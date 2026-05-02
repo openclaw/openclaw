@@ -14,14 +14,20 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/session history: recover Discord sender labels from hidden runtime-context rows without exposing those rows in dashboard or history output. Thanks @Squirbie.
+- Codex/app-server: resolve the managed `@openai/codex` package bin when package installs do not provide a nearby `.bin/codex` shim, avoiding false missing-binary startup failures.
+- Plugins/source checkout: discover source-only plugins such as Codex from the `extensions/*` workspace while using npm package excludes as the packaged-core boundary, removing the stale core-bundle metadata path.
+- Plugins/ClawHub: install ClawPack artifacts from the explicit npm-pack `.tgz` resolver path instead of the legacy ZIP-shaped placeholder route. Thanks @vincentkoc.
 - Control UI: allow deployments to configure grouped chat message max-width with a validated `gateway.controlUi.chatMessageMaxWidth` setting instead of patching bundled CSS after upgrades. Fixes #67935. Thanks @xiew4589-lang.
+- Control UI/Cron: ignore malformed persisted cron rows without valid payloads before they enter UI state and guard stale cron render paths, preventing blank Control UI sections after a bad cron snapshot. Fixes #55047 and #54439; supersedes #54550 and #54552.
 - Control UI/sessions: bound the default Sessions tab query to recent activity and fewer rows, avoiding expensive full-history loads while keeping filters editable. Fixes #76050. (#76051) Thanks @Neomail2.
 - Plugins/doctor: repair missing configured provider and channel plugins from ClawHub before npm fallback, preserving ClawPack metadata in the install record. Thanks @vincentkoc.
 - Gateway/channels: cap startup fanout at four channel/account handoffs and recover from Bonjour ciao self-probe races, reducing Windows startup stalls with many Telegram accounts. Fixes #75687.
 - Gateway/sessions: keep `sessions.list` polling responsive on large session stores by reusing list-safe session cache/indexes and returning a lightweight compaction checkpoint preview instead of heavyweight summaries. Thanks @rolandrscheel.
+- Control UI/Gateway: keep long-running dashboard WebSocket sessions alive with protocol pings and keep Stop available after reconnect or reload by recovering session-scoped active-run abort state. Fixes #70991. Thanks @alexandre-leng.
 - CLI/update: treat inherited Gateway service markers as origin hints and only block package replacement when the managed Gateway is still live, so self-updates can stop the service and continue safely. (#75729) Thanks @hxy91819.
 - Agents/failover: exempt run-level timeouts that fire during tool execution from model fallback, timeout-triggered compaction, and generic timeout payload synthesis. Long `process(poll)`, browser, or `exec` tool calls that exceed `agents.defaults.timeoutSeconds` previously rotated auth profiles, switched to a fallback model, and surfaced a misleading "LLM request timed out" error even though the primary model had already responded. Mirrors the existing `timedOutDuringCompaction` precedent (#46889). Fixes #52147. (#75873) Thanks @simonusa.
 - Docker: copy Bun 1.3.13 from a digest-pinned image and keep CI on the same version. Fixes #74356. Thanks @fede-kamel and @sallyom.
+- Agents/compaction: keep prior context on consecutive turns against z.ai-style providers (z.ai direct, openrouter z-ai/\*, in-house GLM gateways); Pi's internal auto-compaction was misfiring after successful turns and clearing state.messages before the next provider request. (#76056) Thanks @openperf.
 
 ## 2026.5.2
 
@@ -53,9 +59,11 @@ Docs: https://docs.openclaw.ai
 - Dependencies: refresh workspace dependency pins, including TypeBox 1.1.37, AWS SDK 3.1041.0, Microsoft Teams 2.0.9, and Marked 18.0.3. Thanks @mariozechner, @aws, and @microsoft.
 - Discord/channels: add reusable message-channel access groups plus Discord channel-audience DM authorization, so allowlists can reference `accessGroup:<name>` across channel auth paths. (#75813)
 - Crabbox/scripts: print the selected Crabbox binary, version, and supported providers before `pnpm crabbox:*` commands, and reject stale binaries that lack `blacksmith-testbox` provider support.
+- Agents/Codex: add committed happy-path prompt snapshots for Codex/message-tool Telegram direct, Discord group, and heartbeat turns so prompt drift can be reviewed. Thanks @pashpashpash.
 
 ### Fixes
 
+- Doctor/plugins: run a one-time 2026.5.2 configured-plugin install repair based on `meta.lastTouchedVersion`, installing actively used downloadable OpenClaw plugins from ClawHub with npm fallback before marking the config touched for the release.
 - Sessions/transcripts: use one `session.writeLock.acquireTimeoutMs` policy for session transcript lock acquisitions and raise the default wait to 60 seconds, avoiding user-visible lock timeouts during legitimate slow prep, cleanup, compaction, and mirror work. Fixes #75894. Thanks @shandutta.
 - Control UI: contain the standalone iOS PWA viewport with safe-area-aware document locking, so Add-to-Home-Screen launches cannot scroll past the device bounds. Refs #76072. Thanks @kvncrw.
 - Agents/restart recovery: match cleaned transcript locks by exact transcript lock paths plus the canonical session fallback, so interrupted main sessions using topic-suffixed transcripts resume after gateway restart. Refs #76052. Thanks @anyech.

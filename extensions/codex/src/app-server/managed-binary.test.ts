@@ -1,3 +1,5 @@
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -79,6 +81,39 @@ describe("managed Codex app-server binary", () => {
     ).resolves.toEqual({
       ...startOptions("managed"),
       command: installedCommand,
+      commandSource: "resolved-managed",
+    });
+  });
+
+  it("falls back to the resolved Codex package bin when no command shim exists", async () => {
+    const installRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-codex-package-"));
+    const pluginRoot = path.join(installRoot, "dist", "extensions", "codex");
+    const packageRoot = path.join(installRoot, "node_modules", "@openai", "codex");
+    const packageBin = path.join(packageRoot, "bin", "codex.js");
+    await mkdir(path.dirname(packageBin), { recursive: true });
+    await writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "@openai/codex",
+        bin: {
+          codex: "bin/codex.js",
+        },
+      }),
+    );
+    await writeFile(packageBin, "#!/usr/bin/env node\n");
+    const resolvedPackageBin = await realpath(packageBin);
+
+    const pathExists = vi.fn(async (filePath: string) => filePath === resolvedPackageBin);
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "linux",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed"),
+      command: resolvedPackageBin,
       commandSource: "resolved-managed",
     });
   });

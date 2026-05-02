@@ -2,16 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readConfigFileSnapshot, recoverConfigFromJsonRootSuffix } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { findLegacyConfigIssues } from "../config/legacy.js";
 import type { LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  collectRelevantDoctorPluginIds,
-  listPluginDoctorLegacyConfigRules,
-} from "../plugins/doctor-contract-registry.js";
 import { note } from "../terminal/note.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
+import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
@@ -69,13 +65,7 @@ function collectDoctorLegacyIssues(
   }
   const resolvedRaw = snapshot.sourceConfig ?? snapshot.config ?? {};
   const sourceRaw = snapshot.parsed ?? resolvedRaw;
-  return findLegacyConfigIssues(
-    resolvedRaw,
-    sourceRaw,
-    listPluginDoctorLegacyConfigRules({
-      pluginIds: collectRelevantDoctorPluginIds(resolvedRaw),
-    }),
-  );
+  return findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
 }
 
 function addDoctorLegacyIssues(

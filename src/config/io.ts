@@ -1185,6 +1185,18 @@ async function finalizeReadConfigSnapshotInternalResult(
   return result;
 }
 
+async function collectInvalidConfigLegacyIssues(
+  raw: unknown,
+  sourceRaw: unknown,
+): Promise<LegacyConfigIssue[]> {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  const { findDoctorLegacyConfigIssues } =
+    await import("../commands/doctor/shared/legacy-config-issues.js");
+  return findDoctorLegacyConfigIssues(raw, sourceRaw);
+}
+
 export function createConfigIO(
   overrides: ConfigIoDeps & { pluginValidation?: "full" | "skip" } = {},
 ) {
@@ -1756,6 +1768,9 @@ export function createConfigIO(
         }),
       );
       if (!validated.ok) {
+        const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
+          collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed),
+        );
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
             path: configPath,
@@ -1768,7 +1783,7 @@ export function createConfigIO(
             hash: snapshotHash,
             issues: validated.issues,
             warnings: [...validated.warnings, ...envVarWarnings],
-            legacyIssues: [],
+            legacyIssues,
           }),
         });
       }

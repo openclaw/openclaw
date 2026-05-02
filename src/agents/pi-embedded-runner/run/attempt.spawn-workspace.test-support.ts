@@ -321,6 +321,7 @@ vi.mock("../../pi-settings.js", () => ({
       keepRecentTokens: 40_000,
     },
   }),
+  isSilentOverflowProneModel: () => false,
 }));
 
 vi.mock("../extensions.js", () => ({

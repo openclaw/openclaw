@@ -1758,6 +1758,54 @@ export function loadGatewaySessionRow(
  * avoiding excessive yielding overhead for small stores.
  */
 const SESSIONS_LIST_YIELD_BATCH_SIZE = 10;
+const SESSIONS_LIST_TOP_N_LIMIT = 200;
+
+type SessionEntryPair = [string, SessionEntry];
+
+function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntryPair): number {
+  return (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
+}
+
+function resolveSessionsListLimit(
+  opts: import("./protocol/index.js").SessionsListParams,
+): number | undefined {
+  if (typeof opts.limit !== "number" || !Number.isFinite(opts.limit)) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(opts.limit));
+}
+
+function selectNewestLimitedEntries(
+  entries: SessionEntryPair[],
+  limit: number,
+): SessionEntryPair[] {
+  const selected: SessionEntryPair[] = [];
+  for (const entry of entries) {
+    const insertAt = selected.findIndex(
+      (candidate) => compareSessionEntryPairsByUpdatedAt(entry, candidate) < 0,
+    );
+    if (insertAt >= 0) {
+      selected.splice(insertAt, 0, entry);
+      if (selected.length > limit) {
+        selected.pop();
+      }
+    } else if (selected.length < limit) {
+      selected.push(entry);
+    }
+  }
+  return selected;
+}
+
+function sortAndLimitSessionEntries(
+  entries: SessionEntryPair[],
+  limit: number | undefined,
+): SessionEntryPair[] {
+  if (limit !== undefined && limit <= SESSIONS_LIST_TOP_N_LIMIT) {
+    return selectNewestLimitedEntries(entries, limit);
+  }
+  const sorted = entries.toSorted(compareSessionEntryPairsByUpdatedAt);
+  return limit === undefined ? sorted : sorted.slice(0, limit);
+}
 
 export function filterAndSortSessionEntries(params: {
   store: Record<string, SessionEntry>;
@@ -1829,8 +1877,7 @@ export function filterAndSortSessionEntries(params: {
         return true;
       }
       return entry?.label === label;
-    })
-    .toSorted((a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0));
+    });
 
   if (search) {
     entries = entries.filter(([key, entry]) => {
@@ -1852,12 +1899,7 @@ export function filterAndSortSessionEntries(params: {
     entries = entries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
 
-  if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
-    const limit = Math.max(1, Math.floor(opts.limit));
-    entries = entries.slice(0, limit);
-  }
-
-  return entries;
+  return sortAndLimitSessionEntries(entries, resolveSessionsListLimit(opts));
 }
 
 export function listSessionsFromStore(params: {

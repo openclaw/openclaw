@@ -22,6 +22,7 @@ import {
   createPackedCliSmokeEnv,
   createPackedBundledPluginPostinstallEnv,
   MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES,
+  PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS,
   PACKED_CLI_SMOKE_COMMANDS,
   PACKED_COMPLETION_SMOKE_ARGS,
   packageNameFromSpecifier,
@@ -80,6 +81,10 @@ describe("packed CLI smoke", () => {
       ["config", "schema"],
       ["models", "list", "--provider", "amazon-bedrock"],
     ]);
+  });
+
+  it("repairs bundled runtime deps before the read-only plugin doctor smoke", () => {
+    expect(PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS).toEqual(["plugins", "deps", "--repair"]);
   });
 
   it("keeps packed completion smoke scoped to one shell cache", () => {

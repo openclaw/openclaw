@@ -307,5 +307,6 @@ describe("docker build helper", () => {
     expect(clawhub).toContain('plugins update "$CLAWHUB_PLUGIN_ID"');
     expect(clawhub).toContain("clawhub:@openclaw/kitchen-sink");
     expect(assertions).toContain("clawhub-updated");
+    expect(assertions).toContain("record.clawpackSha256");
   });
 });

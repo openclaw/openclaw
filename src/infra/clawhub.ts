@@ -39,6 +39,20 @@ export type ClawHubPackageEnvironmentSummary = {
   supportsRemoteHost?: boolean;
   knownUnsupported?: string[];
 };
+export type ClawHubPackageArtifactSummary = {
+  kind?: "legacy-zip" | "npm-pack" | null;
+  sha256?: string | null;
+  size?: number | null;
+  format?: "zip" | "tgz" | null;
+  npmIntegrity?: string | null;
+  npmShasum?: string | null;
+  npmTarballName?: string | null;
+  npmUnpackedSize?: number | null;
+  npmFileCount?: number | null;
+  downloadUrl?: string | null;
+  tarballUrl?: string | null;
+  legacyDownloadUrl?: string | null;
+};
 export type ClawHubPackageClawPackSummary = {
   available: boolean;
   specVersion?: number | null;
@@ -47,6 +61,9 @@ export type ClawHubPackageClawPackSummary = {
   size?: number | null;
   fileCount?: number | null;
   manifestSha256?: string | null;
+  npmIntegrity?: string | null;
+  npmShasum?: string | null;
+  npmTarballName?: string | null;
   builtAt?: number | null;
   buildVersion?: string | null;
   hostTargets?: ClawHubPackageHostTarget[];
@@ -71,6 +88,7 @@ export type ClawHubPackageListItem = {
   clawpackAvailable?: boolean;
   hostTargetKeys?: string[];
   environmentFlags?: string[];
+  artifact?: ClawHubPackageArtifactSummary | null;
   clawpack?: ClawHubPackageClawPackSummary;
 };
 export type ClawHubPackageDetail = {
@@ -99,6 +117,7 @@ export type ClawHubPackageDetail = {
           hasProvenance?: boolean;
           scanStatus?: string;
         } | null;
+        artifact?: ClawHubPackageArtifactSummary | null;
         clawpack?: ClawHubPackageClawPackSummary;
       })
     | null;
@@ -138,6 +157,7 @@ export type ClawHubPackageVersion = {
         ? C
         : never
       : never;
+    artifact?: ClawHubPackageArtifactSummary | null;
     clawpack?: ClawHubPackageClawPackSummary;
   } | null;
 };
@@ -209,6 +229,9 @@ export type ClawHubDownloadResult = {
   artifact: "archive" | "clawpack";
   clawpackHeaderSha256?: string;
   clawpackHeaderSpecVersion?: number;
+  npmIntegrity?: string;
+  npmShasum?: string;
+  npmTarballName?: string;
   cleanup: () => Promise<void>;
 };
 
@@ -476,6 +499,24 @@ function formatSha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function formatSha512Integrity(bytes: Uint8Array): string {
+  const digest = createHash("sha512").update(bytes).digest("base64");
+  return `sha512-${digest}`;
+}
+
+function normalizeHeaderValue(value: string | null): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function safePackageTarballName(name: string, version: string): string {
+  const base = name
+    .replace(/^@/, "")
+    .replace(/[\\/]+/g, "-")
+    .replace(/[^A-Za-z0-9._-]/g, "-");
+  return `${base || "package"}-${version}.tgz`;
+}
+
 export function normalizeClawHubSha256Integrity(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -645,7 +686,7 @@ export async function downloadClawHubPackageArchive(params: {
       baseUrl: params.baseUrl,
       path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
         params.version,
-      )}/clawpack`,
+      )}/artifact/download`,
       token: params.token,
       timeoutMs: params.timeoutMs,
       fetchImpl: params.fetchImpl,
@@ -659,12 +700,15 @@ export async function downloadClawHubPackageArchive(params: {
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
     const sha256Hex = formatSha256Hex(bytes);
+    const npmIntegrity = formatSha512Integrity(bytes);
     const headerSha256 = normalizeClawHubSha256Hex(
-      response.headers.get("X-ClawHub-ClawPack-Sha256") ?? "",
+      response.headers.get("X-ClawHub-Artifact-Sha256") ??
+        response.headers.get("X-ClawHub-ClawPack-Sha256") ??
+        "",
     );
     if (!headerSha256) {
       throw new Error(
-        `ClawHub ClawPack download for "${params.name}@${params.version}" is missing X-ClawHub-ClawPack-Sha256.`,
+        `ClawHub ClawPack download for "${params.name}@${params.version}" is missing X-ClawHub-Artifact-Sha256.`,
       );
     }
     if (headerSha256 !== sha256Hex) {
@@ -672,11 +716,22 @@ export async function downloadClawHubPackageArchive(params: {
         `ClawHub ClawPack download for "${params.name}@${params.version}" declared sha256 ${headerSha256}, got ${sha256Hex}.`,
       );
     }
+    const headerNpmIntegrity = normalizeHeaderValue(
+      response.headers.get("X-ClawHub-Npm-Integrity"),
+    );
+    if (headerNpmIntegrity && headerNpmIntegrity !== npmIntegrity) {
+      throw new Error(
+        `ClawHub ClawPack download for "${params.name}@${params.version}" declared npm integrity ${headerNpmIntegrity}, got ${npmIntegrity}.`,
+      );
+    }
+    const npmTarballName =
+      normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Tarball-Name")) ??
+      safePackageTarballName(params.name, params.version);
     const rawSpecVersion = response.headers.get("X-ClawHub-ClawPack-Spec-Version");
     const specVersion = rawSpecVersion ? Number.parseInt(rawSpecVersion, 10) : undefined;
     const target = await createTempDownloadTarget({
       prefix: "openclaw-clawhub-clawpack",
-      fileName: `${params.name}.clawpack.zip`,
+      fileName: npmTarballName,
       tmpDir: os.tmpdir(),
     });
     await fs.writeFile(target.path, bytes);
@@ -689,6 +744,11 @@ export async function downloadClawHubPackageArchive(params: {
       ...(typeof specVersion === "number" && Number.isSafeInteger(specVersion) && specVersion >= 0
         ? { clawpackHeaderSpecVersion: specVersion }
         : {}),
+      npmIntegrity,
+      ...(normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Shasum"))
+        ? { npmShasum: normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Shasum")) }
+        : {}),
+      npmTarballName,
       cleanup: target.cleanup,
     };
   }

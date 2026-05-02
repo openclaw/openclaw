@@ -107,6 +107,7 @@ import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settin
 import {
   applyPiAutoCompactionGuard,
   applyPiCompactionSettingsFromConfig,
+  isSilentOverflowProneModel,
 } from "../../pi-settings.js";
 import {
   createClientToolNameConflictError,
@@ -1474,10 +1475,16 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         contextTokenBudget: params.contextTokenBudget,
       });
-      applyPiAutoCompactionGuard({
+      const piAutoCompactionGuardArgs = {
         settingsManager,
         contextEngineInfo: activeContextEngine?.info,
-      });
+        silentOverflowProneProvider: isSilentOverflowProneModel({
+          provider: params.provider,
+          modelId: params.modelId,
+          baseUrl: params.model.baseUrl ?? undefined,
+        }),
+      };
+      applyPiAutoCompactionGuard(piAutoCompactionGuardArgs);
 
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
@@ -1496,12 +1503,15 @@ export async function runEmbeddedAttempt(
       });
       await resourceLoader.reload();
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
-      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager.
+      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager — same
+      // rehydration also restores Pi's auto-compaction (openclaw#75799), so re-apply
+      // both guards.
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
         contextTokenBudget: params.contextTokenBudget,
       });
+      applyPiAutoCompactionGuard(piAutoCompactionGuardArgs);
       prepStages.mark("session-resource-loader");
 
       // Get hook runner early so it's available when creating tools

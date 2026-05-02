@@ -1231,7 +1231,19 @@ describe("cron controller", () => {
           sortDir: "desc",
         });
         return {
-          jobs: [{ id: "job-1", name: "Daily", enabled: true }],
+          jobs: [
+            {
+              id: "job-1",
+              name: "Daily",
+              enabled: true,
+              createdAtMs: 0,
+              updatedAtMs: 0,
+              schedule: { kind: "cron", expr: "0 9 * * *" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "ping" },
+            },
+          ],
           total: 1,
           hasMore: false,
           nextOffset: null,
@@ -1251,6 +1263,42 @@ describe("cron controller", () => {
 
     expect(state.cronJobs).toHaveLength(1);
     expect(state.cronJobsTotal).toBe(1);
+    expect(state.cronJobsHasMore).toBe(false);
+  });
+
+  it("drops malformed cron jobs before they enter UI state", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            { id: "bad-missing-payload", name: "Broken", enabled: true },
+            {
+              id: "job-ok",
+              name: "Daily",
+              enabled: true,
+              createdAtMs: 0,
+              updatedAtMs: 0,
+              schedule: { kind: "cron", expr: "0 9 * * *" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "ping" },
+            },
+          ],
+          total: 2,
+          hasMore: false,
+          nextOffset: null,
+        };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+    });
+
+    await loadCronJobsPage(state);
+
+    expect(state.cronJobs.map((job) => job.id)).toEqual(["job-ok"]);
+    expect(state.cronJobsTotal).toBe(2);
     expect(state.cronJobsHasMore).toBe(false);
   });
 

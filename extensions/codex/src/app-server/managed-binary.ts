@@ -1,5 +1,6 @@
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -66,7 +67,21 @@ function resolveManagedCodexAppServerCommandCandidates(
 ): string[] {
   const pathApi = pathForPlatform(platform);
   const commandName = platform === "win32" ? "codex.cmd" : "codex";
-  const roots = [
+  const roots = resolveManagedCodexAppServerCandidateRoots(pluginRoot, platform);
+  return [
+    ...new Set([
+      ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
+      ...resolveManagedCodexPackageBinCandidates(roots, platform),
+    ]),
+  ];
+}
+
+function resolveManagedCodexAppServerCandidateRoots(
+  pluginRoot: string,
+  platform: NodeJS.Platform,
+): string[] {
+  const pathApi = pathForPlatform(platform);
+  return [
     pluginRoot,
     pathApi.dirname(pluginRoot),
     pathApi.dirname(pathApi.dirname(pluginRoot)),
@@ -74,7 +89,50 @@ function resolveManagedCodexAppServerCommandCandidates(
       ? pathApi.dirname(pathApi.dirname(pathApi.dirname(pluginRoot)))
       : null,
   ].filter((root): root is string => Boolean(root));
-  return [...new Set(roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)))];
+}
+
+function resolveManagedCodexPackageBinCandidates(
+  roots: readonly string[],
+  platform: NodeJS.Platform,
+): string[] {
+  if (platform === "win32") {
+    return [];
+  }
+
+  const candidates: string[] = [];
+  for (const root of roots) {
+    const candidate = resolveManagedCodexPackageBinCandidate(root);
+    if (candidate) {
+      candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
+function resolveManagedCodexPackageBinCandidate(root: string): string | null {
+  try {
+    const requireFromRoot = createRequire(path.join(root, "package.json"));
+    const packageJsonPath = requireFromRoot.resolve(
+      `${MANAGED_CODEX_APP_SERVER_PACKAGE}/package.json`,
+    );
+    const packageRoot = path.dirname(packageJsonPath);
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+      bin?: unknown;
+    };
+    const binPath =
+      typeof packageJson.bin === "string"
+        ? packageJson.bin
+        : isRecord(packageJson.bin) && typeof packageJson.bin.codex === "string"
+          ? packageJson.bin.codex
+          : null;
+    return binPath ? path.resolve(packageRoot, binPath) : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function isDistExtensionRoot(pluginRoot: string, platform: NodeJS.Platform): boolean {

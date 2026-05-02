@@ -882,8 +882,8 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(snap.issues.some((issue) => issue.path === "memorySearch")).toBe(true);
-      expect(snap.legacyIssues).toEqual([]);
+      expect(snap.issues.some((issue) => issue.message.includes('"memorySearch"'))).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
       expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toMatchObject({
         provider: "local",
         fallback: "none",
@@ -905,8 +905,8 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(snap.issues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      expect(snap.legacyIssues).toEqual([]);
+      expect(snap.issues.some((issue) => issue.message.includes('"heartbeat"'))).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
       expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
@@ -928,8 +928,8 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(false);
-      expect(snap.issues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      expect(snap.legacyIssues).toEqual([]);
+      expect(snap.issues.some((issue) => issue.message.includes('"heartbeat"'))).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
       expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
         showOk: true,
         showAlerts: false,
@@ -985,8 +985,11 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expect(snap.issues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(true);
-      expect(snap.issues.some((issue) => issue.path === "agents.list")).toBe(true);
-      expect(snap.legacyIssues).toEqual([]);
+      expect(snap.issues.some((issue) => issue.path === "agents.list.0.sandbox")).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(
+        true,
+      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "agents.list")).toBe(true);
       expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
       expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
     });
@@ -1024,7 +1027,7 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
       expect(snap.valid).toBe(false);
       expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
-      expect(snap.legacyIssues).toEqual([]);
+      expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
     });
   });
 });

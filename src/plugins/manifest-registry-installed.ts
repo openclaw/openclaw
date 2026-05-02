@@ -104,22 +104,27 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
 function resolveInstalledPackageManifest(
   record: InstalledPluginIndexRecord,
 ): OpenClawPackageManifest | undefined {
+  const fallbackPackageManifest = record.packageChannel
+    ? {
+        channel: record.packageChannel,
+      }
+    : undefined;
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageJsonPath = record.packageJson?.path
     ? path.resolve(rootDir, record.packageJson.path)
     : undefined;
   if (!packageJsonPath) {
-    return record.packageChannel ? { channel: record.packageChannel } : undefined;
+    return fallbackPackageManifest;
   }
   const relative = path.relative(rootDir, packageJsonPath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return record.packageChannel ? { channel: record.packageChannel } : undefined;
+    return fallbackPackageManifest;
   }
   try {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PackageManifest;
     const packageManifest = getPackageManifestMetadata(packageJson);
     if (!packageManifest) {
-      return record.packageChannel ? { channel: record.packageChannel } : undefined;
+      return fallbackPackageManifest;
     }
     const channel =
       record.packageChannel || packageManifest.channel
@@ -133,7 +138,7 @@ function resolveInstalledPackageManifest(
       ...(channel ? { channel } : {}),
     };
   } catch {
-    return record.packageChannel ? { channel: record.packageChannel } : undefined;
+    return fallbackPackageManifest;
   }
 }
 

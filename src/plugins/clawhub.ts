@@ -22,6 +22,7 @@ import {
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
   type ClawHubPackageChannel,
+  type ClawHubPackageArtifactSummary,
   type ClawHubPackageCompatibility,
   type ClawHubPackageDetail,
   type ClawHubPackageFamily,
@@ -128,22 +129,26 @@ type ClawHubArchiveEntryLimits = {
 };
 
 function normalizeClawHubClawPackInstallFields(
-  clawpack: ClawHubPackageClawPackSummary | null | undefined,
+  clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
 ): Pick<
   ClawHubPluginInstallRecordFields,
   "clawpackSha256" | "clawpackSpecVersion" | "clawpackManifestSha256" | "clawpackSize"
 > {
-  if (clawpack?.available !== true) {
+  const isNpmPackArtifact =
+    clawpack && "kind" in clawpack && normalizeOptionalString(clawpack.kind) === "npm-pack";
+  const isLegacyClawPack = clawpack && "available" in clawpack && clawpack.available;
+  if (!isNpmPackArtifact && !isLegacyClawPack) {
     return {};
   }
 
   const clawpackSha256 =
     typeof clawpack.sha256 === "string" ? normalizeClawHubSha256Hex(clawpack.sha256) : null;
   const clawpackManifestSha256 =
-    typeof clawpack.manifestSha256 === "string"
+    "manifestSha256" in clawpack && typeof clawpack.manifestSha256 === "string"
       ? normalizeClawHubSha256Hex(clawpack.manifestSha256)
       : null;
   const clawpackSpecVersion =
+    "specVersion" in clawpack &&
     typeof clawpack.specVersion === "number" &&
     Number.isSafeInteger(clawpack.specVersion) &&
     clawpack.specVersion >= 0
@@ -174,12 +179,33 @@ function isTrustedSourceLinkedOfficialPackage(pkg: NonNullable<ClawHubPackageDet
 }
 
 function resolveClawHubClawPackArtifactSha256(
-  clawpack: ClawHubPackageClawPackSummary | null | undefined,
+  clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
 ): string | null {
-  if (clawpack?.available !== true || typeof clawpack.sha256 !== "string") {
+  const isNpmPackArtifact =
+    clawpack && "kind" in clawpack && normalizeOptionalString(clawpack.kind) === "npm-pack";
+  const isLegacyClawPack = clawpack && "available" in clawpack && clawpack.available;
+  if ((!isNpmPackArtifact && !isLegacyClawPack) || typeof clawpack.sha256 !== "string") {
     return null;
   }
   return normalizeClawHubSha256Hex(clawpack.sha256);
+}
+
+function resolveClawHubNpmIntegrity(
+  clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
+): string | null {
+  return normalizeOptionalString(clawpack?.npmIntegrity) ?? null;
+}
+
+function resolveClawHubNpmPackArtifact(
+  version: NonNullable<ClawHubPackageVersion["version"]>,
+): ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null {
+  if (version.artifact?.kind === "npm-pack") {
+    return version.artifact;
+  }
+  if (version.clawpack?.available === true) {
+    return version.clawpack;
+  }
+  return null;
 }
 
 export function formatClawHubSpecifier(params: { name: string; version?: string }): string {
@@ -661,7 +687,7 @@ async function resolveCompatiblePackageVersion(params: {
       version: string;
       compatibility?: ClawHubPackageCompatibility | null;
       verification: ClawHubArchiveVerification | null;
-      clawpack?: ClawHubPackageClawPackSummary | null;
+      clawpack?: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null;
     }
   | ClawHubInstallFailure
 > {
@@ -699,7 +725,9 @@ async function resolveCompatiblePackageVersion(params: {
       clawpack: versionDetail.version?.clawpack ?? null,
     };
   }
-  const clawpack = versionDetail.version?.clawpack ?? null;
+  const clawpack = versionDetail.version
+    ? resolveClawHubNpmPackArtifact(versionDetail.version)
+    : null;
   const verificationState = resolveClawHubArchiveVerification(
     versionDetail,
     params.detail.package?.name ?? "unknown",
@@ -910,6 +938,7 @@ export async function installPluginFromClawHub(
   try {
     if (expectedClawPackSha256) {
       const expectedIntegrity = normalizeClawHubSha256Integrity(expectedClawPackSha256);
+      const expectedNpmIntegrity = resolveClawHubNpmIntegrity(versionState.clawpack);
       if (
         archive.artifact !== "clawpack" ||
         archive.clawpackHeaderSha256 !== expectedClawPackSha256 ||
@@ -918,6 +947,12 @@ export async function installPluginFromClawHub(
       ) {
         return buildClawHubInstallFailure(
           `ClawHub ClawPack integrity mismatch for "${parsed.name}@${versionState.version}": expected ${expectedClawPackSha256}, got ${archive.sha256Hex}.`,
+          CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+        );
+      }
+      if (expectedNpmIntegrity && archive.npmIntegrity !== expectedNpmIntegrity) {
+        return buildClawHubInstallFailure(
+          `ClawHub ClawPack npm integrity mismatch for "${parsed.name}@${versionState.version}": expected ${expectedNpmIntegrity}, got ${archive.npmIntegrity ?? "unknown"}.`,
           CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
         );
       }

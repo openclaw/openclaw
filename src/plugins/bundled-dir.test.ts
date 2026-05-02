@@ -199,7 +199,7 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers source extensions in a pnpm git checkout outside vitest",
+      "prefers built dist/extensions in a pnpm git checkout outside vitest",
       {
         prefix: "openclaw-bundled-dir-git-built-",
         hasExtensions: true,
@@ -210,7 +210,7 @@ describe("resolveBundledPluginsDir", () => {
         hasPnpmWorkspace: true,
       },
       {
-        expectedRelativeDir: "extensions",
+        expectedRelativeDir: path.join("dist", "extensions"),
       },
     ],
     [
@@ -227,7 +227,7 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "still prefers source extensions during tsx-driven pnpm source execution",
+      "prefers built dist/extensions during tsx-driven pnpm source execution",
       {
         prefix: "openclaw-bundled-dir-tsx-built-",
         hasExtensions: true,
@@ -238,7 +238,7 @@ describe("resolveBundledPluginsDir", () => {
         hasPnpmWorkspace: true,
       },
       {
-        expectedRelativeDir: "extensions",
+        expectedRelativeDir: path.join("dist", "extensions"),
         execArgv: ["--import", "tsx"],
       },
     ],

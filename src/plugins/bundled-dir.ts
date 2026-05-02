@@ -167,13 +167,9 @@ function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefin
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
   const sourceCheckout = isSourceCheckoutRoot(packageRoot);
   const hasUsableSourceTree = sourceCheckout && hasUsableBundledPluginTree(sourceExtensionsDir);
-  // In pnpm source checkouts, extensions/* is a workspace package tree with its
-  // own package.json dependencies. Prefer it so git checkouts remain editable
-  // and dependency-complete without moving optional plugin deps back into root.
-  if (hasUsableSourceTree) {
-    return sourceExtensionsDir;
-  }
-
+  // In pnpm source checkouts, prefer the built bundled plugin runtime when it
+  // exists so dist gateway runs avoid loading TS plugin entrypoints through jiti.
+  // Keep the source tree as the fallback for fresh checkouts before build.
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
   const hasUsableRuntimeTree = sourceCheckout
     ? hasUsableBundledPluginTree(runtimeExtensionsDir)
@@ -181,6 +177,12 @@ function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefin
   const hasUsableBuiltTree = sourceCheckout
     ? hasUsableBundledPluginTree(builtExtensionsDir)
     : fs.existsSync(builtExtensionsDir);
+  if (sourceCheckout && hasUsableBuiltTree) {
+    return builtExtensionsDir;
+  }
+  if (sourceCheckout && hasUsableRuntimeTree) {
+    return runtimeExtensionsDir;
+  }
   if (hasUsableRuntimeTree && hasUsableBuiltTree) {
     return runtimeExtensionsDir;
   }

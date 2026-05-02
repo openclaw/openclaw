@@ -316,9 +316,7 @@ function resolveStatus({ dirName, packageJson, excludedDirs }) {
   const hasInstallSpec =
     typeof packageJson.openclaw?.install?.clawhubSpec === "string" ||
     typeof packageJson.openclaw?.install?.npmSpec === "string";
-  const excluded =
-    excludedDirs.has(dirName) || packageJson.openclaw?.bundle?.includeInCore === false;
-  if (!excluded) {
+  if (!excludedDirs.has(dirName)) {
     return "core";
   }
   if (release?.publishToClawHub === true || release?.publishToNpm === true || hasInstallSpec) {
