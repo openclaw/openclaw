@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/Google: raise Gemini 2.5 Flash-Lite's minimal `thinkingBudget` to 512 while keeping Gemini 2.5 Pro and non-Lite Flash minimal budgets at 128, so `/think minimal` matches the provider floor. Fixes #57683. (#70629) Thanks @ericberic.
 - Control UI/chat: show inline feedback when local slash-command dispatch is unavailable or fails unexpectedly instead of clearing the composer silently. Fixes #52105. Thanks @MooreQiao.
 - Agents/tools: return critical tool-loop circuit-breaker stops as blocked tool results instead of thrown tool failures, so models see the guardrail and stop retrying the same call. Thanks @rayraiser.
 - Model commands: clarify direct and inline `/model` acknowledgements for non-default selections as session-scoped. Thanks @addu2612.

@@ -662,6 +662,26 @@ describe("google transport stream", () => {
     });
   });
 
+  it.each([
+    ["gemini-2.5-pro", 128],
+    ["gemini-2.5-flash", 128],
+    ["gemini-2.5-flash-lite", 512],
+  ] as const)("maps minimal Gemini 2.5 thinking budget for %s", (id, thinkingBudget) => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        reasoning: "minimal",
+      },
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      thinkingConfig: { includeThoughts: true, thinkingBudget },
+    });
+  });
+
   it("normalizes explicit Gemini 3 Pro thinking levels", () => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
