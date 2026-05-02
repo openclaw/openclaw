@@ -154,10 +154,10 @@ function resolveSessionModelRef(
   return (
     resolvePersistedSelectedModelRef({
       defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-      runtimeProvider: entry?.modelProvider,
-      runtimeModel: entry?.model,
-      overrideProvider: entry?.providerOverride,
-      overrideModel: entry?.modelOverride,
+      runtimeProvider: normalizeOptionalString(entry?.modelProvider),
+      runtimeModel: normalizeOptionalString(entry?.model),
+      overrideProvider: normalizeOptionalString(entry?.providerOverride),
+      overrideModel: normalizeOptionalString(entry?.modelOverride),
       allowPluginNormalization: false,
     }) ?? resolved
   );

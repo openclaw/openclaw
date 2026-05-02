@@ -106,4 +106,21 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
       model: "gpt-5.4",
     });
   });
+
+  it("does not throw when session model fields are non-string objects (#76206)", () => {
+    expect(() =>
+      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+        model: { provider: "openai", model: "gpt-5.5" },
+      } as never),
+    ).not.toThrow();
+  });
+
+  it("does not throw when session override fields are non-string objects (#76206)", () => {
+    expect(() =>
+      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+        modelOverride: { provider: "openai-codex", model: "gpt-5.4" },
+        providerOverride: 42,
+      } as never),
+    ).not.toThrow();
+  });
 });
