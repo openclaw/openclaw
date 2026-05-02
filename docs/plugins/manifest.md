@@ -1271,12 +1271,30 @@ Implications:
 - A forked or stale copy of a bundled plugin sitting in the workspace will not shadow the bundled build.
 - To actually override a bundled plugin with a local one, pin it via `plugins.entries.<id>` so it wins by precedence rather than relying on workspace discovery.
 - Duplicate drops are logged so Doctor and startup diagnostics can point at the discarded copy.
+- Config-selected duplicate overrides are worded as explicit overrides in diagnostics, but still warn so stale forks and accidental shadows stay visible.
 
 ## JSON Schema requirements
 
 - **Every plugin must ship a JSON Schema**, even if it accepts no config.
 - An empty schema is acceptable (for example, `{ "type": "object", "additionalProperties": false }`).
 - Schemas are validated at config read/write time, not at runtime.
+- When extending or forking a bundled plugin with new config keys, update that plugin's `openclaw.plugin.json` `configSchema` at the same time. Bundled plugin schemas are strict, so adding `plugins.entries.<id>.config.myNewKey` in user config without adding `myNewKey` to `configSchema.properties` will be rejected before the plugin runtime loads.
+
+Example schema extension:
+
+```json
+{
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "myNewKey": {
+        "type": "string"
+      }
+    }
+  }
+}
+```
 
 ## Validation behavior
 

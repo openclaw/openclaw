@@ -458,6 +458,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("include_release_path_suites: true");
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain("source: artifact");
+    expect(workflow).toContain(".artifacts/docker-e2e-package/package-candidate.json");
     expect(workflow).toContain(
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );

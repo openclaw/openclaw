@@ -19,14 +19,14 @@ function normalizeMode(value: unknown): GoogleMeetMode | undefined {
   return value === "realtime" || value === "transcribe" ? value : undefined;
 }
 
-export function normalizeGoogleMeetAccessType(value: unknown): GoogleMeetAccessType | undefined {
+function normalizeGoogleMeetAccessType(value: unknown): GoogleMeetAccessType | undefined {
   const normalized = normalizeOptionalString(value)?.toUpperCase().replaceAll("-", "_");
   return normalized === "OPEN" || normalized === "TRUSTED" || normalized === "RESTRICTED"
     ? normalized
     : undefined;
 }
 
-export function normalizeGoogleMeetEntryPointAccess(
+function normalizeGoogleMeetEntryPointAccess(
   value: unknown,
 ): GoogleMeetEntryPointAccess | undefined {
   const normalized = normalizeOptionalString(value)?.toUpperCase().replaceAll("-", "_");
@@ -82,10 +82,6 @@ function hasGoogleMeetOAuth(config: GoogleMeetConfig, raw: Record<string, unknow
     config.oauth.accessToken ??
     config.oauth.refreshToken,
   );
-}
-
-export function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
-  return raw.join !== false && raw.join !== "false";
 }
 
 export async function createMeetFromParams(params: {

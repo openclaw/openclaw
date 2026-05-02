@@ -131,9 +131,10 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import {
-  consumeSystemEventEntries,
+  consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
+  type SystemEvent,
 } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
@@ -950,6 +951,28 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
   };
 }
 
+function selectSystemEventsConsumedByHeartbeat(params: {
+  preflight: HeartbeatPreflight;
+  hasExecCompletion: boolean;
+  hasCronEvents: boolean;
+}): SystemEvent[] {
+  const { preflight } = params;
+  if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+    return [];
+  }
+  if (params.hasExecCompletion) {
+    return preflight.pendingEventEntries.filter((event) => isExecCompletionEvent(event.text));
+  }
+  if (params.hasCronEvents) {
+    return preflight.pendingEventEntries.filter(
+      (event) =>
+        (preflight.isCronEventReason || event.contextKey?.startsWith("cron:")) &&
+        isCronSystemEvent(event.text),
+    );
+  }
+  return preflight.pendingEventEntries;
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -1127,6 +1150,11 @@ export async function runHeartbeatOnce(opts: {
   const dueCommitmentIds = hasDueCommitments
     ? preflight.dueCommitments.map((commitment) => commitment.id)
     : [];
+  const inspectedSystemEventsToConsume = selectSystemEventsConsumedByHeartbeat({
+    preflight,
+    hasExecCompletion,
+    hasCronEvents,
+  });
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
@@ -1134,8 +1162,8 @@ export async function runHeartbeatOnce(opts: {
     // no reply turn ran, so there is nothing that actually consumed that wake payload.
     const shouldConsumeInspectedEvents =
       !preflight.isWakeReason && preflight.shouldInspectPendingEvents;
-    if (shouldConsumeInspectedEvents && preflight.pendingEventEntries.length > 0) {
-      consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    if (shouldConsumeInspectedEvents && inspectedSystemEventsToConsume.length > 0) {
+      consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
     }
     return { status: "skipped", reason: "no-tasks-due" };
   }
@@ -1240,10 +1268,10 @@ export async function runHeartbeatOnce(opts: {
   };
 
   const consumeInspectedSystemEvents = () => {
-    if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+    if (!preflight.shouldInspectPendingEvents || inspectedSystemEventsToConsume.length === 0) {
       return;
     }
-    consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
   };
 
   const promptWithHeartbeatTool = appendHeartbeatResponseToolPrompt(prompt);

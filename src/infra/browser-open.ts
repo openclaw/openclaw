@@ -116,26 +116,3 @@ export async function openUrl(url: string): Promise<boolean> {
     return false;
   }
 }
-
-export async function openUrlInBackground(url: string): Promise<boolean> {
-  if (shouldSkipBrowserOpenInTests()) {
-    return false;
-  }
-  const normalizedUrl = normalizeBrowserOpenUrl(url);
-  if (!normalizedUrl) {
-    return false;
-  }
-  if (process.platform !== "darwin") {
-    return false;
-  }
-  const resolved = await resolveBrowserOpenCommand();
-  if (!resolved.argv || resolved.command !== "open") {
-    return false;
-  }
-  try {
-    await runCommandWithTimeout(["open", "-g", normalizedUrl], { timeoutMs: 5_000 });
-    return true;
-  } catch {
-    return false;
-  }
-}

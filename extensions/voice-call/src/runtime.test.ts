@@ -44,6 +44,7 @@ vi.mock("./config.js", () => ({
     const normalizedPhone = params.phone?.replace(/\D/g, "");
     return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
   },
+  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig) => ({ config }),
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
