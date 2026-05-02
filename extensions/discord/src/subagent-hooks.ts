@@ -8,6 +8,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDiscordAccount } from "./accounts.js";
 import {
   autoBindSpawnedDiscordSubagent,
   listThreadBindingsBySessionKey,
@@ -91,10 +92,14 @@ export async function handleDiscordSubagentSpawning(
   if (channel !== "discord") {
     return undefined;
   }
+  const account = resolveDiscordAccount({
+    cfg: api.config,
+    accountId: event.requester?.accountId,
+  });
   const threadBindingPolicy = resolveThreadBindingSpawnPolicy({
     cfg: api.config,
     channel: "discord",
-    accountId: event.requester?.accountId,
+    accountId: account.accountId,
     kind: "subagent",
   });
   if (!threadBindingPolicy.enabled) {
@@ -121,7 +126,7 @@ export async function handleDiscordSubagentSpawning(
     const agentId = event.agentId?.trim() || "subagent";
     const binding = await autoBindSpawnedDiscordSubagent({
       cfg: api.config,
-      accountId: event.requester?.accountId,
+      accountId: account.accountId,
       channel: event.requester?.channel,
       to: event.requester?.to,
       threadId: event.requester?.threadId,
