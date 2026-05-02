@@ -351,13 +351,12 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
 async function resolveNormalizedSessionFile(sessionFile: string): Promise<string> {
   const resolvedSessionFile = path.resolve(sessionFile);
   const sessionDir = path.dirname(resolvedSessionFile);
-  let normalizedDir = sessionDir;
   try {
-    normalizedDir = await fs.realpath(sessionDir);
+    const normalizedDir = await fs.realpath(sessionDir);
+    return path.join(normalizedDir, path.basename(resolvedSessionFile));
   } catch {
-    // Fall back to the resolved path if realpath fails (permissions, transient FS).
+    return resolvedSessionFile;
   }
-  return path.join(normalizedDir, path.basename(resolvedSessionFile));
 }
 
 function inspectLockPayload(
@@ -441,7 +440,7 @@ async function shouldReclaimContendedLockFile(
 function shouldTreatAsOrphanSelfLock(params: {
   payload: LockFilePayload | null;
   normalizedSessionFile: string;
-  reclaimWithoutStarttime?: boolean;
+  reclaimLockWithoutStarttime: boolean;
 }): boolean {
   const pid = isValidLockNumber(params.payload?.pid) ? params.payload.pid : null;
   if (pid !== process.pid) {
@@ -455,7 +454,7 @@ function shouldTreatAsOrphanSelfLock(params: {
     ? params.payload.starttime
     : null;
   if (storedStarttime === null) {
-    return params.reclaimWithoutStarttime !== false;
+    return params.reclaimLockWithoutStarttime;
   }
 
   const currentStarttime = getProcessStartTime(process.pid);
@@ -467,14 +466,14 @@ function inspectLockPayloadForSession(params: {
   staleMs: number;
   nowMs: number;
   normalizedSessionFile: string;
-  reclaimWithoutStarttime?: boolean;
+  reclaimLockWithoutStarttime: boolean;
 }): LockInspectionDetails {
   const inspected = inspectLockPayload(params.payload, params.staleMs, params.nowMs);
   if (
     !shouldTreatAsOrphanSelfLock({
       payload: params.payload,
       normalizedSessionFile: params.normalizedSessionFile,
-      reclaimWithoutStarttime: params.reclaimWithoutStarttime,
+      reclaimLockWithoutStarttime: params.reclaimLockWithoutStarttime,
     })
   ) {
     return inspected;
@@ -530,7 +529,7 @@ export async function cleanStaleLockFiles(params: {
       staleMs,
       nowMs,
       normalizedSessionFile,
-      reclaimWithoutStarttime: false,
+      reclaimLockWithoutStarttime: false,
     });
     const lockInfo: SessionLockInspection = {
       lockPath,
@@ -641,6 +640,7 @@ export async function acquireSessionWriteLock(params: {
         staleMs,
         nowMs,
         normalizedSessionFile,
+        reclaimLockWithoutStarttime: true,
       });
       if (await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs)) {
         await fs.rm(lockPath, { force: true });
