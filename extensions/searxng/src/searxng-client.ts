@@ -40,6 +40,7 @@ type SearxngResult = {
   url: string;
   title: string;
   content?: string;
+  img_src?: string;
 };
 
 type SearxngResponse = {
@@ -51,7 +52,12 @@ function normalizeSearxngResult(value: unknown): SearxngResult | null {
     return null;
   }
 
-  const candidate = value as { url?: unknown; title?: unknown; content?: unknown };
+  const candidate = value as {
+    url?: unknown;
+    title?: unknown;
+    content?: unknown;
+    img_src?: unknown;
+  };
   if (typeof candidate.url !== "string" || typeof candidate.title !== "string") {
     return null;
   }
@@ -60,6 +66,7 @@ function normalizeSearxngResult(value: unknown): SearxngResult | null {
     url: candidate.url,
     title: candidate.title,
     content: typeof candidate.content === "string" ? candidate.content : undefined,
+    img_src: typeof candidate.img_src === "string" ? candidate.img_src : undefined,
   };
 }
 
@@ -254,6 +261,7 @@ export async function runSearxngSearch(params: {
       url: result.url,
       snippet: result.content ? wrapWebContent(result.content, "web_search") : "",
       siteName: resolveSiteName(result.url) || undefined,
+      img_src: result.img_src || undefined,
     })),
   } satisfies Record<string, unknown>;
 

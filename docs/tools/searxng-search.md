@@ -112,6 +112,8 @@ key wins first).
 ## Notes
 
 - **JSON API** -- uses SearXNG's native `format=json` endpoint, not HTML scraping
+- **Image result URLs** -- image-category results include `img_src` when SearXNG
+  returns a direct image URL
 - **No API key** -- works with any SearXNG instance out of the box
 - **Base URL validation** -- `baseUrl` must be a valid `http://` or `https://`
   URL; public hosts must use `https://`
