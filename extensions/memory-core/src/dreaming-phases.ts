@@ -61,6 +61,7 @@ type RunPhaseIfTriggeredParams = {
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   eventText: string;
+  currentAgentId?: string;
 } & (
   | {
       phase: "light";
@@ -113,17 +114,28 @@ const MANAGED_DAILY_DREAMING_BLOCKS = [
 function resolveWorkspaces(params: {
   cfg?: DreamingHostConfig;
   fallbackWorkspaceDir?: string;
+  logger?: Logger;
 }): string[] {
   const fallbackWorkspaceDir = normalizeTrimmedString(params.fallbackWorkspaceDir);
-  const workspaceCandidates = params.cfg
+  const workspaceEntries = params.cfg
     ? resolveMemoryDreamingWorkspaces(
         params.cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
         {
           primaryWorkspaceDir: fallbackWorkspaceDir,
           primaryAgentId: "main",
         },
-      ).map((entry) => entry.workspaceDir)
+      )
     : [];
+  // Warn on shared workspaces (Bug #65374 — cross-agent dreaming contamination risk)
+  for (const entry of workspaceEntries) {
+    if (entry.shared && entry.agentIds.length > 1 && params.logger) {
+      params.logger.warn(
+        `memory-core: workspace ${entry.workspaceDir} is shared by agents ` +
+          `${entry.agentIds.join(", ")}. Cross-agent dreaming contamination risk.`,
+      );
+    }
+  }
+  const workspaceCandidates = workspaceEntries.map((entry) => entry.workspaceDir);
   const seen = new Set<string>();
   const workspaces = workspaceCandidates.filter((workspaceDir) => {
     if (seen.has(workspaceDir)) {
@@ -685,8 +697,10 @@ function resolveSessionAgentsForWorkspace(params: {
   cfg: DreamingHostConfig;
   workspaceDir: string;
   primaryWorkspaceDir?: string;
+  logger?: Logger;
+  currentAgentId?: string;
 }): string[] {
-  const { cfg, workspaceDir, primaryWorkspaceDir } = params;
+  const { cfg, workspaceDir, primaryWorkspaceDir, logger, currentAgentId } = params;
   if (!cfg) {
     return [];
   }
@@ -701,6 +715,27 @@ function resolveSessionAgentsForWorkspace(params: {
   const match = workspaces.find((entry) => normalizeWorkspaceKey(entry.workspaceDir) === target);
   if (!match) {
     return [];
+  }
+  // Warn on shared workspaces (Bug #65374)
+  if (match.shared && match.agentIds.length > 1 && logger) {
+    logger.warn(
+      `memory-core: workspace ${match.workspaceDir} is shared by agents ` +
+        `${match.agentIds.join(", ")}. Cross-agent dreaming contamination risk.`,
+    );
+  }
+  // Layer 2: Fail closed when shared workspace has no agent identity (Bug #65374)
+  // If multiple agents share a workspace but we don't know WHICH agent is dreaming,
+  // we must NOT fall through to ingesting all agents' sessions. Skip dreaming entirely.
+  if (match.shared && !currentAgentId) {
+    logger?.warn(
+      `memory-core: shared workspace ${match.workspaceDir} has no agent identity — ` +
+        `skipping dreaming to prevent cross-agent contamination.`,
+    );
+    return [];
+  }
+  // Filter to current agent when workspace is shared and identity is known
+  if (currentAgentId && match.agentIds.length > 1) {
+    return [currentAgentId];
   }
   return match.agentIds
     .filter((agentId, index, all) => agentId.trim().length > 0 && all.indexOf(agentId) === index)
@@ -764,6 +799,8 @@ async function collectSessionIngestionBatches(params: {
   nowMs: number;
   timezone?: string;
   state: SessionIngestionState;
+  logger?: Logger;
+  currentAgentId?: string;
 }): Promise<SessionIngestionCollectionResult> {
   if (!params.cfg) {
     return {
@@ -778,6 +815,8 @@ async function collectSessionIngestionBatches(params: {
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     primaryWorkspaceDir: params.primaryWorkspaceDir,
+    logger: params.logger,
+    currentAgentId: params.currentAgentId,
   });
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const batchByDay = new Map<string, SessionIngestionMessage[]>();
@@ -1065,6 +1104,8 @@ async function ingestSessionTranscriptSignals(params: {
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
+  logger?: Logger;
+  currentAgentId?: string;
 }): Promise<void> {
   const state = await readSessionIngestionState(params.workspaceDir);
   const collected = await collectSessionIngestionBatches({
@@ -1075,6 +1116,8 @@ async function ingestSessionTranscriptSignals(params: {
     nowMs: params.nowMs,
     timezone: params.timezone,
     state,
+    logger: params.logger,
+    currentAgentId: params.currentAgentId,
   });
   const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   for (const batch of collected.batches) {
@@ -1607,6 +1650,7 @@ async function runLightDreaming(params: {
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
+  currentAgentId?: string;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   await ingestDailyMemorySignals({
@@ -1623,6 +1667,8 @@ async function runLightDreaming(params: {
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    logger: params.logger,
+    currentAgentId: params.currentAgentId,
   });
   const recentEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
@@ -1706,6 +1752,7 @@ async function runRemDreaming(params: {
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
+  currentAgentId?: string;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   await ingestDailyMemorySignals({
@@ -1722,6 +1769,8 @@ async function runRemDreaming(params: {
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    logger: params.logger,
+    currentAgentId: params.currentAgentId,
   });
   const entries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
@@ -1804,6 +1853,7 @@ export async function runDreamingSweepPhases(params: {
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
+  currentAgentId?: string;
 }): Promise<void> {
   // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
   const sweepNowMs: number = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
@@ -1821,6 +1871,7 @@ export async function runDreamingSweepPhases(params: {
       subagent: params.subagent,
       nowMs: sweepNowMs,
       detachNarratives: params.detachNarratives,
+      currentAgentId: params.currentAgentId,
     });
   }
 
@@ -1837,6 +1888,7 @@ export async function runDreamingSweepPhases(params: {
       subagent: params.subagent,
       nowMs: sweepNowMs,
       detachNarratives: params.detachNarratives,
+      currentAgentId: params.currentAgentId,
     });
   }
 }
@@ -1855,6 +1907,7 @@ async function runPhaseIfTriggered(
   const workspaces = resolveWorkspaces({
     cfg: params.cfg,
     fallbackWorkspaceDir: primaryWorkspaceDir,
+    logger: params.logger,
   });
   if (workspaces.length === 0) {
     params.logger.warn(
@@ -1876,6 +1929,7 @@ async function runPhaseIfTriggered(
           config: params.config,
           logger: params.logger,
           subagent: params.subagent,
+          currentAgentId: params.currentAgentId,
         });
       } else {
         await runRemDreaming({
@@ -1885,6 +1939,7 @@ async function runPhaseIfTriggered(
           config: params.config,
           logger: params.logger,
           subagent: params.subagent,
+          currentAgentId: params.currentAgentId,
         });
       }
     } catch (err) {
