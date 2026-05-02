@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
-const CODEX_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const CODEX_PLUGIN_ROOT = resolveDefaultCodexPluginRoot(CODEX_APP_SERVER_MODULE_DIR);
 
 type ManagedCodexAppServerPaths = {
   commandPath: string;
@@ -76,6 +77,14 @@ function resolveManagedCodexAppServerCommandCandidates(
   ];
 }
 
+function resolveDefaultCodexPluginRoot(moduleDir: string): string {
+  const moduleBaseName = path.basename(moduleDir);
+  if (moduleBaseName === "dist" || moduleBaseName === "dist-runtime") {
+    return path.dirname(moduleDir);
+  }
+  return path.resolve(moduleDir, "..", "..");
+}
+
 function resolveManagedCodexAppServerCandidateRoots(
   pluginRoot: string,
   platform: NodeJS.Platform,
@@ -134,6 +143,10 @@ function resolveManagedCodexPackageBinCandidate(root: string): string | null {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+export const __testing = {
+  resolveDefaultCodexPluginRoot,
+};
 
 function isDistExtensionRoot(pluginRoot: string, platform: NodeJS.Platform): boolean {
   const pathApi = pathForPlatform(platform);

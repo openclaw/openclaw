@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
+  __testing,
   resolveManagedCodexAppServerPaths,
   resolveManagedCodexAppServerStartOptions,
 } from "./managed-binary.js";
@@ -64,6 +65,16 @@ describe("managed Codex app-server binary", () => {
     expect(paths.commandPath.endsWith(path.win32.join("node_modules", ".bin", "codex.cmd"))).toBe(
       true,
     );
+  });
+
+  it("uses the package root when the resolver is bundled into a dist chunk", () => {
+    expect(__testing.resolveDefaultCodexPluginRoot("/repo/openclaw/dist")).toBe("/repo/openclaw");
+    expect(__testing.resolveDefaultCodexPluginRoot("/repo/openclaw/dist-runtime")).toBe(
+      "/repo/openclaw",
+    );
+    expect(
+      __testing.resolveDefaultCodexPluginRoot("/repo/openclaw/extensions/codex/src/app-server"),
+    ).toBe("/repo/openclaw/extensions/codex");
   });
 
   it("finds Codex in the package install root used by packaged plugins", async () => {
