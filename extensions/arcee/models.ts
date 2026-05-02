@@ -1,6 +1,18 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ModelCompatConfig,
+  ModelDefinitionConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 
 export const ARCEE_BASE_URL = "https://api.arcee.ai/api/v1";
+export const ARCEE_TRINITY_LARGE_THINKING_COMPAT = {
+  supportsReasoningEffort: false,
+  supportsTools: false,
+} as const satisfies ModelCompatConfig;
+
+export function isArceeTrinityLargeThinkingModelId(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return normalized === "trinity-large-thinking" || normalized === "arcee/trinity-large-thinking";
+}
 
 export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
@@ -44,10 +56,7 @@ export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
       cacheRead: 0.25,
       cacheWrite: 0.25,
     },
-    compat: {
-      supportsReasoningEffort: false,
-      supportsTools: false,
-    },
+    compat: ARCEE_TRINITY_LARGE_THINKING_COMPAT,
   },
 ];
 

@@ -209,4 +209,80 @@ describe("arcee provider plugin", () => {
       baseUrl: "https://openrouter.ai/api/v1",
     });
   });
+
+  it("repairs stale Trinity tool compat on existing Arcee configs and runtime models", async () => {
+    const provider = await registerSingleProviderPlugin(arceePlugin);
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "arcee",
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/v1/",
+          models: [
+            {
+              id: "arcee/trinity-large-thinking",
+              name: "Trinity Large Thinking",
+              reasoning: true,
+              input: ["text"],
+              contextWindow: 262144,
+              maxTokens: 80000,
+              cost: {
+                input: 0.25,
+                output: 0.9,
+                cacheRead: 0.25,
+                cacheWrite: 0.25,
+              },
+              compat: {
+                supportsReasoningEffort: false,
+                supportsStrictMode: true,
+              },
+            },
+          ],
+        },
+      } as never),
+    ).toMatchObject({
+      baseUrl: "https://openrouter.ai/api/v1",
+      models: [
+        {
+          id: "arcee/trinity-large-thinking",
+          compat: {
+            supportsReasoningEffort: false,
+            supportsStrictMode: true,
+            supportsTools: false,
+          },
+        },
+      ],
+    });
+
+    expect(
+      provider.contributeResolvedModelCompat?.({
+        provider: "arcee",
+        modelId: "arcee/trinity-large-thinking",
+        model: {
+          provider: "arcee",
+          id: "arcee/trinity-large-thinking",
+          name: "Trinity Large Thinking",
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/api/v1",
+          reasoning: true,
+          input: ["text"],
+          contextWindow: 262144,
+          maxTokens: 80000,
+          cost: {
+            input: 0.25,
+            output: 0.9,
+            cacheRead: 0.25,
+            cacheWrite: 0.25,
+          },
+          compat: {
+            supportsReasoningEffort: false,
+          },
+        },
+      } as never),
+    ).toEqual({
+      supportsReasoningEffort: false,
+      supportsTools: false,
+    });
+  });
 });

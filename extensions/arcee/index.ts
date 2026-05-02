@@ -6,6 +6,10 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  ARCEE_TRINITY_LARGE_THINKING_COMPAT,
+  isArceeTrinityLargeThinkingModelId,
+} from "./models.js";
+import {
   applyArceeConfig,
   applyArceeOpenRouterConfig,
   ARCEE_DEFAULT_MODEL_REF,
@@ -17,6 +21,7 @@ import {
   normalizeArceeOpenRouterBaseUrl,
   toArceeOpenRouterModelId,
 } from "./provider-catalog.js";
+import { normalizeArceeProviderConfig } from "./provider-policy-api.js";
 
 const PROVIDER_ID = "arcee";
 const ARCEE_WIZARD_GROUP = {
@@ -120,13 +125,12 @@ export default definePluginEntry({
           config,
           providerId: PROVIDER_ID,
         }),
-      normalizeConfig: ({ providerConfig }) => {
-        const normalizedBaseUrl = normalizeArceeOpenRouterBaseUrl(providerConfig.baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-          : undefined;
-      },
+      normalizeConfig: ({ providerConfig }) => normalizeArceeProviderConfig(providerConfig),
       normalizeResolvedModel: ({ model }) => normalizeArceeResolvedModel(model),
+      contributeResolvedModelCompat: ({ modelId, model }) =>
+        isArceeTrinityLargeThinkingModelId(model.id) || isArceeTrinityLargeThinkingModelId(modelId)
+          ? ARCEE_TRINITY_LARGE_THINKING_COMPAT
+          : undefined,
       normalizeTransport: ({ api, baseUrl }) => {
         const normalizedBaseUrl = normalizeArceeOpenRouterBaseUrl(baseUrl);
         return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
