@@ -6273,6 +6273,74 @@ module.exports = {
           };
         },
       },
+      {
+        label: "does not warn when install paths resolve through a symlinked state root",
+        loadRegistry: () => {
+          useNoBundledPlugins();
+          const stateDir = makeTempDir();
+          const realHome = path.join(stateDir, "real-home");
+          const linkedHome = path.join(stateDir, "linked-home");
+          mkdirSafe(realHome);
+          fs.symlinkSync(realHome, linkedHome, process.platform === "win32" ? "junction" : "dir");
+
+          const pluginDir = path.join(
+            realHome,
+            ".openclaw",
+            "npm",
+            "node_modules",
+            "@example",
+            "tracked-symlink-install",
+          );
+          mkdirSafe(pluginDir);
+          const plugin = writePlugin({
+            id: "tracked-symlink-install",
+            body: simplePluginBody("tracked-symlink-install"),
+            dir: pluginDir,
+            filename: "index.cjs",
+          });
+          writePersistedInstalledPluginIndexInstallRecordsSync(
+            {
+              [plugin.id]: {
+                source: "npm",
+                spec: "@example/tracked-symlink-install@1.0.0",
+                installPath: path.join(
+                  linkedHome,
+                  ".openclaw",
+                  "npm",
+                  "node_modules",
+                  "@example",
+                  "tracked-symlink-install",
+                ),
+                version: "1.0.0",
+              },
+            },
+            { stateDir },
+          );
+
+          const warnings: string[] = [];
+          const registry = loadOpenClawPlugins({
+            cache: false,
+            logger: createWarningLogger(warnings),
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: stateDir,
+              OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+            },
+            config: {
+              plugins: {
+                enabled: true,
+              },
+            },
+          });
+
+          return {
+            registry,
+            warnings,
+            pluginId: plugin.id,
+            expectWarning: false,
+          };
+        },
+      },
     ] as const;
 
     runScenarioCases(scenarios, (scenario) => {
