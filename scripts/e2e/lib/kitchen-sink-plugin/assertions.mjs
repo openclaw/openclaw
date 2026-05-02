@@ -389,12 +389,7 @@ function assertInstalled() {
     if (!record.version || !record.integrity || !record.resolvedAt) {
       throw new Error(`missing ClawHub resolution metadata: ${JSON.stringify(record)}`);
     }
-    if (
-      !record.clawpackSha256 ||
-      record.clawpackSpecVersion !== 1 ||
-      !record.clawpackManifestSha256 ||
-      typeof record.clawpackSize !== "number"
-    ) {
+    if (!record.clawpackSha256 || typeof record.clawpackSize !== "number") {
       throw new Error(`missing kitchen-sink ClawPack metadata: ${JSON.stringify(record)}`);
     }
   }

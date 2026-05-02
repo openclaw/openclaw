@@ -534,12 +534,7 @@ function assertClawHubInstalled() {
   if (typeof record.installPath !== "string" || record.installPath.length === 0) {
     throw new Error(`missing ClawHub install path for ${pluginId}`);
   }
-  if (
-    !record.clawpackSha256 ||
-    record.clawpackSpecVersion !== 1 ||
-    !record.clawpackManifestSha256 ||
-    typeof record.clawpackSize !== "number"
-  ) {
+  if (!record.clawpackSha256 || typeof record.clawpackSize !== "number") {
     throw new Error(`missing ClawHub ClawPack metadata for ${pluginId}: ${JSON.stringify(record)}`);
   }
 

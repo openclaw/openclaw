@@ -84,7 +84,7 @@ Site: [clawhub.ai](https://clawhub.ai)
     `minGatewayVersion` compatibility before archive install runs, so
     incompatible hosts fail closed early instead of partially installing
     the package. When a package version publishes a ClawPack artifact,
-    OpenClaw prefers that artifact, verifies the ClawHub digest header and
+    OpenClaw prefers the exact uploaded npm-pack `.tgz`, verifies the ClawHub digest header and
     downloaded bytes, and records the ClawPack digest metadata for later
     updates. Older package versions without ClawPack metadata still use the
     legacy package archive verification path.
