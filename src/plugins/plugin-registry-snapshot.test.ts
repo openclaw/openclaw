@@ -96,7 +96,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("keeps persisted package plugins on the fast path when file signatures match", () => {
+  it("keeps persisted package plugins when metadata still matches", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");
     const stateDir = path.join(tempRoot, "state");
@@ -113,22 +113,14 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(record?.packageJson?.fileSignature).toBeDefined();
     writePersistedInstalledPluginIndexSync(index, { stateDir });
 
-    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
     const result = loadPluginRegistrySnapshotWithMetadata({
       config,
       env,
       stateDir,
     });
-    const pluginMetadataFileReads = readFileSyncSpy.mock.calls.filter((call) => {
-      const filePath = String(call[0]);
-      return (
-        filePath === path.join(rootDir, "openclaw.plugin.json") ||
-        filePath === path.join(rootDir, "package.json")
-      );
-    });
 
     expect(result.source).toBe("persisted");
-    expect(pluginMetadataFileReads).toEqual([]);
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("detects same-size same-mtime manifest replacements", () => {
@@ -185,6 +177,57 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       path.join(rootDir, "package.json"),
       JSON.stringify({ name: "demo", version: "1.0.1" }),
     );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    );
+  });
+
+  it("detects package.json replacements even when stored stat fields still match", () => {
+    const tempRoot = makeTempDir();
+    const rootDir = path.join(tempRoot, "workspace");
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {
+      plugins: {
+        load: { paths: [rootDir] },
+      },
+    };
+    writePackagePlugin(rootDir);
+    const index = loadInstalledPluginIndex({ config, env });
+
+    replaceFilePreservingSizeAndMtime(
+      path.join(rootDir, "package.json"),
+      JSON.stringify({ name: "demo", version: "1.0.1" }),
+    );
+    const stat = fs.statSync(path.join(rootDir, "package.json"));
+    const [plugin] = index.plugins;
+    if (!plugin?.packageJson) {
+      throw new Error("expected test plugin package metadata");
+    }
+    const stalePlugin = {
+      ...plugin,
+      packageJson: {
+        ...plugin.packageJson,
+        fileSignature: {
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          ctimeMs: stat.ctimeMs,
+        },
+      },
+    };
+    const staleIndex: InstalledPluginIndex = {
+      ...index,
+      plugins: [stalePlugin, ...index.plugins.slice(1)],
+    };
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({
       config,

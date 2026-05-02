@@ -98,9 +98,14 @@ describe("bundled plugin build entries", () => {
     expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/bluebubbles/"))).toBe(
       false,
     );
-    expect(artifacts).toContain("dist/extensions/acpx/index.js");
-    expect(artifacts).toContain("dist/extensions/googlechat/index.js");
-    expect(artifacts).toContain("dist/extensions/line/index.js");
+    for (const pluginId of ["acpx", "googlechat", "line"]) {
+      expect(
+        Object.keys(entries).some((entry) => entry.startsWith(`extensions/${pluginId}/`)),
+      ).toBe(true);
+      expect(
+        artifacts.some((artifact) => artifact.startsWith(`dist/extensions/${pluginId}/`)),
+      ).toBe(false);
+    }
     expect(Object.keys(entries).some((entry) => entry.startsWith("extensions/qqbot/"))).toBe(false);
     expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qqbot/"))).toBe(false);
   });
