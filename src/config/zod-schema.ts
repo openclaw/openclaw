@@ -1073,6 +1073,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         entries: z.record(z.string(), PluginEntrySchema).optional(),
+        bundledMode: z.enum(["compat", "respect-allow"]).optional(),
       })
       .strict()
       .optional(),
