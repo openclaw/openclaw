@@ -389,3 +389,61 @@ describe("applyPluginAutoEnable channels", () => {
     });
   });
 });
+
+describe("applyPluginAutoEnable — globally-installed plugin auto-load skip (issue #37548)", () => {
+  afterEach(() => {
+    resetPluginAutoEnableTestState();
+  });
+
+  it("does not add plugins.entries for a globally-installed plugin already auto-loaded via its manifest channel", () => {
+    // A globally-installed third-party plugin declares channels: ["acme-chat"] in its
+    // manifest. The plugin loader auto-discovers and loads it from ~/.openclaw/extensions/.
+    // Doctor must NOT also write plugins.entries.acme-chat, which would produce a
+    // "duplicate plugin id" warning at startup.
+    // See: https://github.com/openclaw/openclaw/issues/37548
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { "acme-chat": { apiKey: "test-key" } },
+      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([
+        { id: "acme-chat", channels: ["acme-chat"], origin: "global" },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["acme-chat"]).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("does not add plugins.entries for a workspace-installed plugin already auto-loaded via its manifest channel", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { "acme-chat": { apiKey: "test-key" } },
+      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([
+        { id: "acme-chat", channels: ["acme-chat"], origin: "workspace" },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["acme-chat"]).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it('still adds plugins.entries for a bundled plugin (origin "bundled", not auto-loaded from extensions directory)', () => {
+    // Bundled plugins are part of OpenClaw's own distribution. They are NOT
+    // auto-discovered from ~/.openclaw/extensions/, so they still require an
+    // explicit plugins.entries entry to be enabled.
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { "acme-chat": { apiKey: "test-key" } },
+      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([
+        { id: "acme-chat", channels: ["acme-chat"], origin: "bundled" },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["acme-chat"]?.enabled).toBe(true);
+  });
+});
