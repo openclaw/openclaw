@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,8 +27,8 @@ interface SessionData {
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
 }
 
-function loadTemplate(fileName: string): string {
-  return fs.readFileSync(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
+async function loadTemplate(fileName: string): Promise<string> {
+  return await fsp.readFile(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
 }
 
 function replaceHtmlPlaceholder(template: string, name: string, value: string): string {
@@ -51,12 +50,14 @@ function replaceHtmlPlaceholder(template: string, name: string, value: string): 
   return next;
 }
 
-function generateHtml(sessionData: SessionData): string {
-  const template = loadTemplate("template.html");
-  const templateCss = loadTemplate("template.css");
-  const templateJs = loadTemplate("template.js");
-  const markedJs = loadTemplate(path.join("vendor", "marked.min.js"));
-  const hljsJs = loadTemplate(path.join("vendor", "highlight.min.js"));
+async function generateHtml(sessionData: SessionData): Promise<string> {
+  const [template, templateCss, templateJs, markedJs, hljsJs] = await Promise.all([
+    loadTemplate("template.html"),
+    loadTemplate("template.css"),
+    loadTemplate("template.js"),
+    loadTemplate(path.join("vendor", "marked.min.js")),
+    loadTemplate(path.join("vendor", "highlight.min.js")),
+  ]);
 
   // Use pi-mono dark theme colors (matching their theme/dark.json)
   const themeVars = `
@@ -121,6 +122,15 @@ function generateHtml(sessionData: SessionData): string {
   ].reduce((html, [name, value]) => replaceHtmlPlaceholder(html, name, value), template);
 }
 
+async function fileExists(pathName: string): Promise<boolean> {
+  try {
+    await fsp.access(pathName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function readSessionDataFromTranscript(sessionFile: string): Promise<{
   header: SessionHeader | null;
   entries: PiSessionEntry[];
@@ -151,7 +161,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   }
   const { entry, sessionFile } = sessionTarget;
 
-  if (!fs.existsSync(sessionFile)) {
+  if (!(await fileExists(sessionFile))) {
     return { text: `❌ Session file not found: ${sessionFile}` };
   }
 
@@ -178,7 +188,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   };
 
   // 5. Generate HTML
-  const html = generateHtml(sessionData);
+  const html = await generateHtml(sessionData);
 
   // 6. Determine output path
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -193,12 +203,10 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
 
   // Ensure directory exists
   const outputDir = path.dirname(outputPath);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
+  await fsp.mkdir(outputDir, { recursive: true });
 
   // 7. Write file
-  fs.writeFileSync(outputPath, html, "utf-8");
+  await fsp.writeFile(outputPath, html, "utf-8");
 
   const relativePath = path.relative(params.workspaceDir, outputPath);
   const displayPath = relativePath.startsWith("..") ? outputPath : relativePath;
