@@ -126,6 +126,26 @@ export function isAnthropicFoundryDeployment(modelName?: string | null): boolean
   return normalized.startsWith("claude");
 }
 
+/**
+ * Split a list of Foundry deployments into ones supported by the built-in
+ * provider and Anthropic (Claude) deployments that require a custom provider.
+ * Single source of truth so the picker and the persisted catalog stay in sync.
+ */
+export function partitionFoundryDeployments<T extends { modelName?: string }>(
+  deployments: readonly T[],
+): { supported: T[]; anthropic: T[] } {
+  const supported: T[] = [];
+  const anthropic: T[] = [];
+  for (const deployment of deployments) {
+    if (isAnthropicFoundryDeployment(deployment.modelName)) {
+      anthropic.push(deployment);
+    } else {
+      supported.push(deployment);
+    }
+  }
+  return { supported, anthropic };
+}
+
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized) {

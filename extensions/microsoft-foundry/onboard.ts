@@ -25,7 +25,7 @@ import {
   requiresFoundryMaxCompletionTokens,
   DEFAULT_API,
   DEFAULT_GPT5_API,
-  isAnthropicFoundryDeployment,
+  partitionFoundryDeployments,
   usesFoundryResponsesByDefault,
 } from "./shared.js";
 
@@ -167,15 +167,15 @@ export async function selectFoundryDeployment(
   ctx: ProviderAuthContext,
   resource: FoundryResourceOption,
   deployments: AzDeploymentSummary[],
-): Promise<AzDeploymentSummary> {
+): Promise<{ selected: AzDeploymentSummary; supported: AzDeploymentSummary[] }> {
   // Filter out Anthropic (Claude) deployments — they require a different API
   // shape (/anthropic/v1/messages) that the built-in provider does not support
   // yet.  Use a custom provider pointed at the Anthropic Foundry endpoint
-  // instead.  See #60546.
-  const anthropicNames = deployments
-    .filter((d) => isAnthropicFoundryDeployment(d.modelName))
-    .map((d) => d.name);
-  const supported = deployments.filter((d) => !isAnthropicFoundryDeployment(d.modelName));
+  // instead.  See #60546.  The same `supported` list is reused by the caller
+  // when persisting the deployment catalog so unsupported entries never leak
+  // through into the saved provider config.
+  const { supported, anthropic } = partitionFoundryDeployments(deployments);
+  const anthropicNames = anthropic.map((d) => d.name);
   if (anthropicNames.length > 0) {
     await ctx.prompter.note(
       [
@@ -205,7 +205,7 @@ export async function selectFoundryDeployment(
   if (supported.length === 1) {
     const only = supported[0];
     await ctx.prompter.note(`Using deployment: ${only.name}`, "Model Deployment");
-    return only;
+    return { selected: only, supported };
   }
   const selectedDeploymentName = await ctx.prompter.select({
     message: "Select model deployment",
@@ -217,7 +217,9 @@ export async function selectFoundryDeployment(
         .join(" | "),
     })),
   });
-  return supported.find((deployment) => deployment.name === selectedDeploymentName) ?? supported[0];
+  const selected =
+    supported.find((deployment) => deployment.name === selectedDeploymentName) ?? supported[0];
+  return { selected, supported };
 }
 
 async function promptFoundryApi(
