@@ -24,7 +24,7 @@ const kimiCodingPresetAppliers = createDefaultModelPresetAppliers({
     }
     return {
       providerId: "kimi",
-      api: "anthropic-messages",
+      api: "openai-completions",
       baseUrl: KIMI_CODING_BASE_URL,
       defaultModel,
       defaultModelId: KIMI_CODING_DEFAULT_MODEL_ID,

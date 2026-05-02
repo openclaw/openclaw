@@ -49,8 +49,8 @@ describe("Kimi implicit provider (#22409)", () => {
 
     expect(provider).toMatchObject({
       apiKey: "test-key",
-      baseUrl: "https://api.kimi.com/coding/",
-      api: "anthropic-messages",
+      baseUrl: "https://api.kimi.com/coding/v1",
+      api: "openai-completions",
     });
   });
 

@@ -33,10 +33,10 @@ const KIMI_TOOL_TEXT =
 const KIMI_MULTI_TOOL_TEXT =
   ' <|tool_calls_section_begin|> <|tool_call_begin|> functions.read:0 <|tool_call_argument_begin|> {"file_path":"./package.json"} <|tool_call_end|> <|tool_call_begin|> functions.write:1 <|tool_call_argument_begin|> {"file_path":"./out.txt","content":"done"} <|tool_call_end|> <|tool_calls_section_end|>';
 const KIMI_MODEL = {
-  api: "anthropic-messages",
+  api: "openai-completions",
   provider: "kimi",
   id: "k2p5",
-} as Model<"anthropic-messages">;
+} as Model<"openai-completions">;
 const KIMI_CONTEXT = { messages: [] } as Context;
 
 function createReadToolCall() {
@@ -124,7 +124,7 @@ describe("kimi tool-call markup wrapper", () => {
 
     const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
     const stream = wrapped(
-      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { api: "openai-completions", provider: "kimi", id: "k2p5" } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     ) as FakeStream;
@@ -187,7 +187,7 @@ describe("kimi tool-call markup wrapper", () => {
 
     const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
     const stream = wrapped(
-      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { api: "openai-completions", provider: "kimi", id: "k2p5" } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     ) as FakeStream;
@@ -268,10 +268,10 @@ describe("kimi tool-call markup wrapper", () => {
     const wrapped = createKimiThinkingWrapper(baseStreamFn, "disabled");
     void wrapped(
       {
-        api: "anthropic-messages",
+        api: "openai-completions",
         provider: "kimi",
         id: "kimi-code",
-      } as Model<"anthropic-messages">,
+      } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     );
@@ -294,10 +294,10 @@ describe("kimi tool-call markup wrapper", () => {
 
     void wrapped(
       {
-        api: "anthropic-messages",
+        api: "openai-completions",
         provider: "kimi",
         id: "kimi-code",
-      } as Model<"anthropic-messages">,
+      } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     );
@@ -319,10 +319,10 @@ describe("kimi tool-call markup wrapper", () => {
 
     void wrapped(
       {
-        api: "anthropic-messages",
+        api: "openai-completions",
         provider: "kimi",
         id: "kimi-code",
-      } as Model<"anthropic-messages">,
+      } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     );

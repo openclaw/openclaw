@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Providers/Kimi: switch the bundled Kimi Coding provider to the OpenAI-compatible `/chat/completions` endpoint (`https://api.kimi.com/coding/v1`) so image attachments (`image_url` base64) are accepted instead of returning 403 Forbidden. Fixes #75959. Thanks @hpfan.
+
 ### Changes
 
 - Tools: add a platform-level tool descriptor planner for descriptor-first visibility, generic availability checks, and executor references. Thanks @shakkernerd.
