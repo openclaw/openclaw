@@ -258,6 +258,7 @@ describeLive("gateway live (cli backend)", () => {
       const schemaProbePluginPath = CLI_MCP_SCHEMA_PROBE
         ? await createMcpSchemaProbePlugin(tempDir)
         : undefined;
+      const useMinimalToolsProfile = providerId === "codex-cli" && !schemaProbePluginPath;
       process.env.OPENCLAW_STATE_DIR = stateDir;
       const bundleMcp = backendResolved?.bundleMcp === true;
       const bootstrapWorkspace = await createBootstrapWorkspace(tempDir);
@@ -318,6 +319,14 @@ describeLive("gateway live (cli backend)", () => {
                 },
               }
             : cfg.models,
+        ...(useMinimalToolsProfile
+          ? {
+              tools: {
+                ...cfg.tools,
+                profile: "minimal" as const,
+              },
+            }
+          : {}),
         agents: {
           ...cfg.agents,
           defaults: {
