@@ -101,8 +101,7 @@ export function applyConfiguredContextWindows(params: {
 }
 
 function loadModelsConfigRuntime() {
-  CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimePromise ??= import("./models-config.runtime.js");
-  return CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimePromise;
+  return CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.load();
 }
 
 function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {

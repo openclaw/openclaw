@@ -1026,7 +1026,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     loadModules: options.loadModules,
     runtimeSubagentMode,
     pluginSdkResolution: options.pluginSdkResolution,
-    coreGatewayMethodNames,
+    ...(coreGatewayMethodNames !== undefined && { coreGatewayMethodNames }),
     activate: options.activate,
   });
   return {

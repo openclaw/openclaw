@@ -7,6 +7,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -52,15 +53,16 @@ let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
-let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
+const modelSuppressionLoader = createLazyImportLoader(
+  () => import("./model-suppression.runtime.js"),
+);
 
 function shouldLogModelCatalogTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
 
 function loadModelSuppression() {
-  modelSuppressionPromise ??= import("./model-suppression.runtime.js");
-  return modelSuppressionPromise;
+  return modelSuppressionLoader.load();
 }
 
 export function resetModelCatalogCache() {
