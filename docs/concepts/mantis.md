@@ -352,6 +352,13 @@ comment on that bug or fix PR with inline before/after screenshots. Do not post
 the primary proof only on a generic QA automation PR. Raw logs, observed
 messages, and other bulky evidence stay in the Actions artifact.
 
+Production workflows should post those comments with the Mantis GitHub App, not
+with `github-actions[bot]`. Store the app id and private key as
+`MANTIS_GITHUB_APP_ID` and `MANTIS_GITHUB_APP_PRIVATE_KEY` GitHub Actions
+secrets. If those secrets are missing, the workflow may fall back to
+`github-actions[bot]` for local bring-up, but that is not the desired long-term
+identity.
+
 The PR comment should be short and visual:
 
 ```md
