@@ -486,6 +486,7 @@ vi.mock(buildDiscordSourceModuleId("monitor/auto-presence.js"), () => ({
 
 vi.mock(buildDiscordSourceModuleId("monitor/commands.js"), () => ({
   resolveDiscordSlashCommandConfig: () => ({ ephemeral: false }),
+  resolveDiscordSlashCommandDeployConfig: () => ({ mode: "changed-only" }),
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/exec-approvals.js"), () => ({

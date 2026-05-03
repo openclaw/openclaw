@@ -1,4 +1,8 @@
-import type { DiscordSlashCommandConfig } from "openclaw/plugin-sdk/config-types";
+import type {
+  DiscordSlashCommandConfig,
+  DiscordSlashCommandDeployConfig,
+  DiscordSlashCommandDeployMode,
+} from "openclaw/plugin-sdk/config-types";
 
 export function resolveDiscordSlashCommandConfig(
   raw?: DiscordSlashCommandConfig,
@@ -6,4 +10,13 @@ export function resolveDiscordSlashCommandConfig(
   return {
     ephemeral: raw?.ephemeral !== false,
   };
+}
+
+export function resolveDiscordSlashCommandDeployConfig(
+  raw?: DiscordSlashCommandDeployMode | DiscordSlashCommandDeployConfig,
+): {
+  mode: DiscordSlashCommandDeployMode;
+} {
+  const mode = typeof raw === "string" ? raw : (raw?.mode ?? "changed-only");
+  return { mode };
 }

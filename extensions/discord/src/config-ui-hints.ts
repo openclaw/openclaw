@@ -29,6 +29,14 @@ export const discordChannelConfigUiHints = {
     label: "Discord Native Skill Commands",
     help: 'Override native skill commands for Discord (bool or "auto").',
   },
+  slashCommandDeploy: {
+    label: "Discord Native Slash Deploy Mode",
+    help: 'Startup deploy policy for Discord application commands when native slash commands are enabled. Use "changed-only" (default), "always", "disabled", or the object form { mode: "changed-only" }.',
+  },
+  "slashCommandDeploy.mode": {
+    label: "Discord Native Slash Deploy Mode",
+    help: 'Startup deploy policy for Discord application commands when native slash commands are enabled: "changed-only" (default; persist fingerprints under the OpenClaw state dir and skip deploy REST until the serialized command sets change), "always" (reconcile on each gateway restart), or "disabled" (skip automatic startup deploy without affecting explicit commands.native=false clearing).',
+  },
   streaming: {
     label: "Discord Streaming Mode",
     help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',

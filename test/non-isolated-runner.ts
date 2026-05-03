@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { TestRunner, type RunnerTestSuite, vi } from "vitest";
+import { type RunnerTestSuite, vi } from "vitest";
+import { VitestTestRunner } from "vitest/runners";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -60,7 +61,7 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
   process.env.XDG_CACHE_HOME = path.join(testHome, ".cache");
 }
 
-export default class OpenClawNonIsolatedRunner extends TestRunner {
+export default class OpenClawNonIsolatedRunner extends VitestTestRunner {
   override onCollectStart(file: { filepath: string }) {
     super.onCollectStart(file);
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
