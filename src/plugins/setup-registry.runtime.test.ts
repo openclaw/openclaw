@@ -7,6 +7,8 @@ import {
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
 const loadPluginRegistrySnapshotMock = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndexMock = vi.hoisted(() => vi.fn());
@@ -26,6 +28,7 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
 
 afterEach(() => {
   clearCurrentPluginMetadataSnapshot();
+  resetPluginRuntimeStateForTest();
   loadPluginRegistrySnapshotMock.mockReset();
   loadPluginManifestRegistryForInstalledIndexMock.mockReset();
   loadPluginMetadataSnapshotMock.mockReset();
@@ -34,6 +37,7 @@ afterEach(() => {
 function createCurrentSnapshot(params: {
   manifestHash: string;
   cliBackends: string[];
+  workspaceDir?: string;
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
   const index: InstalledPluginIndex = {
@@ -72,8 +76,10 @@ function createCurrentSnapshot(params: {
         env: process.env,
         index,
         policyHash,
+        workspaceDir: params.workspaceDir,
       },
     ),
+    workspaceDir: params.workspaceDir,
     index,
     plugins: [
       {
@@ -165,6 +171,54 @@ describe("setup-registry runtime fallback", () => {
 
     expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli" })).toBeUndefined();
     expect(resolvePluginSetupCliBackendRuntime({ backend: "next-cli" })).toEqual({
+      pluginId: "openai",
+      backend: { id: "Next-CLI" },
+    });
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("uses workspace-scoped current metadata through the active plugin runtime", async () => {
+    const { __testing, resolvePluginSetupCliBackendRuntime } =
+      await import("./setup-registry.runtime.js");
+    __testing.resetRuntimeState();
+    __testing.setRuntimeModuleForTest(null);
+
+    setActivePluginRegistry(
+      createEmptyPluginRegistry(),
+      "workspace-a",
+      "gateway-bindable",
+      "/workspace/a",
+    );
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "alpha",
+        cliBackends: ["Codex-CLI"],
+        workspaceDir: "/workspace/a",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli", config: {} })).toEqual({
+      pluginId: "openai",
+      backend: { id: "Codex-CLI" },
+    });
+    expect(
+      resolvePluginSetupCliBackendRuntime({ backend: "next-cli", config: {} }),
+    ).toBeUndefined();
+
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "bravo",
+        cliBackends: ["Next-CLI"],
+        workspaceDir: "/workspace/a",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(
+      resolvePluginSetupCliBackendRuntime({ backend: "codex-cli", config: {} }),
+    ).toBeUndefined();
+    expect(resolvePluginSetupCliBackendRuntime({ backend: "next-cli", config: {} })).toEqual({
       pluginId: "openai",
       backend: { id: "Next-CLI" },
     });

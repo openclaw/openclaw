@@ -1,11 +1,13 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
 type SetupRegistryRuntimeModule = Pick<
   typeof import("./setup-registry.js"),
@@ -17,6 +19,13 @@ type SetupCliBackendRuntimeEntry = {
   backend: {
     id: string;
   };
+};
+
+type SetupCliBackendRuntimeLookupParams = {
+  backend: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 const require = createRequire(import.meta.url);
@@ -40,22 +49,36 @@ export const __testing = {
   },
 };
 
-function resolveMetadataSnapshotForSetupCliBackends(): {
+function resolveMetadataSnapshotForSetupCliBackends(
+  params: Omit<SetupCliBackendRuntimeLookupParams, "backend"> = {},
+): {
   snapshot: PluginMetadataSnapshot;
   cacheable: boolean;
 } {
-  const current = getCurrentPluginMetadataSnapshot({ env: process.env });
+  const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const current = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env,
+    workspaceDir,
+  });
   if (current) {
     return { snapshot: current, cacheable: true };
   }
   return {
-    snapshot: loadPluginMetadataSnapshot({ config: {}, env: process.env }),
+    snapshot: loadPluginMetadataSnapshot({
+      config: params.config ?? {},
+      env,
+      workspaceDir,
+    }),
     cacheable: false,
   };
 }
 
-function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
-  const { snapshot, cacheable } = resolveMetadataSnapshotForSetupCliBackends();
+function resolveBundledSetupCliBackends(
+  params: Omit<SetupCliBackendRuntimeLookupParams, "backend"> = {},
+): SetupCliBackendRuntimeEntry[] {
+  const { snapshot, cacheable } = resolveMetadataSnapshotForSetupCliBackends(params);
   const configFingerprint = snapshot.configFingerprint;
   if (
     cacheable &&
@@ -98,13 +121,13 @@ function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {
   return null;
 }
 
-export function resolvePluginSetupCliBackendRuntime(params: { backend: string }) {
+export function resolvePluginSetupCliBackendRuntime(params: SetupCliBackendRuntimeLookupParams) {
   const normalized = normalizeProviderId(params.backend);
   const runtime = loadSetupRegistryRuntime();
   if (runtime !== null) {
     return runtime.resolvePluginSetupCliBackend(params);
   }
-  return resolveBundledSetupCliBackends().find(
+  return resolveBundledSetupCliBackends(params).find(
     (entry) => normalizeProviderId(entry.backend.id) === normalized,
   );
 }

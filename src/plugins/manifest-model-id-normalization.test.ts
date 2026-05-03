@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearCurrentPluginMetadataSnapshot,
   resolvePluginMetadataControlPlaneFingerprint,
@@ -11,6 +11,8 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
 const ORIGINAL_ENV = {
   OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
@@ -83,6 +85,7 @@ function writeNormalizerManifest(params: { pluginDir: string; prefix: string }):
 function createCurrentSnapshot(params: {
   manifestHash: string;
   prefix: string;
+  workspaceDir?: string;
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
   const index: InstalledPluginIndex = {
@@ -121,8 +124,10 @@ function createCurrentSnapshot(params: {
         env: process.env,
         index,
         policyHash,
+        workspaceDir: params.workspaceDir,
       },
     ),
+    workspaceDir: params.workspaceDir,
     index,
     plugins: [
       {
@@ -147,8 +152,13 @@ function normalizeDemoModel(modelId = "demo-model"): string | undefined {
 }
 
 describe("manifest model id normalization", () => {
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
   afterEach(() => {
     clearCurrentPluginMetadataSnapshot();
+    resetPluginRuntimeStateForTest();
     restoreEnv();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -171,6 +181,37 @@ describe("manifest model id normalization", () => {
       createCurrentSnapshot({
         manifestHash: "bravo",
         prefix: "bravo",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(normalizeDemoModel()).toBe("bravo/demo-model");
+  });
+
+  it("uses workspace-scoped current metadata through the active plugin runtime", () => {
+    setActivePluginRegistry(
+      createEmptyPluginRegistry(),
+      "workspace-a",
+      "gateway-bindable",
+      "/workspace/a",
+    );
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "alpha",
+        prefix: "alpha",
+        workspaceDir: "/workspace/a",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
+    expect(normalizeDemoModel("second-model")).toBe("alpha/second-model");
+
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "bravo",
+        prefix: "bravo",
+        workspaceDir: "/workspace/a",
       }),
       { config: {}, env: process.env },
     );
