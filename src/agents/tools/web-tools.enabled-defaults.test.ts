@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -10,6 +14,25 @@ import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 const runWebSearchCalls = vi.hoisted(
   () => [] as Array<{ config?: unknown; runtimeWebSearch?: unknown }>,
 );
+
+const resolveManifestContractOwnerPluginIdMock = vi.hoisted(() =>
+  vi.fn<
+    (params: {
+      contract: string;
+      value?: string;
+      origin?: string;
+      config?: unknown;
+    }) => string | undefined
+  >(() => undefined),
+);
+
+vi.mock("../../plugins/plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/plugin-registry.js")>();
+  return {
+    ...actual,
+    resolveManifestContractOwnerPluginId: resolveManifestContractOwnerPluginIdMock,
+  };
+});
 
 vi.mock("../../web-search/runtime.js", async () => {
   const { getActivePluginRegistry } = await import("../../plugins/runtime.js");
@@ -68,12 +91,16 @@ vi.mock("../../web-search/runtime.js", async () => {
 beforeEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearActiveRuntimeWebToolsMetadata();
+  clearRuntimeConfigSnapshot();
   runWebSearchCalls.length = 0;
+  resolveManifestContractOwnerPluginIdMock.mockReset();
+  resolveManifestContractOwnerPluginIdMock.mockReturnValue(undefined);
 });
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearActiveRuntimeWebToolsMetadata();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("web tools defaults", () => {
@@ -218,5 +245,76 @@ describe("web tools defaults", () => {
     expect(runWebSearchCalls[0]?.runtimeWebSearch).toMatchObject({
       selectedProvider: "fresh",
     });
+  });
+
+  it("resolves the bundled-plugin owner using the runtime snapshot when late-binding", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push({
+      pluginId: "brave",
+      pluginName: "Brave",
+      source: "test",
+      provider: {
+        id: "brave",
+        label: "Brave",
+        hint: "Brave runtime provider",
+        envVars: ["BRAVE_API_KEY"],
+        placeholder: "brave-...",
+        signupUrl: "https://example.com/brave",
+        autoDetectOrder: 1,
+        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+        getCredentialValue: () => "configured",
+        setCredentialValue: () => {},
+        createTool: () => ({
+          description: "brave runtime tool",
+          parameters: {},
+          execute: async () => ({ provider: "brave" }),
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+    const runtimeConfig = {
+      tools: { web: { search: { provider: "brave" } } },
+      plugins: {
+        entries: {
+          brave: {
+            enabled: true,
+            config: { webSearch: { apiKey: "resolved-brave-key" } },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, runtimeConfig);
+    setActiveRuntimeWebToolsMetadata({
+      search: {
+        providerConfigured: "brave",
+        providerSource: "configured",
+        selectedProvider: "brave",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      fetch: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      diagnostics: [],
+    });
+
+    const tool = createWebSearchTool({
+      lateBindRuntimeConfig: true,
+    });
+
+    const result = await tool?.execute?.("call-bundled-owner-lookup", {});
+
+    expect(result?.details).toMatchObject({ provider: "brave" });
+    const ownerLookups = resolveManifestContractOwnerPluginIdMock.mock.calls;
+    expect(ownerLookups.length).toBeGreaterThan(0);
+    // Regression guard: pre-fix, the lateBind path passed `config: undefined`,
+    // leaving the bundled owner lookup unable to resolve the runtime-configured
+    // provider for sub-agent sessions whose active plugin registry has been
+    // narrowed by the tool allowlist. The fix late-binds the owner-lookup config
+    // to the active runtime snapshot so bundled providers stay resolvable.
+    const lateBindLookup = ownerLookups.find(([call]) => call?.value === "brave");
+    expect(lateBindLookup).toBeDefined();
+    expect(lateBindLookup?.[0]?.config).toBe(runtimeConfig);
   });
 });

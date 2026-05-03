@@ -1,3 +1,4 @@
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManifestContractOwnerPluginId } from "../../plugins/plugin-registry.js";
 import { getActiveRuntimeWebToolsMetadata } from "../../secrets/runtime-web-tools-state.js";
@@ -93,13 +94,21 @@ export function createWebSearchTool(options?: {
       const runtimeProviderId =
         runtimeWebSearch?.selectedProvider ?? runtimeWebSearch?.providerConfigured;
       const config = options?.lateBindRuntimeConfig === true ? undefined : options?.config;
+      // The bundled-plugin owner lookup needs config context to find plugin manifests
+      // on disk. When late-binding, fall back to the active runtime snapshot so
+      // sub-agent sessions whose tool allowlist has narrowed the active plugin
+      // registry can still resolve `preferRuntimeProviders` against the bundled set.
+      const ownerLookupConfig =
+        options?.lateBindRuntimeConfig === true
+          ? (getRuntimeConfigSnapshot() ?? undefined)
+          : options?.config;
       const preferRuntimeProviders =
         Boolean(runtimeProviderId) &&
         !resolveManifestContractOwnerPluginId({
           contract: "webSearchProviders",
           value: runtimeProviderId,
           origin: "bundled",
-          config,
+          config: ownerLookupConfig,
         });
       const result = await runWebSearch({
         config,
