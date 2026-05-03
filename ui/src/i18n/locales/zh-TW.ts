@@ -921,6 +921,7 @@ export const zh_TW: TranslationMap = {
     vi: "Tiếng Việt（越南文）",
     nl: "Nederlands（荷蘭文）",
     fa: "فارسی（波斯文）",
+    ru: "Русский（俄文）",
   },
   cron: {
     quickCreate: {

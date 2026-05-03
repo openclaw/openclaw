@@ -937,6 +937,7 @@ export const ja_JP: TranslationMap = {
     vi: "Tiếng Việt（ベトナム語）",
     nl: "Nederlands（オランダ語）",
     fa: "فارسی（ペルシア語）",
+    ru: "Русский（ロシア語）",
   },
   cron: {
     quickCreate: {

@@ -14,6 +14,7 @@ import { ko } from "../locales/ko.ts";
 import { nl } from "../locales/nl.ts";
 import { pl } from "../locales/pl.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
+import { ru } from "../locales/ru.ts";
 import { th } from "../locales/th.ts";
 import { tr } from "../locales/tr.ts";
 import { uk } from "../locales/uk.ts";
@@ -118,6 +119,7 @@ describe("i18n", () => {
     expect((nl.common as { version?: string }).version).toBeTruthy();
     expect((pl.common as { version?: string }).version).toBeTruthy();
     expect((pt_BR.common as { version?: string }).version).toBeTruthy();
+    expect((ru.common as { version?: string }).version).toBeTruthy();
     expect((th.common as { version?: string }).version).toBeTruthy();
     expect((tr.common as { version?: string }).version).toBeTruthy();
     expect((uk.common as { version?: string }).version).toBeTruthy();
@@ -133,6 +135,7 @@ describe("i18n", () => {
       fa,
       it: itLocale,
       nl,
+      ru,
       vi: viLocale,
     })) {
       expect((value.common as { health: string }).health, locale).not.toBe(englishHealth);
@@ -154,6 +157,7 @@ describe("i18n", () => {
       nl,
       pl,
       pt_BR,
+      ru,
       th,
       tr,
       uk,

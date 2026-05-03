@@ -939,6 +939,7 @@ export const tr: TranslationMap = {
     vi: "Tiếng Việt (Vietnamca)",
     nl: "Nederlands (Felemenkçe)",
     fa: "فارسی (Farsça)",
+    ru: "Русский (Rusça)",
   },
   cron: {
     quickCreate: {

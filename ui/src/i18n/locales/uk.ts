@@ -938,6 +938,7 @@ export const uk: TranslationMap = {
     vi: "Tiếng Việt (вʼєтнамська)",
     nl: "Nederlands (нідерландська)",
     fa: "فارسی (перська)",
+    ru: "Русский (російська)",
   },
   cron: {
     quickCreate: {
