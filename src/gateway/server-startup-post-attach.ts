@@ -19,7 +19,15 @@ import type { logGatewayStartup } from "./server-startup-log.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
+/** Runtime stale-lock threshold (30 min) — used by cleanStaleLockFiles outside startup. */
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
+/**
+ * Startup lock-cleanup threshold. At startup we know all previous-process
+ * locks are orphaned, so we remove every .lock file regardless of age.
+ * staleMs must be >0 because resolvePositiveMs clamps 0 to the 30-min default.
+ * Using staleMs=1 forces all locks to be considered stale.  See AGE-11858.
+ */
+const SESSION_LOCK_STARTUP_STALE_MS = 1;
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
@@ -300,7 +308,7 @@ export async function startGatewaySidecars(params: {
       for (const sessionsDir of sessionDirs) {
         const result = await cleanStaleLockFiles({
           sessionsDir,
-          staleMs: SESSION_LOCK_STALE_MS,
+          staleMs: SESSION_LOCK_STARTUP_STALE_MS,
           removeStale: true,
           log: { warn: (message) => params.log.warn(message) },
         });
@@ -315,6 +323,31 @@ export async function startGatewaySidecars(params: {
       }
     } catch (err) {
       params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+    }
+  });
+
+  // Reset stale "running" sessions that survived lock cleanup.
+  // Sessions stuck in "running" after a restart have no live process and block
+  // new runs until the periodic prune cycle clears them (~20 min MTTR).
+  await measureStartup(params.startupTrace, "sidecars.stale-session-reset", async () => {
+    try {
+      const { resetStaleRunningSessions } = await import("./server-startup-stale-session-reset.js");
+      const result = await resetStaleRunningSessions({
+        // At gateway startup, no process is alive, so ALL running sessions
+        // are stale regardless of their updatedAt timestamp.
+        resetAllRunning: true,
+        log: {
+          warn: (message) => params.log.warn(message),
+          info: (message) => params.log.warn(message),
+        },
+      });
+      if (result.resetCount > 0) {
+        params.log.warn(
+          `stale-session-reset: reset ${result.resetCount} stale running session(s) on startup`,
+        );
+      }
+    } catch (err) {
+      params.log.warn(`stale session reset failed on startup: ${String(err)}`);
     }
   });
 
