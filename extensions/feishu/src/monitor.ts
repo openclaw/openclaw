@@ -23,7 +23,7 @@ async function loadMonitorAccountRuntime() {
   for (let i = 0; i < 3; i++) {
     try {
       const mod = await (monitorAccountRuntimePromise ??= import("./monitor.account.js"));
-      if (mod && typeof mod.monitorSingleAccount === "function") return mod;
+      if (typeof mod?.monitorSingleAccount === "function") return mod;
       monitorAccountRuntimePromise = undefined;
     } catch {
       monitorAccountRuntimePromise = undefined;
