@@ -254,6 +254,29 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
+# ──── Custom: Python venv for skill deps ────
+# Pass --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 python3-pip python3-venv build-essential python3-dev gettext-base"
+# at build time so python3 + venv tooling is available before this RUN executes.
+RUN python3 -m venv /opt/skills-venv \
+    && /opt/skills-venv/bin/pip install --no-cache-dir \
+        websockets
+ENV PATH="/opt/skills-venv/bin:$PATH"
+
+# ──── Custom: Bake agent workspace ────
+# Each agent contains its own SOUL.md, AGENT.md, skills, etc. — fully self-contained.
+COPY --chown=node:node ./openclaw-team-workspace /app/agent-workspace
+
+# ──── Custom: Templates for first-run config seeding ────
+COPY ./templates/openclaw.template.json /opt/templates/openclaw.template.json
+COPY ./templates/auth-profiles.template.json /opt/templates/auth-profiles.template.json
+COPY ./templates/USER.template.md /opt/templates/USER.template.md
+
+# ──── Custom: Entrypoint script ────
+# Handles first-run seeding: substitutes env vars into config + USER.md, copies
+# the baked agent workspace into the user's mounted workspace volume on first start.
+COPY ./scripts/openclaw-entrypoint.sh /usr/local/bin/openclaw-entrypoint.sh
+RUN chmod +x /usr/local/bin/openclaw-entrypoint.sh
+
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
@@ -279,4 +302,9 @@ USER node
 # For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# ──── Custom: Wrap CMD with our entrypoint ────
+# The entrypoint script seeds first-run config from templates + env vars,
+# then exec's into whatever CMD specifies (the OpenClaw gateway start command below).
+ENTRYPOINT ["/usr/local/bin/openclaw-entrypoint.sh"]
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]

@@ -150,3 +150,10 @@ test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
 extensions/qa-lab/web/dist/
+
+# Unrequired agent md files
+openclaw-team-workspace/main-agent/HEARTBEAT.md
+openclaw-team-workspace/main-agent/USER.md
+openclaw-team-workspace/main-agent/TOOLS.md
+
+openclaw-team-workspace/outlook-traige-agent/USER.md

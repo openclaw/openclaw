@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "profiles": {
+    "google:default": {
+      "type": "api_key",
+      "provider": "google",
+      "key": "${LLM_API_KEY}"
+    }
+  }
+}

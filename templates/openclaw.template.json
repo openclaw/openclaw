@@ -1,0 +1,131 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "google/gemini-3-flash-preview"
+      },
+      "models": {
+        "google/gemini-3.1-pro-preview": {},
+        "google/gemini-3-flash-preview": {}
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "tools": {
+          "loopDetection": {
+            "enabled": true,
+            "criticalThreshold": 5,
+            "warningThreshold": 3
+          },
+          "deny": ["sessions_spawn"]
+        },
+        "workspace": "/home/node/workspace/main-agent"
+      },
+      {
+        "id": "outlook-triage-agent",
+        "name": "Outlook Triage Agent",
+        "workspace": "/home/node/workspace/outlook-traige-agent",
+        "agentDir": "/home/node/.openclaw/agents/outlook-triage-agent/agent",
+        "model": "google/gemini-3-flash-preview",
+        "subagents": {
+          "allowAgents": ["main"]
+        }
+      }
+    ]
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "${GATEWAY_AUTH_TOKEN}"
+    },
+    "port": 18789,
+    "bind": "loopback",
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "controlUi": {
+      "allowInsecureAuth": true
+    },
+    "nodes": {
+      "denyCommands": [
+        "camera.snap",
+        "camera.clip",
+        "screen.record",
+        "contacts.add",
+        "calendar.add",
+        "reminders.add",
+        "sms.send",
+        "sms.search"
+      ]
+    }
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "tools": {
+    "profile": "coding",
+    "agentToAgent": {
+      "enabled": true,
+      "allow": ["main", "outlook-triage-agent"]
+    },
+    "sessions": {
+      "visibility": "all"
+    }
+  },
+  "auth": {
+    "profiles": {
+      "google:default": {
+        "provider": "google",
+        "mode": "api_key"
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "groups": {
+        "*": {
+          "requireMention": true
+        }
+      },
+      "botToken": "${TELEGRAM_BOT_TOKEN}",
+      "streaming": {
+        "mode": "off"
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "google": {
+        "enabled": true
+      }
+    }
+  },
+  "hooks": {
+    "enabled": true,
+    "token": "${HOOKS_TOKEN}",
+    "allowedAgentIds": ["outlook-triage-agent", "main"],
+    "allowRequestSessionKey": true,
+    "allowedSessionKeyPrefixes": ["agent:main:telegram:", "hook:"],
+    "defaultSessionKey": "hook:ingress"
+  },
+  "skills": {
+    "install": {
+      "nodeManager": "npm"
+    },
+    "entries": {
+      "outlook": {
+        "enabled": true
+      },
+      "microsoft-teams": {
+        "enabled": true
+      },
+      "cua": {
+        "enabled": true
+      }
+    }
+  }
+}

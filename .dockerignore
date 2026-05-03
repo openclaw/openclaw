@@ -70,3 +70,15 @@ vendor/
 !vendor/a2ui/renderers/
 !vendor/a2ui/renderers/lit/
 !vendor/a2ui/renderers/lit/**
+
+**/.git
+**/.gitignore
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+openclaw-team-workspace/main-agent/HEARTBEAT.md
+openclaw-team-workspace/main-agent/USER.md
+openclaw-team-workspace/main-agent/TOOLS.md
+
+openclaw-team-workspace/outlook-traige-agent/USER.md
