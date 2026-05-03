@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Auto-reply/agent-runner: make context-overflow recovery guidance choose `agents.defaults.compaction.reserveTokensFloor` from the active model context window instead of always recommending `20000`, so large-context Feishu conversations no longer appear to overflow after only a few messages. Fixes #65839 and #72106. Thanks @XuXuClassMate.
 - Agents/models: forward model `maxTokens` as the default output-token limit for OpenAI-compatible Responses and Completions transports when no runtime override is provided, preventing provider defaults from silently truncating larger outputs. (#76645) Thanks @joeyfrasier.
 - Gateway/update: run `doctor --non-interactive --fix` after Control UI global package updates before reporting success, so legacy config is migrated before the gateway restart. Thanks @stevenchouai.
 - Gateway/cron: stop a lazy cron startup that loses a hot-reload race, preventing the old cron service from starting after reload has already replaced cron state.
