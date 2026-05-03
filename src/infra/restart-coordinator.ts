@@ -3,7 +3,6 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
   getInspectableActiveTaskRestartBlockers,
-  getInspectableTaskRegistrySummary,
   type ActiveTaskRestartBlocker,
 } from "../tasks/task-registry.maintenance.js";
 import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
@@ -49,7 +48,7 @@ const defaultInspectors: SafeRestartInspectors = {
   getQueueSize: getTotalQueueSize,
   getPendingReplies: getTotalPendingReplies,
   getEmbeddedRuns: getActiveEmbeddedRunCount,
-  getActiveTasks: () => getInspectableTaskRegistrySummary().active,
+  getActiveTasks: () => getInspectableActiveTaskRestartBlockers().length,
   getTaskBlockers: getInspectableActiveTaskRestartBlockers,
 };
 
@@ -74,7 +73,7 @@ function createFallbackTaskBlocker(count: number): SafeGatewayRestartBlocker {
   return {
     kind: "task",
     count,
-    message: `${count} active task run(s)`,
+    message: `${count} active background task run(s)`,
   };
 }
 

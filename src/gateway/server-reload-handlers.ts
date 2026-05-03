@@ -22,7 +22,6 @@ import {
 } from "../secrets/runtime.js";
 import {
   getInspectableActiveTaskRestartBlockers,
-  getInspectableTaskRegistrySummary,
   type ActiveTaskRestartBlocker,
 } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -142,7 +141,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const queueSize = getTotalQueueSize();
     const pendingReplies = getTotalPendingReplies();
     const embeddedRuns = getActiveEmbeddedRunCount();
-    const activeTasks = getInspectableTaskRegistrySummary().active;
+    const activeTasks = getInspectableActiveTaskRestartBlockers().length;
     return {
       queueSize,
       pendingReplies,
@@ -163,7 +162,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       details.push(`${counts.embeddedRuns} embedded run(s)`);
     }
     if (counts.activeTasks > 0) {
-      details.push(`${counts.activeTasks} task run(s)`);
+      details.push(`${counts.activeTasks} background task run(s)`);
     }
     return details;
   };
@@ -418,7 +417,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       );
       const taskBlockers = formatTaskBlockers();
       if (taskBlockers) {
-        params.logReload.warn(`restart blocked by active task run(s): ${taskBlockers}`);
+        params.logReload.warn(`restart blocked by active background task run(s): ${taskBlockers}`);
       }
 
       deferGatewayRestartUntilIdle({
