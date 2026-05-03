@@ -780,7 +780,30 @@ describe("createOpenClawCodingTools", () => {
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
   });
 
-  it("hard-disables write/edit when sandbox workspaceAccess is ro", () => {
+  it("hard-disables write-capable tools when sandbox workspaceAccess is none", () => {
+    const sandboxDir = path.join(os.tmpdir(), "openclaw-sandbox");
+    const sandbox = createPiToolsSandboxContext({
+      workspaceDir: sandboxDir,
+      agentWorkspaceDir: path.join(os.tmpdir(), "openclaw-workspace"),
+      workspaceAccess: "none" as const,
+      fsBridge: createHostSandboxFsBridge(sandboxDir),
+      tools: {
+        allow: ["read", "write", "edit", "apply_patch"],
+        deny: [],
+      },
+    });
+    const tools = createOpenClawCodingTools({
+      sandbox,
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+    });
+    expect(tools.some((tool) => tool.name === "read")).toBe(true);
+    expect(tools.some((tool) => tool.name === "write")).toBe(false);
+    expect(tools.some((tool) => tool.name === "edit")).toBe(false);
+    expect(tools.some((tool) => tool.name === "apply_patch")).toBe(false);
+  });
+
+  it("hard-disables write-capable tools when sandbox workspaceAccess is ro", () => {
     const sandboxDir = path.join(os.tmpdir(), "openclaw-sandbox");
     const sandbox = createPiToolsSandboxContext({
       workspaceDir: sandboxDir,
@@ -788,14 +811,69 @@ describe("createOpenClawCodingTools", () => {
       workspaceAccess: "ro" as const,
       fsBridge: createHostSandboxFsBridge(sandboxDir),
       tools: {
-        allow: ["read", "write", "edit"],
+        allow: ["read", "write", "edit", "apply_patch"],
         deny: [],
       },
     });
-    const tools = createOpenClawCodingTools({ sandbox });
+    const tools = createOpenClawCodingTools({
+      sandbox,
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+    });
     expect(tools.some((tool) => tool.name === "read")).toBe(true);
     expect(tools.some((tool) => tool.name === "write")).toBe(false);
     expect(tools.some((tool) => tool.name === "edit")).toBe(false);
+    expect(tools.some((tool) => tool.name === "apply_patch")).toBe(false);
+  });
+
+  it("keeps write-capable tools when sandbox workspaceAccess is rw", () => {
+    const sandboxDir = path.join(os.tmpdir(), "openclaw-sandbox");
+    const sandbox = createPiToolsSandboxContext({
+      workspaceDir: sandboxDir,
+      agentWorkspaceDir: path.join(os.tmpdir(), "openclaw-workspace"),
+      workspaceAccess: "rw" as const,
+      fsBridge: createHostSandboxFsBridge(sandboxDir),
+      tools: {
+        allow: ["read", "write", "edit", "apply_patch"],
+        deny: [],
+      },
+    });
+    const tools = createOpenClawCodingTools({
+      sandbox,
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+    });
+    expect(tools.some((tool) => tool.name === "read")).toBe(true);
+    expect(tools.some((tool) => tool.name === "write")).toBe(true);
+    expect(tools.some((tool) => tool.name === "edit")).toBe(true);
+    expect(tools.some((tool) => tool.name === "apply_patch")).toBe(true);
+  });
+
+  it("keeps write-capable tools hidden for writable binds without rw workspace access", () => {
+    const sandboxDir = path.join(os.tmpdir(), "openclaw-sandbox");
+    const bindDir = path.join(os.tmpdir(), "openclaw-sandbox-bind");
+    const sandbox = createPiToolsSandboxContext({
+      workspaceDir: sandboxDir,
+      agentWorkspaceDir: path.join(os.tmpdir(), "openclaw-workspace"),
+      workspaceAccess: "none" as const,
+      fsBridge: createHostSandboxFsBridge(sandboxDir),
+      tools: {
+        allow: ["read", "write", "edit", "apply_patch"],
+        deny: [],
+      },
+      dockerOverrides: {
+        binds: [`${bindDir}:/workspace/writable:rw`],
+      },
+    });
+    const tools = createOpenClawCodingTools({
+      sandbox,
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+    });
+    expect(tools.some((tool) => tool.name === "read")).toBe(true);
+    expect(tools.some((tool) => tool.name === "write")).toBe(false);
+    expect(tools.some((tool) => tool.name === "edit")).toBe(false);
+    expect(tools.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
 
   it("accepts canonical parameters for read/write/edit", async () => {
