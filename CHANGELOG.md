@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/skill-workshop: harden workspace `skills/<name>/SKILL.md` writes with **realpath-aware** containment (via `openclaw/plugin-sdk/security-runtime`), **TOCTOU-safe** re-prepare immediately before commit, and **prompt-budget** enforcement aligned with core skills catalog rules (via `openclaw/plugin-sdk/skills-runtime`); document the defense-in-depth model in `docs/plugins/skill-workshop.md` (“Security model”). Refs #72115.
 - Plugins/onboarding: let Manual setup install optional official plugins, including ClawHub-backed diagnostics with npm fallback, and expose the external Codex plugin as a selectable provider setup choice. Thanks @vincentkoc.
 - Plugins/CLI: include package dependency install state in `openclaw plugins list --json` so scripts can spot missing plugin dependencies without runtime-loading plugins.
 - Discord/status: add degraded Discord transport and gateway event-loop starvation signals to `openclaw channels status`, `openclaw status --deep`, and fetch-timeout logs so intermittent socket resets do not look like a healthy running channel. (#76327) Thanks @joshavant.
