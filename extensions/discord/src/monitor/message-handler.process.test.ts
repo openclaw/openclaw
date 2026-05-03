@@ -66,6 +66,17 @@ vi.mock("../send.js", () => ({
   },
 }));
 
+const discordTargetMocks = vi.hoisted(() => ({
+  resolveDiscordTargetChannelId: vi.fn(async (target: string) => ({
+    channelId: target === "user:u1" ? "dm-u1" : target,
+  })),
+}));
+
+vi.mock("../send.shared.js", () => ({
+  resolveDiscordTargetChannelId: (target: string, opts: unknown) =>
+    discordTargetMocks.resolveDiscordTargetChannelId(target, opts),
+}));
+
 vi.mock("../send.messages.js", () => ({
   editMessageDiscord: (channelId: string, messageId: string, payload: unknown, opts?: unknown) =>
     deliveryMocks.editMessageDiscord(channelId, messageId, payload, opts),
@@ -315,6 +326,7 @@ beforeEach(() => {
   vi.useRealTimers();
   sendMocks.reactMessageDiscord.mockClear();
   sendMocks.removeReactionDiscord.mockClear();
+  discordTargetMocks.resolveDiscordTargetChannelId.mockClear();
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
@@ -635,6 +647,43 @@ describe("processDiscordMessage ack reactions", () => {
     expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", "📈"]));
     expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", "✉️"]));
     expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", DEFAULT_EMOJIS.done]));
+  });
+
+  it("resolves tracked reaction to targets like the Discord reaction action", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "message",
+        phase: "start",
+        args: {
+          action: "react",
+          to: "user:u1",
+          messageId: "m1",
+          emoji: "📈",
+          trackToolCalls: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: { messages: { ackReaction: "👀" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+    await vi.runAllTimersAsync();
+
+    expect(discordTargetMocks.resolveDiscordTargetChannelId).toHaveBeenCalledWith(
+      "user:u1",
+      expect.objectContaining({ accountId: "default" }),
+    );
+    const calls = sendMocks.reactMessageDiscord.mock.calls as unknown as Array<
+      [string, string, string]
+    >;
+    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", "📈"]));
+    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", "✉️"]));
+    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", DEFAULT_EMOJIS.done]));
   });
 
   it("shows stall emojis for long no-progress runs", async () => {

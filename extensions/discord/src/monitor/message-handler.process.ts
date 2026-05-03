@@ -27,6 +27,8 @@ import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
+import { resolveDiscordTargetChannelId } from "../send.shared.js";
+import { resolveDiscordChannelId } from "../targets.js";
 import {
   createDiscordAckReactionAdapter,
   createDiscordAckReactionContext,
@@ -235,7 +237,29 @@ export async function processDiscordMessage(
       });
     },
   });
-  const maybeBindStatusReactionsToToolReaction = (payload: ToolStartPayload) => {
+  const resolveTrackedReactionChannelId = async (
+    args: Record<string, unknown>,
+  ): Promise<string> => {
+    const target =
+      readToolStringArg(args, "channelId") ??
+      readToolStringArg(args, "channel_id") ??
+      readToolStringArg(args, "to");
+    if (!target) {
+      return messageChannelId;
+    }
+    try {
+      return resolveDiscordChannelId(target);
+    } catch {
+      return (
+        await resolveDiscordTargetChannelId(target, {
+          cfg,
+          token,
+          accountId,
+        })
+      ).channelId;
+    }
+  };
+  const maybeBindStatusReactionsToToolReaction = async (payload: ToolStartPayload) => {
     if (
       sourceRepliesAreToolOnly ||
       cfg.messages?.statusReactions?.enabled === false ||
@@ -262,8 +286,18 @@ export async function processDiscordMessage(
     }
     const trackedMessageId =
       readToolStringArg(args, "messageId") ?? readToolStringArg(args, "message_id") ?? message.id;
-    const trackedChannelId =
-      readToolStringArg(args, "channelId") ?? readToolStringArg(args, "to") ?? messageChannelId;
+    let trackedChannelId: string;
+    try {
+      trackedChannelId = await resolveTrackedReactionChannelId(args);
+    } catch (err) {
+      logAckFailure({
+        log: logVerbose,
+        channel: "discord",
+        target: `${readToolStringArg(args, "to") ?? readToolStringArg(args, "channelId") ?? messageChannelId}/${trackedMessageId}`,
+        error: err,
+      });
+      return;
+    }
     statusReactionTarget = `${trackedChannelId}/${trackedMessageId}`;
     if (statusReactionsActive) {
       void statusReactions.clear();
@@ -619,7 +653,7 @@ export async function processDiscordMessage(
                   if (isProcessAborted(abortSignal)) {
                     return;
                   }
-                  maybeBindStatusReactionsToToolReaction(payload);
+                  await maybeBindStatusReactionsToToolReaction(payload);
                   await statusReactions.setTool(payload.name);
                   draftPreview.pushToolProgress(
                     payload.name ? `tool: ${payload.name}` : "tool running",
