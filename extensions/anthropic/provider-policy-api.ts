@@ -1,3 +1,4 @@
+import { resolveClaudeThinkingProfile } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   applyAnthropicConfigDefaults,
@@ -10,4 +11,8 @@ export function normalizeConfig(params: { provider: string; providerConfig: Mode
 
 export function applyConfigDefaults(params: Parameters<typeof applyAnthropicConfigDefaults>[0]) {
   return applyAnthropicConfigDefaults(params);
+}
+
+export function resolveThinkingProfile(params: { provider?: string; modelId: string }) {
+  return resolveClaudeThinkingProfile(params.modelId);
 }
