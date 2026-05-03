@@ -324,6 +324,7 @@ describe("scripts/changed-lanes", () => {
     const result = detectChangedLanes([
       ".dockerignore",
       ".jscpd.json",
+      ".npmignore",
       ".pre-commit-config.yaml",
       ".swiftformat",
       "Makefile",
