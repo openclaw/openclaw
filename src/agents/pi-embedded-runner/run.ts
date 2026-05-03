@@ -1056,6 +1056,7 @@ export async function runEmbeddedPiAgent(
             startupStagesEmitted = true;
           }
 
+          lastSubmittedCurrentMessageId = params.currentMessageId;
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
