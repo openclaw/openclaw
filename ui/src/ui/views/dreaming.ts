@@ -1270,9 +1270,13 @@ function renderMemoryPalaceSection(props: DreamingProps) {
 }
 
 function renderDiaryDayChips(content: string | null, props: DreamingProps) {
-  if (typeof content !== "string") return nothing;
+  if (typeof content !== "string") {
+    return nothing;
+  }
   const entries = parseDiaryEntries(content);
-  if (entries.length === 0) return nothing;
+  if (entries.length === 0) {
+    return nothing;
+  }
 
   const reversed = buildDiaryNavigation(entries);
   const page = Math.max(0, Math.min(_diaryPage, reversed.length - 1));
