@@ -457,7 +457,7 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
         agentId: params.agentId,
       },
     );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath);
+    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
     let bestMatch:
       | {
           sessionKey: string;
@@ -506,8 +506,16 @@ function resolveRecallRunChannelContext(params: {
 } {
   const explicitChannel = normalizeOptionalString(params.channelId);
   const explicitProvider = normalizeOptionalString(params.messageProvider);
+  // A channelId that contains ":" is a scoped conversation id (e.g. Telegram
+  // forum-topic "-100123:topic:77"), not a runnable channel name. Using it as
+  // the embedded recall run's channel causes bundled-plugin dirName validation
+  // to throw because ":" is not allowed in directory names (#76704).
+  const runnableExplicitChannel =
+    explicitChannel && !explicitChannel.includes(":") ? explicitChannel : undefined;
   const trustedExplicitChannel =
-    explicitChannel && explicitChannel !== explicitProvider ? explicitChannel : undefined;
+    runnableExplicitChannel && runnableExplicitChannel !== explicitProvider
+      ? runnableExplicitChannel
+      : undefined;
   const resolveReturnValue = (params: {
     resolvedChannel?: string;
     resolvedChannelStrength?: "strong" | "weak";
@@ -518,13 +526,14 @@ function resolveRecallRunChannelContext(params: {
       messageChannel:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
-        explicitChannel ??
+        runnableExplicitChannel ??
+        explicitProvider ??
         params.resolvedChannel,
       messageProvider:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
-        explicitChannel ??
+        runnableExplicitChannel ??
         params.resolvedChannel,
     };
   };
@@ -546,7 +555,7 @@ function resolveRecallRunChannelContext(params: {
         agentId: params.agentId,
       },
     );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath);
+    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
     const sessionEntry = resolveSessionStoreEntry({
       store,
       sessionKey: resolvedSessionKey,
@@ -1404,7 +1413,7 @@ async function persistPluginStatusLines(params: {
       agentId ? { agentId } : undefined,
     );
     if (!params.statusLine && !debugLine) {
-      const store = params.api.runtime.agent.session.loadSessionStore(storePath);
+      const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
       const existingEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
       const hasActiveMemoryEntry = Array.isArray(existingEntry?.pluginDebugEntries)
         ? existingEntry.pluginDebugEntries.some((entry) => entry?.pluginId === "active-memory")
