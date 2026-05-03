@@ -668,8 +668,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         });
       }
 
-      // Send text first if provided
-      if (text?.trim()) {
+      // Send text first if provided, but skip for voice-note media to avoid duplicate messages
+      const isVoiceAudio =
+        audioAsVoice === true ||
+        (mediaUrl && /\.(ogg|opus|mp3|m4a|aac|amr|wav|webm)$/i.test(mediaUrl));
+
+      if (text?.trim() && !isVoiceAudio) {
         await sendOutboundText({
           cfg,
           to,
