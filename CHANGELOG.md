@@ -15,18 +15,26 @@ Docs: https://docs.openclaw.ai
 - Discord/status: add degraded Discord transport and gateway event-loop starvation signals to `openclaw channels status`, `openclaw status --deep`, and fetch-timeout logs so intermittent socket resets do not look like a healthy running channel. (#76327) Thanks @joshavant.
 - Plugins/update: on the beta OpenClaw update channel, default-line npm and ClawHub plugin updates try `@beta` first and fall back to default/latest when no plugin beta release exists.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
+- Exec approvals: add a tree-sitter-backed shell command explainer for future approval and command-review surfaces. (#75004) Thanks @jesse-merhi.
 
 ### Fixes
 
-- Channels/secrets: resolve SecretRef-backed channel credentials through external plugin secret contracts after the plugin split, covering runtime startup, target discovery, webhook auth, disabled-account enumeration, and late-bound web_search config. (#76449) Thanks @joshavant.
+- Agents/sessions: keep delayed `sessions_send` A2A replies alive after soft wait-window timeouts, while preserving terminal run timeouts and avoiding stale target replies in requester sessions. Fixes #76443. Thanks @ryswork1993 and @vincentkoc.
+- Config/doctor: cap `.clobbered.*` forensic snapshots per config path and serialize snapshot writes so repeated `doctor --fix` recovery loops cannot flood the config directory. Fixes #76454; carries forward #65649. Thanks @JUSTICEESSIELP, @rsnow, and @vincentkoc.
+- Feishu: suppress duplicate text when replies send native voice media while preserving captions for ordinary audio files and falling back to text plus attachment links when voice uploads fail.
+- Feishu: keep packaged Feishu startup from bundling the Lark SDK's ESM `__dirname` path by loading the SDK as a plugin-local runtime dependency. Fixes #76291 and #76494. (#76392) Thanks @zqchris.
+- Channels/secrets: resolve SecretRef-backed channel credentials through external plugin secret contracts after the plugin split, covering runtime startup, target discovery, webhook auth, disabled-account enumeration, and late-bound web_search config. Fixes #76371. (#76449) Thanks @joshavant and @neeravmakwana.
 - Docker/Gateway: pass Docker setup `.env` values into gateway and CLI containers and preserve exec SecretRef `passEnv` keys in managed service plans, so 1Password Connect-backed Discord tokens keep resolving after doctor or plugin repair. Thanks @vincentkoc.
 - Control UI/WebChat: explain compaction boundaries in chat history and link directly to session checkpoint controls so pre-compaction turns no longer look silently lost after refresh. Fixes #76415. Thanks @BunsDev.
 - Channels/WhatsApp: attach native outbound mention metadata for group text and media captions by resolving `@+<digits>` and `@<digits>` tokens against WhatsApp participant data, including LID groups. Fixes #39879; carries forward #56863. Thanks @kengi1437, @joe2643, and @fridayck.
+- Plugins/install: resolve bare official external plugin IDs such as `brave` through the official catalog when no bundled source is available, so packaged installs fetch the intended scoped npm package instead of an unrelated unscoped package. Fixes #76373. Thanks @bek91 and @vincentkoc.
 - Gateway/sessions: keep async `sessions.list` title and preview hydration bounded to transcript head/tail reads so Control UI polling cannot full-scan large session transcripts every refresh. Thanks @vincentkoc.
+- Gateway/sessions: keep agent runtime metadata on lightweight `sessions.list` rows so model-only session patches do not make Control UI lose runtime identity. Thanks @vincentkoc.
 - Gateway/sessions: keep bulk `sessions.list` rows lightweight by skipping per-row transcript usage fallback, display model inference, and plugin projection, avoiding event-loop stalls in large session stores. Thanks @Marvinthebored and @vincentkoc.
 - CLI/plugins: reject missing plugin ids before config writes in `plugins enable` and `plugins disable` so a typo no longer persists a stale config entry. (#73554) Thanks @ai-hpc.
 - Agents/sessions: preserve delivered trailing assistant replies during session-file repair so Telegram/WebChat history is not rewritten to drop already-delivered responses. Fixes #76329. Thanks @obviyus.
 - Gateway/chat history: preserve oversized transcript turns as explicit omitted-message placeholders while avoiding large JSONL parse stalls. Thanks @Marvinthebored and @vincentkoc.
+- Gateway/models: keep read-only model-list responses on registry-compatible fallbacks and metadata defaults, so empty or minimal persisted model files do not hide built-ins or custom model capabilities. Thanks @Marvinthebored.
 - Gateway: preserve stack diagnostics when `chat.send` or agent attachment parsing/staging fails, improving image-send failure triage. Refs #63432. (#75135) Thanks @keen0206.
 - Heartbeats/Codex: stop sending the legacy `HEARTBEAT_OK` prompt instruction when heartbeat turns have the structured `heartbeat_respond` tool, while keeping the text sentinel for legacy automatic heartbeat replies. Thanks @pashpashpash.
 - Agent runtimes: fail explicit plugin runtime selections honestly when the requested harness is unavailable instead of silently falling back to the embedded PI runtime. Thanks @pashpashpash.
@@ -65,6 +73,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/externalization: keep official external install docs, update examples, and live Codex npm checks on default npm tags instead of `@beta`. Thanks @vincentkoc.
 - Plugins/externalization: keep ACPX, Google Chat, and LINE publishable plugin dist trees out of the core npm package file list.
 - Plugins/ClawHub: fall back to version metadata when the artifact resolver route is missing and keep the Docker ClawHub fixture aligned with npm-pack artifact resolution, avoiding false version-not-found failures during plugin install validation. Thanks @vincentkoc.
+- Providers/openai-codex: honor `providerConfig.baseUrl` in the dynamic-model synthesis fallback so codex providers configured with a custom upstream (for example a forwarding proxy) no longer silently bypass the configured URL when the registry has no template row to clone for the requested model id. (#76428) Thanks @arniesaha.
 - Status/channels: show configured channels in `openclaw status` and config-only `openclaw channels status` output even when the Gateway is unreachable, avoiding empty Channels tables on WSL and other no-Gateway paths. Thanks @vincentkoc.
 - Plugins/ClawHub: explain unavailable explicit ClawHub ClawPack artifact downloads with a temporary npm install hint while ClawHub artifact routing rolls out. Thanks @vincentkoc.
 - Media: accept home-relative `MEDIA:~/...` attachment paths while preserving existing file-read policy, traversal checks, and media type validation. Fixes #73796. Thanks @fabkury.
