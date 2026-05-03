@@ -343,7 +343,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
 
       connectTimeout = setTimeout(() => {
-        if (!this.connected && !this.intentionallyClosed) {
+        if (!this.sessionConfigured && !this.intentionallyClosed) {
           this.ws?.terminate();
           settleReject(new Error("OpenAI realtime connection timeout"));
         }
@@ -364,7 +364,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         });
         this.sendSessionUpdate();
-        settleResolve();
       });
 
       this.ws.on("message", (data: Buffer) => {
@@ -380,7 +379,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         });
         try {
-          this.handleEvent(JSON.parse(data.toString()) as RealtimeEvent);
+          const event = JSON.parse(data.toString()) as RealtimeEvent;
+          this.handleEvent(event);
+          if (event.type === "session.updated") {
+            settleResolve();
+          }
+          if (event.type === "error" && !this.sessionConfigured) {
+            settleReject(new Error(readRealtimeErrorDetail(event.error)));
+          }
         } catch (error) {
           console.error("[openai] realtime event parse failed:", error);
         }
@@ -398,7 +404,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             capability: "realtime-voice",
           },
         });
-        if (!this.connected) {
+        if (!this.sessionConfigured) {
           settleReject(error instanceof Error ? error : new Error(String(error)));
         }
         this.config.onError?.(error instanceof Error ? error : new Error(String(error)));

@@ -328,6 +328,10 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       onReady,
     });
     const connecting = bridge.connect();
+    let connectResolved = false;
+    void connecting.then(() => {
+      connectResolved = true;
+    });
     const socket = FakeWebSocket.instances[0];
     if (!socket) {
       throw new Error("expected bridge to create a websocket");
@@ -335,11 +339,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
-    await connecting;
+    await Promise.resolve();
 
     bridge.sendAudio(Buffer.from("before-ready"));
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.created" })));
 
+    expect(connectResolved).toBe(false);
     expect(onReady).not.toHaveBeenCalled();
     expect(parseSent(socket).map((event) => event.type)).toEqual(["session.update"]);
     expect(parseSent(socket)[0]?.session).toMatchObject({
@@ -349,13 +354,44 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(false);
 
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
 
+    expect(connectResolved).toBe(true);
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(parseSent(socket).map((event) => event.type)).toEqual([
       "session.update",
       "input_audio_buffer.append",
     ]);
     expect(bridge.isConnected()).toBe(true);
+  });
+
+  it("rejects connection when session configuration fails before readiness", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: { message: "invalid realtime session" },
+        }),
+      ),
+    );
+
+    await expect(connecting).rejects.toThrow("invalid realtime session");
+    expect(bridge.isConnected()).toBe(false);
   });
 
   it("can request PCM16 24 kHz realtime audio for Chrome command-pair bridges", async () => {
@@ -375,6 +411,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
 
     expect(parseSent(socket)[0]?.session).toMatchObject({
@@ -425,8 +462,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
-    await connecting;
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
 
     bridge.setMediaTimestamp(1000);
     socket.emit(
@@ -476,8 +513,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
-    await connecting;
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
 
     const audio = Buffer.from("assistant audio");
     socket.emit(
@@ -525,8 +562,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
-    await connecting;
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
 
     bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
 
