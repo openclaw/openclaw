@@ -163,39 +163,47 @@ export async function buildReplyPayloads(params: {
     }
   }
 
-  const replyTaggedPayloads = (
-    await Promise.all(
-      applyReplyThreading({
-        payloads: sanitizedPayloads,
-        replyToMode: params.replyToMode,
-        replyToChannel: params.replyToChannel,
+  const replyTaggedPayloadCandidates = await Promise.all(
+    applyReplyThreading({
+      payloads: sanitizedPayloads,
+      replyToMode: params.replyToMode,
+      replyToChannel: params.replyToChannel,
+      currentMessageId: params.currentMessageId,
+      replyThreading: params.replyThreading,
+    }).map(async (payload) => {
+      const parsed = normalizeReplyPayloadDirectives({
+        payload,
         currentMessageId: params.currentMessageId,
-        replyThreading: params.replyThreading,
-      }).map(async (payload) => {
-        const parsed = normalizeReplyPayloadDirectives({
-          payload,
-          currentMessageId: params.currentMessageId,
-          silentToken: SILENT_REPLY_TOKEN,
-          parseMode: "always",
-          extractMarkdownImages: params.extractMarkdownImages,
-        });
-        const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
-          payload: parsed.payload,
-          normalizeMediaPaths: params.normalizeMediaPaths,
-        });
-        if (
-          parsed.isSilent &&
-          !resolveSendableOutboundReplyParts(mediaNormalizedPayload).hasMedia
-        ) {
-          mediaNormalizedPayload.text = undefined;
-        }
-        return mediaNormalizedPayload;
-      }),
-    )
-  ).filter(isRenderablePayload);
-  const silentFilteredPayloads = params.silentExpected
-    ? replyTaggedPayloads.filter(shouldKeepPayloadDuringSilentTurn)
-    : replyTaggedPayloads;
+        silentToken: SILENT_REPLY_TOKEN,
+        parseMode: "always",
+        extractMarkdownImages: params.extractMarkdownImages,
+      });
+      const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
+        payload: parsed.payload,
+        normalizeMediaPaths: params.normalizeMediaPaths,
+      });
+      if (parsed.isSilent && !resolveSendableOutboundReplyParts(mediaNormalizedPayload).hasMedia) {
+        mediaNormalizedPayload.text = undefined;
+      }
+      return mediaNormalizedPayload;
+    }),
+  );
+  const replyTaggedPayloads: ReplyPayload[] = [];
+  for (const payload of replyTaggedPayloadCandidates) {
+    if (isRenderablePayload(payload)) {
+      replyTaggedPayloads.push(payload);
+    }
+  }
+  const silentFilteredPayloads: ReplyPayload[] = [];
+  if (params.silentExpected) {
+    for (const payload of replyTaggedPayloads) {
+      if (shouldKeepPayloadDuringSilentTurn(payload)) {
+        silentFilteredPayloads.push(payload);
+      }
+    }
+  } else {
+    silentFilteredPayloads.push(...replyTaggedPayloads);
+  }
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -312,15 +320,28 @@ export async function buildReplyPayloads(params: {
         return preserved;
       })()
     : params.blockStreamingEnabled
-      ? dedupedPayloads.filter(
-          (payload) =>
-            !params.blockReplyPipeline?.hasSentPayload(payload) &&
-            !isDirectlySentBlockPayload(payload),
-        )
+      ? (() => {
+          const unsent: ReplyPayload[] = [];
+          for (const payload of dedupedPayloads) {
+            if (
+              !params.blockReplyPipeline?.hasSentPayload(payload) &&
+              !isDirectlySentBlockPayload(payload)
+            ) {
+              unsent.push(payload);
+            }
+          }
+          return unsent;
+        })()
       : params.directlySentBlockKeys?.size
-        ? dedupedPayloads.filter(
-            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
-          )
+        ? (() => {
+            const unsent: ReplyPayload[] = [];
+            for (const payload of dedupedPayloads) {
+              if (!params.directlySentBlockKeys.has(createBlockReplyContentKey(payload))) {
+                unsent.push(payload);
+              }
+            }
+            return unsent;
+          })()
         : dedupedPayloads;
   const blockSentMediaUrls = params.blockStreamingEnabled
     ? await normalizeSentMediaUrlsForDedupe({
@@ -337,7 +358,14 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
-  const replyPayloads = filteredPayloads.filter(isRenderablePayload);
+  const replyPayloads: ReplyPayload[] = [];
+  if (!messagingToolPayloadDedupe.suppressReplies) {
+    for (const payload of filteredPayloads) {
+      if (isRenderablePayload(payload)) {
+        replyPayloads.push(payload);
+      }
+    }
+  }
 
   return {
     replyPayloads,
