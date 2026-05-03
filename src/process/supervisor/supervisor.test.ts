@@ -159,6 +159,9 @@ describe("process supervisor", () => {
 
     const exitPromise = run.wait();
     await vi.advanceTimersByTimeAsync(5);
+    // Drain the setImmediate yield added in supervisor.ts for the
+    // post-settle I/O drain (#30711) — it is queued under fake timers.
+    await vi.advanceTimersByTimeAsync(0);
 
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
@@ -224,6 +227,8 @@ describe("process supervisor", () => {
 
     const exitPromise = run.wait();
     await vi.advanceTimersByTimeAsync(1);
+    // Drain the post-settle setImmediate yield (#30711).
+    await vi.advanceTimersByTimeAsync(0);
 
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
@@ -235,6 +240,9 @@ describe("process supervisor", () => {
     // Regression test for the race where cancel() during the post-settle
     // setImmediate I/O drain window could overwrite a successful exit
     // reason with "manual-cancel" via a direct registry.updateState call.
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
     const supervisor = createProcessSupervisor();
     const run = await spawnChild(supervisor, {
       sessionId: "s-cancel-race",
@@ -242,6 +250,9 @@ describe("process supervisor", () => {
       timeoutMs: 1_000,
       stdinMode: "pipe-closed",
     });
+
+    adapter.emitStdout("done");
+    adapter.settle(0);
 
     const exit = await run.wait();
     // Process has already settled — cancel should be a no-op

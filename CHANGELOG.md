@@ -116,6 +116,7 @@ Docs: https://docs.openclaw.ai
 - Slack: allow draft preview streaming in top-level DMs when `replyToMode` is `off` while keeping Slack native streaming and assistant thread status gated on reply threads. Fixes #56480. (#56544) Thanks @HangGlidersRule.
 - Control UI/chat: remove the delete-confirm popover outside-click listener on every dismiss path, so Cancel, Delete, outside clicks, and same-button toggles no longer leave stale document listeners behind. Refs #75590 and #69982. Thanks @Ricardo-M-L.
 - Memory-core: treat exhausted file watcher limits as non-fatal for builtin memory auto-sync while preserving fatal handling for unrelated disk-full errors. (#73357) Thanks @solodmd.
+- Process supervisor: drain pending I/O callbacks before snapshotting `stdout`/`stderr` for backgrounded sandbox processes, so block-buffered output flushed by the child at exit (e.g. Bun on a Docker pipe) is no longer silently lost when the final `data` event and `close` event land in the same libuv poll cycle. Hardens `cancel()` so a late cancel during the post-settle drain window cannot overwrite a successful exit reason with `manual-cancel`. Fixes #30711. Thanks @aaajiao.
 
 ## 2026.5.2
 
