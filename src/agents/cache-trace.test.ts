@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
-import { createCacheTrace } from "./cache-trace.js";
+import { createCacheTrace, resolveCacheTraceConfig } from "./cache-trace.js";
+import {
+  DEFAULT_CACHE_TRACE_MAX_ARCHIVES,
+  DEFAULT_CACHE_TRACE_MAX_FILE_BYTES,
+} from "./diagnostic-jsonl-rotation.js";
 
 describe("createCacheTrace", () => {
   function createMemoryTraceForTest() {
@@ -169,6 +173,59 @@ describe("createCacheTrace", () => {
     });
 
     expect(trace).toBeNull();
+  });
+
+  it("resolves default and env-overridden cache trace rotation settings", () => {
+    const defaults = resolveCacheTraceConfig({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {},
+    });
+    expect(defaults.maxFileBytes).toBe(DEFAULT_CACHE_TRACE_MAX_FILE_BYTES);
+    expect(defaults.maxArchives).toBe(DEFAULT_CACHE_TRACE_MAX_ARCHIVES);
+
+    const overridden = resolveCacheTraceConfig({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+            filePath: "~/.openclaw/logs/config-cache-trace.jsonl",
+            maxFileBytes: 1024,
+            maxArchives: 1,
+          },
+        },
+      },
+      env: {
+        OPENCLAW_CACHE_TRACE_FILE: "~/.openclaw/logs/env-cache-trace.jsonl",
+        OPENCLAW_CACHE_TRACE_MAX_BYTES: "2048",
+        OPENCLAW_CACHE_TRACE_MAX_ARCHIVES: "2",
+      },
+    });
+    expect(overridden.filePath).toBe(resolveUserPath("~/.openclaw/logs/env-cache-trace.jsonl"));
+    expect(overridden.maxFileBytes).toBe(2048);
+    expect(overridden.maxArchives).toBe(2);
+  });
+
+  it("allows cache trace max bytes to be disabled", () => {
+    const cfg = resolveCacheTraceConfig({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {
+        OPENCLAW_CACHE_TRACE_MAX_BYTES: "0",
+      },
+    });
+
+    expect(cfg.maxFileBytes).toBeUndefined();
   });
 
   it("sanitizes cache-trace payloads before writing", () => {

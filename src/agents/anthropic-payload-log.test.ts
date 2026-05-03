@@ -1,9 +1,54 @@
 import crypto from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { createAnthropicPayloadLogger } from "./anthropic-payload-log.js";
+import { resolveUserPath } from "../utils.js";
+import { createAnthropicPayloadLogger, resolvePayloadLogConfig } from "./anthropic-payload-log.js";
+import {
+  DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_ARCHIVES,
+  DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_FILE_BYTES,
+} from "./diagnostic-jsonl-rotation.js";
 
 describe("createAnthropicPayloadLogger", () => {
+  it("resolves config-backed defaults and env-overridden rotation settings", () => {
+    const configured = resolvePayloadLogConfig({
+      cfg: {
+        diagnostics: {
+          anthropicPayloadLog: {
+            enabled: true,
+            filePath: "~/.openclaw/logs/provider-payload.jsonl",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(configured.enabled).toBe(true);
+    expect(configured.filePath).toBe(resolveUserPath("~/.openclaw/logs/provider-payload.jsonl"));
+    expect(configured.maxFileBytes).toBe(DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_FILE_BYTES);
+    expect(configured.maxArchives).toBe(DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_ARCHIVES);
+
+    const overridden = resolvePayloadLogConfig({
+      cfg: {
+        diagnostics: {
+          anthropicPayloadLog: {
+            enabled: true,
+            maxFileBytes: 1024,
+            maxArchives: 1,
+          },
+        },
+      },
+      env: {
+        OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "0",
+        OPENCLAW_ANTHROPIC_PAYLOAD_LOG_MAX_BYTES: "0",
+        OPENCLAW_ANTHROPIC_PAYLOAD_LOG_MAX_ARCHIVES: "2",
+      },
+    });
+
+    expect(overridden.enabled).toBe(false);
+    expect(overridden.maxFileBytes).toBeUndefined();
+    expect(overridden.maxArchives).toBe(2);
+  });
+
   it("sanitizes credential fields and image base64 payload data before writing logs", async () => {
     const lines: string[] = [];
     const logger = createAnthropicPayloadLogger({

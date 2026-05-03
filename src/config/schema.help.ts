@@ -32,6 +32,8 @@ export const FIELD_HELP: Record<string, string> = {
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
   "diagnostics.cacheTrace":
     "Cache-trace logging settings for observing cache decisions and payload context in embedded runs. Enable this temporarily for debugging and disable afterward to reduce sensitive log footprint.",
+  "diagnostics.anthropicPayloadLog":
+    "Anthropic provider payload JSONL logging settings for targeted request and usage forensics. Enable this temporarily for debugging and keep rotation bounded because payload logs can contain large model request context.",
   logging:
     "Logging behavior controls for severity, output destinations, formatting, and sensitive-data redaction. Keep levels and redaction strict enough for production while preserving useful diagnostics.",
   "logging.level":
@@ -636,6 +638,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Include full message payloads in trace output (default: true).",
   "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
   "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
+  "diagnostics.cacheTrace.maxFileBytes":
+    "Maximum active cache trace JSONL size in bytes before rotation (default: 52428800 = 50 MB). Set 0 to disable the size cap.",
+  "diagnostics.cacheTrace.maxArchives":
+    "Number of numbered cache trace JSONL archives to keep beside the active file (default: 3). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+  "diagnostics.anthropicPayloadLog.enabled":
+    "Log sanitized Anthropic provider request payloads and usage events for embedded agent runs (default: false).",
+  "diagnostics.anthropicPayloadLog.filePath":
+    "JSONL output path for Anthropic provider payload logs (default: $OPENCLAW_STATE_DIR/logs/anthropic-payload.jsonl).",
+  "diagnostics.anthropicPayloadLog.maxFileBytes":
+    "Maximum active Anthropic provider payload JSONL size in bytes before rotation (default: 104857600 = 100 MB). Set 0 to disable the size cap.",
+  "diagnostics.anthropicPayloadLog.maxArchives":
+    "Number of numbered Anthropic provider payload JSONL archives to keep beside the active file (default: 5). Set 0 to suppress writes after the active file reaches maxFileBytes.",
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":

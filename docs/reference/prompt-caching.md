@@ -312,6 +312,8 @@ diagnostics:
     includeMessages: false # default true
     includePrompt: false # default true
     includeSystem: false # default true
+    maxFileBytes: 52428800 # default 50 MB; 0 disables the cap
+    maxArchives: 3 # default 3; 0 suppresses writes after maxFileBytes
 ```
 
 Defaults:
@@ -320,6 +322,8 @@ Defaults:
 - `includeMessages`: `true`
 - `includePrompt`: `true`
 - `includeSystem`: `true`
+- `maxFileBytes`: `52428800` (50 MB)
+- `maxArchives`: `3`
 
 ### Env toggles (one-off debugging)
 
@@ -328,6 +332,8 @@ Defaults:
 - `OPENCLAW_CACHE_TRACE_MESSAGES=0|1` toggles full message payload capture.
 - `OPENCLAW_CACHE_TRACE_PROMPT=0|1` toggles prompt text capture.
 - `OPENCLAW_CACHE_TRACE_SYSTEM=0|1` toggles system prompt capture.
+- `OPENCLAW_CACHE_TRACE_MAX_BYTES=<bytes>` overrides the active trace file rotation cap. Use `0` to disable the cap.
+- `OPENCLAW_CACHE_TRACE_MAX_ARCHIVES=<count>` overrides the number of numbered trace archives to keep. Use `0` to suppress writes after the cap.
 
 ### What to inspect
 

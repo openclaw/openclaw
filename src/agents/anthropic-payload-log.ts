@@ -3,10 +3,16 @@ import path from "node:path";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
+import {
+  DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_ARCHIVES,
+  DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_FILE_BYTES,
+  resolveDiagnosticJsonlRotation,
+} from "./diagnostic-jsonl-rotation.js";
 import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 
@@ -31,6 +37,8 @@ type PayloadLogEvent = {
 type PayloadLogConfig = {
   enabled: boolean;
   filePath: string;
+  maxFileBytes?: number;
+  maxArchives: number;
 };
 
 type PayloadLogWriter = QueuedFileWriter;
@@ -38,17 +46,38 @@ type PayloadLogWriter = QueuedFileWriter;
 const writers = new Map<string, PayloadLogWriter>();
 const log = createSubsystemLogger("agent/anthropic-payload");
 
-function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
-  const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
-  const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
+export function resolvePayloadLogConfig(params: {
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): PayloadLogConfig {
+  const env = params.env ?? process.env;
+  const config = params.cfg?.diagnostics?.anthropicPayloadLog;
+  const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? config?.enabled ?? false;
+  const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim() || config?.filePath?.trim();
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
     : path.join(resolveStateDir(env), "logs", "anthropic-payload.jsonl");
-  return { enabled, filePath };
+  const rotation = resolveDiagnosticJsonlRotation({
+    configMaxFileBytes: config?.maxFileBytes,
+    configMaxArchives: config?.maxArchives,
+    envMaxFileBytes: env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_MAX_BYTES,
+    envMaxArchives: env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_MAX_ARCHIVES,
+    defaultMaxFileBytes: DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_FILE_BYTES,
+    defaultMaxArchives: DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_ARCHIVES,
+  });
+  return {
+    enabled,
+    filePath,
+    maxFileBytes: rotation.maxFileBytes,
+    maxArchives: rotation.maxArchives,
+  };
 }
 
-function getWriter(filePath: string): PayloadLogWriter {
-  return getQueuedFileWriter(writers, filePath);
+function getWriter(cfg: PayloadLogConfig): PayloadLogWriter {
+  return getQueuedFileWriter(writers, cfg.filePath, {
+    maxFileBytes: cfg.maxFileBytes,
+    maxArchives: cfg.maxArchives,
+  });
 }
 
 function formatError(error: unknown): string | undefined {
@@ -96,6 +125,7 @@ type AnthropicPayloadLogger = {
 };
 
 export function createAnthropicPayloadLogger(params: {
+  cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   runId?: string;
   sessionId?: string;
@@ -107,12 +137,12 @@ export function createAnthropicPayloadLogger(params: {
   writer?: PayloadLogWriter;
 }): AnthropicPayloadLogger | null {
   const env = params.env ?? process.env;
-  const cfg = resolvePayloadLogConfig(env);
+  const cfg = resolvePayloadLogConfig({ cfg: params.cfg, env });
   if (!cfg.enabled) {
     return null;
   }
 
-  const writer = params.writer ?? getWriter(cfg.filePath);
+  const writer = params.writer ?? getWriter(cfg);
   const base: Omit<PayloadLogEvent, "ts" | "stage"> = {
     runId: params.runId,
     sessionId: params.sessionId,

@@ -8,8 +8,9 @@ export type QueuedFileWriter = {
   flush: () => Promise<void>;
 };
 
-type QueuedFileWriterOptions = {
+export type QueuedFileWriterOptions = {
   maxFileBytes?: number;
+  maxArchives?: number;
 };
 
 type QueuedFileAppendFlagConstants = Pick<
@@ -67,6 +68,56 @@ function verifyStableOpenedFile(params: {
   }
 }
 
+export function resolveQueuedFileRotatedPath(filePath: string, index: number): string {
+  const ext = path.extname(filePath);
+  const base = filePath.slice(0, filePath.length - ext.length);
+  return `${base}.${index}${ext}`;
+}
+
+function normalizePositiveIntegerOption(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+function normalizeNonNegativeIntegerOption(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return Math.floor(value);
+}
+
+async function renameRegularFileIfPresent(from: string, to: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(from);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to rotate queued log through symlink: ${from}`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`Refusing to rotate queued log from non-file: ${from}`);
+    }
+    await fs.rename(from, to);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw err;
+  }
+}
+
+async function rotateQueuedFile(filePath: string, maxArchives: number): Promise<boolean> {
+  await fs.rm(resolveQueuedFileRotatedPath(filePath, maxArchives), { force: true });
+  for (let index = maxArchives - 1; index >= 1; index -= 1) {
+    await renameRegularFileIfPresent(
+      resolveQueuedFileRotatedPath(filePath, index),
+      resolveQueuedFileRotatedPath(filePath, index + 1),
+    );
+  }
+  return renameRegularFileIfPresent(filePath, resolveQueuedFileRotatedPath(filePath, 1));
+}
+
 async function safeAppendFile(
   filePath: string,
   line: string,
@@ -89,19 +140,31 @@ async function safeAppendFile(
       throw err;
     }
   }
+  const maxFileBytes = normalizePositiveIntegerOption(options.maxFileBytes);
+  const maxArchives = normalizeNonNegativeIntegerOption(options.maxArchives);
   const lineBytes = Buffer.byteLength(line, "utf8");
-  if (
-    options.maxFileBytes !== undefined &&
-    (preOpenStat?.size ?? 0) + lineBytes > options.maxFileBytes
-  ) {
+  if (maxFileBytes !== undefined && lineBytes > maxFileBytes) {
     return;
+  }
+  if (maxFileBytes !== undefined && preOpenStat && preOpenStat.size + lineBytes > maxFileBytes) {
+    if (maxArchives <= 0) {
+      return;
+    }
+    if (preOpenStat.nlink > 1) {
+      throw new Error(`Refusing to rotate queued log from hardlinked file: ${filePath}`);
+    }
+    const rotated = await rotateQueuedFile(filePath, maxArchives);
+    if (!rotated) {
+      return;
+    }
+    preOpenStat = undefined;
   }
 
   const handle = await fs.open(filePath, resolveQueuedFileAppendFlags(), 0o600);
   try {
     const stat = await handle.stat();
     verifyStableOpenedFile({ preOpenStat, postOpenStat: stat, filePath });
-    if (options.maxFileBytes !== undefined && stat.size + lineBytes > options.maxFileBytes) {
+    if (maxFileBytes !== undefined && stat.size + lineBytes > maxFileBytes) {
       return;
     }
     await handle.chmod(0o600);

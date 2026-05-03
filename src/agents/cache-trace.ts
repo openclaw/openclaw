@@ -6,6 +6,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
+import {
+  DEFAULT_CACHE_TRACE_MAX_ARCHIVES,
+  DEFAULT_CACHE_TRACE_MAX_FILE_BYTES,
+  resolveDiagnosticJsonlRotation,
+} from "./diagnostic-jsonl-rotation.js";
 import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import { buildAgentTraceBase } from "./trace-base.js";
@@ -73,18 +78,20 @@ type CacheTraceConfig = {
   includeMessages: boolean;
   includePrompt: boolean;
   includeSystem: boolean;
+  maxFileBytes?: number;
+  maxArchives: number;
 };
 
 type CacheTraceWriter = QueuedFileWriter;
 
 const writers = new Map<string, CacheTraceWriter>();
 
-function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
+export function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const env = params.env ?? process.env;
   const config = params.cfg?.diagnostics?.cacheTrace;
   const envEnabled = parseBooleanValue(env.OPENCLAW_CACHE_TRACE);
   const enabled = envEnabled ?? config?.enabled ?? false;
-  const fileOverride = config?.filePath?.trim() || env.OPENCLAW_CACHE_TRACE_FILE?.trim();
+  const fileOverride = env.OPENCLAW_CACHE_TRACE_FILE?.trim() || config?.filePath?.trim();
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
     : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
@@ -93,6 +100,14 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
     parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
   const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
   const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
+  const rotation = resolveDiagnosticJsonlRotation({
+    configMaxFileBytes: config?.maxFileBytes,
+    configMaxArchives: config?.maxArchives,
+    envMaxFileBytes: env.OPENCLAW_CACHE_TRACE_MAX_BYTES,
+    envMaxArchives: env.OPENCLAW_CACHE_TRACE_MAX_ARCHIVES,
+    defaultMaxFileBytes: DEFAULT_CACHE_TRACE_MAX_FILE_BYTES,
+    defaultMaxArchives: DEFAULT_CACHE_TRACE_MAX_ARCHIVES,
+  });
 
   return {
     enabled,
@@ -100,11 +115,16 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
     includeMessages: includeMessages ?? true,
     includePrompt: includePrompt ?? true,
     includeSystem: includeSystem ?? true,
+    maxFileBytes: rotation.maxFileBytes,
+    maxArchives: rotation.maxArchives,
   };
 }
 
-function getWriter(filePath: string): CacheTraceWriter {
-  return getQueuedFileWriter(writers, filePath);
+function getWriter(cfg: CacheTraceConfig): CacheTraceWriter {
+  return getQueuedFileWriter(writers, cfg.filePath, {
+    maxFileBytes: cfg.maxFileBytes,
+    maxArchives: cfg.maxArchives,
+  });
 }
 
 function stableStringify(value: unknown, seen: WeakSet<object> = new WeakSet()): string {
@@ -184,7 +204,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     return null;
   }
 
-  const writer = params.writer ?? getWriter(cfg.filePath);
+  const writer = params.writer ?? getWriter(cfg);
   let seq = 0;
 
   const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);

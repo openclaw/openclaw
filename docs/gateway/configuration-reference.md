@@ -944,6 +944,15 @@ Notes:
       includeMessages: true,
       includePrompt: true,
       includeSystem: true,
+      maxFileBytes: 52428800,
+      maxArchives: 3,
+    },
+
+    anthropicPayloadLog: {
+      enabled: false,
+      filePath: "~/.openclaw/logs/anthropic-payload.jsonl",
+      maxFileBytes: 104857600,
+      maxArchives: 5,
     },
   },
 }
@@ -968,6 +977,13 @@ Notes:
 - `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
 - `cacheTrace.filePath`: output path for cache trace JSONL (default: `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`).
 - `cacheTrace.includeMessages` / `includePrompt` / `includeSystem`: control what is included in cache trace output (all default: `true`).
+- `cacheTrace.maxFileBytes`: maximum active cache trace JSONL size before rotation (default: `52428800` = 50 MB). Set `0` to disable the cap.
+- `cacheTrace.maxArchives`: number of numbered cache trace archives to keep (default: `3`). Set `0` to suppress writes after `maxFileBytes` instead of rotating.
+- `anthropicPayloadLog.enabled`: log sanitized Anthropic provider request payload and usage JSONL events (default: `false`).
+- `anthropicPayloadLog.filePath`: output path for Anthropic provider payload JSONL (default: `$OPENCLAW_STATE_DIR/logs/anthropic-payload.jsonl`).
+- `anthropicPayloadLog.maxFileBytes`: maximum active provider payload JSONL size before rotation (default: `104857600` = 100 MB). Set `0` to disable the cap.
+- `anthropicPayloadLog.maxArchives`: number of numbered provider payload archives to keep (default: `5`). Set `0` to suppress writes after `maxFileBytes` instead of rotating.
+- Env overrides for provider payload logging: `OPENCLAW_ANTHROPIC_PAYLOAD_LOG`, `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`, `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_MAX_BYTES`, and `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_MAX_ARCHIVES`.
 
 ---
 

@@ -338,11 +338,64 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Cache Trace Include System",
                 description: "Include system prompt in trace output (default: true).",
               },
+              maxFileBytes: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Cache Trace Max File Bytes",
+                description:
+                  "Maximum active cache trace JSONL size in bytes before rotation (default: 52428800 = 50 MB). Set 0 to disable the size cap.",
+              },
+              maxArchives: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Cache Trace Max Archives",
+                description:
+                  "Number of numbered cache trace JSONL archives to keep beside the active file (default: 3). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+              },
             },
             additionalProperties: false,
             title: "Cache Trace",
             description:
               "Cache-trace logging settings for observing cache decisions and payload context in embedded runs. Enable this temporarily for debugging and disable afterward to reduce sensitive log footprint.",
+          },
+          anthropicPayloadLog: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+                title: "Anthropic Payload Log Enabled",
+                description:
+                  "Log sanitized Anthropic provider request payloads and usage events for embedded agent runs (default: false).",
+              },
+              filePath: {
+                type: "string",
+                title: "Anthropic Payload Log File Path",
+                description:
+                  "JSONL output path for Anthropic provider payload logs (default: $OPENCLAW_STATE_DIR/logs/anthropic-payload.jsonl).",
+              },
+              maxFileBytes: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Anthropic Payload Log Max File Bytes",
+                description:
+                  "Maximum active Anthropic provider payload JSONL size in bytes before rotation (default: 104857600 = 100 MB). Set 0 to disable the size cap.",
+              },
+              maxArchives: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Anthropic Payload Log Max Archives",
+                description:
+                  "Number of numbered Anthropic provider payload JSONL archives to keep beside the active file (default: 5). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+              },
+            },
+            additionalProperties: false,
+            title: "Anthropic Payload Log",
+            description:
+              "Anthropic provider payload JSONL logging settings for targeted request and usage forensics. Enable this temporarily for debugging and keep rotation bounded because payload logs can contain large model request context.",
           },
         },
         additionalProperties: false,
@@ -24714,6 +24767,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Cache Trace Include System",
       help: "Include system prompt in trace output (default: true).",
       tags: ["observability", "storage"],
+    },
+    "diagnostics.cacheTrace.maxFileBytes": {
+      label: "Cache Trace Max File Bytes",
+      help: "Maximum active cache trace JSONL size in bytes before rotation (default: 52428800 = 50 MB). Set 0 to disable the size cap.",
+      tags: ["observability", "performance", "storage"],
+    },
+    "diagnostics.cacheTrace.maxArchives": {
+      label: "Cache Trace Max Archives",
+      help: "Number of numbered cache trace JSONL archives to keep beside the active file (default: 3). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+      tags: ["observability", "performance", "storage"],
+    },
+    "diagnostics.anthropicPayloadLog": {
+      label: "Anthropic Payload Log",
+      help: "Anthropic provider payload JSONL logging settings for targeted request and usage forensics. Enable this temporarily for debugging and keep rotation bounded because payload logs can contain large model request context.",
+      tags: ["observability"],
+    },
+    "diagnostics.anthropicPayloadLog.enabled": {
+      label: "Anthropic Payload Log Enabled",
+      help: "Log sanitized Anthropic provider request payloads and usage events for embedded agent runs (default: false).",
+      tags: ["observability"],
+    },
+    "diagnostics.anthropicPayloadLog.filePath": {
+      label: "Anthropic Payload Log File Path",
+      help: "JSONL output path for Anthropic provider payload logs (default: $OPENCLAW_STATE_DIR/logs/anthropic-payload.jsonl).",
+      tags: ["observability", "storage"],
+    },
+    "diagnostics.anthropicPayloadLog.maxFileBytes": {
+      label: "Anthropic Payload Log Max File Bytes",
+      help: "Maximum active Anthropic provider payload JSONL size in bytes before rotation (default: 104857600 = 100 MB). Set 0 to disable the size cap.",
+      tags: ["observability", "performance", "storage"],
+    },
+    "diagnostics.anthropicPayloadLog.maxArchives": {
+      label: "Anthropic Payload Log Max Archives",
+      help: "Number of numbered Anthropic provider payload JSONL archives to keep beside the active file (default: 5). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+      tags: ["observability", "performance"],
     },
     "agents.list.*.identity.avatar": {
       label: "Identity Avatar",

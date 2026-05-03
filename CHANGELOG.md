@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Diagnostics: rotate `cache-trace.jsonl` and Anthropic provider payload JSONL logs with default size caps and numbered archives, plus config/env overrides, so temporary forensic tracing cannot grow without bound. Fixes #75380.
 - Gateway: preserve stack diagnostics when `chat.send` or agent attachment parsing/staging fails, improving image-send failure triage. Refs #63432. (#75135) Thanks @keen0206.
 - Maintainer workflow: push prepared PR heads through GitHub's verified commit API by default and require an explicit override before git-protocol pushes can publish unsigned commits. Thanks @BunsDev.
 - Feishu: resolve setup/status probes through the selected/default account so multi-account configs with account-scoped app credentials show as configured and probeable. Fixes #72930. Thanks @brokemac79.

@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getQueuedFileWriter, resolveQueuedFileAppendFlags } from "./queued-file-writer.js";
+import {
+  getQueuedFileWriter,
+  resolveQueuedFileAppendFlags,
+  resolveQueuedFileRotatedPath,
+} from "./queued-file-writer.js";
 
 const tempDirs: string[] = [];
 
@@ -79,5 +83,37 @@ describe("getQueuedFileWriter", () => {
     await writer.flush();
 
     expect(fs.readFileSync(filePath, "utf8")).toBe("12345\n");
+  });
+
+  it("rotates capped files when archive retention is configured", async () => {
+    const tmpDir = makeTempDir();
+    const filePath = path.join(tmpDir, "trace.jsonl");
+    const writer = getQueuedFileWriter(new Map(), filePath, {
+      maxFileBytes: 6,
+      maxArchives: 2,
+    });
+
+    for (const line of ["aa\n", "bb\n", "cc\n", "dd\n", "ee\n", "ff\n"]) {
+      writer.write(line);
+    }
+    await writer.flush();
+
+    expect(fs.readFileSync(filePath, "utf8")).toBe("ee\nff\n");
+    expect(fs.readFileSync(resolveQueuedFileRotatedPath(filePath, 1), "utf8")).toBe("cc\ndd\n");
+    expect(fs.readFileSync(resolveQueuedFileRotatedPath(filePath, 2), "utf8")).toBe("aa\nbb\n");
+  });
+
+  it("drops a single line that exceeds the configured cap", async () => {
+    const tmpDir = makeTempDir();
+    const filePath = path.join(tmpDir, "trace.jsonl");
+    const writer = getQueuedFileWriter(new Map(), filePath, {
+      maxFileBytes: 4,
+      maxArchives: 1,
+    });
+
+    writer.write("12345\n");
+    await writer.flush();
+
+    expect(fs.existsSync(filePath)).toBe(false);
   });
 });

@@ -1768,6 +1768,7 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
       const anthropicPayloadLogger = createAnthropicPayloadLogger({
+        cfg: params.config,
         env: process.env,
         runId: params.runId,
         sessionId: activeSession.sessionId,

@@ -380,6 +380,17 @@ export const OpenClawSchema = z
             includeMessages: z.boolean().optional(),
             includePrompt: z.boolean().optional(),
             includeSystem: z.boolean().optional(),
+            maxFileBytes: z.number().int().nonnegative().optional(),
+            maxArchives: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        anthropicPayloadLog: z
+          .object({
+            enabled: z.boolean().optional(),
+            filePath: z.string().optional(),
+            maxFileBytes: z.number().int().nonnegative().optional(),
+            maxArchives: z.number().int().nonnegative().optional(),
           })
           .strict()
           .optional(),
