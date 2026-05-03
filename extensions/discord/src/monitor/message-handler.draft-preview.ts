@@ -70,6 +70,7 @@ export function createDiscordDraftPreviewController(params: {
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   let finalDeliveryHandled = false;
+  let progressDraftStarted = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
   const suppressDefaultToolProgressMessages =
@@ -116,6 +117,9 @@ export function createDiscordDraftPreviewController(params: {
       if (!draftStream || discordStreamMode !== "progress") {
         return;
       }
+      if (progressDraftStarted) {
+        return;
+      }
       const previewText = formatChannelProgressDraftText({
         entry: params.discordConfig,
         lines: [],
@@ -124,6 +128,7 @@ export function createDiscordDraftPreviewController(params: {
       if (!previewText || previewText === lastPartialText) {
         return;
       }
+      progressDraftStarted = true;
       lastPartialText = previewText;
       draftText = previewText;
       hasStreamedMessage = true;

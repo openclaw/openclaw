@@ -618,8 +618,9 @@ export async function processDiscordMessage(
             limit: historyLimit,
           },
           onPreDispatchFailure: settleDispatchBeforeStart,
-          runDispatch: () =>
-            dispatchInboundMessage({
+          runDispatch: async () => {
+            await draftPreview.startProgressDraft();
+            return await dispatchInboundMessage({
               ctx: ctxPayload,
               cfg,
               dispatcher,
@@ -712,7 +713,8 @@ export async function processDiscordMessage(
                   await statusReactions.setThinking();
                 },
               },
-            }),
+            });
+          },
         }),
       },
     });

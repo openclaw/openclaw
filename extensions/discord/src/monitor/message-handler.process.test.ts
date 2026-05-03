@@ -1477,6 +1477,29 @@ describe("processDiscordMessage draft streaming", () => {
     });
   });
 
+  it("starts Discord progress drafts when accepted turns dispatch", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps standalone Discord tool progress when partial preview lines are disabled", async () => {
     createMockDraftStreamForTest();
 
