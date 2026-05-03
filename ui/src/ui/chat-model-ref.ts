@@ -268,8 +268,10 @@ export function buildChatModelOptionFromLookup(
   displayLookup: ChatModelDisplayLookup,
 ): { value: string; label: string } {
   const provider = entry.provider?.trim();
+  const value = buildQualifiedChatModelValue(entry.id, provider);
+  void displayLookup;
   return {
-    value: buildQualifiedChatModelValue(entry.id, provider),
-    label: formatCatalogEntryDisplay(entry, displayLookup),
+    value,
+    label: value,
   };
 }

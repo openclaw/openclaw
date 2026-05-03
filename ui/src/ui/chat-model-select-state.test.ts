@@ -133,10 +133,10 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("nvidia/moonshotai/kimi-k2.5");
-    expect(resolved.defaultLabel).toBe("Default (Kimi K2.5 (NVIDIA))");
+    expect(resolved.defaultLabel).toBe("Default (nvidia/moonshotai/kimi-k2.5)");
     expect(resolved.options).toContainEqual({
       value: "nvidia/moonshotai/kimi-k2.5",
-      label: "Kimi K2.5 (NVIDIA)",
+      label: "nvidia/moonshotai/kimi-k2.5",
     });
   });
 
@@ -164,14 +164,14 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("anthropic/claude-3-7-sonnet");
-    expect(resolved.defaultLabel).toBe("Default (Claude Sonnet · openrouter)");
+    expect(resolved.defaultLabel).toBe("Default (openrouter/claude-3-7-sonnet)");
     expect(resolved.options).toContainEqual({
       value: "anthropic/claude-3-7-sonnet",
-      label: "Claude Sonnet · anthropic",
+      label: "anthropic/claude-3-7-sonnet",
     });
     expect(resolved.options).toContainEqual({
       value: "openrouter/claude-3-7-sonnet",
-      label: "Claude Sonnet · openrouter",
+      label: "openrouter/claude-3-7-sonnet",
     });
   });
 
@@ -199,16 +199,14 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("anthropic/claude-3-7-sonnet");
-    expect(resolved.defaultLabel).toBe(
-      "Default (Claude Sonnet · claude-3-7-sonnet-thinking · anthropic)",
-    );
+    expect(resolved.defaultLabel).toBe("Default (anthropic/claude-3-7-sonnet-thinking)");
     expect(resolved.options).toContainEqual({
       value: "anthropic/claude-3-7-sonnet",
-      label: "Claude Sonnet · claude-3-7-sonnet · anthropic",
+      label: "anthropic/claude-3-7-sonnet",
     });
     expect(resolved.options).toContainEqual({
       value: "anthropic/claude-3-7-sonnet-thinking",
-      label: "Claude Sonnet · claude-3-7-sonnet-thinking · anthropic",
+      label: "anthropic/claude-3-7-sonnet-thinking",
     });
   });
 });
