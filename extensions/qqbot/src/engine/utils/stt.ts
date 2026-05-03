@@ -7,7 +7,6 @@
 
 import * as fs from "node:fs";
 import path from "node:path";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
   asOptionalObjectRecord as asRecord,
@@ -15,7 +14,7 @@ import {
   sanitizeFileName,
 } from "./string-normalize.js";
 
-export interface STTConfig {
+interface STTConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -85,26 +84,17 @@ export async function transcribeAudio(
   form.append("file", new Blob([fileBuffer], { type: mime }), fileName);
   form.append("model", sttCfg.model);
 
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${sttCfg.baseUrl}/audio/transcriptions`,
-    init: {
-      method: "POST",
-      headers: { Authorization: `Bearer ${sttCfg.apiKey}` },
-      body: form,
-    },
-    policy: {},
-    auditContext: "qqbot.stt",
+  const resp = await fetch(`${sttCfg.baseUrl}/audio/transcriptions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${sttCfg.apiKey}` },
+    body: form,
   });
 
-  try {
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      throw new Error(`STT failed (HTTP ${response.status}): ${detail.slice(0, 300)}`);
-    }
-
-    const result = (await response.json()) as { text?: string };
-    return normalizeOptionalString(result.text) ?? null;
-  } finally {
-    await release();
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new Error(`STT failed (HTTP ${resp.status}): ${detail.slice(0, 300)}`);
   }
+
+  const result = (await resp.json()) as { text?: string };
+  return normalizeOptionalString(result.text) ?? null;
 }
