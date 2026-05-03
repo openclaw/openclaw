@@ -3040,6 +3040,61 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("falls back in forum topics when a queued final was not delivered to Telegram", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    deliverReplies.mockResolvedValueOnce({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        isGroup: true,
+        chatId: -1003752586071,
+        primaryCtx: {
+          message: { chat: { id: -1003752586071, type: "supergroup" } },
+        } as TelegramMessageContext["primaryCtx"],
+        msg: {
+          chat: { id: -1003752586071, type: "supergroup" },
+          message_id: 3,
+          message_thread_id: 2,
+          is_topic_message: true,
+        } as TelegramMessageContext["msg"],
+        threadSpec: { id: 2, scope: "forum" },
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-1003752586071:topic:2",
+          MessageThreadId: 2,
+          IsForum: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              direct: "disallow",
+              group: "disallow",
+              internal: "allow",
+            },
+            silentReplyRewrite: {
+              group: false,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "-1003752586071",
+        thread: { id: 2, scope: "forum" },
+        replies: [expect.objectContaining({ text: "NO_REPLY" })],
+      }),
+    );
+  });
+
   it("does not add silent-reply fallback after visible block delivery", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -4115,7 +4170,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     vi.useFakeTimers();
     const reactionApi = vi.fn(async () => true);
     const statusReactionController = createStatusReactionController();
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
     deliverReplies.mockResolvedValue({ delivered: true });
 
     try {
@@ -4154,7 +4212,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it("restores the initial Telegram status reaction after reply when removeAckAfterReply is disabled", async () => {
     const reactionApi = vi.fn(async () => true);
     const statusReactionController = createStatusReactionController();
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
     deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({
