@@ -425,6 +425,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           this.config.onClose?.("completed");
           return;
         }
+        if (!this.sessionConfigured && !settled) {
+          settleReject(new Error("OpenAI realtime connection closed before ready"));
+          return;
+        }
         void this.attemptReconnect();
       });
     });

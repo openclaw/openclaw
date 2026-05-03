@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 - Channels/WhatsApp: allow `@whiskeysockets/libsignal-node` in `onlyBuiltDependencies` so pnpm v9+ `blockExoticSubdeps` no longer rejects the baileys git-tarball subdep and silences all inbound agent replies. Fixes #76539. Thanks @ottodeng and @vincentkoc.
 - Gateway/systemd: preserve operator-added secrets in the Gateway env file across re-stage while clearing OpenClaw-managed keys (such as `OPENCLAW_GATEWAY_TOKEN`) so a fresh staging value is never shadowed by a stale env-file copy; operator secrets are also retained when the state-dir `.env` is empty. Fixes #76860. Thanks @hclsys.
+- OpenAI/Google Meet: fail realtime voice connection attempts when the socket closes before `session.updated`, avoiding stuck Meet joins waiting on a bridge that never became ready. Thanks @vincentkoc.
 - QA/cache: require the full `CACHE-OK <suffix>` marker before live cache probes stop retrying, so suffix-only prose cannot hide a broken probe response. Thanks @vincentkoc.
 - Slack/Matrix: avoid creating blank progress-draft messages when `streaming.progress.label=false` and progress tool lines are disabled. Thanks @vincentkoc.
 - QA/Matrix: keep the mock OpenAI tool-progress provider aligned with exact-marker Matrix prompts so the hardened live preview scenario still forces a deterministic read before final delivery. Thanks @vincentkoc.
