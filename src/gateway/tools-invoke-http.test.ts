@@ -508,7 +508,10 @@ describe("POST /tools/invoke", () => {
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toMatchObject({ ok: true, permissionFlow: true });
-    expect(lastCreateOpenClawToolsContext?.pluginToolAllowlist).toEqual(["plugin_doctor"]);
+    expect(lastCreateOpenClawToolsContext?.pluginToolAllowlist).toEqual(
+      expect.arrayContaining(["plugin_doctor"]),
+    );
+    expect(lastCreateOpenClawToolsContext?.pluginToolAllowlist).not.toContain("*");
   });
 
   it("blocks tool execution when before_tool_call rejects the invoke", async () => {

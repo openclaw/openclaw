@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -943,6 +944,26 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolveOptionalDemoTools(toolAllowlist);
 
     expectResolvedToolNames(tools, ["optional_tool"]);
+  });
+
+  it("keeps default non-optional plugin tools when alsoAllow opts into optional tools", () => {
+    const defaultEntry: MockRegistryToolEntry = {
+      pluginId: "multi",
+      optional: false,
+      source: "/tmp/multi.js",
+      names: ["other_tool"],
+      declaredNames: ["other_tool"],
+      factory: () => makeTool("other_tool"),
+    };
+    setRegistry([defaultEntry, createOptionalDemoEntry()]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "optional_tool"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["other_tool", "optional_tool"]);
   });
 
   it("rejects plugin id collisions with core tool names", () => {
