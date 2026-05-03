@@ -1,6 +1,8 @@
 name: Mantis Discord Status Reactions
 
 on:
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       baseline_ref:
@@ -24,7 +26,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: mantis-discord-status-reactions-${{ inputs.baseline_ref }}-${{ inputs.candidate_ref }}-${{ github.run_attempt }}
+  group: mantis-discord-status-reactions-${{ github.event.issue.number || inputs.pr_number || inputs.candidate_ref || github.run_id }}-${{ github.run_attempt }}
   cancel-in-progress: false
 
 env:
@@ -37,6 +39,19 @@ env:
 jobs:
   authorize_actor:
     name: Authorize workflow actor
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          (
+            contains(github.event.comment.body, '@Mantis') ||
+            contains(github.event.comment.body, '@mantis') ||
+            contains(github.event.comment.body, '/mantis')
+          )
+        )
+      }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - name: Require maintainer-level repository access
@@ -58,9 +73,101 @@ jobs:
               );
             }
 
+  resolve_request:
+    name: Resolve Mantis request
+    needs: authorize_actor
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
+      candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      request_source: ${{ steps.resolve.outputs.request_source }}
+      should_run: ${{ steps.resolve.outputs.should_run }}
+    steps:
+      - name: Resolve refs and target PR
+        id: resolve
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const defaultBaseline = "0bf06e953fdda290799fc9fb9244a8f67fdae593";
+            const eventName = context.eventName;
+
+            function setOutput(name, value) {
+              core.setOutput(name, value ?? "");
+              core.info(`${name}=${value ?? ""}`);
+            }
+
+            if (eventName === "workflow_dispatch") {
+              const inputs = context.payload.inputs ?? {};
+              setOutput("should_run", "true");
+              setOutput("baseline_ref", inputs.baseline_ref || defaultBaseline);
+              setOutput("candidate_ref", inputs.candidate_ref || "main");
+              setOutput("pr_number", inputs.pr_number || "");
+              setOutput("request_source", "workflow_dispatch");
+              return;
+            }
+
+            if (eventName !== "issue_comment") {
+              core.setFailed(`Unsupported event: ${eventName}`);
+              return;
+            }
+
+            const issue = context.payload.issue;
+            const body = context.payload.comment?.body ?? "";
+            if (!issue?.pull_request) {
+              core.setFailed("Mantis issue_comment trigger requires a pull request comment.");
+              return;
+            }
+
+            const normalized = body.toLowerCase();
+            const requested =
+              (normalized.includes("@mantis") || normalized.includes("/mantis")) &&
+              normalized.includes("discord") &&
+              normalized.includes("status") &&
+              normalized.includes("reaction");
+            if (!requested) {
+              core.notice("Comment mentioned Mantis but did not request the Discord status-reactions scenario.");
+              setOutput("should_run", "false");
+              setOutput("baseline_ref", "");
+              setOutput("candidate_ref", "");
+              setOutput("pr_number", "");
+              setOutput("request_source", "unsupported_issue_comment");
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: issue.number,
+            });
+
+            const baselineMatch = body.match(/(?:baseline|base)[\s:=]+([^\s`]+)/i);
+            const candidateMatch = body.match(/(?:candidate|head)[\s:=]+([^\s`]+)/i);
+            const baseline = baselineMatch?.[1] ?? defaultBaseline;
+            const rawCandidate = candidateMatch?.[1];
+            const candidate =
+              rawCandidate && !["head", "pr", "pr-head"].includes(rawCandidate.toLowerCase())
+                ? rawCandidate
+                : pr.head.sha;
+
+            setOutput("should_run", "true");
+            setOutput("baseline_ref", baseline);
+            setOutput("candidate_ref", candidate);
+            setOutput("pr_number", String(issue.number));
+            setOutput("request_source", "issue_comment");
+
+            await github.rest.reactions.createForIssueComment({
+              owner,
+              repo,
+              comment_id: context.payload.comment.id,
+              content: "eyes",
+            }).catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
+
   validate_refs:
     name: Validate selected refs
-    needs: authorize_actor
+    needs: resolve_request
+    if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       baseline_revision: ${{ steps.validate.outputs.baseline_revision }}
@@ -76,8 +183,8 @@ jobs:
         id: validate
         env:
           GH_TOKEN: ${{ github.token }}
-          BASELINE_REF: ${{ inputs.baseline_ref }}
-          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
+          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
         shell: bash
         run: |
           set -euo pipefail
@@ -126,7 +233,8 @@ jobs:
 
   run_status_reactions:
     name: Run Discord status reaction before/after
-    needs: validate_refs
+    needs: [resolve_request, validate_refs]
+    if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 180
     environment: qa-live-shared
@@ -268,7 +376,7 @@ jobs:
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token
-        if: ${{ always() && inputs.pr_number != '' }}
+        if: ${{ always() && needs.resolve_request.outputs.pr_number != '' }}
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
@@ -280,14 +388,14 @@ jobs:
           permission-pull-requests: write
 
       - name: Comment PR with inline QA screenshots
-        if: ${{ always() && inputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
+        if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
         env:
           GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
-          TARGET_PR: ${{ inputs.pr_number }}
+          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
           ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
           BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
           CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
-          MANTIS_COMMENT_BOT_LOGIN: ${{ vars.MANTIS_GITHUB_APP_BOT_LOGIN || 'openclaw-mantis-qa[bot]' }}
+          REQUEST_SOURCE: ${{ needs.resolve_request.outputs.request_source }}
         shell: bash
         run: |
           set -euo pipefail
@@ -343,6 +451,7 @@ jobs:
           baseline_status="$(jq -r '.baseline.status' "$root/comparison.json")"
           candidate_status="$(jq -r '.candidate.status' "$root/comparison.json")"
           pass="$(jq -r '.pass' "$root/comparison.json")"
+          mantis_bot_login="$(gh api user --jq '.login')"
           comment_file="$(mktemp)"
           cat > "$comment_file" <<EOF
           <!-- mantis-discord-status-reactions -->
@@ -351,6 +460,7 @@ jobs:
           Summary: Mantis reran Discord status reactions against the known queued-only baseline and the candidate ref. The baseline reproduced the bug, while the candidate showed the expected queued -> thinking -> done reaction sequence.
 
           - Scenario: \`discord-status-reactions-tool-only\`
+          - Trigger: \`${REQUEST_SOURCE}\`
           - Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           - Artifact: ${ARTIFACT_URL}
           - Baseline: \`${baseline_status}\` at \`${BASELINE_SHA}\`
@@ -366,7 +476,7 @@ jobs:
 
           comment_id="$(
             gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TARGET_PR}/comments" \
-              --jq ".[] | select(.body | contains(\"<!-- mantis-discord-status-reactions -->\")) | select(.user.login == \"${MANTIS_COMMENT_BOT_LOGIN}\") | .id" \
+              --jq ".[] | select(.body | contains(\"<!-- mantis-discord-status-reactions -->\")) | select(.user.login == \"${mantis_bot_login}\") | .id" \
               | tail -n 1
           )"
 

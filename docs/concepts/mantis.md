@@ -101,6 +101,22 @@ worktrees, runs `discord-status-reactions-tool-only` against each worktree, and
 uploads `baseline/`, `candidate/`, `comparison.json`, and `mantis-report.md` as
 Actions artifacts.
 
+You can also trigger the status-reactions run directly from a PR comment:
+
+```text
+@Mantis discord status reactions
+```
+
+The comment trigger is intentionally narrow. It only runs on pull request
+comments from users with write, maintain, or admin access, and it only recognizes
+Discord status-reaction requests. By default it uses the known bad baseline ref
+and the current PR head SHA as the candidate. Maintainers can override either
+ref:
+
+```text
+@Mantis discord status reactions baseline=origin/main candidate=HEAD
+```
+
 ClawSweeper command examples:
 
 ```text
@@ -361,11 +377,9 @@ messages, and other bulky evidence stay in the Actions artifact.
 Production workflows should post those comments with the Mantis GitHub App, not
 with `github-actions[bot]`. Store the app id and private key as
 `MANTIS_GITHUB_APP_ID` and `MANTIS_GITHUB_APP_PRIVATE_KEY` GitHub Actions
-secrets. If the app is renamed, set `MANTIS_GITHUB_APP_BOT_LOGIN` as a GitHub
-Actions variable to the new bot login, for example `openclaw-mantis[bot]`. The
-workflow should update an existing Mantis-owned comment when one exists; if only
-an older `github-actions[bot]` comment exists, it should create a new
-Mantis-owned comment instead of rewriting the legacy bot comment.
+secrets. The workflow resolves the bot login from the GitHub App token, updates
+an existing Mantis-owned comment when one exists, and creates a new Mantis-owned
+comment instead of rewriting older `github-actions[bot]` comments.
 
 The PR comment should be short and visual:
 
