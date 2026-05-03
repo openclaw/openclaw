@@ -43,6 +43,10 @@ import {
   type PluginPackageInstall,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
+import {
+  getOfficialExternalPluginCatalogEntryForPackage,
+  getOfficialExternalPluginCatalogManifest,
+} from "./official-external-plugin-catalog.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -258,6 +262,72 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   return merged;
 }
 
+function mergeContractLists(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): string[] | undefined {
+  const merged = [...(left ?? []), ...(right ?? [])]
+    .map((value) => value.trim())
+    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+  return merged.length > 0 ? merged : undefined;
+}
+
+function mergeManifestContracts(
+  manifestContracts: PluginManifestContracts | undefined,
+  catalogContracts: PluginManifestContracts | undefined,
+): PluginManifestContracts | undefined {
+  if (!catalogContracts) {
+    return manifestContracts;
+  }
+  const contracts: PluginManifestContracts = {};
+  for (const key of [
+    "embeddedExtensionFactories",
+    "agentToolResultMiddleware",
+    "externalAuthProviders",
+    "memoryEmbeddingProviders",
+    "speechProviders",
+    "realtimeTranscriptionProviders",
+    "realtimeVoiceProviders",
+    "mediaUnderstandingProviders",
+    "documentExtractors",
+    "imageGenerationProviders",
+    "videoGenerationProviders",
+    "musicGenerationProviders",
+    "webContentExtractors",
+    "webFetchProviders",
+    "webSearchProviders",
+    "migrationProviders",
+    "tools",
+  ] as const) {
+    const merged = mergeContractLists(manifestContracts?.[key], catalogContracts[key]);
+    if (merged) {
+      contracts[key] = merged;
+    }
+  }
+  return Object.keys(contracts).length > 0 ? contracts : undefined;
+}
+
+function mergeCatalogChannelConfigs(params: {
+  manifestChannelConfigs?: Record<string, PluginManifestChannelConfig>;
+  catalogChannelConfigs?: Record<string, PluginManifestChannelConfig>;
+}): Record<string, PluginManifestChannelConfig> | undefined {
+  if (!params.catalogChannelConfigs) {
+    return params.manifestChannelConfigs;
+  }
+  const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
+  for (const [key, value] of Object.entries(params.catalogChannelConfigs)) {
+    if (!isBlockedObjectKey(key)) {
+      merged[key] = value;
+    }
+  }
+  for (const [key, value] of Object.entries(params.manifestChannelConfigs ?? {})) {
+    if (!isBlockedObjectKey(key)) {
+      merged[key] = value;
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -274,8 +344,17 @@ function buildRecord(params: {
           packageManifest: params.candidate.packageManifest,
         })
       : params.manifest.channelConfigs;
+  const officialCatalogManifest =
+    params.candidate.origin !== "bundled"
+      ? getOfficialExternalPluginCatalogManifest(
+          getOfficialExternalPluginCatalogEntryForPackage(params.candidate.packageName) ?? {},
+        )
+      : undefined;
   const channelConfigs = mergePackageChannelMetaIntoChannelConfigs({
-    channelConfigs: manifestChannelConfigs,
+    channelConfigs: mergeCatalogChannelConfigs({
+      manifestChannelConfigs,
+      catalogChannelConfigs: officialCatalogManifest?.channelConfigs,
+    }),
     packageChannel: params.candidate.packageManifest?.channel,
   });
   const packageChannelCommands = normalizePackageChannelCommands(
@@ -341,7 +420,10 @@ function buildRecord(params: {
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
-    contracts: params.manifest.contracts,
+    contracts: mergeManifestContracts(
+      params.manifest.contracts,
+      officialCatalogManifest?.contracts,
+    ),
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,

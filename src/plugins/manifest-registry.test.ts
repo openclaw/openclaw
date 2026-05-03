@@ -62,6 +62,7 @@ function createPluginCandidate(params: {
   origin: "bundled" | "global" | "workspace" | "config";
   format?: "openclaw" | "bundle";
   bundleFormat?: "codex" | "claude" | "cursor";
+  packageName?: string;
   packageManifest?: OpenClawPackageManifest;
   packageDir?: string;
   bundledManifest?: PluginCandidate["bundledManifest"];
@@ -74,6 +75,7 @@ function createPluginCandidate(params: {
     origin: params.origin,
     format: params.format,
     bundleFormat: params.bundleFormat,
+    packageName: params.packageName,
     packageManifest: params.packageManifest,
     packageDir: params.packageDir,
     bundledManifest: params.bundledManifest,
@@ -1091,6 +1093,39 @@ describe("loadPluginManifestRegistry", () => {
       type: "object",
       additionalProperties: false,
     });
+    expect(
+      registry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+  });
+
+  it("hydrates supplemental official external catalog contracts for lagging npm manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "wecom-openclaw-plugin",
+      channels: ["wecom"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "wecom-openclaw-plugin",
+        rootDir: dir,
+        origin: "global",
+        packageName: "@wecom/wecom-openclaw-plugin",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.contracts?.tools).toEqual(["wecom_mcp"]);
+    expect(registry.plugins[0]?.channelConfigs?.wecom).toEqual(
+      expect.objectContaining({
+        label: "WeCom",
+        schema: expect.objectContaining({
+          type: "object",
+        }),
+      }),
+    );
     expect(
       registry.diagnostics.some((diagnostic) =>
         diagnostic.message.includes("without channelConfigs metadata"),

@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/catalog: supplement lagging official external WeCom and Yuanbao npm manifests with channel config descriptors and declared tool contracts from the OpenClaw catalog, so trusted package sweeps no longer fail because external package metadata trails the host contract. Thanks @vincentkoc.
 - Plugins/install: let trusted official `@openclaw/*` catalog installs recover when npm `latest` points at a prerelease by falling back to the newest stable version, or by allowing prerelease-only launch packages with a warning instead of making beta/development plugin sweeps fail at install time. Thanks @vincentkoc.
 - Google Meet: use the local call-control microphone button instead of disabled remote participant mute buttons, and block realtime speech when the OpenClaw Meet microphone remains muted.
 - Google Meet: refresh realtime browser state during status and retry delayed speech after Meet finishes joining, so a just-opened in-call tab no longer leaves speech stuck behind stale `not-in-call` health.
