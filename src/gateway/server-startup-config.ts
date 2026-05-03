@@ -1,5 +1,10 @@
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
-import { readVaultOAuthCredential } from "../agents/auth-profiles/vault-oauth-store.js";
+import { cloneAuthProfileStore } from "../agents/auth-profiles/clone.js";
+import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  getCachedVaultOAuthCredential,
+  readVaultOAuthCredential,
+} from "../agents/auth-profiles/vault-oauth-store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
@@ -141,14 +146,9 @@ export function createRuntimeSecretsActivator(params: {
   let secretsDegraded = false;
   let secretsActivationTail: Promise<void> = Promise.resolve();
   let secretsRuntimePromise: Promise<typeof import("../secrets/runtime.js")> | null = null;
-  let authProfilesPromise: Promise<typeof import("../agents/auth-profiles.js")> | null = null;
   const loadSecretsRuntime = () => {
     secretsRuntimePromise ??= import("../secrets/runtime.js");
     return secretsRuntimePromise;
-  };
-  const loadAuthProfiles = () => {
-    authProfilesPromise ??= import("../agents/auth-profiles.js");
-    return authProfilesPromise;
   };
 
   const runWithSecretsActivationLock = async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -173,17 +173,24 @@ export function createRuntimeSecretsActivator(params: {
           params.activateRuntimeSecretsSnapshot ?? secretsRuntime!.activateSecretsRuntimeSnapshot;
         const startupPreflight =
           activationParams.reason === "startup" || activationParams.reason === "restart-check";
-        const loadAuthStore = startupPreflight
-          ? (await loadAuthProfiles()).loadAuthProfileStoreWithoutExternalProfiles
-          : undefined;
+        const authStore = startupPreflight ? loadAuthProfileStoreWithoutExternalProfiles() : null;
         // Warm the vault OAuth cache before building the secrets snapshot so
         // that vault-backed credentials are available for the overlay when the
         // first request arrives. Failures are non-fatal: the gateway will retry
-        // on the first auth overlay call (and log the miss).
-        await readVaultOAuthCredential(loadAuthStore?.()).catch(() => undefined);
+        // on the first auth overlay call (and log the miss). Also mirror the
+        // warmed credential into the runtime auth snapshot so provider-auth
+        // resolution sees the same startup-warmed state.
+        await readVaultOAuthCredential(authStore).catch(() => undefined);
+        const cachedVaultCredential = getCachedVaultOAuthCredential();
+        if (authStore && cachedVaultCredential) {
+          const runtimeAuthStore = cloneAuthProfileStore(authStore);
+          runtimeAuthStore.profiles[cachedVaultCredential.profileId] =
+            cachedVaultCredential.credential;
+          setRuntimeAuthProfileStoreSnapshot(runtimeAuthStore);
+        }
         const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
-          ...(loadAuthStore ? { loadAuthStore } : {}),
+          ...(authStore ? { loadAuthStore: () => authStore } : {}),
         });
         assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
         if (activationParams.activate) {

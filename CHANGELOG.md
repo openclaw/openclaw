@@ -449,7 +449,10 @@ Docs: https://docs.openclaw.ai
 - macOS CLI/onboarding: honor sensitive wizard text steps in `openclaw-mac wizard` with termios no-echo input, suppressing saved credential previews while preserving long API keys and gateway tokens. Fixes #76698. Thanks @anurag-bg-neu and @sallyom.
 - Control UI/Skills: fix skill detail modal silently failing to open in all browsers by deferring `showModal()` until the dialog element is connected to the DOM; the Lit `ref` callback fired before connection causing a `DOMException: HTMLDialogElement.showModal: Dialog element is not connected` on every skill click. Thanks @nickmopen.
 - fix(lsp): resolve Windows .cmd shims in LSP server spawning so npm-installed language servers (e.g. typescript-language-server) start correctly on Windows. Fixes #75352. Thanks @ElliotDrel.
-- Gateway/auth: let `openai-codex` provider-auth resolution read Codex OAuth credentials from the external CLI keychain path, so Slack and other gateway-triggered runs do not fail with unresolved OpenAI Codex tokens.
+- Gateway/auth: let `openai-codex` provider-auth resolution pick up both Codex CLI keychain auth and vault-warmed startup OAuth snapshots, so Slack and other gateway-triggered runs do not fail with unresolved OpenAI Codex tokens.
+=======
+- Gateway/auth: let `openai-codex` provider-auth resolution pick up both Codex CLI keychain auth and vault-warmed startup OAuth snapshots, so Slack and other gateway-triggered runs do not fail with unresolved OpenAI Codex tokens.
+>>>>>>> 93520cbc7f (fix gateway vault-backed codex auth startup snapshot)
 - Gateway/update: run `doctor --non-interactive --fix` after Control UI global package updates before reporting success, so legacy config is migrated before the gateway restart. Thanks @stevenchouai.
 - Gateway/cron: stop a lazy cron startup that loses a hot-reload race, preventing the old cron service from starting after reload has already replaced cron state.
 - CLI/plugins: warn when npm plugin installs remain shadowed by a failing config-selected source and surface the repair path in `plugins doctor`. Thanks @LindalyX-Lee.

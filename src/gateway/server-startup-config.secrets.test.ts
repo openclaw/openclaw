@@ -9,6 +9,24 @@ import {
 } from "./server-startup-config.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
+const runtimeSnapshotMocks = vi.hoisted(() => ({
+  setRuntimeAuthProfileStoreSnapshot: vi.fn(),
+}));
+
+const vaultOauthMocks = vi.hoisted(() => ({
+  readVaultOAuthCredential: vi.fn(async () => null),
+  getCachedVaultOAuthCredential: vi.fn(() => null),
+}));
+
+vi.mock("../agents/auth-profiles/runtime-snapshots.js", () => ({
+  setRuntimeAuthProfileStoreSnapshot: runtimeSnapshotMocks.setRuntimeAuthProfileStoreSnapshot,
+}));
+
+vi.mock("../agents/auth-profiles/vault-oauth-store.js", () => ({
+  readVaultOAuthCredential: vaultOauthMocks.readVaultOAuthCredential,
+  getCachedVaultOAuthCredential: vaultOauthMocks.getCachedVaultOAuthCredential,
+}));
+
 function gatewayTokenConfig(config: OpenClawConfig): OpenClawConfig {
   return {
     ...config,
@@ -66,6 +84,11 @@ describe("gateway startup config secret preflight", () => {
   const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
 
   afterEach(() => {
+    runtimeSnapshotMocks.setRuntimeAuthProfileStoreSnapshot.mockReset();
+    vaultOauthMocks.readVaultOAuthCredential.mockReset();
+    vaultOauthMocks.readVaultOAuthCredential.mockResolvedValue(null);
+    vaultOauthMocks.getCachedVaultOAuthCredential.mockReset();
+    vaultOauthMocks.getCachedVaultOAuthCredential.mockReturnValue(null);
     if (previousSkipChannels === undefined) {
       delete process.env.OPENCLAW_SKIP_CHANNELS;
     } else {
@@ -124,10 +147,60 @@ describe("gateway startup config secret preflight", () => {
       activate: false,
     });
 
-    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith({
-      config: expect.any(Object),
-      loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
+    const call = prepareRuntimeSecretsSnapshot.mock.calls[0]?.[0] as
+      | { config: OpenClawConfig; loadAuthStore?: () => unknown }
+      | undefined;
+    expect(call?.config).toEqual(expect.any(Object));
+    expect(call?.loadAuthStore).toEqual(expect.any(Function));
+    expect(call?.loadAuthStore?.()).toEqual(loadAuthProfileStoreWithoutExternalProfiles());
+  });
+
+  it("seeds the main runtime auth snapshot with a warmed vault oauth profile", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    vaultOauthMocks.readVaultOAuthCredential.mockResolvedValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "cached-access",
+      refresh: "cached-refresh",
+      expires: Date.now() + 60_000,
     });
+    vaultOauthMocks.getCachedVaultOAuthCredential.mockReturnValue({
+      profileId: "openai-codex:default",
+      credential: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "cached-access",
+        refresh: "cached-refresh",
+        expires: Date.now() + 60_000,
+      },
+      readAt: Date.now(),
+    });
+    const activateRuntimeSecrets = createRuntimeSecretsActivator({
+      logSecrets: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      emitStateEvent: vi.fn(),
+      prepareRuntimeSecretsSnapshot,
+      activateRuntimeSecretsSnapshot: vi.fn(),
+    });
+
+    await activateRuntimeSecrets(gatewayTokenConfig({}), {
+      reason: "startup",
+      activate: false,
+    });
+
+    expect(runtimeSnapshotMocks.setRuntimeAuthProfileStoreSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profiles: expect.objectContaining({
+          "openai-codex:default": expect.objectContaining({
+            type: "oauth",
+            provider: "openai-codex",
+          }),
+        }),
+      }),
+    );
   });
 
   it("does not emit degraded or recovered events for warning-only secret reloads", async () => {
@@ -269,12 +342,15 @@ describe("gateway startup config secret preflight", () => {
         gateway: expect.any(Object),
       }),
     });
-    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith({
-      config: expect.not.objectContaining({
+    const startupCall = prepareRuntimeSecretsSnapshot.mock.calls[0]?.[0] as
+      | { config: OpenClawConfig; loadAuthStore?: () => unknown }
+      | undefined;
+    expect(startupCall?.config).toEqual(
+      expect.not.objectContaining({
         channels: expect.anything(),
       }),
-      loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
-    });
+    );
+    expect(startupCall?.loadAuthStore).toEqual(expect.any(Function));
   });
 
   it("honors startup auth overrides before secret preflight gating", async () => {
@@ -314,8 +390,11 @@ describe("gateway startup config secret preflight", () => {
       mode: "password",
       password: "override-password",
     });
-    expect(prepareRuntimeSecretsSnapshot).toHaveBeenNthCalledWith(1, {
-      config: expect.objectContaining({
+    const overrideCall = prepareRuntimeSecretsSnapshot.mock.calls[0]?.[0] as
+      | { config: OpenClawConfig; loadAuthStore?: () => unknown }
+      | undefined;
+    expect(overrideCall?.config).toEqual(
+      expect.objectContaining({
         gateway: expect.objectContaining({
           auth: expect.objectContaining({
             mode: "password",
@@ -323,8 +402,8 @@ describe("gateway startup config secret preflight", () => {
           }),
         }),
       }),
-      loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
-    });
+    );
+    expect(overrideCall?.loadAuthStore).toEqual(expect.any(Function));
     expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
   });
 
@@ -349,16 +428,19 @@ describe("gateway startup config secret preflight", () => {
       token: "startup-test-token",
     });
     expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
-    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith({
-      config: expect.objectContaining({
+    const plainStringCall = prepareRuntimeSecretsSnapshot.mock.calls[0]?.[0] as
+      | { config: OpenClawConfig; loadAuthStore?: () => unknown }
+      | undefined;
+    expect(plainStringCall?.config).toEqual(
+      expect.objectContaining({
         gateway: expect.objectContaining({
           auth: expect.objectContaining({
             token: "startup-test-token",
           }),
         }),
       }),
-      loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
-    });
+    );
+    expect(plainStringCall?.loadAuthStore).toEqual(expect.any(Function));
   });
 
   it("uses gateway auth strings resolved during startup preflight for bootstrap auth", async () => {
