@@ -51,6 +51,7 @@ export {
   readWebhookBodyOrReject,
   registerWebhookTargetWithPluginRoute,
   resolveRequestClientIp,
+  resolveWebhookTargetWithAuthOrReject,
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,
 } from "openclaw/plugin-sdk/webhook-ingress";

@@ -1,3 +1,4 @@
+import * as secretInputRuntimeModule from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -411,7 +412,48 @@ describe("BlueBubbles webhook monitor", () => {
     });
 
     it("authenticates via password query parameter", async () => {
-      await expectProtectedWebhookRequestStatus(createProtectedPasswordQueryRequestParams(), 200);
+      const resolveSpy = vi.spyOn(secretInputRuntimeModule, "resolveConfiguredSecretInputString");
+      try {
+        await expectProtectedWebhookRequestStatus(createProtectedPasswordQueryRequestParams(), 200);
+        expect(resolveSpy).not.toHaveBeenCalled();
+      } finally {
+        resolveSpy.mockRestore();
+      }
+    });
+
+    describe("configured SecretRef password", () => {
+      it("authenticates inbound webhooks via runtime-resolved SecretRef password", async () => {
+        const resolveSpy = vi.spyOn(secretInputRuntimeModule, "resolveConfiguredSecretInputString");
+        resolveSpy.mockResolvedValue({ value: TEST_WEBHOOK_PASSWORD });
+        try {
+          setupWebhookTarget({
+            account: createMockAccount({
+              // @ts-expect-error SecretRef is accepted at runtime for gateway-merged account config.
+              password: { source: "exec", provider: "op-bb-password", id: "value" }, // pragma: allowlist secret
+            }),
+          });
+
+          await expectWebhookRequestStatusForTest(
+            createProtectedPasswordQueryRequestParams(TEST_WEBHOOK_PASSWORD),
+            200,
+            "ok",
+          );
+
+          expect(resolveSpy).toHaveBeenCalledTimes(1);
+          expect(resolveSpy.mock.calls[0]?.[0]).toMatchObject({
+            config: expect.any(Object),
+            env: expect.any(Object),
+            value: expect.objectContaining({
+              source: "exec",
+              provider: "op-bb-password",
+              id: "value",
+            }), // pragma: allowlist secret
+            path: "channels.bluebubbles.accounts.default.password",
+          });
+        } finally {
+          resolveSpy.mockRestore();
+        }
+      });
     });
 
     it("authenticates via x-password header", async () => {

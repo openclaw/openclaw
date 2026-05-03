@@ -211,11 +211,13 @@ export function resolveSingleWebhookTarget<T>(
 /** Async variant of single-target resolution for auth checks that need I/O. */
 export async function resolveSingleWebhookTargetAsync<T>(
   targets: readonly T[],
-  isMatch: (target: T) => Promise<boolean>,
+  isMatch: (target: T) => boolean | Promise<boolean>,
 ): Promise<WebhookTargetMatchResult<T>> {
   let matched: T | undefined;
   for (const target of targets) {
-    if (!(await isMatch(target))) {
+    const verdict = isMatch(target);
+    const ok = typeof verdict === "boolean" ? verdict : await verdict;
+    if (!ok) {
       continue;
     }
     const updated = updateMatchedWebhookTarget(matched, target);
@@ -237,9 +239,7 @@ export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
   ambiguousStatusCode?: number;
   ambiguousMessage?: string;
 }): Promise<T | null> {
-  const match = await resolveSingleWebhookTargetAsync(params.targets, async (target) =>
-    params.isMatch(target),
-  );
+  const match = await resolveSingleWebhookTargetAsync(params.targets, params.isMatch);
   return resolveWebhookTargetMatchOrReject(params, match);
 }
 

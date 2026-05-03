@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBlueBubblesEffectiveAllowPrivateNetwork } from "./accounts.js";
@@ -23,6 +24,7 @@ import {
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createFixedWindowRateLimiter,
@@ -30,7 +32,7 @@ import {
   registerWebhookTargetWithPluginRoute,
   readWebhookBodyOrReject,
   resolveRequestClientIp,
-  resolveWebhookTargetWithAuthOrRejectSync,
+  resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
 } from "./webhook-ingress.js";
 
@@ -189,12 +191,20 @@ export async function handleBlueBubblesWebhookRequest(
         req.headers["x-bluebubbles-guid"] ??
         req.headers["authorization"];
       const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
-      const target = resolveWebhookTargetWithAuthOrRejectSync({
+      const target = await resolveWebhookTargetWithAuthOrReject({
         targets,
         res,
-        isMatch: (target) => {
-          const token = target.account.config.password?.trim() ?? "";
-          return safeEqualAuthToken(guid, token);
+        isMatch: (target): boolean | Promise<boolean> => {
+          const direct = normalizeSecretInputString(target.account.config.password);
+          if (direct) {
+            return safeEqualAuthToken(guid, direct);
+          }
+          return resolveConfiguredSecretInputString({
+            config: target.config,
+            env: process.env,
+            value: target.account.config.password,
+            path: `channels.bluebubbles.accounts.${target.account.accountId}.password`,
+          }).then((resolved) => safeEqualAuthToken(guid, resolved.value ?? ""));
         },
       });
       if (!target) {

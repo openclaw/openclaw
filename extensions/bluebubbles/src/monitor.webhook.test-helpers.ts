@@ -118,8 +118,9 @@ export function createMockRequest(
   req.headers = headers;
   (req as unknown as { socket: { remoteAddress: string } }).socket = { remoteAddress };
 
-  // Emit body data after a microtask.
-  void Promise.resolve().then(() => {
+  // Defer emission until after microtasks drain so webhook handlers that
+  // authenticate asynchronously can attach HTTP body listeners first.
+  setImmediate(() => {
     const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
     req.emit("data", Buffer.from(bodyStr));
     req.emit("end");
