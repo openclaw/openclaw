@@ -867,6 +867,7 @@ describe("gateway server cron", () => {
       expect(finishedPayload).toMatchObject({
         jobId,
         action: "finished",
+        runId: manualRunId,
         status: "ok",
         summary: "hello",
         deliveryStatus: "not-requested",
