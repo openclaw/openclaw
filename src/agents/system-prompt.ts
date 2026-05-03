@@ -147,10 +147,18 @@ function buildProjectContextSection(params: {
     const hasSoulFile = params.files.some(
       (file) => getContextFileBasename(file.path) === "soul.md",
     );
+    const hasIdentityFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "identity.md",
+    );
     lines.push("The following project context files have been loaded:");
     if (hasSoulFile) {
       lines.push(
         "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      );
+    }
+    if (hasIdentityFile) {
+      lines.push(
+        "If IDENTITY.md is present, preserve its explicit expression defaults such as naming, vibe, and preferred emoji in normal chat replies when they fit the context; do not suppress them by default.",
       );
     }
     lines.push("");

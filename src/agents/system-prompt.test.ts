@@ -709,6 +709,17 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds IDENTITY guidance when an identity file is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "./IDENTITY.md", content: "Emoji: 🧢" }],
+    });
+
+    expect(prompt).toContain(
+      "If IDENTITY.md is present, preserve its explicit expression defaults such as naming, vibe, and preferred emoji in normal chat replies when they fit the context; do not suppress them by default.",
+    );
+  });
+
   it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
