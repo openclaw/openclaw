@@ -23,6 +23,41 @@ function normalizePositiveInt(value: unknown): number | null {
   return int > 0 ? int : null;
 }
 
+/**
+ * Matches a configured model id against a runtime model id, accounting for
+ * the runtime potentially using `provider/model` form while the config uses
+ * the bare model id (or vice-versa).
+ */
+function matchesModelIdForProvider(
+  configuredId: string | undefined,
+  runtimeModelId: string,
+  provider: string,
+): boolean {
+  if (!configuredId) return false;
+  if (configuredId === runtimeModelId) return true;
+
+  const providerPrefix = provider ? `${provider}/` : "";
+  if (!providerPrefix) return false;
+
+  // Runtime id is provider-scoped, configured id is bare
+  if (
+    runtimeModelId.startsWith(providerPrefix) &&
+    runtimeModelId.slice(providerPrefix.length) === configuredId
+  ) {
+    return true;
+  }
+
+  // Configured id is provider-scoped, runtime id is bare
+  if (
+    configuredId.startsWith(providerPrefix) &&
+    configuredId.slice(providerPrefix.length) === runtimeModelId
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function resolveContextWindowInfo(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -40,7 +75,9 @@ export function resolveContextWindowInfo(params: {
       | undefined;
     const providerEntry = findNormalizedProviderValue(providers, params.provider);
     const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
-    const match = models.find((m) => m?.id === params.modelId);
+    const match = models.find((m) =>
+      matchesModelIdForProvider(m?.id, params.modelId, params.provider),
+    );
     return normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
   })();
   const fromModel =

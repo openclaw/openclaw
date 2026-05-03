@@ -113,6 +113,61 @@ describe("context-window-guard", () => {
     });
   });
 
+  it("matches provider-scoped runtime modelId against bare config id", () => {
+    const cfg = openRouterModelConfig({ contextWindow: 1_000_000, contextTokens: 936_000 });
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openrouter",
+      modelId: "openrouter/tiny",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 936_000,
+    });
+  });
+
+  it("matches bare runtime modelId against provider-scoped config id", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            models: [
+              {
+                id: "github-copilot/claude-opus-4.7-1m-internal",
+                name: "claude-opus-4.7-1m",
+                reasoning: false,
+                input: ["text"] as const,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_000_000,
+                contextTokens: 936_000,
+                maxTokens: 64_000,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "github-copilot",
+      modelId: "claude-opus-4.7-1m-internal",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 936_000,
+    });
+  });
+
   it("normalizes provider aliases when reading models config context windows", () => {
     const cfg = {
       models: {
