@@ -1,4 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 
@@ -139,14 +140,22 @@ export async function discoverHuggingfaceModels(
     return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   }
 
+  let releaseGuardedFetch: (() => void) | undefined;
   try {
-    const response = await fetch(`${HUGGINGFACE_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: {
-        Authorization: `Bearer ${trimmedKey}`,
-        "Content-Type": "application/json",
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${HUGGINGFACE_BASE_URL}/models`,
+      init: {
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: {
+          Authorization: `Bearer ${trimmedKey}`,
+          "Content-Type": "application/json",
+        },
       },
+      timeoutMs,
+      policy: { allowedHostnames: ["router.huggingface.co"] },
+      auditContext: "huggingface.model-discovery",
     });
+    releaseGuardedFetch = release;
     if (!response.ok) {
       return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
     }
@@ -201,5 +210,7 @@ export async function discoverHuggingfaceModels(
       : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   } catch {
     return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
+  } finally {
+    releaseGuardedFetch?.();
   }
 }

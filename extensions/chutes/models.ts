@@ -1,5 +1,6 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -532,17 +533,30 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
     headers.Authorization = `Bearer ${trimmedKey}`;
   }
 
+  let releaseGuardedFetch: (() => void) | undefined;
   try {
-    let response = await fetch(`${CHUTES_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(10_000),
-      headers,
+    let guardedFetch = await fetchWithSsrFGuard({
+      url: `${CHUTES_BASE_URL}/models`,
+      init: { headers },
+      timeoutMs: 10_000,
+      policy: { allowedHostnames: ["llm.chutes.ai"] },
+      auditContext: "chutes.model-discovery",
     });
+    let response = guardedFetch.response;
+    releaseGuardedFetch = guardedFetch.release;
 
     if (response.status === 401 && trimmedKey) {
       effectiveKey = "";
-      response = await fetch(`${CHUTES_BASE_URL}/models`, {
-        signal: AbortSignal.timeout(10_000),
+      releaseGuardedFetch();
+      releaseGuardedFetch = undefined;
+      guardedFetch = await fetchWithSsrFGuard({
+        url: `${CHUTES_BASE_URL}/models`,
+        timeoutMs: 10_000,
+        policy: { allowedHostnames: ["llm.chutes.ai"] },
+        auditContext: "chutes.model-discovery",
       });
+      response = guardedFetch.response;
+      releaseGuardedFetch = guardedFetch.release;
     }
 
     if (!response.ok) {
@@ -607,5 +621,7 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
   } catch (error) {
     log.warn(`Discovery failed: ${String(error)}, using static catalog`);
     return staticCatalog();
+  } finally {
+    releaseGuardedFetch?.();
   }
 }

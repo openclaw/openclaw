@@ -240,10 +240,16 @@ describe("extension runtime dependency manifests", () => {
       const runtimeText = listRuntimeFiles(extensionDir)
         .map((filePath) => fs.readFileSync(filePath, "utf8"))
         .join("\n");
+      const pluginManifestPath = path.join(extensionDir, "openclaw.plugin.json");
+      const pluginManifestText = fs.existsSync(pluginManifestPath)
+        ? fs.readFileSync(pluginManifestPath, "utf8")
+        : "";
 
       const unused = declared.filter(
         (dependencyName) =>
-          !allowedIndirect.has(dependencyName) && !runtimeText.includes(dependencyName),
+          !allowedIndirect.has(dependencyName) &&
+          !runtimeText.includes(dependencyName) &&
+          !pluginManifestText.includes(`node_modules/${dependencyName}`),
       );
 
       expect(unused).toEqual([]);
