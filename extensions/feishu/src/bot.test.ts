@@ -3161,3 +3161,250 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
     );
   });
 });
+
+describe("handleFeishuMessage DM topic session scoping", () => {
+  const mockFinalizeInboundContext = vi.fn((ctx: Record<string, unknown>) => ctx);
+  const mockDispatchReplyFromConfig = vi
+    .fn()
+    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
+  const mockWithReplyDispatcher = vi.fn(
+    async ({
+      dispatcher,
+      run,
+      onSettled,
+    }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
+      try {
+        return await run();
+      } finally {
+        dispatcher.markComplete();
+        try {
+          await dispatcher.waitForIdle();
+        } finally {
+          await onSettled?.();
+        }
+      }
+    },
+  );
+  const mockShouldComputeCommandAuthorized = vi.fn(() => false);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetMessageFeishu.mockReset().mockResolvedValue(null);
+    mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
+    mockReadSessionUpdatedAt.mockReturnValue(undefined);
+    mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
+    mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
+      ({
+        route,
+      }: {
+        route: NonNullable<ConfiguredBindingRoute>["route"];
+      }): ConfiguredBindingRoute => ({
+        bindingResolution: null,
+        route,
+      }),
+    );
+    mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
+    mockResolveBoundConversation.mockReset().mockReturnValue(null);
+    mockTouchBinding.mockReset();
+    mockResolveAgentRoute.mockReturnValue(buildDefaultResolveRoute());
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+    });
+    mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
+    setFeishuRuntime(
+      createFeishuBotRuntime({
+        channel: {
+          reply: {
+            resolveEnvelopeFormatOptions:
+              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext: mockFinalizeInboundContext as never,
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher: mockWithReplyDispatcher as never,
+          },
+          commands: {
+            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          },
+          pairing: {
+            readAllowFromStore: vi.fn().mockResolvedValue([]),
+            upsertPairingRequest: vi.fn(),
+            buildPairingReply: vi.fn(),
+          },
+        },
+      }),
+    );
+  });
+
+  it("scopes DM topic messages to an independent session with topic-based peerId", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { dmPolicy: "open" } },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_dm_topic_user" } },
+      message: {
+        message_id: "msg-dm-topic-1",
+        root_id: "om_dm_root_abc",
+        chat_id: "oc-dm-chat",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic message" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // The route should use a topic-scoped peerId instead of flat senderOpenId
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: expect.objectContaining({
+          kind: "direct",
+          id: expect.stringContaining(":topic:om_dm_root_abc"),
+        }),
+      }),
+    );
+  });
+
+  it("keeps flat per-sender session for DM messages without root_id/thread_id", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { dmPolicy: "open" } },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_dm_flat_user" } },
+      message: {
+        message_id: "msg-dm-flat",
+        chat_id: "oc-dm-chat",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "main surface message" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: expect.objectContaining({
+          kind: "direct",
+          id: "ou_dm_flat_user",
+        }),
+      }),
+    );
+  });
+
+  it("enables replyInThread for DM topic messages", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { dmPolicy: "open" } },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_dm_reply_user" } },
+      message: {
+        message_id: "msg-dm-topic-reply",
+        root_id: "om_dm_root_reply",
+        chat_id: "oc-dm-chat",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic reply" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyInThread: true,
+        threadReply: true,
+        skipReplyToInMessages: false,
+      }),
+    );
+  });
+
+  it("disables replyInThread for main surface DM messages", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { dmPolicy: "open" } },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_dm_main_user" } },
+      message: {
+        message_id: "msg-dm-main",
+        chat_id: "oc-dm-chat",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "main surface" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyInThread: false,
+        threadReply: false,
+        skipReplyToInMessages: true,
+      }),
+    );
+  });
+
+  it("sets parentPeer for DM topic messages to enable parent routing", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { dmPolicy: "open" } },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_dm_parent_user" } },
+      message: {
+        message_id: "msg-dm-parent",
+        root_id: "om_dm_root_parent",
+        chat_id: "oc-dm-chat",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic with parent" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentPeer: { kind: "direct", id: "ou_dm_parent_user" },
+      }),
+    );
+  });
+
+  it("uses thread_id when root_id is absent for DM topic scoping", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { dmPolicy: "open" } },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_dm_thread_user" } },
+      message: {
+        message_id: "msg-dm-thread",
+        thread_id: "omt_dm_thread_only",
+        chat_id: "oc-dm-chat",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "thread only" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: expect.objectContaining({
+          kind: "direct",
+          id: expect.stringContaining(":topic:omt_dm_thread_only"),
+        }),
+      }),
+    );
+  });
+});

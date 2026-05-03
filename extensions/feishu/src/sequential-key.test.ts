@@ -6,6 +6,9 @@ function createTextEvent(params: {
   text: string;
   messageId?: string;
   chatId?: string;
+  chatType?: string;
+  rootId?: string;
+  threadId?: string;
 }): FeishuMessageEvent {
   return {
     sender: {
@@ -18,9 +21,11 @@ function createTextEvent(params: {
     message: {
       message_id: params.messageId ?? "om_message_1",
       chat_id: params.chatId ?? "oc_dm_chat",
-      chat_type: "p2p",
+      chat_type: params.chatType ?? "p2p",
       message_type: "text",
       content: JSON.stringify({ text: params.text }),
+      ...(params.rootId ? { root_id: params.rootId } : {}),
+      ...(params.threadId ? { thread_id: params.threadId } : {}),
     },
   } as FeishuMessageEvent;
 }
@@ -68,5 +73,79 @@ describe("getFeishuSequentialKey", () => {
         event,
       }),
     ).toBe("feishu:default:oc_dm_chat:btw");
+  });
+
+  // --- DM topic parallelism ---
+
+  it("returns topic queue key for DM message with root_id", () => {
+    const event = createTextEvent({
+      text: "hello",
+      rootId: "om_root_abc",
+    });
+    expect(getFeishuSequentialKey({ accountId: "default", event })).toBe(
+      "feishu:default:oc_dm_chat:topic:om_root_abc",
+    );
+  });
+
+  it("returns topic queue key for DM message with thread_id", () => {
+    const event = createTextEvent({
+      text: "hello",
+      threadId: "omt_thread_xyz",
+    });
+    expect(getFeishuSequentialKey({ accountId: "default", event })).toBe(
+      "feishu:default:oc_dm_chat:topic:omt_thread_xyz",
+    );
+  });
+
+  it("prefers root_id over thread_id for DM topic key", () => {
+    const event = createTextEvent({
+      text: "hello",
+      rootId: "om_root_1",
+      threadId: "omt_thread_2",
+    });
+    expect(getFeishuSequentialKey({ accountId: "default", event })).toBe(
+      "feishu:default:oc_dm_chat:topic:om_root_1",
+    );
+  });
+
+  it("does NOT apply topic parallelism in group chats", () => {
+    const event = createTextEvent({
+      text: "hello",
+      chatType: "group",
+      rootId: "om_root_group",
+    });
+    expect(getFeishuSequentialKey({ accountId: "default", event })).toBe(
+      "feishu:default:oc_dm_chat",
+    );
+  });
+
+  it("ignores empty/whitespace root_id", () => {
+    const event = createTextEvent({
+      text: "hello",
+      rootId: "  ",
+    });
+    expect(getFeishuSequentialKey({ accountId: "default", event })).toBe(
+      "feishu:default:oc_dm_chat",
+    );
+  });
+
+  it("routes /stop to control lane even within a DM topic", () => {
+    const event = createTextEvent({
+      text: "/stop",
+      rootId: "om_root_abc",
+    });
+    expect(getFeishuSequentialKey({ accountId: "default", event })).toBe(
+      "feishu:default:oc_dm_chat:topic:om_root_abc:control",
+    );
+  });
+
+  it("routes /btw to btw lane even within a DM topic", () => {
+    const event = createTextEvent({
+      text: "/btw something",
+      rootId: "om_root_abc",
+    });
+    expect(getFeishuSequentialKey({ accountId: "default", event })).toBe(
+      "feishu:default:oc_dm_chat:topic:om_root_abc:btw",
+    );
   });
 });
