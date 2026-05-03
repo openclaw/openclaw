@@ -30,6 +30,7 @@ import {
   stripHeartbeatToken,
   type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
+import { resolveActiveReplyRunSessionId } from "../auto-reply/reply/reply-run-registry.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -1111,6 +1112,20 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
+
+  // A reply run can remain active for this session even after the command lane
+  // itself has drained, for example while the active assistant turn is still
+  // finishing provider/output cleanup. In that window, a heartbeat/system-event
+  // wake would race the user-visible reply and can effectively swallow it.
+  // Skip and let heartbeat-wake retry shortly instead of preempting the turn.
+  if (resolveActiveReplyRunSessionId(sessionKey)) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+  }
 
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
