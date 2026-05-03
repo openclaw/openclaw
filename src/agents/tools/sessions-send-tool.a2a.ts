@@ -133,13 +133,50 @@ export async function runSessionsSendA2AFlow(params: {
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
+
+    // Send the announce reply back to the requester's session instead of the target's channel
     if (
+      params.requesterSessionKey &&
+      announceReply &&
+      announceReply.trim() &&
+      !isAnnounceSkip(announceReply) &&
+      !isNonDeliverableSessionsReply(announceReply)
+    ) {
+      try {
+        const inputProvenance = {
+          kind: "inter_session" as const,
+          sourceSessionKey: params.targetSessionKey,
+          sourceChannel: targetChannel,
+          sourceTool: "sessions_send",
+        };
+        await sessionsSendA2ADeps.callGateway({
+          method: "agent",
+          params: {
+            message: announceReply.trim(),
+            sessionKey: params.requesterSessionKey,
+            idempotencyKey: crypto.randomUUID(),
+            deliver: true,
+            channel: params.requesterChannel ?? "webchat",
+            lane: resolveNestedAgentLaneForSession(params.requesterSessionKey),
+            inputProvenance,
+          },
+          timeoutMs: 10_000,
+        });
+      } catch (err) {
+        log.warn("sessions_send announce delivery to requester failed", {
+          runId: runContextId,
+          requesterSessionKey: params.requesterSessionKey,
+          error: formatErrorMessage(err),
+        });
+      }
+    } else if (
       announceTarget &&
       announceReply &&
       announceReply.trim() &&
       !isAnnounceSkip(announceReply) &&
       !isNonDeliverableSessionsReply(announceReply)
     ) {
+      // Fallback: if no requester session, send to target's channel (original behavior)
       try {
         await sessionsSendA2ADeps.callGateway({
           method: "send",
