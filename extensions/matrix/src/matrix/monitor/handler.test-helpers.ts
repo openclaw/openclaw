@@ -26,6 +26,7 @@ type MatrixHandlerTestHarnessOptions = {
   client?: Partial<MatrixClient>;
   runtime?: RuntimeEnv;
   logger?: RuntimeLogger;
+  currentConfig?: () => unknown;
   logVerboseMessage?: (message: string) => void;
   allowFrom?: string[];
   allowFromResolvedEntries?: MatrixMonitorHandlerParams["allowFromResolvedEntries"];
@@ -192,7 +193,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     core: {
       config: {
-        current: () => cfgForHandler,
+        current: options.currentConfig ?? (() => cfgForHandler),
       },
       channel: {
         pairing: {

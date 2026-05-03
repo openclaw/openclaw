@@ -64,6 +64,7 @@ export type BuildPluginApiParams = {
       | "getRunContext"
       | "clearRunContext"
       | "registerSessionSchedulerJob"
+      | "sendSessionAttachment"
       | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
       | "registerMemoryPromptSection"
@@ -138,6 +139,10 @@ const noopGetRunContext: OpenClawPluginApi["getRunContext"] = () => undefined;
 const noopClearRunContext: OpenClawPluginApi["clearRunContext"] = () => {};
 const noopRegisterSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] = () =>
   undefined;
+const noopSendSessionAttachment: OpenClawPluginApi["sendSessionAttachment"] = async () => ({
+  ok: false,
+  error: "not wired",
+});
 const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
@@ -227,6 +232,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     clearRunContext: handlers.clearRunContext ?? noopClearRunContext,
     registerSessionSchedulerJob:
       handlers.registerSessionSchedulerJob ?? noopRegisterSessionSchedulerJob,
+    sendSessionAttachment: handlers.sendSessionAttachment ?? noopSendSessionAttachment,
     registerDetachedTaskRuntime:
       handlers.registerDetachedTaskRuntime ?? noopRegisterDetachedTaskRuntime,
     registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,

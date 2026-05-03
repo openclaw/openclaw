@@ -151,6 +151,47 @@ export type PluginSessionSchedulerJobHandle = {
   kind: string;
 };
 
+export type PluginSessionAttachmentFile = {
+  path: string;
+};
+
+export type PluginAttachmentChannelHints = {
+  telegram?: {
+    parseMode?: "HTML";
+    disableNotification?: boolean;
+    /**
+     * Require host-side detection to match this MIME before forcing document delivery.
+     * Mismatched files are rejected before the outbound adapter is called.
+     */
+    forceDocumentMime?: string;
+  };
+  slack?: {
+    threadTs?: string;
+  };
+};
+
+export type PluginSessionAttachmentCaptionFormat = "plain" | "html" | "markdown";
+
+export type PluginSessionAttachmentParams = {
+  sessionKey: string;
+  files: PluginSessionAttachmentFile[];
+  text?: string;
+  threadId?: string | number;
+  forceDocument?: boolean;
+  maxBytes?: number;
+  captionFormat?: PluginSessionAttachmentCaptionFormat;
+  channelHints?: PluginAttachmentChannelHints;
+};
+
+export type PluginSessionAttachmentResult =
+  | {
+      ok: true;
+      channel: string;
+      deliveredTo: string;
+      count: number;
+    }
+  | { ok: false; error: string };
+
 export function normalizePluginHostHookId(value: string | undefined): string {
   return (value ?? "").trim();
 }

@@ -267,6 +267,7 @@ export function createCapturedPluginRegistration(params?: {
             kind: job.kind,
           };
         },
+        sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
         registerTool(tool) {
           if (typeof tool !== "function") {
             tools.push(tool);

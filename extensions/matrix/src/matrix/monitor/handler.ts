@@ -1211,7 +1211,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         triggerSnapshot,
         threadRootId: _threadRootId,
         thread,
-        effectiveAllowFrom,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
       } = resolvedIngressResult;
@@ -1854,11 +1853,27 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onIdle: typingCallbacks.onIdle,
         });
       const pinnedMainDmOwner = isDirectMessage
-        ? resolvePinnedMainDmOwnerFromAllowlist({
-            dmScope: cfg.session?.dmScope,
-            allowFrom: effectiveAllowFrom,
-            normalizeEntry: normalizeMatrixUserId,
-          })
+        ? await (async () => {
+            const livePinnedCfg = core.config.current() as CoreConfig;
+            const livePinnedAllowlists = resolveMatrixAccountAllowlistConfig({
+              cfg: livePinnedCfg,
+              accountId,
+            });
+            const livePinnedDmAllowFrom = await resolveCachedLiveAllowlist({
+              cfg: livePinnedCfg,
+              entries: livePinnedAllowlists.dmAllowFrom,
+              startupResolvedEntries: allowFromResolvedEntries,
+              cache: liveDmAllowlistCache,
+              updateCache: (next) => {
+                liveDmAllowlistCache = next;
+              },
+            });
+            return resolvePinnedMainDmOwnerFromAllowlist({
+              dmScope: livePinnedCfg.session?.dmScope,
+              allowFrom: livePinnedDmAllowFrom,
+              normalizeEntry: normalizeMatrixUserId,
+            });
+          })()
         : null;
 
       const turnResult = await core.channel.turn.run({
