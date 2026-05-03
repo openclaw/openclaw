@@ -12,6 +12,7 @@ import { ambiguousTargetError, unknownTargetError } from "./target-errors.js";
 import { maybeResolveIdLikeTarget, type ResolvedIdLikeTarget } from "./target-id-resolution.js";
 import {
   buildTargetResolverSignature,
+  inferTargetResolveKind,
   looksLikeTargetId,
   maybeResolvePluginMessagingTarget,
   normalizeChannelTargetInput,
@@ -146,32 +147,12 @@ function detectTargetKind(
   raw: string,
   preferred?: TargetResolveKind,
 ): TargetResolveKind {
-  if (preferred) {
-    return preferred;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "group";
-  }
-  const inferredChatType = getChannelPlugin(channel)?.messaging?.inferTargetChatType?.({ to: raw });
-  if (inferredChatType === "direct") {
-    return "user";
-  }
-  if (inferredChatType === "channel") {
-    return "channel";
-  }
-  if (inferredChatType === "group") {
-    return "group";
-  }
-
-  if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) {
-    return "user";
-  }
-  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) {
-    return "group";
-  }
-
-  return "group";
+  const inferred = inferTargetResolveKind({
+    channel,
+    raw,
+    preferredKind: preferred,
+  });
+  return inferred === "channel" ? "group" : inferred;
 }
 
 function normalizeDirectoryEntryId(channel: ChannelId, entry: ChannelDirectoryEntry): string {
@@ -367,7 +348,7 @@ export async function resolveMessagingTarget(params: {
       channel: params.channel,
       input: raw,
       accountId: params.accountId,
-      preferredKind: params.preferredKind,
+      preferredKind: kind,
     });
     if (resolvedIdLikeTarget) {
       return {
