@@ -19,6 +19,16 @@ interface QQBotChannelConfig extends QQBotAccountConfig {
   defaultAccount?: string;
 }
 
+function assertNotLegacySecretRefMarker(value: unknown, path: string): void {
+  const normalized = normalizeSecretInputString(value);
+  if (!normalized || !/^secretref(?:-env)?:/i.test(normalized)) {
+    return;
+  }
+  throw new Error(
+    `${path}: legacy SecretRef marker strings are not valid QQ Bot clientSecret values; use a structured SecretRef object instead.`,
+  );
+}
+
 function resolveEnvSecretRefValue(params: {
   cfg: OpenClawConfig;
   value: unknown;
@@ -55,6 +65,8 @@ function resolveQQBotClientSecretInput(params: {
   value: unknown;
   path: string;
 }): string | undefined {
+  assertNotLegacySecretRefMarker(params.value, params.path);
+
   const envSecret = resolveEnvSecretRefValue({
     cfg: params.cfg,
     value: params.value,

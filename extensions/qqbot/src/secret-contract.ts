@@ -2,11 +2,12 @@ import {
   collectConditionalChannelFieldAssignments,
   getChannelSurface,
   hasConfiguredSecretInputValue,
-  normalizeSecretStringValue,
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+
+const DEFAULT_ACCOUNT_ID = "default";
 
 export const secretTargetRegistryEntries = [
   {
@@ -33,8 +34,11 @@ export const secretTargetRegistryEntries = [
   },
 ] satisfies SecretTargetRegistryEntry[];
 
-function hasClientSecretFile(value: unknown): boolean {
-  return normalizeSecretStringValue(value).length > 0;
+function hasTopLevelAppId(qqbot: Record<string, unknown>): boolean {
+  if (typeof qqbot.appId === "string") {
+    return qqbot.appId.trim().length > 0;
+  }
+  return typeof qqbot.appId === "number";
 }
 
 export function collectRuntimeConfigAssignments(params: {
@@ -48,9 +52,9 @@ export function collectRuntimeConfigAssignments(params: {
   }
 
   const { channel: qqbot, surface } = resolved;
-  const baseClientSecretFile = hasClientSecretFile(qqbot.clientSecretFile);
-  const accountClientSecretFile = (account: Record<string, unknown>) =>
-    hasClientSecretFile(account.clientSecretFile);
+  const hasExplicitDefaultAccount = surface.accounts.some(
+    ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
+  );
 
   collectConditionalChannelFieldAssignments({
     channelKey: "qqbot",
@@ -59,20 +63,16 @@ export function collectRuntimeConfigAssignments(params: {
     surface,
     defaults: params.defaults,
     context: params.context,
-    topLevelActiveWithoutAccounts: !baseClientSecretFile,
-    topLevelInheritedAccountActive: ({ account, enabled }) => {
-      if (!enabled || baseClientSecretFile) {
-        return false;
+    topLevelActiveWithoutAccounts: true,
+    topLevelInheritedAccountActive: ({ accountId, account, enabled }) => {
+      if (accountId === DEFAULT_ACCOUNT_ID) {
+        return enabled && !hasConfiguredSecretInputValue(account.clientSecret, params.defaults);
       }
-      return (
-        !hasConfiguredSecretInputValue(account.clientSecret, params.defaults) &&
-        !accountClientSecretFile(account)
-      );
+      return !hasExplicitDefaultAccount && hasTopLevelAppId(qqbot);
     },
-    accountActive: ({ account, enabled }) => enabled && !accountClientSecretFile(account),
-    topInactiveReason:
-      "no enabled QQBot surface inherits this top-level clientSecret (clientSecretFile is configured).",
-    accountInactiveReason: "QQBot account is disabled or clientSecretFile is configured.",
+    accountActive: ({ enabled }) => enabled,
+    topInactiveReason: "no enabled QQ Bot default surface uses this top-level clientSecret.",
+    accountInactiveReason: "QQ Bot account is disabled.",
   });
 }
 

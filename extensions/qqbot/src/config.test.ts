@@ -214,6 +214,21 @@ describe("qqbot config", () => {
     );
   });
 
+  it("rejects legacy SecretRef marker strings before QQ token exchange", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          appId: "123456",
+          clientSecret: "secretref:/QQBOT_CLIENT_SECRET",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(() => resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID)).toThrow(
+      "channels.qqbot.clientSecret: legacy SecretRef marker strings are not valid QQ Bot clientSecret values; use a structured SecretRef object instead.",
+    );
+  });
+
   it("allows unresolved SecretRefs for setup/status flows", () => {
     const cfg = makeQqbotSecretRefConfig();
 
