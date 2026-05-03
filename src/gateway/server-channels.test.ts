@@ -301,7 +301,7 @@ describe("server-channels auto restart", () => {
     }
   });
 
-  it("does not allow a second account task to start when stop times out", async () => {
+  it("forgets a timed-out stop so health restarts can replace wedged long-poll providers", async () => {
     const startAccount = vi.fn(
       async ({ abortSignal }: { abortSignal: AbortSignal }) =>
         await new Promise<void>(() => {
@@ -323,10 +323,43 @@ describe("server-channels auto restart", () => {
 
     const snapshot = manager.getRuntimeSnapshot();
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(2);
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
-    expect(account?.lastError).toContain("channel stop timed out");
+    expect(account?.lastError).toBeNull();
+  });
+
+  it("does not let an old timed-out lifecycle mark its replacement stopped", async () => {
+    const firstLifecycleDone = createDeferred();
+    const startAccount = vi
+      .fn()
+      .mockImplementationOnce(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+        abortSignal.addEventListener("abort", () => {}, { once: true });
+        await firstLifecycleDone.promise;
+      })
+      .mockImplementationOnce(
+        async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+          await new Promise<void>(() => {
+            abortSignal.addEventListener("abort", () => {}, { once: true });
+          }),
+      );
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    firstLifecycleDone.resolve();
+    await flushMicrotasks();
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(account?.running).toBe(true);
+    expect(account?.lastError).toBeNull();
   });
 
   it("marks enabled/configured when account descriptors omit them", () => {

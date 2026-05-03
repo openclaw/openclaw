@@ -538,11 +538,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             })
             .finally(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
-              setRuntime(channelId, id, {
-                accountId: id,
-                running: false,
-                lastStopAt: Date.now(),
-              });
+              // A timed-out stop may intentionally forget this lifecycle and start
+              // a replacement provider. Do not let the old task settle later and
+              // clobber the replacement account runtime back to stopped.
+              if (store.tasks.get(id) === trackedPromise || store.aborts.get(id) === abort) {
+                setRuntime(channelId, id, {
+                  accountId: id,
+                  running: false,
+                  lastStopAt: Date.now(),
+                });
+              }
             })
             .then(async () => {
               if (manuallyStopped.has(rKey)) {
@@ -679,12 +684,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         );
         if (!stoppedCleanly) {
           log.warn?.(
-            `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
+            `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; forgetting timed-out lifecycle so a replacement can start`,
           );
+          if (store.aborts.get(id) === abort) {
+            store.aborts.delete(id);
+          }
+          if (store.tasks.get(id) === task) {
+            store.tasks.delete(id);
+          }
           setRuntime(channelId, id, {
             accountId: id,
-            running: true,
+            running: false,
             restartPending: false,
+            lastStopAt: Date.now(),
             lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
           });
           return;
