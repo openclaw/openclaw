@@ -868,6 +868,7 @@ export const GoogleChatAccountSchema = z
     dm: GoogleChatDmSchema.optional(),
     healthMonitor: ChannelHealthMonitorSchema,
     typingIndicator: z.enum(["none", "message", "reaction"]).optional(),
+    sessionThread: z.boolean().optional(),
     responsePrefix: z.string().optional(),
   })
   .strict();

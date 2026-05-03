@@ -20,6 +20,13 @@ Docs: https://docs.openclaw.ai
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
 - Exec approvals: add a tree-sitter-backed shell command explainer for future approval and command-review surfaces. (#75004) Thanks @jesse-merhi.
 - Agents/sandbox: store sandbox container and browser registry entries as per-runtime shard files, reducing unrelated session lock contention while `openclaw doctor --fix` migrates legacy monolithic registry files. (#74831) Thanks @luckylhb90.
+- Google Chat: add `sessionThread` channel option that binds each OpenClaw session to a single Google Chat thread, so starting a new thread starts a fresh conversation with no context bleed from prior threads in the same space. Default is `false` (space-scoped, prior behavior). (#68967) Thanks @dyaskur.
+
+### Fixes
+
+- Google Chat: always pass the inbound `thread.name` and `messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD` when sending replies, so bot responses stay in the user's thread (both in DMs and spaces) instead of creating a new thread per reply. Fixes #41788. (#68967) Thanks @dyaskur.
+
+## 2026.4.26
 
 ### Fixes
 

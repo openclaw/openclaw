@@ -21,8 +21,11 @@ export async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
+  forcedThreadName?: string;
 }): Promise<void> {
-  const { payload, account, spaceId, runtime, core, config, statusSink } = params;
+  const { payload, account, spaceId, runtime, core, config, statusSink, forcedThreadName } =
+    params;
+  const threadForReply = payload.replyToId ?? forcedThreadName;
   // Clear this whenever the typing message is deleted or unavailable; otherwise
   // text delivery can keep retrying a dead message and drop content.
   let typingMessageName = params.typingMessageName;
@@ -70,7 +73,7 @@ export async function deliverGoogleChatReply(params: {
       account,
       space: spaceId,
       text: chunk,
-      thread: payload.replyToId,
+      thread: threadForReply,
     });
   };
   await deliverTextOrMediaReply({
@@ -125,7 +128,7 @@ export async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: threadForReply,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
