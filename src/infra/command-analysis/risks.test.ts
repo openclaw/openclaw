@@ -17,8 +17,20 @@ describe("command-analysis risks", () => {
       "-c",
     );
     expect(detectInlineEvalArgv(["sudo", "-uroot", "python3", "-c", "print(1)"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["sudo", "-EH", "python3", "-c", "print(1)"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["sudo", "-Eu", "root", "python3", "-c", "print(1)"])?.flag).toBe(
+      "-c",
+    );
     expect(detectInlineEvalArgv(["doas", "-uroot", "python3", "-c", "print(1)"])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["env", "sudo", "python3", "-c", "print(1)"])?.flag).toBe("-c");
+    expect(
+      detectInlineEvalArgv(["env", "env", "env", "env", "env", "env", "python3", "-c", "print(1)"])
+        ?.flag,
+    ).toBe("-c");
+    expect(detectInlineEvalArgv(["env", "-iSpython3 -c 'print(1)'"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["env", "-iS", "python3 -c 'print(1)'"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["env", "-S", "python3 -c", "print(1)"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["env", "-iSpython3 -c", "print(1)"])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["command", "node", "--eval", "1"])?.flag).toBe("--eval");
     expect(detectInlineEvalArgv(["env", "-S", 'python3 -c "print(1)"'])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["python3", "script.py"])).toBeNull();
@@ -64,6 +76,12 @@ describe("command-analysis risks", () => {
     ).toBe("sudo");
     expect(
       detectShellWrapperThroughCarrierArgv(
+        ["sudo", "-EH", "bash", "-lc", "id"],
+        (argv, startIndex) => argv[startIndex] === "-lc",
+      ),
+    ).toBe("sudo");
+    expect(
+      detectShellWrapperThroughCarrierArgv(
         ["sudo", "echo", "bash", "-lc", "id"],
         (argv, startIndex) => argv[startIndex] === "-lc",
       ),
@@ -85,6 +103,9 @@ describe("command-analysis risks", () => {
     expect(buildCommandPayloadCandidates(["FOO=1", "sudo", "-E", "/approve", "abc"])).toEqual([
       "/approve abc",
     ]);
+    expect(buildCommandPayloadCandidates(["sudo", "-EH", "/approve", "abc"])).toEqual([
+      "/approve abc",
+    ]);
     expect(
       buildCommandPayloadCandidates(["sudo", "-uroot", "bash", "-lc", "/approve req allow-once"]),
     ).toEqual(["bash -lc /approve req allow-once", "/approve req allow-once"]);
@@ -95,12 +116,35 @@ describe("command-analysis risks", () => {
       "bash -lc /approve abc deny",
       "/approve abc deny",
     ]);
+    expect(buildCommandPayloadCandidates(["env", "-S", "bash -lc", "/approve abc deny"])).toEqual([
+      "bash -lc /approve abc deny",
+      "/approve abc deny",
+    ]);
+    expect(buildCommandPayloadCandidates(["env", "-iSbash -lc", "/approve abc deny"])).toEqual([
+      "bash -lc /approve abc deny",
+      "/approve abc deny",
+    ]);
     expect(buildCommandPayloadCandidates(["exec", "-a", "openclaw", "/approve", "abc"])).toEqual([
       "/approve abc",
     ]);
     expect(buildCommandPayloadCandidates(["command", "-v", "/approve"])).toEqual([
       "command -v /approve",
     ]);
+    expect(
+      buildCommandPayloadCandidates([
+        "env",
+        "env",
+        "env",
+        "env",
+        "env",
+        "env",
+        "openclaw",
+        "channels",
+        "login",
+        "--channel",
+        "whatsapp",
+      ]),
+    ).toContain("openclaw channels login --channel whatsapp");
   });
 
   it("checks both effective and original argv for segment inline eval", () => {
