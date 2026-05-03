@@ -160,13 +160,13 @@ Npm specs are registry-only (package name + optional exact version or dist-tag).
 
 ## Bundled hooks
 
-| Hook                  | Events                         | What it does                                          |
-| --------------------- | ------------------------------ | ----------------------------------------------------- |
-| session-memory        | `command:new`, `command:reset`                         | Saves session context to `<workspace>/memory/`                  |
-| bootstrap-extra-files | `agent:bootstrap`                                      | Injects additional bootstrap files from glob patterns           |
-| command-logger        | `command`                                              | Logs all commands to `~/.openclaw/logs/commands.log`            |
-| compaction-notifier   | `session:compact:before`, `session:compact:after`      | Sends visible chat notices when session compaction starts/ends  |
-| boot-md               | `gateway:startup`                                      | Runs `BOOT.md` when the gateway starts                          |
+| Hook                  | Events                                            | What it does                                                   |
+| --------------------- | ------------------------------------------------- | -------------------------------------------------------------- |
+| session-memory        | `command:new`, `command:reset`                    | Saves session context to `<workspace>/memory/`                 |
+| bootstrap-extra-files | `agent:bootstrap`                                 | Injects additional bootstrap files from glob patterns          |
+| command-logger        | `command`                                         | Logs all commands to `~/.openclaw/logs/commands.log`           |
+| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts/ends |
+| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` when the gateway starts                         |
 
 Enable any bundled hook:
 
