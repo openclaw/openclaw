@@ -125,9 +125,10 @@ function readBranch(params: {
   const branchEntries: PiSessionEntry[] = [];
   let current = params.leafId ? params.byId.get(params.leafId) : undefined;
   while (current) {
-    branchEntries.unshift(current);
+    branchEntries.push(current);
     current = current.parentId ? params.byId.get(current.parentId) : undefined;
   }
+  branchEntries.reverse();
   return branchEntries;
 }
 
@@ -178,9 +179,12 @@ async function readForkSourceTranscript(
   const byId = buildEntryIndex(entries);
   const leafId = entries.at(-1)?.id ?? null;
   const branchEntries = readBranch({ byId, leafId });
-  const pathEntryIds = new Set(
-    branchEntries.filter((entry) => entry.type !== "label").map((entry) => entry.id),
-  );
+  const pathEntryIds = new Set<string>();
+  for (const entry of branchEntries) {
+    if (entry.type !== "label") {
+      pathEntryIds.add(entry.id);
+    }
+  }
   return {
     cwd: header?.cwd ?? process.cwd(),
     sessionDir: path.dirname(parentSessionFile),

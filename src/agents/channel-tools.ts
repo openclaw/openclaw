@@ -155,7 +155,14 @@ export function resolveChannelPromptCapabilities(params: {
 }
 
 function normalizePromptCapabilities(capabilities?: readonly string[] | null): string[] {
-  return (capabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
+  const normalized: string[] = [];
+  for (const entry of capabilities ?? []) {
+    const trimmed = entry.trim();
+    if (trimmed) {
+      normalized.push(trimmed);
+    }
+  }
+  return normalized;
 }
 
 export function resolveChannelReactionGuidance(params: {

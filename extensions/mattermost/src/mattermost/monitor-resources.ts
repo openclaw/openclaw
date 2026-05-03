@@ -61,7 +61,13 @@ export function createMattermostMonitorResources(params: {
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
   ): Promise<MattermostMediaInfo[]> => {
-    const ids = (fileIds ?? []).map((id) => id?.trim()).filter(Boolean);
+    const ids: string[] = [];
+    for (const id of fileIds ?? []) {
+      const trimmed = id?.trim();
+      if (trimmed) {
+        ids.push(trimmed);
+      }
+    }
     if (ids.length === 0) {
       return [];
     }

@@ -15,9 +15,13 @@ function mergeRuntimeCapabilities(
   additions: readonly string[] = [],
 ): string[] | undefined {
   const merged = [...(base ?? [])];
-  const seen = new Set(
-    merged.map((capability) => normalizeOptionalLowercaseString(capability)).filter(Boolean),
-  );
+  const seen = new Set<string>();
+  for (const capability of merged) {
+    const normalized = normalizeOptionalLowercaseString(capability);
+    if (normalized) {
+      seen.add(normalized);
+    }
+  }
 
   for (const capability of additions) {
     const normalizedCapability = normalizeOptionalLowercaseString(capability);

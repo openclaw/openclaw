@@ -153,7 +153,12 @@ export async function listMattermostDirectoryPeers(
       const members = await client.request<{ user_id: string }[]>(
         `/teams/${teamId}/members?per_page=200`,
       );
-      const userIds = members.map((m) => m.user_id).filter((id) => id !== me.id);
+      const userIds: string[] = [];
+      for (const member of members) {
+        if (member.user_id !== me.id) {
+          userIds.push(member.user_id);
+        }
+      }
       if (!userIds.length) {
         return [];
       }
