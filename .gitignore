@@ -97,6 +97,7 @@ USER.md
 *.tar.gz
 *.zip
 .idea
+.vscode/
 
 # local tooling
 .serena/
@@ -190,12 +191,21 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .vmux*
 .artifacts/
 .openclaw-config-doc-cache/
 openclaw-path-alias-*/
 /.pi/
 /C:\\openclaw/
+*.log
+*.tmp
+*.heapsnapshot
+*.cpuprofile
+*.prof
 test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
