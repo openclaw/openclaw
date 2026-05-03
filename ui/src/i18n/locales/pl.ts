@@ -163,6 +163,7 @@ export const pl: TranslationMap = {
     limit: "Limit",
     global: "Globalne",
     unknown: "Nieznane",
+    showArchived: "Show archived",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filtruj według klucza, agenta, etykiety, rodzaju…",
     selected: "Wybrano: {count}",

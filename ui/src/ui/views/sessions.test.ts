@@ -34,6 +34,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     limit: "120",
     includeGlobal: false,
     includeUnknown: false,
+    showArchived: false,
     basePath: "",
     searchQuery: "",
     agentIdentityById: {},
@@ -66,6 +67,35 @@ function buildProps(result: SessionsListResult): SessionsProps {
 }
 
 describe("sessions view", () => {
+  it("renders an explicit archived-session toggle", async () => {
+    const container = document.createElement("div");
+    const onFiltersChange = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        onFiltersChange,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const archivedToggle = container.querySelector(
+      ".session-archive-toggle input",
+    ) as HTMLInputElement | null;
+    expect(archivedToggle?.checked).toBe(false);
+
+    archivedToggle!.checked = true;
+    archivedToggle!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onFiltersChange).toHaveBeenCalledWith({
+      activeMinutes: "",
+      limit: "120",
+      includeGlobal: false,
+      includeUnknown: false,
+      showArchived: true,
+    });
+  });
+
   it("renders and patches provider-owned thinking ids", async () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();

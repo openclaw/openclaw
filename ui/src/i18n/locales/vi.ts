@@ -162,6 +162,7 @@ export const vi: TranslationMap = {
     limit: "Giới hạn",
     global: "Toàn cục",
     unknown: "Không rõ",
+    showArchived: "Show archived",
     minutesPlaceholder: "phút",
     searchPlaceholder: "Lọc theo khóa, agent, nhãn, loại…",
     selected: "Đã chọn {count}",

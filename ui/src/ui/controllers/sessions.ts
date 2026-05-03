@@ -23,6 +23,7 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsShowArchived: boolean;
   sessionsExpandedCheckpointKey: string | null;
   sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   sessionsCheckpointLoadingKey: string | null;
@@ -35,6 +36,7 @@ type LoadSessionsOverrides = {
   limit?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
+  showArchived?: boolean;
 };
 
 type CreateSessionParams = {
@@ -79,6 +81,7 @@ const SESSION_EVENT_ROW_FIELDS = [
   "spawnedBy",
   "startedAt",
   "status",
+  "archived",
   "subject",
   "surface",
   "systemSent",
@@ -121,6 +124,34 @@ function normalizeSessionKind(value: unknown): GatewaySessionRow["kind"] | undef
   return value === "direct" || value === "group" || value === "global" || value === "unknown"
     ? value
     : undefined;
+}
+
+const TERMINAL_SESSION_STATUSES = new Set(["done", "failed", "killed", "timeout"]);
+
+export function isArchivedSessionRow(row: GatewaySessionRow): boolean {
+  if (row.archived === true) {
+    return true;
+  }
+  return typeof row.status === "string" && TERMINAL_SESSION_STATUSES.has(row.status);
+}
+
+function filterAvailableSessionRows(
+  rows: GatewaySessionRow[],
+  options: { showArchived: boolean },
+): GatewaySessionRow[] {
+  return rows.filter((row) => row.key && (options.showArchived || !isArchivedSessionRow(row)));
+}
+
+function projectSessionsResultForAvailability(
+  result: SessionsListResult,
+  options: { showArchived: boolean },
+): SessionsListResult {
+  const sessions = filterAvailableSessionRows(result.sessions, options);
+  return {
+    ...result,
+    count: sessions.length,
+    sessions,
+  };
 }
 
 function checkpointSummarySignature(
@@ -247,7 +278,23 @@ export function applySessionsChangedEvent(state: SessionsState, payload: unknown
 
   const previousRows = state.sessionsResult.sessions;
   const existingIndex = previousRows.findIndex((row) => row.key === key);
+  if (payload.reason === "delete") {
+    if (existingIndex < 0) {
+      return false;
+    }
+    state.sessionsResult = {
+      ...state.sessionsResult,
+      count: Math.max(0, state.sessionsResult.count - 1),
+      sessions: previousRows.filter((row) => row.key !== key),
+    };
+    invalidateCheckpointCacheForKey(state, key);
+    return true;
+  }
   const existing = existingIndex >= 0 ? previousRows[existingIndex] : undefined;
+  const hasReliableSource = eventSession !== null || typeof source.sessionId === "string";
+  if (!existing && !hasReliableSource) {
+    return false;
+  }
   const previousCheckpointSignature = checkpointSummarySignature(existing);
   const fallbackKind = normalizeSessionKind(source.kind) ?? existing?.kind ?? "unknown";
   const nextRow: GatewaySessionRow = {
@@ -269,6 +316,18 @@ export function applySessionsChangedEvent(state: SessionsState, payload: unknown
   }
   if (nextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
     delete nextRow.totalTokens;
+  }
+  if (!state.sessionsShowArchived && isArchivedSessionRow(nextRow)) {
+    if (existingIndex < 0) {
+      return false;
+    }
+    state.sessionsResult = {
+      ...state.sessionsResult,
+      count: Math.max(0, state.sessionsResult.count - 1),
+      sessions: previousRows.filter((row) => row.key !== key),
+    };
+    invalidateCheckpointCacheForKey(state, key);
+    return true;
   }
 
   const sessions =
@@ -364,15 +423,16 @@ async function loadSessionsOnce(
     }
     const res = await client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
-      state.sessionsResult = res;
-      const nextKeys = new Set(res.sessions.map((row) => row.key));
+      const showArchived = overrides?.showArchived ?? state.sessionsShowArchived;
+      state.sessionsResult = projectSessionsResultForAvailability(res, { showArchived });
+      const nextKeys = new Set(state.sessionsResult.sessions.map((row) => row.key));
       for (const key of Object.keys(state.sessionsCheckpointItemsByKey)) {
         if (!nextKeys.has(key)) {
           invalidateCheckpointCacheForKey(state, key);
         }
       }
       let expandedNeedsRefetch = false;
-      for (const row of res.sessions) {
+      for (const row of state.sessionsResult.sessions) {
         const previous = previousRows.get(row.key);
         if (checkpointSummarySignature(previous) !== checkpointSummarySignature(row)) {
           invalidateCheckpointCacheForKey(state, row.key);

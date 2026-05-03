@@ -22,6 +22,7 @@ export type SessionsProps = {
   limit: string;
   includeGlobal: boolean;
   includeUnknown: boolean;
+  showArchived: boolean;
   basePath: string;
   searchQuery: string;
   agentIdentityById: Record<string, AgentIdentityResult>;
@@ -40,6 +41,7 @@ export type SessionsProps = {
     limit: string;
     includeGlobal: boolean;
     includeUnknown: boolean;
+    showArchived: boolean;
   }) => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
@@ -312,6 +314,7 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: props.includeUnknown,
+                showArchived: props.showArchived,
               })}
           />
         </label>
@@ -326,6 +329,7 @@ export function renderSessions(props: SessionsProps) {
                 limit: (e.target as HTMLInputElement).value,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: props.includeUnknown,
+                showArchived: props.showArchived,
               })}
           />
         </label>
@@ -339,6 +343,7 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: (e.target as HTMLInputElement).checked,
                 includeUnknown: props.includeUnknown,
+                showArchived: props.showArchived,
               })}
           />
           <span>${t("sessionsView.global")}</span>
@@ -353,9 +358,25 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: (e.target as HTMLInputElement).checked,
+                showArchived: props.showArchived,
               })}
           />
           <span>${t("sessionsView.unknown")}</span>
+        </label>
+        <label class="field-inline checkbox session-archive-toggle">
+          <input
+            type="checkbox"
+            .checked=${props.showArchived}
+            @change=${(e: Event) =>
+              props.onFiltersChange({
+                activeMinutes: props.activeMinutes,
+                limit: props.limit,
+                includeGlobal: props.includeGlobal,
+                includeUnknown: props.includeUnknown,
+                showArchived: (e.target as HTMLInputElement).checked,
+              })}
+          />
+          <span>${t("sessionsView.showArchived")}</span>
         </label>
       </div>
 

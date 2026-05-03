@@ -161,6 +161,7 @@ export const ar: TranslationMap = {
     limit: "الحد",
     global: "عام",
     unknown: "غير معروف",
+    showArchived: "Show archived",
     minutesPlaceholder: "دقيقة",
     searchPlaceholder: "تصفية حسب المفتاح أو الوكيل أو التسمية أو النوع…",
     selected: "تم تحديد {count}",

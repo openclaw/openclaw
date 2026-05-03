@@ -160,6 +160,7 @@ export const zh_TW: TranslationMap = {
     limit: "限制",
     global: "全域",
     unknown: "未知",
+    showArchived: "Show archived",
     minutesPlaceholder: "分鐘",
     searchPlaceholder: "依金鑰、代理程式、標籤、類型篩選…",
     selected: "已選取 {count} 個",

@@ -162,6 +162,7 @@ export const id: TranslationMap = {
     limit: "Batas",
     global: "Global",
     unknown: "Tidak diketahui",
+    showArchived: "Show archived",
     minutesPlaceholder: "mnt",
     searchPlaceholder: "Filter menurut kunci, agen, label, jenis…",
     selected: "{count} dipilih",

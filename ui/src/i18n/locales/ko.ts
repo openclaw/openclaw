@@ -161,6 +161,7 @@ export const ko: TranslationMap = {
     limit: "제한",
     global: "전역",
     unknown: "알 수 없음",
+    showArchived: "Show archived",
     minutesPlaceholder: "분",
     searchPlaceholder: "키, 에이전트, 레이블, 종류로 필터링…",
     selected: "{count}개 선택됨",

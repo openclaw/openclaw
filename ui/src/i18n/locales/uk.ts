@@ -163,6 +163,7 @@ export const uk: TranslationMap = {
     limit: "Обмеження",
     global: "Глобально",
     unknown: "Невідомо",
+    showArchived: "Show archived",
     minutesPlaceholder: "хв",
     searchPlaceholder: "Фільтрувати за ключем, агентом, міткою, типом…",
     selected: "Вибрано: {count}",
