@@ -68,9 +68,9 @@ export async function buildTelegramMessageContextForTest(
       api: {
         sendChatAction: vi.fn(),
         setMessageReaction: vi.fn(),
-        sendSticker: vi.fn(async (_chatId, _fileId, _params) => ({
+        sendSticker: vi.fn(async (chatId, _fileId, _params) => ({
           message_id: 1001,
-          chat: { id: params.message.chat?.["id"] ?? 123 },
+          chat: { id: typeof chatId === "number" ? chatId : 123 },
         })),
         ...params.botApi,
       },
