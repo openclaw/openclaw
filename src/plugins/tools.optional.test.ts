@@ -389,7 +389,7 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   beforeEach(() => {
-    loadOpenClawPluginsMock.mockClear();
+    loadOpenClawPluginsMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockImplementation((params) =>
       loadOpenClawPluginsMock(params),
@@ -1185,6 +1185,217 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("does not let disabled bundled tool owners poison explicit runtime allowlists", () => {
+    const config = {
+      plugins: {
+        enabled: true,
+        allow: ["memory-core", "memory-lancedb"],
+        load: { paths: [] },
+        entries: {
+          "memory-core": { enabled: true },
+          "memory-lancedb": { enabled: false },
+        },
+        slots: { memory: "memory-core" },
+      },
+    };
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "memory-core",
+          origin: "bundled",
+          enabledByDefault: false,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["memory_get", "memory_search"],
+          },
+        },
+        {
+          id: "memory-lancedb",
+          origin: "bundled",
+          enabledByDefault: false,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["memory_recall"],
+          },
+        },
+      ],
+    });
+    const memorySearchFactory = vi.fn(() => [makeTool("memory_search"), makeTool("memory_get")]);
+    const activeRegistry = {
+      plugins: [
+        { id: "memory-core", status: "loaded" },
+        { id: "memory-lancedb", status: "disabled" },
+      ],
+      tools: [
+        {
+          pluginId: "memory-core",
+          optional: false,
+          source: "/tmp/memory-core.js",
+          names: ["memory_search", "memory_get"],
+          declaredNames: ["memory_search", "memory_get"],
+          factory: memorySearchFactory,
+        },
+      ],
+      diagnostics: [],
+    };
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), config },
+        toolAllowlist: ["memory_recall", "memory_search", "memory_get"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
+    expect(memorySearchFactory).toHaveBeenCalledTimes(1);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back from a loaded channel registry without matching tool entries", () => {
+    const config = {
+      plugins: {
+        enabled: true,
+        allow: ["memory-core"],
+        load: { paths: [] },
+        entries: {
+          "memory-core": { enabled: true },
+        },
+        slots: { memory: "memory-core" },
+      },
+    };
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "memory-core",
+        origin: "bundled",
+        enabledByDefault: false,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["memory_get", "memory_search"],
+        },
+      },
+    });
+    const memorySearchFactory = vi.fn(() => [makeTool("memory_search"), makeTool("memory_get")]);
+    const activeRegistry = {
+      plugins: [{ id: "memory-core", status: "loaded" }],
+      tools: [
+        {
+          pluginId: "memory-core",
+          optional: false,
+          source: "/tmp/memory-core.js",
+          names: ["memory_search", "memory_get"],
+          declaredNames: ["memory_search", "memory_get"],
+          factory: memorySearchFactory,
+        },
+      ],
+      diagnostics: [],
+    };
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
+    pinActivePluginChannelRegistry({
+      plugins: [{ id: "memory-core", status: "loaded" }],
+      tools: [],
+      diagnostics: [],
+    } as never);
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), config },
+        toolAllowlist: ["memory_search", "memory_get"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
+    expect(memorySearchFactory).toHaveBeenCalledTimes(1);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("loads a standalone registry when cached runtime registries lack matching tool entries", () => {
+    const config = {
+      plugins: {
+        enabled: true,
+        allow: ["memory-core"],
+        load: { paths: [] },
+        entries: {
+          "memory-core": { enabled: true },
+        },
+        slots: { memory: "memory-core" },
+      },
+    };
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "memory-core",
+        origin: "bundled",
+        enabledByDefault: false,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["memory_get", "memory_search"],
+        },
+      },
+    });
+    const memorySearchFactory = vi.fn(() => [makeTool("memory_search"), makeTool("memory_get")]);
+    const loadedRegistry = {
+      plugins: [{ id: "memory-core", status: "loaded" }],
+      tools: [
+        {
+          pluginId: "memory-core",
+          optional: false,
+          source: "/tmp/memory-core.js",
+          names: ["memory_search", "memory_get"],
+          declaredNames: ["memory_search", "memory_get"],
+          factory: memorySearchFactory,
+        },
+      ],
+      diagnostics: [],
+    };
+    setActivePluginRegistry(
+      {
+        plugins: [{ id: "memory-core", status: "loaded" }],
+        tools: [],
+        diagnostics: [],
+      } as never,
+      "gateway-startup",
+      "gateway-bindable",
+      "/tmp",
+    );
+    pinActivePluginChannelRegistry({
+      plugins: [{ id: "memory-core", status: "loaded" }],
+      tools: [],
+      diagnostics: [],
+    } as never);
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+    loadOpenClawPluginsMock.mockReturnValue(loadedRegistry);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), config },
+        toolAllowlist: ["memory_search", "memory_get"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
+    expect(memorySearchFactory).toHaveBeenCalledTimes(1);
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activate: false,
+        onlyPluginIds: ["memory-core"],
+        toolDiscovery: true,
+      }),
+    );
+  });
+
   it("adds enabled non-startup tool plugins to the active tool runtime scope", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
@@ -1207,7 +1418,18 @@ describe("resolvePluginTools optional tools", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: expect.arrayContaining(["tavily"]),
+        toolDiscovery: true,
+      }),
+    );
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: expect.arrayContaining(["tavily"]),
+        toolDiscovery: true,
+      }),
+    );
   });
 
   it("reuses the pinned gateway channel registry after provider runtime loads replace active registry", () => {
