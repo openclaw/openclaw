@@ -18,6 +18,34 @@ function getInstallRecords() {
     : (index.installRecords ?? {});
 }
 
+function readOpenClawConfig() {
+  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+  return fs.existsSync(configPath) ? readJson(configPath) : {};
+}
+
+function assertPluginRemoved(params) {
+  const list = readJson(params.listFile);
+  if ((list.plugins || []).some((entry) => entry.id === params.pluginId)) {
+    throw new Error(`${params.pluginId} still listed after uninstall`);
+  }
+
+  const installRecords = getInstallRecords();
+  if (installRecords[params.pluginId]) {
+    throw new Error(`${params.pluginId} install record still present after uninstall`);
+  }
+
+  const config = readOpenClawConfig();
+  if (config.plugins?.entries?.[params.pluginId]) {
+    throw new Error(`${params.pluginId} config entry still present after uninstall`);
+  }
+  if ((config.plugins?.allow || []).includes(params.pluginId)) {
+    throw new Error(`${params.pluginId} allowlist entry still present after uninstall`);
+  }
+  if ((config.plugins?.deny || []).includes(params.pluginId)) {
+    throw new Error(`${params.pluginId} denylist entry still present after uninstall`);
+  }
+}
+
 function recordFixturePluginTrust() {
   const pluginId = process.argv[3];
   const pluginRoot = process.argv[4];
@@ -272,6 +300,25 @@ function assertGitPlugin() {
     throw new Error(`missing git plugin installed dependency: ${dependencyPackagePath}`);
   }
   assertRealPathInside(installPath, dependencyPackagePath, "git plugin installed dependency");
+  fs.writeFileSync("/tmp/plugins-git-install-path.txt", installPath, "utf8");
+  fs.writeFileSync("/tmp/plugins-git-install-parent.txt", path.dirname(installPath), "utf8");
+}
+
+function assertGitPluginRemoved() {
+  const installPath = fs.readFileSync("/tmp/plugins-git-install-path.txt", "utf8").trim();
+  const installParent = fs.readFileSync("/tmp/plugins-git-install-parent.txt", "utf8").trim();
+  assertPluginRemoved({
+    pluginId: "demo-plugin-git",
+    listFile: "/tmp/plugins-git-uninstalled.json",
+  });
+  if (fs.existsSync(installPath)) {
+    throw new Error(`git managed repo still exists after uninstall: ${installPath}`);
+  }
+  if (fs.existsSync(installParent)) {
+    throw new Error(
+      `empty git managed install parent still exists after uninstall: ${installParent}`,
+    );
+  }
 }
 
 function assertRealPathInside(parentPath, childPath, label) {
@@ -407,11 +454,32 @@ function assertNpmPlugin() {
     throw new Error(`missing npm plugin installed dependency: ${dependencyPackagePath}`);
   }
   assertRealPathInside(npmRoot, dependencyPackagePath, "npm plugin installed dependency");
+  fs.writeFileSync("/tmp/plugins-npm-install-path.txt", installPath, "utf8");
+  fs.writeFileSync("/tmp/plugins-npm-dependency-path.txt", dependencyPackagePath, "utf8");
 }
 
 function assertNpmPluginUpdateUnchanged() {
   assertUpdateOutput("/tmp/plugins-npm-update.log", "demo-plugin-npm is up to date (0.0.1).");
   assertNpmPlugin();
+}
+
+function assertNpmPluginRemoved() {
+  const installPath = fs.readFileSync("/tmp/plugins-npm-install-path.txt", "utf8").trim();
+  const dependencyPackagePath = fs
+    .readFileSync("/tmp/plugins-npm-dependency-path.txt", "utf8")
+    .trim();
+  assertPluginRemoved({
+    pluginId: "demo-plugin-npm",
+    listFile: "/tmp/plugins-npm-uninstalled.json",
+  });
+  if (fs.existsSync(installPath)) {
+    throw new Error(`npm managed package still exists after uninstall: ${installPath}`);
+  }
+  if (fs.existsSync(dependencyPackagePath)) {
+    throw new Error(
+      `npm managed dependency still exists after uninstall: ${dependencyPackagePath}`,
+    );
+  }
 }
 
 function assertMarketplaceUpdated() {
@@ -646,10 +714,12 @@ const commands = {
     ),
   "plugin-npm": assertNpmPlugin,
   "plugin-npm-update": assertNpmPluginUpdateUnchanged,
+  "plugin-npm-removed": assertNpmPluginRemoved,
   "bundle-disabled": assertClaudeBundleDisabled,
   "bundle-inspect": assertClaudeBundleInspect,
   "slash-install": assertSlashInstall,
   "plugin-git": assertGitPlugin,
+  "plugin-git-removed": assertGitPluginRemoved,
   "plugin-git-updated": assertGitPluginUpdated,
   "marketplace-list": assertMarketplaceList,
   "marketplace-installed": assertMarketplaceInstalled,
