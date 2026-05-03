@@ -3,9 +3,9 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveQueueSettings } from "./settings.js";
 
 describe("resolveQueueSettings", () => {
-  it("defaults inbound channels to steer with a short followup debounce", () => {
+  it("defaults inbound channels to collect with a short followup debounce", () => {
     expect(resolveQueueSettings({ cfg: {} as OpenClawConfig })).toEqual({
-      mode: "steer",
+      mode: "collect",
       debounceMs: 500,
       cap: 20,
       dropPolicy: "summarize",

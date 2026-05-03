@@ -190,6 +190,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/update: carry `continuationMessage` from `update.run` into successful restart sentinels so session-scoped self-updates can resume one follow-up turn after the Gateway restarts. Refs #71178. (#74362) Thanks @100menotu001, @HeilbronAILabs, and @artnking.
 - Agents/fallback: suppress duplicate current-turn user-message transcript writes after embedded fallback retries while still sending the retry prompt to the model. (#63696) Thanks @dashhuang.
 - Channels/Telegram: force a fresh final message when a visible non-preview bubble (tool/block/error) was delivered after the active answer preview, so multi-step assistant replies no longer end up with the final answer above intermediate output. Fixes #76529. Thanks @jack-stormentswe.
+- Auto-reply/queue: default inbound message queueing back to collect mode so same-session follow-ups keep per-sender authorization metadata instead of steering text into another sender's active run. Thanks @Lucenx9.
 
 ## 2026.5.2
 
