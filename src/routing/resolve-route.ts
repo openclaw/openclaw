@@ -3,7 +3,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldLogVerbose } from "../globals.js";
-import { logDebug } from "../logger.js";
+import { logDebug, logWarn } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   normalizeRouteBindingId,
@@ -250,6 +250,7 @@ function buildEvaluatedBindingsByChannel(
       continue;
     }
     const match = normalizeBindingMatch(binding.match);
+    maybeWarnSuspiciousWhatsAppBindingMatch(cfg, channel, binding.match, binding.agentId);
     const evaluated: EvaluatedBinding = {
       binding,
       match,
@@ -495,6 +496,75 @@ function normalizePeerConstraint(
     return { state: "wildcard-kind", kind };
   }
   return { state: "valid", kind, id };
+}
+
+// Dedupe the per-cfg WhatsApp accountId-vs-peer.id misuse warning so reload
+// loops over the same config do not spam the logs. Keyed by the offending
+// `whatsapp:<accountId>` so each distinct misuse fires once per config object.
+const warnedSuspiciousWhatsAppBindingsByCfg = new WeakMap<OpenClawConfig, Set<string>>();
+
+function looksLikeWhatsAppSenderPhone(value: string): boolean {
+  // Matches authored E.164 with or without the leading `+`, plus a few
+  // formatting characters users commonly paste in (spaces, dashes,
+  // parentheses). We are strict enough to avoid flagging legitimate
+  // free-form account-id strings, and lax enough to catch the realistic
+  // shapes that show up in `match.accountId` typos.
+  const stripped = value.replace(/[\s\-()]/g, "");
+  return /^\+?[0-9]{4,}$/.test(stripped);
+}
+
+// Issue #75211. The reporter authored a binding with
+// `match: { channel: "whatsapp", accountId: "+51XXXXXXXXX" }` expecting it
+// to filter inbound by sender phone, but `match.accountId` selects which
+// connected WhatsApp ACCOUNT the binding applies to (the bot's own
+// number/handle), not the sender. The binding silently never matched and
+// every inbound from that contact fell through to the default agent. The
+// docs already show the correct shape (`match.peer = { kind: "direct",
+// id: "+51XXXXXXXXX" }`), but there was no diagnostic surfacing the
+// mistake at runtime. This warning closes that gap without changing
+// routing semantics, so existing deployments that intentionally name a
+// WhatsApp account with a phone-number-like accountId continue to work.
+function maybeWarnSuspiciousWhatsAppBindingMatch(
+  cfg: OpenClawConfig,
+  channel: string,
+  rawMatch:
+    | {
+        accountId?: string | undefined;
+        peer?: { kind?: string; id?: string } | undefined;
+      }
+    | undefined,
+  agentIdForLog: string | undefined,
+): void {
+  if (channel !== "whatsapp") {
+    return;
+  }
+  if (rawMatch?.peer && (rawMatch.peer.kind || rawMatch.peer.id)) {
+    return;
+  }
+  const accountId = (rawMatch?.accountId ?? "").trim();
+  if (!accountId || !looksLikeWhatsAppSenderPhone(accountId)) {
+    return;
+  }
+  let warned = warnedSuspiciousWhatsAppBindingsByCfg.get(cfg);
+  if (!warned) {
+    warned = new Set<string>();
+    warnedSuspiciousWhatsAppBindingsByCfg.set(cfg, warned);
+  }
+  const dedupeKey = `whatsapp:${accountId}`;
+  if (warned.has(dedupeKey)) {
+    return;
+  }
+  warned.add(dedupeKey);
+  const agentLabel = agentIdForLog ? `agentId="${agentIdForLog}" ` : "";
+  logWarn(
+    `[routing] suspicious WhatsApp binding ${agentLabel}match.accountId="${accountId}" looks ` +
+      `like a sender phone, but match.accountId selects which CONNECTED WhatsApp account the ` +
+      `binding applies to (the bot's own number/handle), not the sender. ` +
+      `To route inbound from a specific sender, use ` +
+      `match.peer = { kind: "direct", id: "${accountId}" } instead. ` +
+      `See docs/concepts/multi-agent.md and #75211. ` +
+      `(silenced after first occurrence per config)`,
+  );
 }
 
 function normalizeBindingMatch(
