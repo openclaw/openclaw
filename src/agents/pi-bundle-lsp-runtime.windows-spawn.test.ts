@@ -68,7 +68,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
   });
 
   it("passes sanitized env to resolveWindowsSpawnProgram", async () => {
-    const sanitizedEnv = { PATH: "C:\Windows;C:\nodejs", PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+    const sanitizedEnv = { PATH: "C:\\Windows;C:\\nodejs", PATHEXT: ".COM;.EXE;.BAT;.CMD" };
 
     sanitizeHostExecEnvMock.mockReturnValue(sanitizedEnv);
     resolveWindowsSpawnProgramMock.mockReturnValue({ resolvedCommand: "tls", isShim: false });
