@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
+import { safeCwd } from "./home-dir.js";
 
 type EnsureOpenClawPathOpts = {
   execPath?: string;
@@ -51,7 +52,7 @@ function mergePath(params: { existing: string; prepend?: string[]; append?: stri
 
 function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; append: string[] } {
   const execPath = opts.execPath ?? process.execPath;
-  const cwd = opts.cwd ?? process.cwd();
+  const cwd = opts.cwd ?? safeCwd() ?? os.tmpdir();
   const homeDir = opts.homeDir ?? os.homedir();
   const platform = opts.platform ?? process.platform;
 

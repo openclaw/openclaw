@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- CLI/TUI: handle deleted working directory (uv_cwd ENOENT) during startup — dotenv probing, PATH bootstrap, TUI workspace inference, autocomplete setup, and local auth spawn no longer crash when cwd is removed; falls back to `os.tmpdir()` as a last resort. (#73676) Thanks @sumaiazaman.
+
 ### Highlights
 
 - Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.

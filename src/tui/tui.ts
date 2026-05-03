@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -14,6 +15,7 @@ import {
 } from "@mariozechner/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { safeCwd } from "../infra/home-dir.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
 import {
@@ -127,7 +129,7 @@ export function resolveLocalAuthSpawnOptions(params: {
 }
 
 export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
-  const defaultCwd = params.defaultCwd ?? process.cwd();
+  const defaultCwd = params.defaultCwd ?? safeCwd() ?? os.tmpdir();
   const entryArg = params.args[0]?.trim();
   if (!entryArg) {
     return defaultCwd;
@@ -180,7 +182,7 @@ export function resolveInitialTuiAgentId(params: {
 
   const inferredFromWorkspace = resolveAgentIdByWorkspacePath(
     params.cfg,
-    params.cwd ?? process.cwd(),
+    params.cwd ?? safeCwd() ?? os.tmpdir(),
   );
   if (inferredFromWorkspace) {
     return inferredFromWorkspace;
@@ -307,7 +309,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     cfg: config,
     fallbackAgentId: agentDefaultId,
     initialSessionInput,
-    cwd: process.cwd(),
+    cwd: safeCwd() ?? os.tmpdir(),
   });
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
@@ -565,7 +567,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           model: sessionInfo.model,
           thinkingLevels: sessionInfo.thinkingLevels,
         }),
-        process.cwd(),
+        safeCwd() ?? os.tmpdir(),
       ),
     );
   };
@@ -884,7 +886,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
                 }
 
                 const child = spawn(command, args, {
-                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: process.cwd() }),
+                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: safeCwd() ?? os.tmpdir() }),
                   env: process.env,
                   stdio: "inherit",
                   ...resolveLocalAuthSpawnOptions({ command }),
