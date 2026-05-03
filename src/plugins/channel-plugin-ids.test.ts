@@ -302,6 +302,25 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "external-hook-capability",
+        channels: [],
+        activation: {
+          onCapabilities: ["hook"],
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "external-hook-policy",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "lossless-claw",
         kind: "context-engine",
         channels: [],
@@ -844,6 +863,173 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads explicit hook-capability plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-hook-capability"],
+        allowPluginIds: ["external-hook-capability"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-hook-capability"],
+    });
+  });
+
+  it("does not ambient-load hook-capability plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["browser"],
+    });
+  });
+
+  it("blocks hook-capability plugins when plugins are globally disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          enabled: false,
+          allow: ["external-hook-capability"],
+          slots: { memory: "none" },
+          entries: {
+            "external-hook-capability": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      expected: [],
+    });
+  });
+
+  it("blocks hook-capability plugins when explicitly denied", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["external-hook-capability"],
+          deny: ["external-hook-capability"],
+          slots: { memory: "none" },
+          entries: {
+            "external-hook-capability": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      expected: [],
+    });
+  });
+
+  it("loads explicit hook-policy plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            browser: {
+              enabled: false,
+            },
+            "external-hook-policy": {
+              hooks: {
+                allowConversationAccess: true,
+                allowPromptInjection: true,
+              },
+            },
+          },
+        },
+      },
+      expected: ["external-hook-policy"],
+    });
+  });
+
+  it.each([
+    ["conversation access", { allowConversationAccess: true }],
+    ["prompt injection", { allowPromptInjection: true }],
+  ] as const)("loads hook-policy plugins with only %s enabled", (_name, hooks) => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            browser: {
+              enabled: false,
+            },
+            "external-hook-policy": {
+              hooks,
+            },
+          },
+        },
+      },
+      expected: ["external-hook-policy"],
+    });
+  });
+
+  it("keeps hook-policy plugins behind restrictive allowlists", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["browser"],
+          slots: { memory: "none" },
+          entries: {
+            browser: {
+              enabled: false,
+            },
+            "external-hook-policy": {
+              hooks: {
+                allowPromptInjection: true,
+              },
+            },
+          },
+        },
+      },
+      expected: [],
+    });
+  });
+
+  it("does not let effective-only hook policy bypass the authored startup allowlist", () => {
+    const activationSourceConfig = {
+      channels: {},
+      plugins: {
+        allow: ["browser"],
+        slots: { memory: "none" },
+        entries: {
+          browser: {
+            enabled: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      channels: {},
+      plugins: {
+        allow: ["browser", "external-hook-policy"],
+        slots: { memory: "none" },
+        entries: {
+          browser: {
+            enabled: false,
+          },
+          "external-hook-policy": {
+            hooks: {
+              allowPromptInjection: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: runtimeConfig,
+      activationSourceConfig,
+      expected: [],
     });
   });
 
