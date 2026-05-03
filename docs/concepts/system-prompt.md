@@ -158,8 +158,11 @@ All of these files are **injected into the context window** on every turn unless
 a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when
 heartbeats are disabled for the default agent or
 `agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
-files concise — especially `MEMORY.md`, which can grow over time and lead to
-unexpectedly high context usage and more frequent compaction.
+files concise, especially `MEMORY.md`. `MEMORY.md` is intended to stay a
+curated long-term summary; detailed daily notes belong in `memory/*.md` where
+`memory_search` and `memory_get` can retrieve them on demand. Oversized
+`MEMORY.md` files increase prompt usage and can be partially injected because of
+the bootstrap file limits below.
 
 When a session runs on the native Codex harness, Codex loads `AGENTS.md`
 through its own project-doc discovery. OpenClaw still resolves the remaining
@@ -180,6 +183,12 @@ occurs, OpenClaw can inject a concise system-prompt warning notice; control this
 `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
 default: `once`). Detailed raw/injected counts stay in diagnostics such as
 `/context`, `/status`, doctor, and logs.
+
+For memory files, truncation is not data loss: the file remains intact on disk,
+but the model only sees the shortened injected copy until it reads or searches
+memory directly. If `MEMORY.md` is repeatedly truncated, distill it into a
+shorter durable summary and move detailed history into `memory/*.md`, or
+intentionally raise the bootstrap limits.
 
 Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
 are filtered out to keep the sub-agent context small).
