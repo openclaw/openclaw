@@ -140,7 +140,12 @@ describe("process supervisor", () => {
   });
 
   it("enforces no-output timeout for silent processes", async () => {
-    vi.useFakeTimers();
+    // Keep setImmediate on the real platform queue so the post-settle
+    // I/O drain in supervisor.ts (#30711) can fire after the kill is
+    // triggered. Fake only the timer APIs we need to control.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
     const adapter = createStubChildAdapter({
       onKill: (signal, current) => {
         current.settle(null, signal ?? "SIGKILL");
@@ -159,11 +164,6 @@ describe("process supervisor", () => {
 
     const exitPromise = run.wait();
     await vi.advanceTimersByTimeAsync(5);
-    // Switch to real timers so the post-settle setImmediate I/O drain
-    // (supervisor.ts, #30711) can fire on the real platform; vitest fakes
-    // setImmediate by default and it lives on a separate queue from
-    // setTimeout, so advancing the fake clock does not flush it.
-    vi.useRealTimers();
 
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
@@ -211,7 +211,11 @@ describe("process supervisor", () => {
   });
 
   it("applies overall timeout even for near-immediate timer firing", async () => {
-    vi.useFakeTimers();
+    // setImmediate stays real (post-settle I/O drain, #30711); see the
+    // no-output test above for the rationale.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
     const adapter = createStubChildAdapter({
       onKill: (signal, current) => {
         current.settle(null, signal ?? "SIGKILL");
@@ -229,9 +233,6 @@ describe("process supervisor", () => {
 
     const exitPromise = run.wait();
     await vi.advanceTimersByTimeAsync(1);
-    // Real timers from here so the post-settle setImmediate drain
-    // (#30711) fires; see the no-output test above for context.
-    vi.useRealTimers();
 
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
