@@ -167,6 +167,15 @@ describe("tsdown config", () => {
     expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
   });
 
+  // Regression test for session store runtime entry
+  // See: https://github.com/openclaw/openclaw/pull/65962
+  it("includes config/sessions/store.runtime entry", () => {
+    const unifiedGraph = unifiedDistGraph();
+    const entries = entryKeys(unifiedGraph!);
+
+    expect(entries).toContain("config/sessions/store.runtime");
+  });
+
   it("suppresses unresolved imports from extension source", () => {
     const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
     const handled: TsdownLog[] = [];
