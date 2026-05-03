@@ -132,7 +132,7 @@ export function hashToolCall(toolName: string, params: unknown): string {
   return `${toolName}:${digestStable(params)}`;
 }
 
-function stableStringify(value: unknown): string {
+function stableStringify(value: unknown): string | undefined {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
   }
@@ -151,7 +151,9 @@ function digestStable(value: unknown): string {
 
 function stableStringifyFallback(value: unknown): string {
   try {
-    return stableStringify(value);
+    // JSON.stringify(undefined) returns undefined (JS value, not string), so guard with ??
+    const result = stableStringify(value);
+    return result ?? String(value);
   } catch {
     if (value === null || value === undefined) {
       return `${value}`;
@@ -204,7 +206,7 @@ function formatErrorForHash(error: unknown): string {
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
     return `${error}`;
   }
-  return stableStringify(error);
+  return stableStringify(error) ?? String(error);
 }
 
 function extractUnknownToolName(error: unknown): string | undefined {
