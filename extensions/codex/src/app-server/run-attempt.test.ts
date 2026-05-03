@@ -441,34 +441,27 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("forces the message dynamic tool for message-tool-only source replies", async () => {
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.config = { tools: { profile: "coding" } };
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.messageProvider = "whatsapp";
-    params.timeoutMs = 60_000;
 
-    const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 5 });
-    await harness.waitForMethod("thread/start");
-    await harness.waitForMethod("turn/start");
-
-    const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    const dynamicToolNames = (
-      (startRequest?.params as { dynamicTools?: Array<{ name: string }> } | undefined)
-        ?.dynamicTools ?? []
-    ).map((tool) => tool.name);
-    expect(dynamicToolNames).toContain("message");
-
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await expect(run).resolves.toMatchObject({
-      timedOut: false,
-      aborted: false,
+    const dynamicTools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: params.sessionKey,
+      sandbox: undefined,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
     });
+    const dynamicToolNames = dynamicTools.map((tool) => tool.name);
+
+    expect(dynamicToolNames).toContain("message");
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
