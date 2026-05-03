@@ -17,7 +17,7 @@ type ToolProfilePolicy = {
   deny?: string[];
 };
 
-export type CoreToolSection = {
+type CoreToolSection = {
   id: string;
   label: string;
   tools: Array<{

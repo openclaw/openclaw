@@ -67,6 +67,7 @@ There are two related systems:
 <ParamField path="commands.native" type='boolean | "auto"' default='"auto"'>
   Registers native commands. Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support. Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
 </ParamField>
+On Discord, native command specs may include `descriptionLocalizations`, which OpenClaw publishes as Discord `description_localizations` and includes in reconcile comparisons.
 <ParamField path="commands.nativeSkills" type='boolean | "auto"' default='"auto"'>
   Registers **skill** commands natively when supported. Auto: on for Discord/Telegram; off for Slack (Slack requires creating a slash command per skill). Set `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills`, or `channels.slack.commands.nativeSkills` to override per provider (bool or `"auto"`).
 </ParamField>
@@ -124,6 +125,7 @@ Current source-of-truth:
 <AccordionGroup>
   <Accordion title="Sessions and runs">
     - `/new [model]` starts a new session; `/reset` is the reset alias.
+    - Control UI intercepts typed `/new` to create and switch to a fresh dashboard session; typed `/reset` still runs the Gateway's in-place reset.
     - `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
     - `/compact [instructions]` compacts the session context. See [Compaction](/concepts/compaction).
     - `/stop` aborts the current run.
@@ -237,6 +239,7 @@ User-invocable skills are also exposed as slash commands:
 - `/skill <name> [input]` always works as the generic entrypoint.
 - skills may also appear as direct commands like `/prose` when the skill/plugin registers them.
 - native skill-command registration is controlled by `commands.nativeSkills` and `channels.<provider>.commands.nativeSkills`.
+- command specs can provide `descriptionLocalizations` for native surfaces that support localized descriptions, including Discord.
 
 <AccordionGroup>
   <Accordion title="Argument and parser notes">
@@ -247,8 +250,8 @@ User-invocable skills are also exposed as slash commands:
     - In multi-account channels, config-targeted `/allowlist --account <id>` and `/config set channels.<provider>.accounts.<id>...` also honor the target account's `configWrites`.
     - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
     - `/restart` is enabled by default; set `commands.restart: false` to disable it.
-    - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, `git:<repo>`, or `clawhub:<pkg>`.
-    - `/plugins enable|disable` updates plugin config and may prompt for a restart.
+    - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, `git:<repo>`, or `clawhub:<pkg>`, then requests a Gateway restart because plugin source modules changed.
+    - `/plugins enable|disable` updates plugin config and triggers Gateway plugin reload for new agent turns.
 
   </Accordion>
   <Accordion title="Channel-specific behavior">
@@ -426,8 +429,9 @@ Examples:
 
 <Note>
 - `/plugins list` and `/plugins show` use real plugin discovery against the current workspace plus on-disk config.
+- `/plugins install` installs from ClawHub, npm, git, local directories, and archives.
 - `/plugins enable|disable` updates plugin config only; it does not install or uninstall plugins.
-- After enable/disable changes, restart the gateway to apply them.
+- Enable and disable changes hot-reload Gateway plugin runtime surfaces for new agent turns; install requests a Gateway restart because plugin source modules changed.
 
 </Note>
 

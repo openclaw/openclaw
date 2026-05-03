@@ -12,8 +12,6 @@ import { formatErrorMessage } from "../dreaming-shared.js";
 import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
 
 const NODE_LLAMA_CPP_RUNTIME_PACKAGE = "node-llama-cpp";
-const NODE_LLAMA_CPP_RUNTIME_VERSION = "3.18.1";
-const NODE_LLAMA_CPP_INSTALL_SPEC = `${NODE_LLAMA_CPP_RUNTIME_PACKAGE}@${NODE_LLAMA_CPP_RUNTIME_VERSION}`;
 
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   providerId: string;
@@ -59,7 +57,7 @@ function formatLocalSetupError(err: unknown): string {
     "To enable local embeddings:",
     "1) Use Node 24 (recommended for installs/updates; Node 22 LTS, currently 22.14+, remains supported)",
     missing
-      ? `2) Run openclaw doctor --fix to repair managed plugin runtime deps for ${NODE_LLAMA_CPP_INSTALL_SPEC}`
+      ? `2) Install ${NODE_LLAMA_CPP_RUNTIME_PACKAGE} next to the OpenClaw package or source checkout`
       : null,
     `3) If you use pnpm: pnpm approve-builds (select ${NODE_LLAMA_CPP_RUNTIME_PACKAGE}), then pnpm rebuild ${NODE_LLAMA_CPP_RUNTIME_PACKAGE}`,
     ...listRemoteEmbeddingSetupHints(),

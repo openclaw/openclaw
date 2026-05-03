@@ -7,7 +7,6 @@ import {
   createTypedHook,
   HOOK_ONLY_MESSAGE,
   LEGACY_BEFORE_AGENT_START_MESSAGE,
-  LEGACY_IMPLICIT_STARTUP_SIDECAR_MESSAGE,
 } from "./status.test-helpers.js";
 
 const loadConfigMock = vi.fn();
@@ -16,6 +15,21 @@ const loadPluginMetadataRegistrySnapshotMock = vi.fn();
 const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
 const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
 const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
+const loadPluginMetadataSnapshotMock = vi.fn((rawParams: unknown = {}) => {
+  const params = rawParams as { index?: unknown };
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndexMock(params) ?? {
+    plugins: [],
+    diagnostics: [],
+  };
+  return {
+    index: params.index ?? createInstalledPluginIndexSnapshot([]),
+    manifestRegistry,
+    plugins: manifestRegistry.plugins,
+    byPluginId: new Map(
+      manifestRegistry.plugins.map((plugin: { id: string }) => [plugin.id, plugin]),
+    ),
+  };
+});
 const applyPluginAutoEnableMock = vi.fn();
 const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginAllowlistCompatMock = vi.fn();
@@ -60,6 +74,10 @@ vi.mock("./plugin-registry.js", () => ({
 vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: (...args: unknown[]) =>
     loadPluginManifestRegistryForInstalledIndexMock(...args),
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (...args: unknown[]) => loadPluginMetadataSnapshotMock(...args),
 }));
 
 vi.mock("./providers.js", () => ({
@@ -371,6 +389,7 @@ describe("plugin status reports", () => {
     loadPluginManifestRegistryForPluginRegistryMock.mockReset();
     loadPluginRegistrySnapshotWithMetadataMock.mockReset();
     loadPluginManifestRegistryForInstalledIndexMock.mockReset();
+    loadPluginMetadataSnapshotMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
     withBundledPluginAllowlistCompatMock.mockReset();
@@ -450,34 +469,34 @@ describe("plugin status reports", () => {
     loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
       snapshot: createInstalledPluginIndexSnapshot([
         {
-          pluginId: "legacy-sidecar",
-          manifestPath: "/tmp/legacy-sidecar/openclaw.plugin.json",
+          pluginId: "provider-env-plugin",
+          manifestPath: "/tmp/provider-env-plugin/openclaw.plugin.json",
           manifestHash: "manifest-hash",
-          rootDir: "/tmp/legacy-sidecar",
+          rootDir: "/tmp/provider-env-plugin",
           origin: "workspace",
           enabled: true,
           startup: {
-            sidecar: true,
+            sidecar: false,
             memory: false,
             deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
-          compat: ["legacy-implicit-startup-sidecar"],
+          compat: ["provider-auth-env-vars"],
         },
       ]),
       source: "derived",
       diagnostics: [],
     });
     loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue({
-      plugins: [{ id: "legacy-sidecar", name: "Legacy Sidecar" }],
+      plugins: [{ id: "provider-env-plugin", name: "Provider Env Plugin" }],
       diagnostics: [],
     });
 
     const report = buildPluginRegistrySnapshotReport({ config: {} });
 
     expect(report.plugins[0]).toMatchObject({
-      id: "legacy-sidecar",
-      compat: ["legacy-implicit-startup-sidecar"],
+      id: "provider-env-plugin",
+      compat: ["provider-auth-env-vars"],
     });
   });
 
@@ -843,27 +862,7 @@ describe("plugin status reports", () => {
     });
   });
 
-  it("builds compatibility warnings for deprecated implicit startup sidecar metadata", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "legacy-sidecar",
-        name: "Legacy Sidecar",
-        compat: ["legacy-implicit-startup-sidecar"],
-      }),
-    );
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "legacy-sidecar",
-          code: "legacy-implicit-startup-sidecar",
-        }),
-      ],
-      warnings: [`legacy-sidecar ${LEGACY_IMPLICIT_STARTUP_SIDECAR_MESSAGE}`],
-    });
-  });
-
-  it("does not warn when explicit startup-lazy metadata avoids legacy startup compatibility", () => {
+  it("does not warn for explicit startup-lazy metadata", () => {
     setSinglePluginLoadResult(
       createPluginRecord({
         id: "modern-startup-lazy",
@@ -939,14 +938,10 @@ describe("plugin status reports", () => {
     expect(
       summarizePluginCompatibility([
         notice,
-        createCompatibilityNotice({
-          pluginId: "legacy-plugin",
-          code: "legacy-implicit-startup-sidecar",
-        }),
         createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
       ]),
     ).toEqual({
-      noticeCount: 3,
+      noticeCount: 2,
       pluginCount: 1,
     });
   });

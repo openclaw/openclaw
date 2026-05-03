@@ -958,6 +958,10 @@ export async function runReplyAgent(params: {
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
+  const effectiveResetTriggered = resetTriggered === true;
+  const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
+  const effectiveShouldSteer = !effectiveResetTriggered && shouldSteer;
+  const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
 
   const isHeartbeat = opts?.isHeartbeat === true;
   const typingSignals = createTypingSignaler({
@@ -995,7 +999,7 @@ export async function runReplyAgent(params: {
     }
   };
 
-  if (shouldSteer && isStreaming) {
+  if (effectiveShouldSteer && isStreaming) {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
@@ -1003,7 +1007,7 @@ export async function runReplyAgent(params: {
       steeringMode: resolvePiSteeringModeForQueueMode(resolvedQueue.mode),
       ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
     });
-    if (steered && !shouldFollowup) {
+    if (steered && !effectiveShouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
@@ -1013,8 +1017,9 @@ export async function runReplyAgent(params: {
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat,
-    shouldFollowup,
-    queueMode: resolvedQueue.mode,
+    shouldFollowup: effectiveShouldFollowup,
+    queueMode: activeRunQueueMode,
+    resetTriggered: effectiveResetTriggered,
   });
 
   const queuedRunFollowupTurn = createFollowupRunner({
@@ -1045,11 +1050,16 @@ export async function runReplyAgent(params: {
     );
     // Re-check liveness after enqueue so a stale active snapshot cannot leave
     // the followup queue idle if the original run already finished.
-    if (!isRunActive?.()) {
+    const queuedBehindActiveRun = isRunActive?.() === true;
+    if (!queuedBehindActiveRun) {
       finalizeWithFollowup(undefined, queueKey, queuedRunFollowupTurn);
     }
     await touchActiveSessionEntry();
-    typing.cleanup();
+    if (queuedBehindActiveRun) {
+      await typingSignals.signalToolStart();
+    } else {
+      typing.cleanup();
+    }
     return undefined;
   }
 
@@ -1113,7 +1123,7 @@ export async function runReplyAgent(params: {
       createReplyOperation({
         sessionId: followupRun.run.sessionId,
         sessionKey: replySessionKey ?? "",
-        resetTriggered: resetTriggered === true,
+        resetTriggered: effectiveResetTriggered,
         upstreamAbortSignal: opts?.abortSignal,
       });
   } catch (error) {

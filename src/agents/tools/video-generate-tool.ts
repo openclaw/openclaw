@@ -29,6 +29,7 @@ import type {
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
 } from "../../video-generation/types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import { withMediaGenerationTaskKeepalive } from "./media-generate-background-shared.js";
@@ -46,7 +47,11 @@ import {
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -225,13 +230,19 @@ const VideoGenerateToolSchema = Type.Object({
 export function resolveVideoGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
-    providers: listRuntimeVideoGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
+}
+
+function hasExplicitVideoGenerationModelConfig(cfg?: OpenClawConfig): boolean {
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.videoGenerationModel));
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
@@ -583,6 +594,7 @@ async function executeVideoGenerationJob(params: {
   loadedReferenceAudios: LoadedReferenceAsset[];
   taskHandle?: VideoGenerationTaskHandle | null;
   providerOptions?: Record<string, unknown>;
+  autoProviderFallback?: boolean;
   timeoutMs?: number;
 }): Promise<ExecutedVideoGeneration> {
   if (params.taskHandle) {
@@ -605,6 +617,7 @@ async function executeVideoGenerationJob(params: {
     inputImages: params.loadedReferenceImages.map((entry) => entry.sourceAsset),
     inputVideos: params.loadedReferenceVideos.map((entry) => entry.sourceAsset),
     inputAudios: params.loadedReferenceAudios.map((entry) => entry.sourceAsset),
+    autoProviderFallback: params.autoProviderFallback,
     providerOptions: params.providerOptions,
     timeoutMs: params.timeoutMs,
   });
@@ -795,6 +808,7 @@ async function executeVideoGenerationJob(params: {
 export function createVideoGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authProfileStore?: AuthProfileStore;
   agentSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
@@ -807,8 +821,9 @@ export function createVideoGenerateTool(options?: {
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
+      authStore: options?.authProfileStore,
       modelConfig: cfg.agents?.defaults?.videoGenerationModel,
-      providers: () => listRuntimeVideoGenerationProviders({ config: cfg }),
       providerKey: "videoGenerationProviders",
     })
   ) {
@@ -847,10 +862,12 @@ export function createVideoGenerateTool(options?: {
       const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
         cfg,
         agentDir: options?.agentDir,
+        authStore: options?.authProfileStore,
       });
       if (!videoGenerationModelConfig) {
         throw new ToolInputError("No video-generation model configured.");
       }
+      const explicitModelConfig = hasExplicitVideoGenerationModelConfig(cfg);
       const effectiveCfg =
         applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
@@ -1017,6 +1034,7 @@ export function createVideoGenerateTool(options?: {
                   loadedReferenceAudios,
                   taskHandle,
                   providerOptions,
+                  autoProviderFallback: explicitModelConfig ? false : undefined,
                   timeoutMs,
                 }),
             });
@@ -1114,6 +1132,7 @@ export function createVideoGenerateTool(options?: {
           loadedReferenceAudios,
           taskHandle,
           providerOptions,
+          autoProviderFallback: explicitModelConfig ? false : undefined,
           timeoutMs,
         });
         completeVideoGenerationTaskRun({

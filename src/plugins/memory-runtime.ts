@@ -1,11 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { resolveRuntimePluginRegistry } from "./loader.js";
 import { getMemoryRuntime } from "./memory-state.js";
-import {
-  buildPluginRuntimeLoadOptions,
-  resolvePluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
 
 function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   const memorySlot = normalizePluginsConfig(config.plugins).slots.memory;
@@ -17,16 +13,11 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   if (current || !cfg) {
     return current;
   }
-  const context = resolvePluginRuntimeLoadContext({ config: cfg });
-  const onlyPluginIds = resolveMemoryRuntimePluginIds(context.config);
+  const onlyPluginIds = resolveMemoryRuntimePluginIds(cfg);
   if (onlyPluginIds.length === 0) {
     return getMemoryRuntime();
   }
-  resolveRuntimePluginRegistry(
-    buildPluginRuntimeLoadOptions(context, {
-      onlyPluginIds,
-    }),
-  );
+  getLoadedRuntimePluginRegistry({ requiredPluginIds: onlyPluginIds });
   return getMemoryRuntime();
 }
 
