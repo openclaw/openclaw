@@ -40,7 +40,14 @@ repos:
     rev: v1.22.0
     hooks:
       - id: zizmor
-        args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
+        args:
+          [
+            --config,
+            .github/zizmor.yml,
+            --persona=regular,
+            --min-severity=medium,
+            --min-confidence=medium,
+          ]
         exclude: "^(vendor/|apps/swabble/)"
 
   # Python checks for skills scripts
@@ -49,13 +56,13 @@ repos:
     hooks:
       - id: ruff
         files: "^skills/.*\\.py$"
-        args: [--config, pyproject.toml]
+        args: [--config, skills/pyproject.toml]
 
   - repo: local
     hooks:
       - id: skills-python-tests
         name: skills python tests
-        entry: pytest -q skills
+        entry: pytest -q -c skills/pyproject.toml skills
         language: python
         additional_dependencies: [pytest>=8, <9]
         pass_filenames: false

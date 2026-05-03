@@ -1769,10 +1769,10 @@ jobs:
           python -m pip install pytest ruff pyyaml
 
       - name: Lint Python skill scripts
-        run: python -m ruff check skills
+        run: python -m ruff check --config skills/pyproject.toml skills
 
       - name: Test skill Python scripts
-        run: python -m pytest -q skills
+        run: python -m pytest -q -c skills/pyproject.toml skills
 
   checks-windows:
     permissions:
