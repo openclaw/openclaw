@@ -279,6 +279,71 @@ describe("loadModelCatalog", () => {
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
+  it("falls back to the registry when persisted read-only catalog has no model rows", async () => {
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          openai: {
+            modelOverrides: {
+              "gpt-4.1": {
+                contextWindow: 128000,
+              },
+            },
+          },
+        },
+      }),
+    );
+    const discoverAuthStorage = vi.fn(() => ({
+      getOAuthProviders: () => [],
+    }));
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage,
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(discoverAuthStorage).toHaveBeenCalledWith("/tmp/openclaw", { readOnly: true });
+  });
+
+  it("preserves registry defaults for minimal persisted read-only catalog rows", async () => {
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          custom: {
+            models: [{ id: "local-tiny" }],
+          },
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(result).toEqual([
+      {
+        provider: "custom",
+        id: "local-tiny",
+        name: "local-tiny",
+        reasoning: false,
+        contextWindow: 128000,
+        input: ["text"],
+        compat: undefined,
+      },
+    ]);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(augmentCatalogMock).not.toHaveBeenCalled();
+  });
+
   it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
     mockPiDiscoveryModels([
       {

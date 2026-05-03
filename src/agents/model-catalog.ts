@@ -21,6 +21,7 @@ import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
+const PI_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW = 128_000;
 
 export type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 export {
@@ -188,13 +189,14 @@ function normalizePersistedModelCatalogEntry(
   const contextWindow =
     typeof entry?.contextWindow === "number" && entry.contextWindow > 0
       ? entry.contextWindow
-      : undefined;
-  const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
-  const input = Array.isArray(entry?.input)
+      : PI_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW;
+  const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : false;
+  const parsedInput = Array.isArray(entry?.input)
     ? entry.input.filter((value): value is ModelInputType =>
         ["text", "image", "audio", "video", "document"].includes(String(value)),
       )
     : undefined;
+  const input: ModelInputType[] = parsedInput?.length ? parsedInput : ["text"];
   const compat =
     entry?.compat && typeof entry.compat === "object"
       ? (entry.compat as ModelCatalogEntry["compat"])
@@ -226,6 +228,9 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
         models.push(normalized);
       }
     }
+  }
+  if (models.length === 0) {
+    throw new Error("persisted model catalog has no usable model rows");
   }
   const configuredModels = buildConfiguredModelCatalog({ cfg });
   if (configuredModels.length > 0) {
