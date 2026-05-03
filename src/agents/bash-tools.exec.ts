@@ -11,6 +11,7 @@ import {
   requireValidExecTarget,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { validateExecCommandSsrF } from "../infra/exec-ssrf-filter.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
@@ -1609,6 +1610,14 @@ export function createExecTool(
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
       rejectUnsafeControlShellCommand(params.command);
+
+      // SSRF filter: block network tools from reaching private IPs/hostnames
+      // This mirrors the web_fetch SSRF guard for exec commands using curl/wget/etc.
+      // Skip for sandbox (has own isolation) and node (has own policy).
+      // Skip when bypassApprovals is true (explicit full-access mode).
+      if (host === "gateway" && !bypassApprovals) {
+        validateExecCommandSsrF({ command: params.command });
+      }
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const hostEnvResult =
