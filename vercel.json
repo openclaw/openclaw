@@ -1,0 +1,6 @@
+{
+  "framework": "vite",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm -C ui build",
+  "outputDirectory": "dist/control-ui"
+}
