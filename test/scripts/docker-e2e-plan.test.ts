@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LIVE_RETRIES,
   RELEASE_PATH_PROFILE,
+  STABLE_NIGHTLY_PROFILE,
   parseLaneSelection,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mjs";
@@ -468,6 +469,28 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.needs).toMatchObject({
       bareImage: true,
       liveImage: true,
+      package: true,
+    });
+  });
+
+  it("keeps the stable nightly Docker profile narrow and deterministic", () => {
+    const plan = planFor({
+      profile: STABLE_NIGHTLY_PROFILE,
+    });
+
+    expect(plan.profile).toBe(STABLE_NIGHTLY_PROFILE);
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "config-reload",
+      "mcp-channels",
+      "plugin-update",
+    ]);
+    expect(plan.lanes.every((lane) => !lane.live)).toBe(true);
+    expect(plan.credentials).toEqual([]);
+    expect(plan.needs).toMatchObject({
+      bareImage: true,
+      e2eImage: true,
+      functionalImage: true,
+      liveImage: false,
       package: true,
     });
   });

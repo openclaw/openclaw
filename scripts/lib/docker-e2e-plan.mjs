@@ -30,6 +30,8 @@ export const DEFAULT_RESOURCE_LIMITS = {
 };
 export const DEFAULT_TAIL_PARALLELISM = 10;
 export const RELEASE_PATH_PROFILE = "release-path";
+export const STABLE_NIGHTLY_PROFILE = "stable-nightly";
+export const STABLE_NIGHTLY_LANES = ["config-reload", "mcp-channels", "plugin-update"];
 
 export function parseLaneSelection(raw) {
   if (!raw) {
@@ -261,11 +263,15 @@ export function parseLiveMode(raw) {
 
 export function parseProfile(raw) {
   const profile = raw || DEFAULT_PROFILE;
-  if (profile === DEFAULT_PROFILE || profile === RELEASE_PATH_PROFILE) {
+  if (
+    profile === DEFAULT_PROFILE ||
+    profile === RELEASE_PATH_PROFILE ||
+    profile === STABLE_NIGHTLY_PROFILE
+  ) {
     return profile;
   }
   throw new Error(
-    `OPENCLAW_DOCKER_ALL_PROFILE must be one of: ${DEFAULT_PROFILE}, ${RELEASE_PATH_PROFILE}. Got: ${JSON.stringify(raw)}`,
+    `OPENCLAW_DOCKER_ALL_PROFILE must be one of: ${DEFAULT_PROFILE}, ${RELEASE_PATH_PROFILE}, ${STABLE_NIGHTLY_PROFILE}. Got: ${JSON.stringify(raw)}`,
   );
 }
 
@@ -432,7 +438,13 @@ export function resolveDockerE2ePlan(options) {
           selectNamedLanes(selectableLanes, [selectedName], "OPENCLAW_DOCKER_ALL_LANES");
           return [];
         })
-      : undefined;
+      : options.profile === STABLE_NIGHTLY_PROFILE
+        ? selectNamedLanes(
+            selectableLanes,
+            STABLE_NIGHTLY_LANES,
+            "OPENCLAW_DOCKER_ALL_PROFILE=stable-nightly",
+          )
+        : undefined;
   const configuredLanes = selectedLanes
     ? selectedLanes
     : releaseLanes

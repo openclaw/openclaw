@@ -20,6 +20,12 @@ function run(command, args) {
 if (commandExists("actionlint")) {
   run("actionlint", []);
 } else {
+  if (!commandExists("go")) {
+    console.error(
+      "Workflow sanity requires actionlint or go. Install actionlint, or install go so this script can run the pinned actionlint version.",
+    );
+    process.exit(1);
+  }
   run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`]);
 }
 

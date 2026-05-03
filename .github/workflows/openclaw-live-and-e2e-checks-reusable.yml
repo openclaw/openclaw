@@ -1638,44 +1638,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Validate provider credential
+      - name: Check provider credentials
+        id: credential_preflight
         if: contains(matrix.profiles, inputs.release_test_profile)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_any() {
-            local label="$1"
-            shift
-            local key
-            for key in "$@"; do
-              if [[ -n "${!key:-}" ]]; then
-                return 0
-              fi
-            done
-            echo "Missing credential for ${label}: expected one of $*" >&2
-            exit 1
-          }
-
-          case "${{ matrix.providers }}" in
-            anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
-            google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
-            minimax) require_any MiniMax MINIMAX_API_KEY ;;
-            openai) require_any OpenAI OPENAI_API_KEY ;;
-            opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
-            openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
-            xai) require_any xAI XAI_API_KEY ;;
-            zai) require_any Z.ai ZAI_API_KEY Z_AI_API_KEY ;;
-            fireworks) require_any Fireworks FIREWORKS_API_KEY ;;
-            *)
-              echo "Unhandled live model provider shard: ${{ matrix.providers }}" >&2
-              exit 1
-              ;;
-          esac
+        env:
+          OPENCLAW_LIVE_LANE_ID: live-models-${{ matrix.providers }}
+          RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
+        run: node .release-harness/scripts/github/live-provider-preflight.mjs
 
       - name: Run Docker live model sweep
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && steps.credential_preflight.outputs.should_run == '1'
         run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh
+
+      - name: Upload live lane summary
+        if: contains(matrix.profiles, inputs.release_test_profile) && always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-lane-summary-${{ matrix.providers }}
+          path: .artifacts/live-lane-summaries/*.json
+          if-no-files-found: error
 
   validate_live_models_docker_targeted:
     name: Docker live models (selected providers)
@@ -1806,52 +1787,32 @@ jobs:
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh
 
+      - name: Check provider credentials
+        id: credential_preflight
+        env:
+          OPENCLAW_LIVE_LANE_ID: live-models-targeted
+          RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
+        run: node .release-harness/scripts/github/live-provider-preflight.mjs
+
       - name: Log in to GHCR
+        if: steps.credential_preflight.outputs.should_run == '1'
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Validate provider credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_any() {
-            local label="$1"
-            shift
-            local key
-            for key in "$@"; do
-              if [[ -n "${!key:-}" ]]; then
-                return 0
-              fi
-            done
-            echo "Missing credential for ${label}: expected one of $*" >&2
-            exit 1
-          }
-
-          IFS=',' read -r -a providers <<<"${OPENCLAW_LIVE_PROVIDERS}"
-          for provider in "${providers[@]}"; do
-            case "$provider" in
-              anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
-              google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
-              minimax) require_any MiniMax MINIMAX_API_KEY ;;
-              openai) require_any OpenAI OPENAI_API_KEY ;;
-              opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
-              openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
-              xai) require_any xAI XAI_API_KEY ;;
-              zai) require_any Z.ai ZAI_API_KEY Z_AI_API_KEY ;;
-              fireworks) require_any Fireworks FIREWORKS_API_KEY ;;
-              *)
-                echo "Unhandled live model provider shard: ${provider}" >&2
-                exit 1
-                ;;
-            esac
-          done
-
       - name: Run Docker live model sweep
+        if: steps.credential_preflight.outputs.should_run == '1'
         run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh
+
+      - name: Upload live lane summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-lane-summary-targeted
+          path: .artifacts/live-lane-summaries/*.json
+          if-no-files-found: error
 
   validate_live_provider_suites:
     needs: validate_selected_ref
