@@ -112,6 +112,48 @@ describe("delivery context helpers", () => {
     });
   });
 
+  it("does not inherit fallback threadId when same channel but `to` differs", () => {
+    const merged = mergeDeliveryContext(
+      { channel: "demo-channel", to: "channel:CURRENT" },
+      { channel: "demo-channel", to: "channel:STALE", accountId: "acct", threadId: "99" },
+    );
+
+    expect(merged).toEqual({
+      channel: "demo-channel",
+      to: "channel:CURRENT",
+      accountId: "acct",
+    });
+    expect(merged?.threadId).toBeUndefined();
+  });
+
+  it("inherits fallback threadId when same channel and `to` matches", () => {
+    const merged = mergeDeliveryContext(
+      { channel: "demo-channel", to: "channel:SAME" },
+      { channel: "demo-channel", to: "channel:SAME", accountId: "acct", threadId: "99" },
+    );
+
+    expect(merged).toEqual({
+      channel: "demo-channel",
+      to: "channel:SAME",
+      accountId: "acct",
+      threadId: "99",
+    });
+  });
+
+  it("does not inherit orphan fallback threadId when fallback has no `to`", () => {
+    const merged = mergeDeliveryContext(
+      { channel: "demo-channel", to: "channel:CURRENT" },
+      { channel: "demo-channel", threadId: "99" },
+    );
+
+    expect(merged).toEqual({
+      channel: "demo-channel",
+      to: "channel:CURRENT",
+      accountId: undefined,
+    });
+    expect(merged?.threadId).toBeUndefined();
+  });
+
   it("uses fallback route fields when fallback has no channel", () => {
     const merged = mergeDeliveryContext(
       { channel: "demo-channel" },
