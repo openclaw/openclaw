@@ -198,6 +198,7 @@ export async function promptRemoteGatewayConfig(
           message: "Gateway token",
           initialValue: typeof token === "string" ? token : undefined,
           validate: (value) => (value?.trim() ? undefined : "Required"),
+          sensitive: true,
         })
       ).trim();
     }
@@ -230,6 +231,7 @@ export async function promptRemoteGatewayConfig(
           message: "Gateway password",
           initialValue: typeof password === "string" ? password : undefined,
           validate: (value) => (value?.trim() ? undefined : "Required"),
+          sensitive: true,
         })
       ).trim();
     }

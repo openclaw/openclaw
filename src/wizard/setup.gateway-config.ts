@@ -216,6 +216,7 @@ export async function configureGatewayForSetup(
           quickstartTokenString ??
           normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN) ??
           "",
+        sensitive: true,
       });
       gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
       gatewayTokenInput = gatewayToken;
@@ -252,6 +253,7 @@ export async function configureGatewayForSetup(
           await prompter.text({
             message: "Gateway password",
             validate: validateGatewayPasswordInput,
+            sensitive: true,
           }),
         );
       }
