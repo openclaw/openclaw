@@ -98,10 +98,11 @@ title: "Thinking levels"
 
 ## Reasoning visibility (/reasoning)
 
-- Levels: `on|off|stream`.
+- Levels: `on|off|stream|verbose`.
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Reasoning:`.
 - `stream` (Telegram only): streams reasoning into the Telegram draft bubble while the reply is generating, then sends the final answer without reasoning.
+- `verbose`: streams reasoning live (like `stream`) and includes tool action summaries in the reasoning output.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 - Resolution order: inline directive, then session override, then per-agent default (`agents.list[].reasoningDefault`), then fallback (`off`).
