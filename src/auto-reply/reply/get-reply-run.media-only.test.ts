@@ -1095,6 +1095,43 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.transcriptPrompt).not.toContain("System: [t] Initial event.");
   });
 
+  it("threads reply context as explicit current-turn context without changing transcript text", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "what does this mean?",
+          RawBody: "what does this mean?",
+          CommandBody: "what does this mean?",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "what does this mean?",
+          BodyStripped: "what does this mean?",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          ReplyToSender: "Jake",
+          ReplyToBody: "quoted status body",
+          ReplyToIsQuote: true,
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.commandBody).toContain("what does this mean?");
+    expect(call?.transcriptCommandBody).toBe("what does this mean?");
+    expect(call?.followupRun.transcriptPrompt).toBe("what does this mean?");
+    expect(call?.followupRun.currentTurnContext).toEqual({
+      reply: {
+        senderLabel: "Jake",
+        body: "quoted status body",
+        isQuote: true,
+      },
+    });
+  });
+
   it("keeps heartbeat prompts out of visible transcript prompt", async () => {
     const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
 

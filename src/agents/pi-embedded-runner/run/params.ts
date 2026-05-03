@@ -24,6 +24,14 @@ export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
+export type CurrentTurnPromptContext = {
+  reply?: {
+    body: string;
+    senderLabel?: string;
+    isQuote?: boolean;
+  };
+};
+
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
@@ -96,6 +104,8 @@ export type RunEmbeddedPiAgentParams = {
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
+  /** Explicit current-turn context that must be visible to the model but not persisted as user text. */
+  currentTurnContext?: CurrentTurnPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
