@@ -901,6 +901,24 @@ export async function runEmbeddedPiAgent(
             activeSessionFile = nextSessionFile;
           }
         };
+        const onCompactionHookMessages = async (payload: {
+          phase: "before" | "after";
+          messages: string[];
+        }) => {
+          const messages = payload.messages.filter((message) => message.trim().length > 0);
+          if (messages.length === 0) {
+            return;
+          }
+          await params.onAgentEvent?.({
+            stream: "compaction",
+            data: {
+              phase: payload.phase === "before" ? "start" : "end",
+              ...(payload.phase === "after" ? { completed: true } : {}),
+              messages,
+            },
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          });
+        };
         // When the engine owns compaction, compactEmbeddedPiSessionDirect is
         // bypassed. Fire lifecycle hooks here so recovery paths still notify
         // subscribers like memory extensions and usage trackers.
@@ -1369,6 +1387,7 @@ export async function runEmbeddedPiAgent(
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  onCompactionHookMessages,
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "timeout_recovery",
@@ -1525,6 +1544,7 @@ export async function runEmbeddedPiAgent(
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  onCompactionHookMessages,
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "overflow",
