@@ -389,6 +389,18 @@ describe("model-selection", () => {
         model: "kimi-code",
       });
     });
+
+    it("ignores malformed persisted model fields and tolerates a missing default provider", () => {
+      expect(
+        resolvePersistedModelRef({
+          defaultProvider: undefined,
+          runtimeProvider: { provider: "openai" },
+          runtimeModel: false,
+          overrideProvider: ["anthropic"],
+          overrideModel: 123,
+        }),
+      ).toBeNull();
+    });
   });
 
   describe("resolvePersistedOverrideModelRef", () => {
@@ -415,6 +427,16 @@ describe("model-selection", () => {
         provider: "kimi",
         model: "kimi-code",
       });
+    });
+
+    it("ignores malformed persisted override fields", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: undefined,
+          overrideProvider: ["anthropic"],
+          overrideModel: 123,
+        }),
+      ).toBeNull();
     });
   });
 
