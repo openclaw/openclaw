@@ -94,6 +94,10 @@ export type RunEmbeddedPiAgentParams = {
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
   forceMessageTool?: boolean;
+  /** Include the heartbeat response tool for structured heartbeat outcomes. */
+  enableHeartbeatTool?: boolean;
+  /** Keep the heartbeat response tool available even when a narrow profile would omit it. */
+  forceHeartbeatTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   sessionFile: string;

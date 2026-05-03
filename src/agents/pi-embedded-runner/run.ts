@@ -1162,6 +1162,8 @@ export async function runEmbeddedPiAgent(
             ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
+            enableHeartbeatTool: params.enableHeartbeatTool,
+            forceHeartbeatTool: params.forceHeartbeatTool,
             requireExplicitMessageTarget: params.requireExplicitMessageTarget,
             internalEvents: params.internalEvents,
             bootstrapPromptWarningSignaturesSeen,

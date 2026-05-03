@@ -925,6 +925,8 @@ export async function runEmbeddedAttempt(
                 params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
               disableMessageTool: params.disableMessageTool,
               forceMessageTool: params.forceMessageTool,
+              enableHeartbeatTool: params.enableHeartbeatTool,
+              forceHeartbeatTool: params.forceHeartbeatTool,
               authProfileStore: params.authProfileStore,
               recordToolPrepStage: (name) => corePluginToolStages.mark(name),
               onYield: (message) => {
