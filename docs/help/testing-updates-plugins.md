@@ -93,7 +93,7 @@ Important lanes:
 - `test:docker:plugin-lifecycle-matrix` installs the candidate package in a bare
   container, runs an npm plugin through install, inspect, disable, enable,
   explicit upgrade, explicit downgrade, and uninstall after deleting the plugin
-  code. It logs `/usr/bin/time` RSS and CPU metrics for each phase.
+  code. It logs RSS and CPU metrics for each phase.
 - `test:docker:plugin-update` validates that an unchanged installed plugin does
   not reinstall or lose install metadata during `openclaw plugins update`.
 - `test:docker:upgrade-survivor` installs the candidate tarball over a dirty
