@@ -97,6 +97,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.list",
     "sessions.get",
     "sessions.preview",
+    "sessions.describe",
     "sessions.resolve",
     "sessions.compaction.list",
     "sessions.compaction.get",

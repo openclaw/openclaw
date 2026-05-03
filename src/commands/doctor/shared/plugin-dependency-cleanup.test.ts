@@ -30,6 +30,13 @@ describe("cleanupLegacyPluginDependencyState", () => {
       "demo",
       "node_modules",
     );
+    const legacyExtensionStamp = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "demo",
+      ".openclaw-runtime-deps-stamp.json",
+    );
     const legacyManifest = path.join(
       packageRoot,
       "extensions",
@@ -41,12 +48,20 @@ describe("cleanupLegacyPluginDependencyState", () => {
       stateDirectoryRuntimeRoot,
       "openclaw-2026.4.25-feedface",
     );
+    const thirdPartyNodeModules = path.join(
+      stateDir,
+      "extensions",
+      "lossless-claw",
+      "node_modules",
+    );
 
     await fs.mkdir(path.join(legacyRuntimeVersionedRoot, "node_modules"), { recursive: true });
     await fs.mkdir(legacyLocalRoot, { recursive: true });
     await fs.mkdir(legacyExtensionNodeModules, { recursive: true });
+    await fs.writeFile(legacyExtensionStamp, "{}");
     await fs.mkdir(path.dirname(legacyManifest), { recursive: true });
     await fs.writeFile(legacyManifest, "{}");
+    await fs.mkdir(thirdPartyNodeModules, { recursive: true });
     await fs.mkdir(explicitStageDir, { recursive: true });
     await fs.mkdir(path.join(stateDirectoryVersionedRoot, "node_modules"), { recursive: true });
 
@@ -61,6 +76,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
         legacyRuntimeVersionedRoot,
         legacyLocalRoot,
         legacyExtensionNodeModules,
+        legacyExtensionStamp,
         legacyManifest,
         explicitStageDir,
         stateDirectoryVersionedRoot,
@@ -68,6 +84,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
     );
     expect(targets).not.toContain(legacyRuntimeRoot);
     expect(targets).not.toContain(stateDirectoryRuntimeRoot);
+    expect(targets).not.toContain(thirdPartyNodeModules);
 
     const result = await cleanupLegacyPluginDependencyState({ env, packageRoot });
 
@@ -77,7 +94,9 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expect(fs.stat(legacyRuntimeVersionedRoot)).rejects.toThrow();
     await expect(fs.stat(legacyLocalRoot)).rejects.toThrow();
     await expect(fs.stat(legacyExtensionNodeModules)).rejects.toThrow();
+    await expect(fs.stat(legacyExtensionStamp)).rejects.toThrow();
     await expect(fs.stat(legacyManifest)).rejects.toThrow();
+    await expect(fs.stat(thirdPartyNodeModules)).resolves.toBeDefined();
     await expect(fs.stat(explicitStageDir)).rejects.toThrow();
     await expect(fs.stat(stateDirectoryRuntimeRoot)).resolves.toBeTruthy();
     await expect(fs.stat(stateDirectoryVersionedRoot)).rejects.toThrow();

@@ -41,6 +41,7 @@ otherwise -> reply
 ## Visible replies
 
 For group/channel rooms, OpenClaw defaults to `messages.groupChat.visibleReplies: "message_tool"`.
+`openclaw doctor --fix` writes this default into configured-channel configs that omit it.
 That means the agent still processes the turn and can update memory/session state, but its normal final answer is not automatically posted back into the room. To speak visibly, the agent uses `message(action=send)`.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls

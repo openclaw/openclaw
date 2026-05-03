@@ -46,6 +46,7 @@ export type PushTestResult = SchemaType<"PushTestResult">;
 export type SessionsListParams = SchemaType<"SessionsListParams">;
 export type SessionsCleanupParams = SchemaType<"SessionsCleanupParams">;
 export type SessionsPreviewParams = SchemaType<"SessionsPreviewParams">;
+export type SessionsDescribeParams = SchemaType<"SessionsDescribeParams">;
 export type SessionsResolveParams = SchemaType<"SessionsResolveParams">;
 export type SessionCompactionCheckpoint = SchemaType<"SessionCompactionCheckpoint">;
 export type SessionsCompactionListParams = SchemaType<"SessionsCompactionListParams">;

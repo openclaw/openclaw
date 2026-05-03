@@ -1,6 +1,5 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { findLegacyConfigIssues } from "../config/legacy.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -77,6 +76,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let pendingChanges = false;
   let fixHints: string[] = [];
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
+  const sourceMeta = (snapshot.sourceConfig as { meta?: { lastTouchedVersion?: unknown } })?.meta;
+  const sourceLastTouchedVersion =
+    typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
   const legacyStep = applyLegacyCompatibilityStep({
     snapshot,
@@ -89,15 +91,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (snapshot.parsed === snapshot.sourceConfig) {
       return [];
     }
-    const { collectRelevantDoctorPluginIds, listPluginDoctorLegacyConfigRules } =
-      await import("../plugins/doctor-contract-registry.js");
-    return findLegacyConfigIssues(
-      snapshot.parsed,
-      snapshot.parsed,
-      listPluginDoctorLegacyConfigRules({
-        pluginIds: collectRelevantDoctorPluginIds(snapshot.parsed),
-      }),
-    );
+    const { findDoctorLegacyConfigIssues } =
+      await import("./doctor/shared/legacy-config-issues.js");
+    return findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed);
   })();
   const seenLegacyIssues = new Set(
     snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
@@ -283,5 +279,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
+    ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
   };
 }

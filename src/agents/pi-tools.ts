@@ -69,6 +69,7 @@ import {
 import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
+  collectExplicitDenylist,
   mergeAlsoAllowPolicy,
   normalizeToolName,
   resolveToolProfilePolicy,
@@ -617,6 +618,17 @@ export function createOpenClawCodingTools(options?: {
     subagentPolicy,
     options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
   ]);
+  const pluginToolDenylist = collectExplicitDenylist([
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    sandboxToolPolicy,
+    subagentPolicy,
+  ]);
   const pluginToolsOnly = includeCoreTools
     ? []
     : resolveOpenClawPluginToolsForOptions({
@@ -705,6 +717,7 @@ export function createOpenClawCodingTools(options?: {
           sandboxed: !!sandbox,
           config: options?.config,
           pluginToolAllowlist,
+          pluginToolDenylist,
           currentChannelId: options?.currentChannelId,
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,

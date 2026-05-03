@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
 import type { ConfigWriteNotification } from "../config/io.js";
@@ -9,33 +8,30 @@ import {
   shouldAttemptLastKnownGoodRecovery,
 } from "../config/recovery-policy.js";
 import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
-import type { GatewayReloadMode } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
-import { isPlainObject } from "../utils.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecordsSync,
+} from "../plugins/installed-plugin-index-records.js";
+import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 
 export {
   buildGatewayReloadPlan,
+  diffConfigPaths,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
+  resolveGatewayReloadSettings,
 };
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
-
-type GatewayReloadSettings = {
-  mode: GatewayReloadMode;
-  debounceMs: number;
-};
-
-const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
-  mode: "hybrid",
-  debounceMs: 300,
-};
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
 
@@ -71,6 +67,7 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartCron &&
     !plan.restartHeartbeat &&
     !plan.restartHealthMonitor &&
+    !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
     plan.restartChannels.size === 0
   );
@@ -109,54 +106,19 @@ function resolvePluginLocalInvalidReloadSnapshot(params: {
   };
 }
 
-export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
-  if (prev === next) {
-    return [];
-  }
-  if (isPlainObject(prev) && isPlainObject(next)) {
-    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
-    const paths: string[] = [];
-    for (const key of keys) {
-      const prevValue = prev[key];
-      const nextValue = next[key];
-      if (prevValue === undefined && nextValue === undefined) {
-        continue;
-      }
-      const childPrefix = prefix ? `${prefix}.${key}` : key;
-      const childPaths = diffConfigPaths(prevValue, nextValue, childPrefix);
-      if (childPaths.length > 0) {
-        paths.push(...childPaths);
-      }
-    }
-    return paths;
-  }
-  if (Array.isArray(prev) && Array.isArray(next)) {
-    // Arrays can contain object entries (for example memory.qmd.paths/scope.rules);
-    // compare structurally so identical values are not reported as changed.
-    if (isDeepStrictEqual(prev, next)) {
-      return [];
-    }
-  }
-  return [prefix || "<root>"];
-}
-
-export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {
-  const rawMode = cfg.gateway?.reload?.mode;
-  const mode =
-    rawMode === "off" || rawMode === "restart" || rawMode === "hot" || rawMode === "hybrid"
-      ? rawMode
-      : DEFAULT_RELOAD_SETTINGS.mode;
-  const debounceRaw = cfg.gateway?.reload?.debounceMs;
-  const debounceMs =
-    typeof debounceRaw === "number" && Number.isFinite(debounceRaw)
-      ? Math.max(0, Math.floor(debounceRaw))
-      : DEFAULT_RELOAD_SETTINGS.debounceMs;
-  return { mode, debounceMs };
-}
-
 type GatewayConfigReloader = {
   stop: () => Promise<void>;
 };
+
+type PluginInstallRecords = Record<string, PluginInstallRecord>;
+
+function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
+  return {
+    plugins: {
+      installs: records,
+    },
+  };
+}
 
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
@@ -167,6 +129,8 @@ export function startGatewayConfigReloader(opts: {
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   recoverSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
+  initialPluginInstallRecords?: PluginInstallRecords;
+  readPluginInstallRecords?: () => Promise<PluginInstallRecords>;
   onRecovered?: (params: {
     reason: string;
     snapshot: ConfigFileSnapshot;
@@ -196,6 +160,10 @@ export function startGatewayConfigReloader(opts: {
     afterWrite?: ConfigWriteNotification["afterWrite"];
   } | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
+  let currentPluginInstallRecords =
+    opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
+  const readPluginInstallRecords =
+    opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -294,17 +262,47 @@ export function startGatewayConfigReloader(opts: {
     nextCompareConfig: OpenClawConfig,
     afterWrite?: ConfigWriteNotification["afterWrite"],
   ) => {
-    const changedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
-    const pluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+    const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
+    const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
       currentCompareConfig,
       nextCompareConfig,
     );
-    const pluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
+    const configPluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
       currentCompareConfig,
       nextCompareConfig,
     );
+    let nextPluginInstallRecords = currentPluginInstallRecords;
+    try {
+      nextPluginInstallRecords = await readPluginInstallRecords();
+    } catch (err) {
+      opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
+    }
+    const previousPluginInstallConfig = asPluginInstallConfig(currentPluginInstallRecords);
+    const nextPluginInstallConfig = asPluginInstallConfig(nextPluginInstallRecords);
+    const pluginInstallRecordChangedPaths = diffConfigPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const pluginInstallRecordTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const pluginInstallRecordWholeRecordPaths = listPluginInstallWholeRecordPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const changedPaths = [...configChangedPaths, ...pluginInstallRecordChangedPaths];
+    const pluginInstallTimestampNoopPaths = [
+      ...configPluginInstallTimestampNoopPaths,
+      ...pluginInstallRecordTimestampNoopPaths,
+    ];
+    const pluginInstallWholeRecordPaths = [
+      ...configPluginInstallWholeRecordPaths,
+      ...pluginInstallRecordWholeRecordPaths,
+    ];
     currentConfig = nextConfig;
     currentCompareConfig = nextCompareConfig;
+    currentPluginInstallRecords = nextPluginInstallRecords;
     settings = resolveGatewayReloadSettings(nextConfig);
     if (changedPaths.length === 0) {
       return;

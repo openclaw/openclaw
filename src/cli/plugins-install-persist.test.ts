@@ -3,10 +3,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
   buildPluginDiagnosticsReport,
+  buildPluginSnapshotReport,
+  clearPluginRegistryLoadCache,
   enablePluginInConfig,
   loadPluginManifestRegistry,
+  replaceConfigFile,
   refreshPluginRegistry,
   resetPluginsCliTestState,
+  runtimeLogs,
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
@@ -60,6 +64,14 @@ describe("persistPluginInstall", () => {
       }),
     });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: enabledConfig,
+      baseHash: "config-1",
+      writeOptions: {
+        afterWrite: { mode: "restart", reason: "plugin source changed" },
+        unsetPaths: [["plugins", "installs"]],
+      },
+    });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: enabledConfig,
       installRecords: {
@@ -71,6 +83,183 @@ describe("persistPluginInstall", () => {
       },
       reason: "source-changed",
     });
+    expect(clearPluginRegistryLoadCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists installs even when runtime cache invalidation fails", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    clearPluginRegistryLoadCache.mockImplementation(() => {
+      throw new Error("cache unavailable");
+    });
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "alpha",
+      install: {
+        source: "npm",
+        spec: "alpha@1.0.0",
+        installPath: "/tmp/alpha",
+      },
+    });
+
+    expect(next).toEqual(enabledConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalled();
+    expect(
+      runtimeLogs.some((line) => line.includes("Plugin runtime cache invalidation failed")),
+    ).toBe(true);
+  });
+
+  it("warns when an installed npm plugin remains shadowed by a config-selected source", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "config",
+          source: "/tmp/openclaw-upstream/extensions/discord/index.ts",
+          status: "error",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "discord",
+      install: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
+      },
+    });
+
+    expect(next).toEqual(enabledConfig);
+    expect(buildPluginSnapshotReport).toHaveBeenCalledWith({
+      config: enabledConfig,
+      effectiveOnly: true,
+      onlyPluginIds: ["discord"],
+    });
+    expect(runtimeLogs.join("\n")).toContain(
+      'Warning: installed plugin "discord" is not the active source',
+    );
+    expect(runtimeLogs.join("\n")).toContain(
+      "active config source: /tmp/openclaw-upstream/extensions/discord/index.ts",
+    );
+    expect(runtimeLogs.join("\n")).toContain(
+      "installed npm source: /tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
+    );
+    expect(runtimeLogs.join("\n")).toContain("openclaw plugins doctor");
+  });
+
+  it("does not warn when the config-selected source is inside the npm install path", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "config",
+          source: "/tmp/openclaw/npm/node_modules/@openclaw/discord/dist/index.js",
+          status: "loaded",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "discord",
+      install: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/discord",
+      },
+    });
+
+    expect(runtimeLogs.join("\n")).not.toContain("is not the active source");
+  });
+
+  it("invalidates runtime cache even when registry refresh fails", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    refreshPluginRegistry.mockRejectedValueOnce(new Error("registry unavailable"));
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "alpha",
+      install: {
+        source: "npm",
+        spec: "alpha@1.0.0",
+        installPath: "/tmp/alpha",
+      },
+    });
+
+    expect(next).toEqual(enabledConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalled();
+    expect(clearPluginRegistryLoadCache).toHaveBeenCalledTimes(1);
+    expect(runtimeLogs.some((line) => line.includes("Plugin registry refresh failed"))).toBe(true);
   });
 
   it("removes stale denylist entries before enabling installed plugins", async () => {

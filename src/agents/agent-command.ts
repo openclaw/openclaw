@@ -584,6 +584,7 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
+          config: cfg,
         });
       } catch (error) {
         log.warn(
@@ -965,6 +966,7 @@ async function agentCommandInternal(
         });
 
         let fallbackAttemptIndex = 0;
+        let currentTurnUserMessagePersisted = false;
         const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
           cfg,
           provider,
@@ -1021,6 +1023,10 @@ async function agentCommandInternal(
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
                 !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
+              suppressPromptPersistenceOnRetry: isFallbackRetry && currentTurnUserMessagePersisted,
+              onUserMessagePersisted: () => {
+                currentTurnUserMessagePersisted = true;
+              },
               onAgentEvent: (evt) => {
                 if (evt.stream.startsWith("codex_app_server.")) {
                   emitAgentEvent({
@@ -1190,6 +1196,7 @@ async function agentCommandInternal(
           opts.bootstrapContextRunKind !== "cron" &&
           opts.bootstrapContextRunKind !== "heartbeat" &&
           !opts.internalEvents?.length,
+        preserveRuntimeModel: opts.bootstrapContextRunKind === "heartbeat",
       });
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }
@@ -1208,6 +1215,7 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
+          config: cfg,
         });
         sessionEntry = await (
           await loadCliCompactionRuntime()

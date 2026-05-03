@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
@@ -339,6 +340,24 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
 };
+
+function resolveCurrentTurnPromptContext(
+  ctx: TemplateContext,
+): CurrentTurnPromptContext | undefined {
+  const replyBody = normalizeOptionalString(ctx.ReplyToBody);
+  if (!replyBody) {
+    return undefined;
+  }
+  return {
+    reply: {
+      body: replyBody,
+      ...(normalizeOptionalString(ctx.ReplyToSender)
+        ? { senderLabel: normalizeOptionalString(ctx.ReplyToSender) }
+        : {}),
+      ...(ctx.ReplyToIsQuote === true ? { isQuote: true } : {}),
+    },
+  };
+}
 
 export async function runPreparedReply(
   params: RunPreparedReplyParams,
@@ -728,6 +747,7 @@ export async function runPreparedReply(
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
   let { prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies();
+  const currentTurnContext = resolveCurrentTurnPromptContext(sessionCtx);
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -819,11 +839,16 @@ export async function runPreparedReply(
     ? piRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
     : undefined;
   const laneSize = sessionLaneKey ? getQueueSize(sessionLaneKey) : 0;
-  if (resolvedQueue.mode === "interrupt" && sessionLaneKey && laneSize > 0) {
+  const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
+  const activeSessionIdForInterrupt = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
+  if (
+    activeRunQueueMode === "interrupt" &&
+    sessionLaneKey &&
+    (laneSize > 0 || activeSessionIdForInterrupt)
+  ) {
     const cleared = clearCommandLane(sessionLaneKey);
-    const activeSessionId = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
     const aborted = piRuntime?.abortEmbeddedPiRun(
-      activeSessionId ?? preparedSessionState.sessionId,
+      activeSessionIdForInterrupt ?? preparedSessionState.sessionId,
     );
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
@@ -856,22 +881,24 @@ export async function runPreparedReply(
     };
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
-  const shouldSteer = isSteeringQueueMode(resolvedQueue.mode);
+  const shouldSteer = !effectiveResetTriggered && isSteeringQueueMode(resolvedQueue.mode);
   const shouldFollowup =
-    resolvedQueue.mode === "followup" ||
-    resolvedQueue.mode === "collect" ||
-    resolvedQueue.mode === "steer-backlog";
+    !effectiveResetTriggered &&
+    (resolvedQueue.mode === "followup" ||
+      resolvedQueue.mode === "collect" ||
+      resolvedQueue.mode === "steer-backlog");
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat: opts?.isHeartbeat === true,
     shouldFollowup,
-    queueMode: resolvedQueue.mode,
+    queueMode: activeRunQueueMode,
+    resetTriggered: effectiveResetTriggered,
   });
   if (isActive && activeRunQueueAction === "run-now") {
     const queueState = await resolvePreparedReplyQueueState({
       activeRunQueueAction,
       activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
-      queueMode: resolvedQueue.mode,
+      queueMode: activeRunQueueMode,
       sessionKey,
       sessionId: sessionIdFinal,
       abortActiveRun: (activeRunSessionId) =>
@@ -911,6 +938,7 @@ export async function runPreparedReply(
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
+    currentTurnContext,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),

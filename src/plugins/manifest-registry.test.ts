@@ -308,12 +308,12 @@ describe("loadPluginManifestRegistry", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
-    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default function () {}", "utf-8");
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify({
         name: "@openclaw/cached-manifest",
-        openclaw: { extensions: ["./index.ts"] },
+        openclaw: { extensions: ["./index.js"] },
       }),
       "utf-8",
     );
@@ -916,6 +916,35 @@ describe("loadPluginManifestRegistry", () => {
         level: "warn",
         pluginId: "external-openai",
         source: path.join(dir, "openclaw.plugin.json"),
+        message: expect.stringContaining(
+          "providerAuthEnvVars is deprecated compatibility metadata",
+        ),
+      }),
+    );
+  });
+
+  it("does not report deprecated providerAuthEnvVars when setup providers mirror env vars", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-openai",
+      providers: ["openai"],
+      setup: {
+        providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }],
+      },
+      providerAuthEnvVars: {
+        openai: ["OPENAI_API_KEY"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-openai",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.diagnostics).not.toContainEqual(
+      expect.objectContaining({
         message: expect.stringContaining(
           "providerAuthEnvVars is deprecated compatibility metadata",
         ),

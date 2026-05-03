@@ -22,6 +22,7 @@ export {
   resolveDiscordMaxLinesPerMessage,
 } from "./src/accounts.js";
 export { tryHandleDiscordMessageActionGuildAdmin } from "./src/actions/handle-action.guild-admin.js";
+export { DiscordApiError, fetchDiscord, requestDiscord } from "./src/api.js";
 export { buildDiscordComponentMessage } from "./src/components.js";
 type DiscordMessageActionHandler =
   typeof import("./src/channel-actions.runtime.js").handleDiscordMessageAction;

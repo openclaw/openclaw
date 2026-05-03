@@ -1,5 +1,5 @@
 import { LitElement } from "lit";
-import { customElement, state } from "lit/decorators.js";
+import { state } from "lit/decorators.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -140,7 +140,6 @@ function resolveOnboardingMode(): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-@customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
   private i18nController = new I18nController(this);
   clientInstanceId = generateUUID();
@@ -189,6 +188,7 @@ export class OpenClawApp extends LitElement {
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;
+  @state() chatMessageMaxWidth: string | null = null;
   @state() serverVersion: string | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
@@ -370,8 +370,8 @@ export class OpenClawApp extends LitElement {
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;
-  @state() sessionsFilterActive = "";
-  @state() sessionsFilterLimit = "120";
+  @state() sessionsFilterActive = "120";
+  @state() sessionsFilterLimit = "50";
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
   @state() sessionsHideCron = true;
@@ -1163,4 +1163,8 @@ export class OpenClawApp extends LitElement {
   render() {
     return renderApp(this as unknown as AppViewState);
   }
+}
+
+if (!customElements.get("openclaw-app")) {
+  customElements.define("openclaw-app", OpenClawApp);
 }

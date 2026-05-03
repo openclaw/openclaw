@@ -75,7 +75,11 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
-import { applyPiCompactionSettingsFromConfig } from "../pi-settings.js";
+import {
+  applyPiAutoCompactionGuard,
+  applyPiCompactionSettingsFromConfig,
+  isSilentOverflowProneModel,
+} from "../pi-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
@@ -90,6 +94,7 @@ import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
+  resolveSessionWriteLockAcquireTimeoutMs,
 } from "../session-write-lock.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
@@ -126,7 +131,7 @@ import {
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
-import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
+import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
@@ -904,6 +909,7 @@ async function compactEmbeddedPiSessionDirectOnce(
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
         timeoutMs: compactionTimeoutMs,
       }),
@@ -911,6 +917,7 @@ async function compactEmbeddedPiSessionDirectOnce(
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
+        debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
       await prewarmSessionFile(params.sessionFile);
@@ -958,11 +965,25 @@ async function compactEmbeddedPiSessionDirectOnce(
       });
       await resourceLoader.reload();
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
-      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager.
+      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager — same
+      // rehydration also restores Pi's auto-compaction (openclaw#75799), so re-apply
+      // both guards. effectiveModel.baseUrl matches the surrounding scope so
+      // auth-profile-injected baseUrls reach the endpoint-class detector.
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
         contextTokenBudget: ctxInfo.tokens,
+      });
+      // contextEngineInfo is intentionally omitted: this guard runs inside the
+      // compaction LLM session, which is not the user-facing agent session and
+      // has no associated context engine.
+      applyPiAutoCompactionGuard({
+        settingsManager,
+        silentOverflowProneProvider: isSilentOverflowProneModel({
+          provider,
+          modelId,
+          baseUrl: effectiveModel.baseUrl ?? undefined,
+        }),
       });
 
       const { customTools } = splitSdkTools({
@@ -1075,7 +1096,7 @@ async function compactEmbeddedPiSessionDirectOnce(
           const originalMessages = session.messages.slice();
           const truncated = limitHistoryTurns(
             session.messages,
-            getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
           );
           // Re-run tool_use/tool_result pairing repair after truncation, since
           // limitHistoryTurns can orphan tool_result blocks by removing the
@@ -1109,6 +1130,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             workspaceDir: effectiveWorkspace,
             messageProvider: resolvedMessageProvider,
             metrics: beforeHookMetrics,
+            onHookMessages: params.onCompactionHookMessages,
           });
           const { messageCountOriginal } = beforeHookMetrics;
           const diagEnabled = log.isEnabled("debug");
@@ -1293,6 +1315,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
+            onHookMessages: params.onCompactionHookMessages,
           });
           return {
             ok: true,

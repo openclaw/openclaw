@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../channel-plugin-ids.js").resolveDiscoverableScopedChannelPluginIds>(),
   resolveChannelPluginIds:
     vi.fn<typeof import("../channel-plugin-ids.js").resolveChannelPluginIds>(),
+  resolveEffectivePluginIds:
+    vi.fn<typeof import("../effective-plugin-ids.js").resolveEffectivePluginIds>(),
   applyPluginAutoEnable:
     vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
   resolveAgentWorkspaceDir: vi.fn<
@@ -55,6 +57,11 @@ vi.mock("../channel-plugin-ids.js", () => ({
     mocks.resolveChannelPluginIds(...args),
 }));
 
+vi.mock("../effective-plugin-ids.js", () => ({
+  resolveEffectivePluginIds: (...args: Parameters<typeof mocks.resolveEffectivePluginIds>) =>
+    mocks.resolveEffectivePluginIds(...args),
+}));
+
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: Parameters<typeof mocks.applyPluginAutoEnable>) =>
     mocks.applyPluginAutoEnable(...args),
@@ -82,6 +89,7 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.resolveConfiguredChannelPluginIds.mockReset();
     mocks.resolveDiscoverableScopedChannelPluginIds.mockReset();
     mocks.resolveChannelPluginIds.mockReset();
+    mocks.resolveEffectivePluginIds.mockReset();
     mocks.applyPluginAutoEnable.mockReset();
     mocks.resolveAgentWorkspaceDir.mockClear();
     mocks.resolveDefaultAgentId.mockClear();
@@ -111,6 +119,7 @@ describe("ensurePluginRegistryLoaded", () => {
       },
     }));
     mocks.resolveDiscoverableScopedChannelPluginIds.mockReturnValue([]);
+    mocks.resolveEffectivePluginIds.mockReturnValue(["demo"]);
   });
 
   it("uses the shared runtime load context for configured-channel loads", () => {
@@ -328,8 +337,63 @@ describe("ensurePluginRegistryLoaded", () => {
     ).toBeUndefined();
   });
 
+  it("derives all-scope runtime loads from effective plugin ids", () => {
+    const config = {
+      plugins: { enabled: true },
+      channels: { "demo-channel-a": { enabled: true } },
+    };
+    const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+
+    mocks.resolveEffectivePluginIds.mockReturnValue(["demo-effective", "demo-hook"]);
+
+    ensurePluginRegistryLoaded({ scope: "all", config: config as never, env });
+
+    expect(mocks.resolveEffectivePluginIds).toHaveBeenCalledWith({
+      config,
+      env,
+      workspaceDir: "/resolved-workspace",
+    });
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          ...config,
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              demo: { enabled: true },
+            }),
+          }),
+        }),
+        onlyPluginIds: ["demo-effective", "demo-hook"],
+        throwOnLoadError: true,
+        workspaceDir: "/resolved-workspace",
+      }),
+    );
+  });
+
+  it("preserves empty all-scope loads instead of widening to all discovered plugins", () => {
+    mocks.resolveEffectivePluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { enabled: true } } as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: [],
+      }),
+    );
+  });
+
   it("reuses a compatible active registry instead of forcing a broad reload", () => {
     const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.plugins.push({
+      id: "demo",
+      source: "/tmp/demo.js",
+      origin: "workspace",
+      enabled: true,
+      status: "loaded",
+    } as never);
     mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
     mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(activeRegistry);
 
