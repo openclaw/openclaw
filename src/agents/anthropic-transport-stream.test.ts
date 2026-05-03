@@ -902,4 +902,40 @@ describe("anthropic transport stream", () => {
       output_config: { effort: "xhigh" },
     });
   });
+
+  it("strips temperature for adaptive-thinking Anthropic models to avoid API rejection (#76861)", async () => {
+    for (const modelId of ["claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"] as const) {
+      const model = makeAnthropicTransportModel({
+        id: modelId,
+        reasoning: false,
+        maxTokens: 8192,
+      });
+
+      await runTransportStream(
+        model,
+        { messages: [{ role: "user", content: "Hello." }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api", temperature: 0 } as AnthropicStreamOptions,
+      );
+
+      const payload = latestAnthropicRequest().payload;
+      expect(payload, `${modelId} must not receive temperature`).not.toHaveProperty("temperature");
+    }
+  });
+
+  it("forwards temperature for non-adaptive Anthropic models with thinking disabled", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-3-7-sonnet-20250219",
+      name: "Claude 3.7 Sonnet",
+      reasoning: false,
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      { messages: [{ role: "user", content: "Hello." }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api", temperature: 0.5 } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload).toMatchObject({ temperature: 0.5 });
+  });
 });

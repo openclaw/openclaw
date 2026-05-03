@@ -765,7 +765,11 @@ function buildAnthropicParams(
       },
     ];
   }
-  if (options?.temperature !== undefined && !options.thinkingEnabled) {
+  if (
+    options?.temperature !== undefined &&
+    !options.thinkingEnabled &&
+    !supportsAdaptiveThinking(model.id)
+  ) {
     params.temperature = options.temperature;
   }
   if (context.tools) {

@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Anthropic: strip `temperature` from requests to adaptive-thinking Anthropic models (`claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`) so agents with explicit `params.temperature` no longer get a `FailoverError: temperature is deprecated for this model` on every turn. Fixes #76861. Thanks @hclsys.
 - Agents/models: forward model `maxTokens` as the default output-token limit for OpenAI-compatible Responses and Completions transports when no runtime override is provided, preventing provider defaults from silently truncating larger outputs. (#76645) Thanks @joeyfrasier.
 - Control UI/Skills: fix skill detail modal silently failing to open in all browsers by deferring `showModal()` until the dialog element is connected to the DOM; the Lit `ref` callback fired before connection causing a `DOMException: HTMLDialogElement.showModal: Dialog element is not connected` on every skill click. Thanks @nickmopen.
 - Gateway/update: run `doctor --non-interactive --fix` after Control UI global package updates before reporting success, so legacy config is migrated before the gateway restart. Thanks @stevenchouai.
