@@ -359,26 +359,22 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
-  <Accordion title="Reasoning stream sink (external egress)">
-    `channels.telegram.reasoningStreamSink` forwards reasoning lifecycle events to an external HTTP endpoint as they arrive, independently of the Telegram preview stream.
+  <Accordion title="Agent event sink (external egress)">
+    The top-level `agentEventSink` config forwards thinking and reply stream events to an external HTTPS endpoint as they arrive. This is channel-agnostic — it works for all channels (Telegram, Discord, CLI, etc.) via the core `AgentEventStream` bus.
 
-    **Egress boundary:** the sink POSTs reasoning text and session context (chat ID, thread ID, account ID, optional session key) to an operator-controlled URL. Treat the receiving endpoint as a trusted internal service — it receives reasoning content before the final answer.
+    **Egress boundary:** the sink POSTs thinking/reply deltas and session metadata (`runId`, `sessionKey`) to an operator-controlled URL. Treat the receiving endpoint as a trusted internal service — it receives reasoning content before the final answer.
 
     **Configuration:**
 
     ```json
     {
-      "channels": {
-        "telegram": {
-          "reasoningStreamSink": {
-            "url": "https://your-endpoint.example.com/reasoning",
-            "secret": "your-signing-secret",
-            "headers": {
-              "Authorization": "Bearer your-token"
-            },
-            "timeoutMs": 5000
-          }
-        }
+      "agentEventSink": {
+        "url": "https://your-endpoint.example.com/events",
+        "secret": "your-signing-secret",
+        "headers": {
+          "Authorization": "Bearer your-token"
+        },
+        "timeoutMs": 5000
       }
     }
     ```
@@ -390,17 +386,20 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     **Payload shape:**
 
-    Events are delivered in order (`reasoning_start` → one or more `reasoning_stream` → `reasoning_end`). Each POST body is a JSON object with an `event` field:
+    Thinking events are delivered in order (`thinking_start` → one or more `thinking_stream` → `thinking_end`), followed by reply events (`reply_start` → one or more `reply_stream` → `reply_end`). Each POST body is a JSON object with an `event` field:
 
     ```json
-    { "event": "reasoning_start", "streamId": "a1b2c3d4", "chatId": "123", "threadId": 456, "accountId": "bot", "sessionKey": "...", "timestamp": 1700000000000 }
-    { "event": "reasoning_stream", "streamId": "a1b2c3d4", "text": "delta text", "timestamp": 1700000000010 }
-    { "event": "reasoning_end",   "streamId": "a1b2c3d4", "timestamp": 1700000000999 }
+    { "event": "thinking_start",  "runId": "abc123", "sessionKey": "agent:main:main", "timestamp": 1700000000000 }
+    { "event": "thinking_stream", "runId": "abc123", "delta": "Let me think about...", "timestamp": 1700000000010 }
+    { "event": "thinking_end",    "runId": "abc123", "timestamp": 1700000000500 }
+    { "event": "reply_start",     "runId": "abc123", "sessionKey": "agent:main:main", "timestamp": 1700000000501 }
+    { "event": "reply_stream",    "runId": "abc123", "delta": "Here's my answer:", "timestamp": 1700000000510 }
+    { "event": "reply_end",       "runId": "abc123", "timestamp": 1700000000999 }
     ```
 
-    **Failure behavior:** POST errors and non-2xx responses are logged at verbose level and silently dropped. The sink never blocks or retries — a slow or down endpoint does not affect the bot reply. If `secret` or any header value references an unresolvable `SecretRef`, the sink is disabled for that dispatch.
+    **Failure behavior:** POST errors and non-2xx responses are logged and silently dropped. The sink never blocks or retries — a slow or down endpoint does not affect agent replies. If `secret` or any header value references an unresolvable `SecretRef`, the sink is disabled at startup.
 
-    **Private-network policy:** the `url` must resolve to a public host; the sink uses the same guarded outbound fetch path as other channel HTTP egress (DNS pinning, redirect handling, SSRF policy).
+    **Private-network policy:** the `url` must resolve to a public host; the sink uses the same guarded outbound fetch path as other HTTP egress (DNS pinning, redirect handling, SSRF policy).
 
   </Accordion>
 

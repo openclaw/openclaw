@@ -17,7 +17,7 @@ import {
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+
 import type {
   OpenClawConfig,
   ReplyToMode,
@@ -90,7 +90,7 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
-import { createReasoningStreamSink } from "./reasoning-stream-sink.js";
+
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -481,73 +481,6 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
-  let reasoningStreamSink:
-    | import("./reasoning-stream-sink.js").ReasoningStreamSinkHandle
-    | undefined;
-  if (telegramCfg.reasoningStreamSink?.url) {
-    const sinkCfg = telegramCfg.reasoningStreamSink;
-    let resolvedSecret: string | undefined;
-    if (sinkCfg.secret) {
-      const resolution = await resolveConfiguredSecretInputString({
-        config: cfg,
-        env: process.env,
-        value: sinkCfg.secret,
-        path: "channels.telegram.reasoningStreamSink.secret",
-      });
-      if (resolution.unresolvedRefReason) {
-        logVerbose(
-          `reasoning stream sink: secret unresolved (${resolution.unresolvedRefReason}), sink disabled`,
-        );
-      } else {
-        resolvedSecret = resolution.value;
-      }
-    }
-    let resolvedHeaders: Record<string, string> | undefined;
-    let headersUnresolved = false;
-    if (sinkCfg.headers) {
-      const resolved: Record<string, string> = {};
-      for (const [key, val] of Object.entries(sinkCfg.headers)) {
-        const resolution = await resolveConfiguredSecretInputString({
-          config: cfg,
-          env: process.env,
-          value: val,
-          path: `channels.telegram.reasoningStreamSink.headers.${key}`,
-        });
-        if (resolution.unresolvedRefReason) {
-          logVerbose(
-            `reasoning stream sink: header "${key}" unresolved (${resolution.unresolvedRefReason}), sink disabled`,
-          );
-          headersUnresolved = true;
-          break;
-        }
-        if (resolution.value !== undefined) {
-          resolved[key] = resolution.value;
-        }
-      }
-      if (!headersUnresolved) {
-        resolvedHeaders = resolved;
-      }
-    }
-    if (
-      (sinkCfg.secret && resolvedSecret === undefined) ||
-      headersUnresolved
-    ) {
-      // Configured credentials could not be resolved; skip sink to avoid posting unsigned events.
-    } else {
-      reasoningStreamSink = createReasoningStreamSink({
-        config: sinkCfg,
-        context: {
-          chatId: String(chatId),
-          threadId: typeof threadSpec.id === "number" ? threadSpec.id : undefined,
-          accountId: route.accountId,
-          sessionKey: ctxPayload.SessionKey,
-        },
-        resolvedSecret,
-        resolvedHeaders,
-        warn: logVerbose,
-      });
-    }
-  }
   const previewToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let previewToolProgressSuppressed = false;
@@ -1188,24 +1121,18 @@ export const dispatchTelegramMessage = async ({
                             await ingestDraftLaneSegments(payload.text);
                           })
                       : undefined,
-                  onReasoningStream:
-                    reasoningLane.stream || reasoningStreamSink
-                      ? (payload) => {
-                          if (payload.text && reasoningStreamSink) {
-                            reasoningStreamSink.onToken(payload.text);
+                  onReasoningStream: reasoningLane.stream
+                    ? (payload) => {
+                        void enqueueDraftLaneEvent(async () => {
+                          if (splitReasoningOnNextStream) {
+                            reasoningLane.stream?.forceNewMessage();
+                            resetDraftLaneState(reasoningLane);
+                            splitReasoningOnNextStream = false;
                           }
-                          if (reasoningLane.stream) {
-                            void enqueueDraftLaneEvent(async () => {
-                              if (splitReasoningOnNextStream) {
-                                reasoningLane.stream?.forceNewMessage();
-                                resetDraftLaneState(reasoningLane);
-                                splitReasoningOnNextStream = false;
-                              }
-                              await ingestDraftLaneSegments(payload.text);
-                            });
-                          }
-                        }
-                      : undefined,
+                          await ingestDraftLaneSegments(payload.text);
+                        });
+                      }
+                    : undefined,
                   onAssistantMessageStart: answerLane.stream
                     ? () =>
                         enqueueDraftLaneEvent(async () => {
@@ -1234,19 +1161,15 @@ export const dispatchTelegramMessage = async ({
                           retainPreviewOnCleanupByLane.answer = false;
                         })
                     : undefined,
-                  onReasoningEnd:
-                    reasoningLane.stream || reasoningStreamSink
-                      ? () => {
-                          reasoningStreamSink?.onEnd();
-                          if (reasoningLane.stream) {
-                            void enqueueDraftLaneEvent(async () => {
-                              splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
-                              previewToolProgressSuppressed = false;
-                              previewToolProgressLines = [];
-                            });
-                          }
-                        }
-                      : undefined,
+                  onReasoningEnd: reasoningLane.stream
+                    ? () => {
+                        void enqueueDraftLaneEvent(async () => {
+                          splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
+                          previewToolProgressSuppressed = false;
+                          previewToolProgressLines = [];
+                        });
+                      }
+                    : undefined,
                   suppressDefaultToolProgressMessages:
                     !previewStreamingEnabled || Boolean(answerLane.stream),
                   onToolStart: async (payload) => {

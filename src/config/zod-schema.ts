@@ -1088,6 +1088,27 @@ export const OpenClawSchema = z
       )
       .optional(),
     proxy: ProxyConfigSchema,
+    agentEventSink: z
+      .object({
+        url: z
+          .string()
+          .url()
+          .refine(
+            (v) => {
+              try {
+                return new URL(v).protocol === "https:";
+              } catch {
+                return false;
+              }
+            },
+            "Expected https:// URL",
+          ),
+        secret: SecretInputSchema.optional().register(sensitive),
+        headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+        timeoutMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

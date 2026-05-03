@@ -92,6 +92,7 @@ function createGatewayCloseTestDeps(
     heartbeatUnsub: null,
     transcriptUnsub: null,
     lifecycleUnsub: null,
+    agentEventSinkUnsub: null,
     chatRunState: { clear: vi.fn() },
     clients: new Set<GatewayCloseClient>(),
     configReloader: { stop: vi.fn(async () => undefined) },

@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Highlights
 
+- Core/events: add channel-agnostic agent event sink (`agentEventSink` config) that streams thinking and reply deltas to an external HTTPS webhook via the core `AgentEventStream` bus — works for all channels (Telegram, Discord, CLI, etc.) without per-channel wiring. (#75587)
 - Plugins/file-transfer: add bundled file-transfer plugin with `file_fetch`, `dir_list`, `dir_fetch`, and `file_write` agent tools for binary file ops on paired nodes; default-deny per-node path policy under `plugins.entries.file-transfer.config.nodes` with operator approval, symlink traversal refused by default (opt-in `followSymlinks`), and a 16 MB byte ceiling per round-trip. (#74742) Thanks @omarshahine.
 - Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.
 

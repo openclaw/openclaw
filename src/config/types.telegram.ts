@@ -221,10 +221,7 @@ export type TelegramAccountConfig = {
   trustedLocalFileRoots?: string[];
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
-  /**
-   * Forward reasoning/thinking stream tokens to an external HTTP endpoint.
-   * Useful for dashboards or external UIs that want to consume reasoning output in real-time.
-   */
+  /** @deprecated Use top-level agentEventSink instead. */
   reasoningStreamSink?: ReasoningStreamSinkConfig;
 };
 

@@ -350,8 +350,8 @@ export type IdentityConfig = {
   avatar?: string;
 };
 
-export type ReasoningStreamSinkConfig = {
-  /** HTTP endpoint to POST reasoning stream updates to. Required. */
+export type AgentEventSinkConfig = {
+  /** HTTPS endpoint to POST agent event stream updates to. */
   url: string;
   /**
    * HMAC-SHA256 signing secret. When set, each request includes
@@ -363,3 +363,6 @@ export type ReasoningStreamSinkConfig = {
   /** Per-request timeout in milliseconds. Default: 5000. */
   timeoutMs?: number;
 };
+
+/** @deprecated Use AgentEventSinkConfig instead. */
+export type ReasoningStreamSinkConfig = AgentEventSinkConfig;
