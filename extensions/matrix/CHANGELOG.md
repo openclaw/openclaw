@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.5.3-beta.1
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 ## 2026.5.3
 
 ### Changes
