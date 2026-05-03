@@ -3,6 +3,9 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerApprovalPolicy, CodexAppServerSandboxMode } from "./config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
+const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
+const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
+
 export type CodexAppServerThreadBinding = {
   schemaVersion: 1;
   threadId: string;
@@ -49,7 +52,10 @@ export async function readCodexAppServerBinding(
       cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
       authProfileId: typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined,
       model: typeof parsed.model === "string" ? parsed.model : undefined,
-      modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+      modelProvider: normalizeCodexAppServerBindingModelProvider({
+        authProfileId: typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined,
+        modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+      }),
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
       serviceTier: readServiceTier(parsed.serviceTier),
@@ -83,7 +89,10 @@ export async function writeCodexAppServerBinding(
     cwd: binding.cwd,
     authProfileId: binding.authProfileId,
     model: binding.model,
-    modelProvider: binding.modelProvider,
+    modelProvider: normalizeCodexAppServerBindingModelProvider({
+      authProfileId: binding.authProfileId,
+      modelProvider: binding.modelProvider,
+    }),
     approvalPolicy: binding.approvalPolicy,
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
@@ -109,6 +118,32 @@ export async function clearCodexAppServerBinding(sessionFile: string): Promise<v
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+export function isCodexAppServerNativeAuthProfileId(authProfileId: string | undefined): boolean {
+  const normalized = authProfileId?.trim().toLowerCase();
+  return Boolean(
+    normalized &&
+    (normalized === CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER ||
+      normalized.startsWith(`${CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER}:`)),
+  );
+}
+
+export function normalizeCodexAppServerBindingModelProvider(params: {
+  authProfileId?: string;
+  modelProvider?: string;
+}): string | undefined {
+  const modelProvider = params.modelProvider?.trim();
+  if (!modelProvider) {
+    return undefined;
+  }
+  if (
+    isCodexAppServerNativeAuthProfileId(params.authProfileId) &&
+    modelProvider.toLowerCase() === PUBLIC_OPENAI_MODEL_PROVIDER
+  ) {
+    return undefined;
+  }
+  return modelProvider;
 }
 
 function readApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
