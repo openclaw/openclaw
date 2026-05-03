@@ -2507,7 +2507,7 @@ describe("matrix live qa scenarios", () => {
 
   it("captures Matrix tool progress inside the quiet preview before finalizing", async () => {
     const previewEventId = "$tool-progress-preview";
-    mockMatrixQaRoomClient({
+    const { sendTextMessage } = mockMatrixQaRoomClient({
       driverEventId: "$tool-progress-trigger",
       events: [
         {
@@ -2552,6 +2552,10 @@ describe("matrix live qa scenarios", () => {
         },
       },
     });
+    const prompt = String(sendTextMessage.mock.calls[0]?.[0]?.body);
+    expect(prompt).toContain("use the read tool exactly once on `QA_KICKOFF_TASK.md`");
+    expect(prompt).toContain("Do not read `HEARTBEAT.md`");
+    expect(prompt).toContain("reply with only this exact marker and no other text");
   });
 
   it("accepts non-read Matrix tool progress lines in quiet previews", async () => {
@@ -2656,6 +2660,63 @@ describe("matrix live qa scenarios", () => {
 
     await expect(runMatrixQaScenario(scenario!, context)).rejects.toThrow(
       /observed preview candidates:[\s\S]*\$tool-progress-timeout-update/,
+    );
+  });
+
+  it("reports Matrix tool progress final candidates when finalization misses the token", async () => {
+    const previewEvent = matrixQaMessageEvent({
+      kind: "notice",
+      eventId: "$tool-progress-final-timeout-preview",
+      body: "Working...",
+    });
+    const progressEvent = matrixQaMessageEvent({
+      kind: "notice",
+      eventId: "$tool-progress-final-timeout-update",
+      body: "Working...\n- `tool: read`",
+      relatesTo: {
+        relType: "m.replace",
+        eventId: previewEvent.eventId,
+      },
+    });
+    const finalCandidate = matrixQaMessageEvent({
+      kind: "message",
+      eventId: "$tool-progress-final-timeout-candidate",
+      body: "I read the file, but missed the exact marker.",
+      relatesTo: {
+        relType: "m.replace",
+        eventId: previewEvent.eventId,
+      },
+    });
+    const context = matrixQaScenarioContext();
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$tool-progress-final-timeout-trigger");
+    const waitForRoomEvent = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        context.observedEvents.push(previewEvent);
+        return { event: previewEvent, since: "driver-sync-preview" };
+      })
+      .mockImplementationOnce(async () => {
+        context.observedEvents.push(progressEvent);
+        return { event: progressEvent, since: "driver-sync-progress" };
+      })
+      .mockImplementationOnce(async () => {
+        context.observedEvents.push(finalCandidate);
+        throw new Error("timed out after 8000ms waiting for Matrix room event");
+      });
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-room-tool-progress-preview",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, context)).rejects.toThrow(
+      /observed final candidates:[\s\S]*\$tool-progress-final-timeout-candidate/,
     );
   });
 
