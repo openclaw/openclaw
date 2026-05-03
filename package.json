@@ -1790,6 +1790,7 @@
       "@tloncorp/api",
       "@tloncorp/tlon-skill",
       "@whiskeysockets/baileys",
+      "@whiskeysockets/libsignal-node",
       "authenticate-pam",
       "esbuild",
       "node-llama-cpp",
