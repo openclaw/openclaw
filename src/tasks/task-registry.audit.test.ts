@@ -46,8 +46,8 @@ describe("task-registry audit", () => {
     });
 
     expect(findings.map((finding) => [finding.code, finding.task.taskId])).toEqual([
-      ["lost", "lost-task"],
       ["stale_running", "stale-running"],
+      ["lost", "lost-task"],
       ["missing_cleanup", "missing-cleanup"],
     ]);
   });
@@ -83,7 +83,7 @@ describe("task-registry audit", () => {
     });
   });
 
-  it("downgrades retained lost tasks with future cleanupAfter to warnings", () => {
+  it("classifies terminal lost tasks as warnings instead of active queue errors", () => {
     const now = Date.parse("2026-03-30T01:00:00.000Z");
     const findings = listTaskAuditFindings({
       now,
@@ -110,9 +110,10 @@ describe("task-registry audit", () => {
     expect(
       findings.map((finding) => [finding.task.taskId, finding.code, finding.severity]),
     ).toEqual([
-      ["lost-expired", "lost", "error"],
+      ["lost-expired", "lost", "warn"],
       ["lost-retained", "lost", "warn"],
     ]);
+    expect(findings.every((finding) => finding.severity === "warn")).toBe(true);
   });
 
   it("does not double-report lost tasks as missing cleanup", () => {
@@ -130,5 +131,45 @@ describe("task-registry audit", () => {
     });
 
     expect(findings.map((finding) => finding.code)).toEqual(["lost"]);
+  });
+
+  it("ignores tiny startedAt-before-createdAt ordering races", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "one-ms-race",
+          status: "succeeded",
+          createdAt: now,
+          startedAt: now - 1,
+          endedAt: now + 1,
+          cleanupAfter: now + 60_000,
+        }),
+      ],
+    });
+
+    expect(findings).toEqual([]);
+  });
+
+  it("still flags material startedAt-before-createdAt inconsistencies", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "material-skew",
+          status: "succeeded",
+          createdAt: now,
+          startedAt: now - 5_000,
+          endedAt: now + 1,
+          cleanupAfter: now + 60_000,
+        }),
+      ],
+    });
+
+    expect(findings.map((finding) => [finding.code, finding.detail])).toEqual([
+      ["inconsistent_timestamps", "startedAt is earlier than createdAt"],
+    ]);
   });
 });
