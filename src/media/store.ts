@@ -352,6 +352,12 @@ async function writeSavedMediaBuffer(params: {
       const handle = await fs.open(tempDest, "r");
       try {
         await handle.sync();
+      } catch (syncErr) {
+        // Best-effort fsync on platforms (e.g. Windows, certain network mounts)
+        // where the operation may fail with EPERM without indicating a real problem.
+        if ((syncErr as NodeJS.ErrnoException).code !== "EPERM") {
+          throw syncErr;
+        }
       } finally {
         await handle.close();
       }

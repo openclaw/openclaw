@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Control UI/Sessions: avoid full `sessions.list` reloads for chat-turn `sessions.changed` payloads, so large session stores no longer add multi-second delays while chat responses are being delivered. (#76676) Thanks @VACInc.
+- Media/store: treat `EPERM` from `fsync` as a best-effort flush on Windows, preventing Telegram media downloads from failing when the file system or antivirus software blocks sync operations. Fixes #76640. Thanks @chinar-amrutkar.
 - Doctor/Telegram: warn when selected Telegram quote replies can suppress `streaming.preview.toolProgress`, and document the `replyToMode` trade-off without changing runtime delivery. Fixes #73487. Thanks @GodsBoy.
 - Discord/status: honor explicit `messages.statusReactions.enabled: true` in tool-only guild channels so queued ack reactions can progress through thinking/done lifecycle reactions instead of stopping at the initial emoji. Thanks @Marvinthebored.
 - Discord/native commands: compare Discord-normalized slash-command descriptions and localized descriptions during reconcile so CJK or multiline command text no longer triggers redundant startup PATCH bursts and rate-limit 429s. Fixes #76587. Thanks @zhengsx.
