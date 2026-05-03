@@ -589,6 +589,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 | `enabled`   | `boolean` | `false`       | Enable or disable dreaming entirely               |
 | `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep |
 | `model`     | `string`  | default model | Optional Dream Diary subagent model override      |
+| `staggerMs` | `number`  | —             | Optional deterministic random stagger window (in ms) applied to the dreaming cron schedule. Prevents multiple instances from firing at the exact same time. When unset, the cron service applies its default stagger (5 min for top-of-hour recurring schedules). Set to `0` to disable stagger and fire at the exact cron expression time. |
 
 ### Example
 
@@ -618,6 +619,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
 - `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
+- `dreaming.staggerMs` is an optional deterministic random stagger window (in ms) applied to the dreaming cron schedule. It prevents multiple instances from firing at the exact same time. When unset, the cron service applies its default stagger (5 min for top-of-hour recurring schedules). Set to `0` to disable stagger and fire at the exact cron expression time.
 - Dream Diary retries once with the session default model when the configured model is unavailable. Trust or allowlist failures are logged and are not silently retried.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
 
