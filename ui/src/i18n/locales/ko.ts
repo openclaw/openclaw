@@ -980,7 +980,7 @@ export const ko: TranslationMap = {
         },
         isolated: {
           label: "독립 세션",
-          description: "자체 세션에서 실행",
+          description: "자체 세션���서 실행",
         },
       },
       steps: {
