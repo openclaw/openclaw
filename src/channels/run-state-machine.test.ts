@@ -18,10 +18,18 @@ describe("createRunStateMachine", () => {
     machine.onRunEnd();
     expect(setStatus).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ activeRuns: 1, busy: true, lastRunActivityAt: 123 }),
+      expect.objectContaining({
+        activeRuns: 1,
+        busy: true,
+        lastRunActivityAt: 123,
+      }),
     );
     expect(setStatus).toHaveBeenLastCalledWith(
-      expect.objectContaining({ activeRuns: 0, busy: false, lastRunActivityAt: 123 }),
+      expect.objectContaining({
+        activeRuns: 0,
+        busy: false,
+        lastRunActivityAt: 123,
+      }),
     );
   });
 
@@ -38,5 +46,29 @@ describe("createRunStateMachine", () => {
     abortController.abort();
     machine.onRunEnd();
     expect(setStatus.mock.calls.length).toBe(callsBeforeAbort);
+  });
+
+  it("clamps activeRuns to zero when onRunEnd is called without a matching onRunStart", () => {
+    const setStatus = vi.fn();
+    const machine = createRunStateMachine({ setStatus, now: () => 1 });
+
+    machine.onRunEnd();
+
+    expect(setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ activeRuns: 0, busy: false }),
+    );
+  });
+
+  it("clamps activeRuns to zero when onRunEnd is called more times than onRunStart", () => {
+    const setStatus = vi.fn();
+    const machine = createRunStateMachine({ setStatus, now: () => 1 });
+
+    machine.onRunStart();
+    machine.onRunEnd();
+    machine.onRunEnd(); // extra call — should not go negative
+
+    expect(setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ activeRuns: 0, busy: false }),
+    );
   });
 });
