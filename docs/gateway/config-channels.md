@@ -97,10 +97,19 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```json5
 {
   web: {
+    enabled: true,
+    heartbeatSeconds: 60,
     whatsapp: {
       keepAliveIntervalMs: 25000,
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
+    },
+    reconnect: {
+      initialMs: 2000,
+      maxMs: 120000,
+      factor: 1.4,
+      jitter: 0.2,
+      maxAttempts: 0,
     },
   },
   channels: {
@@ -116,17 +125,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       },
       groupPolicy: "allowlist",
       groupAllowFrom: ["+15551234567"],
-    },
-  },
-  web: {
-    enabled: true,
-    heartbeatSeconds: 60,
-    reconnect: {
-      initialMs: 2000,
-      maxMs: 120000,
-      factor: 1.4,
-      jitter: 0.2,
-      maxAttempts: 0,
     },
   },
 }
@@ -884,7 +882,7 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 - Text commands must be **standalone** messages with leading `/`.
 - `native: "auto"` turns on native commands for Discord/Telegram, leaves Slack off.
 - `nativeSkills: "auto"` turns on native skill commands for Discord/Telegram, leaves Slack off.
-- Override per channel: `channels.discord.commands.native` (bool or `"auto"`). `false` clears previously registered commands.
+- Override per channel: `channels.discord.commands.native` (bool or `"auto"`). For Discord, `false` skips native command registration and cleanup during startup.
 - Override native skill registration per channel with `channels.<provider>.commands.nativeSkills`.
 - `channels.telegram.customCommands` adds extra Telegram bot menu entries.
 - `bash: true` enables `! <cmd>` for host shell. Requires `tools.elevated.enabled` and sender in `tools.elevated.allowFrom.<channel>`.

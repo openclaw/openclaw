@@ -308,12 +308,12 @@ describe("loadPluginManifestRegistry", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
-    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default function () {}", "utf-8");
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify({
         name: "@openclaw/cached-manifest",
-        openclaw: { extensions: ["./index.ts"] },
+        openclaw: { extensions: ["./index.js"] },
       }),
       "utf-8",
     );
@@ -471,6 +471,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, {
       id: "openai",
       enabledByDefault: true,
+      enabledByDefaultOnPlatforms: ["darwin", "not-a-platform"],
       providers: ["openai", "openai-codex"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
@@ -594,6 +595,7 @@ describe("loadPluginManifestRegistry", () => {
       "openai-codex": "openai",
     });
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
+    expect(registry.plugins[0]?.enabledByDefaultOnPlatforms).toEqual(["darwin"]);
     expect(registry.plugins[0]?.providerAuthChoices).toEqual([
       {
         provider: "openai",

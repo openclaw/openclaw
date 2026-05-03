@@ -112,6 +112,25 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
   return entries;
 }
 
+export function collectExplicitDenylist(policies: Array<ToolPolicyLike | undefined>): string[] {
+  const entries: string[] = [];
+  for (const policy of policies) {
+    if (!policy?.deny) {
+      continue;
+    }
+    for (const value of policy.deny) {
+      if (typeof value !== "string") {
+        continue;
+      }
+      const trimmed = value.trim();
+      if (trimmed) {
+        entries.push(trimmed);
+      }
+    }
+  }
+  return entries;
+}
+
 export function buildPluginToolGroups<T extends { name: string }>(params: {
   tools: T[];
   toolMeta: (tool: T) => { pluginId: string } | undefined;

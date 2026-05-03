@@ -388,6 +388,11 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
         "usage_hint": "<question>"
       },
       {
+        "command": "/side",
+        "description": "Ask a side question without changing session context",
+        "usage_hint": "<question>"
+      },
+      {
         "command": "/usage",
         "description": "Control the usage footer or show cost summary",
         "usage_hint": "off|tokens|full|cost"

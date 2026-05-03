@@ -20,6 +20,7 @@ import {
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
   buildInstalledBrowserOverrideImportProbeScript,
+  buildNpmGlobalInstallArgs,
   buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
@@ -202,6 +203,19 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(allowlist).not.toContain("document-extract");
     expect(allowlist).not.toContain("microsoft");
     expect(allowlist).not.toContain("web-readability");
+  });
+
+  it("can stage packaged-upgrade baselines without npm lifecycle scripts", () => {
+    expect(buildNpmGlobalInstallArgs("openclaw@2026.5.2", { ignoreScripts: true })).toEqual([
+      "install",
+      "-g",
+      "openclaw@2026.5.2",
+      "--omit=dev",
+      "--no-fund",
+      "--no-audit",
+      "--ignore-scripts",
+      "--loglevel=notice",
+    ]);
   });
 
   it("keeps cross-OS live smoke agent turns on GPT-5-safe timeouts and minimal context", () => {

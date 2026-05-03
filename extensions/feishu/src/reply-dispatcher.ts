@@ -222,6 +222,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
   const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
+  const coreBlockStreamingEnabled = account.config?.blockStreaming === true;
   const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
 
   let streaming: FeishuStreamingSession | null = null;
@@ -444,7 +445,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       mediaUrls,
       caption: "",
       send: async ({ mediaUrl }) => {
-        await sendMediaFeishu({
+        const result = await sendMediaFeishu({
           cfg,
           to: chatId,
           mediaUrl,
@@ -453,6 +454,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           accountId,
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
+        if (result?.voiceIntentDegradedToFile && options?.fallbackText && !sentFallbackText) {
+          sentFallbackText = true;
+          await sendChunkedTextReply({
+            text: options.fallbackText,
+            useCard: false,
+            infoKind: "final",
+            sendChunk: async ({ chunk, isFirst }) => {
+              await sendMessageFeishu({
+                cfg,
+                to: chatId,
+                text: chunk,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                mentions: isFirst ? mentionTargets : undefined,
+                accountId,
+              });
+            },
+          });
+        }
       },
       onError:
         options?.fallbackText === undefined
@@ -511,7 +531,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }),
           );
         const useCard =
-          hasText && (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text)));
+          hasText &&
+          (renderMode === "card" ||
+            (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
+            (renderMode === "auto" && shouldUseCard(text)));
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
         const skipTextForClosedStreamingFinal =
@@ -641,7 +664,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
-      disableBlockStreaming: true,
+      disableBlockStreaming:
+        typeof account.config?.blockStreaming === "boolean" ? !account.config.blockStreaming : true,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {

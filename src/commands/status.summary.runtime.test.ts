@@ -106,4 +106,18 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
       model: "gpt-5.4",
     });
   });
+
+  it("falls back to configured defaults when persisted session model fields are malformed", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+        modelProvider: { provider: "openai" },
+        model: false,
+        providerOverride: ["anthropic"],
+        modelOverride: 123,
+      } as never),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+  });
 });

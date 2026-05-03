@@ -1176,6 +1176,43 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("does not apply target hostname allowlists to public explicit proxy hosts", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
+      if (hostname === "proxy.example.net") {
+        return [{ address: "93.184.216.34", family: 4 }];
+      }
+      return [{ address: "149.154.167.220", family: 4 }];
+    }) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+      fetchImpl,
+      lookupFn,
+      policy: {
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+        hostnameAllowlist: ["api.telegram.org"],
+      },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.example.net:6152",
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(lookupFn).toHaveBeenCalledWith("proxy.example.net", { all: true });
+    expect(lookupFn).toHaveBeenCalledWith("api.telegram.org", { all: true });
+    expect(proxyAgentCtor).toHaveBeenCalled();
+    await result.release();
+  });
+
   it("skips target DNS pinning in trusted explicit-proxy mode after hostname-policy checks", async () => {
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: agentCtor,

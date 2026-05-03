@@ -215,9 +215,11 @@ OpenClaw classifies sessions by the work it can still observe:
 - `session.long_running`: active embedded work, model calls, or tool calls are
   still making progress.
 - `session.stalled`: active work exists, but the active run has not reported
-  recent progress.
-- `session.stuck`: stale session bookkeeping with no active work. This is the
-  only liveness classification that releases the affected session lane.
+  recent progress. Stalled embedded runs stay observe-only at first, then
+  abort-drain after at least 10 minutes and 5x `diagnostics.stuckSessionWarnMs`
+  with no progress so queued turns behind the lane can resume.
+- `session.stuck`: stale session bookkeeping with no active work. This releases
+  the affected session lane immediately.
 
 Only `session.stuck` emits the `openclaw.session.stuck` counter, the
 `openclaw.session.stuck_age_ms` histogram, and the `openclaw.session.stuck`
