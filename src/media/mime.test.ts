@@ -7,8 +7,10 @@ import {
   FILE_TYPE_SNIFF_MAX_BYTES,
   imageMimeFromFormat,
   isAudioFileName,
+  isVerifiedAudioSource,
   kindFromMime,
   normalizeMimeType,
+  sanitizeMediaMime,
   sliceMimeSniffBuffer,
 } from "./mime.js";
 
@@ -247,5 +249,101 @@ describe("mediaKindFromMime", () => {
     { mime: "model/gltf+json", expected: undefined },
   ] as const)("maps kindFromMime($mime) => $expected", ({ mime, expected }) => {
     expectMimeKindCase(mime, expected);
+  });
+});
+
+describe("sanitizeMediaMime", () => {
+  it.each([
+    { input: "audio/ogg\r\nX-Injected: 1", expected: null },
+    { input: "audio/ogg\nfoo", expected: null },
+    { input: "audio/ogg\tfoo", expected: null },
+    { input: "audio/ogg\x00", expected: null },
+    { input: "audio/ogg\x7f", expected: null },
+  ] as const)("rejects control characters in $input", ({ input, expected }) => {
+    expect(sanitizeMediaMime(input)).toBe(expected);
+  });
+
+  it.each([
+    { input: "audio", expected: null },
+    { input: "/audio", expected: null },
+    { input: "audio/", expected: null },
+    { input: "audio/og g", expected: null },
+    { input: "audio/<script>", expected: null },
+    { input: "  ", expected: null },
+    { input: null, expected: null },
+    { input: undefined, expected: null },
+    { input: "Audio/OGG", expected: "audio/ogg" },
+    { input: "audio/ogg; charset=utf-8", expected: "audio/ogg" },
+    {
+      input: "application/vnd.example~v1+json",
+      expected: "application/vnd.example~v1+json",
+    },
+    { input: "application/x-foo%bar*baz", expected: "application/x-foo%bar*baz" },
+  ] as const)("validates RFC 2045 token shape for $input", ({ input, expected }) => {
+    expect(sanitizeMediaMime(input)).toBe(expected);
+  });
+
+  it.each([
+    {
+      input: "audio/ogg; codecs=opus",
+      options: { preserveCodecsParam: true },
+      expected: "audio/ogg; codecs=opus",
+    },
+    {
+      input: "AUDIO/MP4; codecs=mp4a.40.2; profile=foo",
+      options: { preserveCodecsParam: true },
+      expected: "audio/mp4; codecs=mp4a.40.2",
+    },
+    {
+      input: "audio/ogg; charset=utf-8",
+      options: { preserveCodecsParam: true },
+      expected: "audio/ogg",
+    },
+    {
+      input: "audio/ogg; codecs=opus",
+      options: undefined,
+      expected: "audio/ogg",
+    },
+    {
+      input: "audio/mp4; codecs=mp4a.40.2,opus",
+      options: { preserveCodecsParam: true },
+      expected: "audio/mp4; codecs=mp4a.40.2,opus",
+    },
+    {
+      input: 'video/mp4; codecs="avc1.42e01e,mp4a.40.2"',
+      options: { preserveCodecsParam: true },
+      expected: 'video/mp4; codecs="avc1.42e01e,mp4a.40.2"',
+    },
+    {
+      input: "audio/mp4; codecs=opus,",
+      options: { preserveCodecsParam: true },
+      expected: "audio/mp4",
+    },
+    {
+      input: 'audio/mp4; codecs="opus;evil=foo"',
+      options: { preserveCodecsParam: true },
+      expected: "audio/mp4",
+    },
+  ] as const)("handles preserveCodecsParam for $input", ({ input, options, expected }) => {
+    expect(sanitizeMediaMime(input, options)).toBe(expected);
+  });
+});
+
+describe("isVerifiedAudioSource", () => {
+  it.each([
+    { media: { kind: "audio" }, expected: true },
+    { media: { kind: "audio", contentType: "audio/ogg" }, expected: true },
+    { media: { kind: "image", contentType: "audio/ogg" }, expected: false },
+    { media: { contentType: "audio/ogg" }, expected: false },
+    { media: { kind: "video" }, expected: false },
+    { media: { kind: null, contentType: null }, expected: false },
+    { media: {}, expected: false },
+  ] as const)("classifies $media", ({ media, expected }) => {
+    expect(isVerifiedAudioSource(media)).toBe(expected);
+  });
+
+  it("does not trust filename or URL hints (filename/URL fields are not part of the contract)", () => {
+    expect(isVerifiedAudioSource({ kind: "image", contentType: "image/png" })).toBe(false);
+    expect(isVerifiedAudioSource({ kind: undefined })).toBe(false);
   });
 });

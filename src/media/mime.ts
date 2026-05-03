@@ -238,3 +238,81 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
 export function kindFromMime(mime?: string | null): MediaKind | undefined {
   return mediaKindFromMime(normalizeMimeType(mime));
 }
+
+/**
+ * Returns true only when the caller-provided classified `kind` is `"audio"`.
+ * Refuses to infer audio from filename or URL hints, and does not treat a
+ * raw `contentType` starting with `audio/` as sufficient on its own. The
+ * `contentType` field is kept on the parameter shape as a seam for a
+ * future sniffed-MIME extension (e.g. via `detectMime`); it is not read
+ * today.
+ */
+export function isVerifiedAudioSource(media: {
+  kind?: string | null;
+  contentType?: string | null;
+}): boolean {
+  return media.kind === "audio";
+}
+
+// Reject ASCII control characters (U+0000-U+001F) and DEL (U+007F) to avoid
+// downstream header injection (CWE-93). Implemented via charCodeAt instead of
+// a control-character regex to keep the intent explicit and to avoid the
+// no-control-regex lint rule.
+function hasAsciiControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Validates and normalizes a MIME type for outbound media headers.
+ * Returns null when the input is unsafe or malformed. By default all
+ * parameters are stripped; pass `preserveCodecsParam: true` to retain a
+ * single `codecs=...` parameter when present.
+ */
+export function sanitizeMediaMime(
+  input: string | null | undefined,
+  options?: { preserveCodecsParam?: boolean },
+): string | null {
+  if (input == null) {
+    return null;
+  }
+  const value = input.trim();
+  if (!value) {
+    return null;
+  }
+
+  if (hasAsciiControlChar(value)) {
+    return null;
+  }
+
+  const parts = value.split(";");
+  const base = parts[0]?.trim().toLowerCase() ?? "";
+  // RFC 2045 token character set (US-ASCII printable minus SPACE, CTLs,
+  // and tspecials). Broader than RFC 6838's restricted-name to avoid
+  // false-null reject on valid vendor types like `application/vnd.x~v1+json`.
+  if (!/^[a-z0-9!#$%&'*+.^_`|~-]+\/[a-z0-9!#$%&'*+.^_`|~-]+$/.test(base)) {
+    return null;
+  }
+
+  if (options?.preserveCodecsParam && parts.length > 1) {
+    // Accept common single-codec, comma-separated multi-codec, and matched
+    // quoted-string forms (e.g. `codecs=opus`, `codecs=mp4a.40.2,opus`,
+    // `codecs="avc1.42e01e,mp4a.40.2"`). Mismatched quotes, trailing
+    // commas, semicolons inside the value, and unrelated parameters fall
+    // through to the strip-all-parameters path.
+    const codecsParam = parts
+      .slice(1)
+      .map((part) => part.trim().toLowerCase())
+      .find((part) => /^codecs=("?)[a-z0-9._-]+(?:,[a-z0-9._-]+)*\1$/.test(part));
+    if (codecsParam) {
+      return `${base}; ${codecsParam}`;
+    }
+  }
+
+  return base;
+}
