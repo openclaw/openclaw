@@ -252,4 +252,61 @@ describe("mantis discord smoke runtime", () => {
       }),
     );
   });
+
+  it("redacts response guild ids in mismatch failure artifacts", async () => {
+    fetchWithSsrFGuard.mockImplementation(
+      async ({ url, init }: { url: string; init?: RequestInit }) => {
+        const pathname = new URL(url).pathname;
+        const method = init?.method ?? "GET";
+        if (pathname === "/api/v10/users/@me") {
+          return {
+            response: jsonResponse({ id: "1489650053747314748", username: "Mantis" }),
+            release: vi.fn(),
+          };
+        }
+        if (pathname === "/api/v10/guilds/1456350064065904867") {
+          return {
+            response: jsonResponse({ id: "1456350064065904867", name: "Friends" }),
+            release: vi.fn(),
+          };
+        }
+        if (pathname === "/api/v10/guilds/1456350064065904867/channels") {
+          return { response: jsonResponse([{ id: "1456744319972282449" }]), release: vi.fn() };
+        }
+        if (pathname === "/api/v10/channels/1456744319972282449" && method === "GET") {
+          return {
+            response: jsonResponse({
+              guild_id: "1999999999999999999",
+              id: "1456744319972282449",
+              name: "wrong-guild-channel",
+              type: 0,
+            }),
+            release: vi.fn(),
+          };
+        }
+        return {
+          response: jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404),
+          release: vi.fn(),
+        };
+      },
+    );
+
+    const result = await runMantisDiscordSmoke({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/mantis/wrong-guild-redacted",
+      tokenFile,
+      redactPublicMetadata: true,
+      env: {
+        OPENCLAW_QA_DISCORD_GUILD_ID: "1456350064065904867",
+        OPENCLAW_QA_DISCORD_CHANNEL_ID: "1456744319972282449",
+      },
+    });
+
+    expect(result.status).toBe("fail");
+    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    expect(errorText).toContain("<redacted>");
+    expect(errorText).not.toContain("1999999999999999999");
+    expect(errorText).not.toContain("1456350064065904867");
+    expect(errorText).not.toContain("1456744319972282449");
+  });
 });

@@ -395,24 +395,36 @@ export async function runMantisDiscordSmoke(
       path: "/users/@me",
       token,
     });
+    addSensitiveValue(sensitiveValues, bot.id);
+    addSensitiveValue(sensitiveValues, bot.username);
     const guild = await callDiscordApi<DiscordGuild>({
       apiCalls,
       label: "guild",
       path: `/guilds/${guildId}`,
       token,
     });
+    addSensitiveValue(sensitiveValues, guild.id);
+    addSensitiveValue(sensitiveValues, guild.name);
     const guildChannels = await callDiscordApi<DiscordChannel[]>({
       apiCalls,
       label: "guild-channels",
       path: `/guilds/${guildId}/channels`,
       token,
     });
+    for (const guildChannel of guildChannels) {
+      addSensitiveValue(sensitiveValues, guildChannel.id);
+      addSensitiveValue(sensitiveValues, guildChannel.guild_id);
+      addSensitiveValue(sensitiveValues, guildChannel.name);
+    }
     const channel = await callDiscordApi<DiscordChannel>({
       apiCalls,
       label: "channel",
       path: `/channels/${channelId}`,
       token,
     });
+    addSensitiveValue(sensitiveValues, channel.id);
+    addSensitiveValue(sensitiveValues, channel.guild_id);
+    addSensitiveValue(sensitiveValues, channel.name);
     assertMantisDiscordChannelInGuild({
       channel,
       guildChannels,
@@ -422,12 +434,6 @@ export async function runMantisDiscordSmoke(
     summary.bot = { id: bot.id, username: bot.username };
     summary.guild = { id: guild.id, name: guild.name };
     summary.channel = { id: channel.id, name: channel.name, type: channel.type };
-    addSensitiveValue(sensitiveValues, bot.id);
-    addSensitiveValue(sensitiveValues, bot.username);
-    addSensitiveValue(sensitiveValues, guild.id);
-    addSensitiveValue(sensitiveValues, guild.name);
-    addSensitiveValue(sensitiveValues, channel.id);
-    addSensitiveValue(sensitiveValues, channel.name);
 
     if (opts.skipPost) {
       summary.message = { id: "", posted: false, reactionAdded: false };
