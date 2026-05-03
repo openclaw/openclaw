@@ -369,7 +369,49 @@ describe("logs cli", () => {
 
       expect(readConfiguredLogTail).not.toHaveBeenCalled();
       expect(stderrWrites.join("")).toContain("gateway disconnected");
+      expect(stderrWrites.join("")).toContain("gateway reconnected");
       expect(stdoutWrites.join("")).toContain("line from remote");
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("emits notice JSON records for retry and reconnect in --follow --json mode", async () => {
+      callGatewayFromCli
+        .mockRejectedValueOnce(
+          new GatewayTransportError({
+            kind: "closed",
+            code: 1006,
+            reason: "abnormal closure",
+            connectionDetails: {
+              url: "ws://remote.example.com:18789",
+              urlSource: "cli",
+              message: "",
+            },
+            message: "gateway closed (1006 abnormal closure): abnormal closure",
+          }),
+        )
+        .mockResolvedValueOnce({
+          file: "/tmp/openclaw.log",
+          cursor: 10,
+          lines: [],
+        });
+
+      const stderrWrites = captureStderrWrites();
+      const stdoutWrites = captureStdoutWrites();
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+      await runLogsCli(["logs", "--follow", "--json", "--url", "ws://remote.example.com:18789"]);
+
+      const stderr = stderrWrites.join("");
+      const noticeRecords = stderr
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as { type: string; message?: string });
+      const messages = noticeRecords
+        .filter((record) => record.type === "notice")
+        .map((record) => record.message ?? "");
+      expect(messages.some((message) => message.includes("gateway disconnected"))).toBe(true);
+      expect(messages.some((message) => message.includes("gateway reconnected"))).toBe(true);
+      expect(stdoutWrites.join("")).toContain('"type":"meta"');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
