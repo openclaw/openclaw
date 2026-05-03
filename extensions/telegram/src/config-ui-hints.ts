@@ -101,6 +101,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram API Timeout (seconds)",
     help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
   },
+  mediaGroupFlushMs: {
+    label: "Telegram Media Group Flush (ms)",
+    help: "Milliseconds to buffer Telegram albums/media groups before dispatching them as one inbound message. Default: 500.",
+  },
   pollingStallThresholdMs: {
     label: "Telegram Polling Stall Threshold (ms)",
     help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
