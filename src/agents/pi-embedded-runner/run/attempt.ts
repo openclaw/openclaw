@@ -2811,7 +2811,7 @@ export async function runEmbeddedAttempt(
           // Detect and load images referenced in the visible prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
           const imageResult = await detectAndLoadPromptImages({
-            prompt: promptForModel,
+            prompt: promptSubmission.prompt,
             workspaceDir: effectiveWorkspace,
             model: params.model,
             existingImages: params.images,
