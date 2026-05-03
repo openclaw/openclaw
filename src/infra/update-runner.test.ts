@@ -12,7 +12,7 @@ import { runGatewayUpdate } from "./update-runner.js";
 
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
-const WHATSAPP_LIGHT_RUNTIME_API = bundledDistPluginFile("whatsapp", "light-runtime-api.js");
+const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-" });
 
 function toCommandResult(response?: CommandResponse): CommandResult {
@@ -1556,8 +1556,11 @@ describe("runGatewayUpdate", () => {
           "utf-8",
         );
         await writeBundledRuntimeSidecars(pkgRoot);
-        await writePackageDistInventory(pkgRoot);
-        await fs.rm(path.join(pkgRoot, WHATSAPP_LIGHT_RUNTIME_API), { force: true });
+        const inventory = await writePackageDistInventory(pkgRoot);
+        expect(inventory).toContain(MATRIX_HELPER_API);
+        const matrixHelperApiPath = path.join(pkgRoot, MATRIX_HELPER_API);
+        await expect(pathExists(matrixHelperApiPath)).resolves.toBe(true);
+        await fs.rm(matrixHelperApiPath);
       },
     });
 
@@ -1566,7 +1569,7 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("global-install-failed");
     expect(result.steps.at(-1)?.stderrTail).toContain(
-      `missing packaged dist file ${WHATSAPP_LIGHT_RUNTIME_API}`,
+      `missing packaged dist file ${MATRIX_HELPER_API}`,
     );
   });
 

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { discoverStaticExtensionAssets } from "../../scripts/lib/static-extension-assets.mjs";
 import {
   copyStaticExtensionAssets,
   listStaticExtensionAssetOutputs,
@@ -21,6 +22,37 @@ describe("runtime postbuild static assets", () => {
         "dist/extensions/diffs/assets/viewer-runtime.js",
       ]),
     );
+  });
+
+  it("discovers static assets from plugin package metadata", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const packageDir = path.join(rootDir, "extensions", "demo");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/demo",
+        openclaw: {
+          build: {
+            staticAssets: [
+              {
+                source: "./assets/runtime.js",
+                output: "assets/runtime.js",
+              },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(discoverStaticExtensionAssets({ rootDir })).toEqual([
+      {
+        pluginDir: "demo",
+        src: "extensions/demo/assets/runtime.js",
+        dest: "dist/extensions/demo/assets/runtime.js",
+      },
+    ]);
   });
 
   it("copies declared static assets into dist", async () => {
@@ -91,8 +123,10 @@ describe("runtime postbuild static assets", () => {
 
     writeLegacyCliExitCompatChunks({ rootDir });
 
-    await expect(
-      fs.readFile(path.join(rootDir, "dist", "memory-state-CcqRgDZU.js"), "utf8"),
-    ).resolves.toContain("function hasMemoryRuntime()");
+    for (const chunk of ["memory-state-CcqRgDZU.js", "memory-state-DwGdReW4.js"]) {
+      await expect(fs.readFile(path.join(rootDir, "dist", chunk), "utf8")).resolves.toContain(
+        "function hasMemoryRuntime()",
+      );
+    }
   });
 });

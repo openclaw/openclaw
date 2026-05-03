@@ -59,6 +59,23 @@ describe("gateway --force helpers", () => {
     expect(listPortListeners(18789)).toEqual([]);
   });
 
+  it("does not re-scan lsof when no listeners were killed", async () => {
+    (execFileSync as unknown as Mock).mockImplementation(() => {
+      const err = new Error("no matches") as NodeJS.ErrnoException & { status?: number };
+      err.status = 1; // lsof uses exit 1 for no matches
+      throw err;
+    });
+
+    const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
+
+    expect(result).toEqual({
+      killed: [],
+      waitedMs: 0,
+      escalatedToSigkill: false,
+    });
+    expect(execFileSync).toHaveBeenCalledOnce();
+  });
+
   it("throws when lsof missing", () => {
     (execFileSync as unknown as Mock).mockImplementation(() => {
       const err = new Error("not found") as NodeJS.ErrnoException;

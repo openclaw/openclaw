@@ -1,5 +1,4 @@
 import { migrateLegacyRuntimeModelRef } from "../../../agents/model-runtime-aliases.js";
-import { isLegacyModelsAddCodexMetadataModel } from "../../../agents/openai-codex-models-add-legacy.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
@@ -12,7 +11,44 @@ import {
 } from "../../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { isRecord } from "./legacy-config-record-shared.js";
+import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
+
+function hasConfiguredChannels(cfg: OpenClawConfig): boolean {
+  const channels = cfg.channels;
+  if (!isRecord(channels)) {
+    return false;
+  }
+  return Object.keys(channels).some((channelId) => channelId !== "defaults");
+}
+
+export function normalizeMissingGroupVisibleRepliesDefault(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const messages = cfg.messages;
+  if (
+    !hasConfiguredChannels(cfg) ||
+    messages?.visibleReplies !== undefined ||
+    messages?.groupChat?.visibleReplies !== undefined
+  ) {
+    return cfg;
+  }
+
+  const nextMessages = messages ? { ...messages } : {};
+  nextMessages.groupChat = {
+    ...messages?.groupChat,
+    visibleReplies: "message_tool",
+  };
+  changes.push(
+    'Set messages.groupChat.visibleReplies to "message_tool" so group/channel replies use the message tool by default.',
+  );
+
+  return {
+    ...cfg,
+    messages: nextMessages,
+  };
+}
 
 export function normalizeLegacyCommandsConfig(
   cfg: OpenClawConfig,
@@ -262,6 +298,7 @@ function normalizeLegacyRuntimeAllowlistModels(
     const migrated = migrateLegacyRuntimeModelRef(rawKey);
     if (migrated?.runtime === selectedRuntime) {
       changed = true;
+      next[rawKey] = mergeModelEntry(entry, next[rawKey]);
       legacyEntries.push([migrated.ref, entry]);
       continue;
     }

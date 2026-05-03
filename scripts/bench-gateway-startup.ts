@@ -138,16 +138,6 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     config: BASE_CONFIG,
   },
   {
-    id: "fiftyPluginsFutureStrict",
-    name: "gateway, 50 manifest plugins with legacy startup fallback disabled",
-    env: {
-      OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-    },
-    pluginCount: 50,
-    config: BASE_CONFIG,
-  },
-  {
     id: "fiftyStartupLazyPlugins",
     name: "gateway, 50 startup-lazy manifest plugins",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
@@ -167,6 +157,10 @@ function parseFlagValue(flag: string): string | undefined {
 
 function hasFlag(flag: string): boolean {
   return process.argv.includes(flag);
+}
+
+function hasHelpFlag(): boolean {
+  return hasFlag("--help") || hasFlag("-h");
 }
 
 function parseRepeatableFlag(flag: string): string[] {
@@ -214,6 +208,28 @@ function parseOptions(): CliOptions {
     timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS),
     warmup: parsePositiveInt(parseFlagValue("--warmup"), DEFAULT_WARMUP),
   };
+}
+
+function printUsage(): void {
+  console.log(`OpenClaw Gateway startup benchmark
+
+Usage:
+  pnpm test:startup:gateway -- [options]
+  node --import tsx scripts/bench-gateway-startup.ts [options]
+
+Options:
+  --case <id>          Specific case id to run; repeatable
+  --entry <path>       Gateway CLI entry file (default: ${DEFAULT_ENTRY})
+  --runs <n>           Measured runs per case (default: ${DEFAULT_RUNS})
+  --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
+  --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
+  --output <path>      Write machine-readable JSON to a file
+  --json               Emit machine-readable JSON
+  --help, -h           Show this text
+
+Case ids:
+  ${GATEWAY_CASES.map((benchCase) => `${benchCase.id} (${benchCase.name})`).join("\n  ")}
+`);
 }
 
 function median(values: number[]): number {
@@ -806,6 +822,11 @@ function printResult(result: CaseResult): void {
 }
 
 async function main() {
+  if (hasHelpFlag()) {
+    printUsage();
+    return;
+  }
+
   const options = parseOptions();
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {

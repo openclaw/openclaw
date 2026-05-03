@@ -1,4 +1,5 @@
 import type { App } from "@slack/bolt";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type {
   OpenClawConfig,
@@ -7,7 +8,6 @@ import type {
 import type { SessionScope } from "openclaw/plugin-sdk/config-types";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-types";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -26,11 +26,7 @@ import { normalizeSlackChannelType } from "./channel-type.js";
 import { resolveSessionKey } from "./config.runtime.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
-export {
-  inferSlackChannelType,
-  normalizeSlackChannelType,
-  resolveSlackChatType,
-} from "./channel-type.js";
+export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;
@@ -45,6 +41,7 @@ export type SlackMonitorContext = {
   apiAppId: string;
 
   historyLimit: number;
+  dmHistoryLimit: number;
   channelHistories: Map<string, HistoryEntry[]>;
   sessionScope: SessionScope;
   mainKey: string;
@@ -114,6 +111,7 @@ export function createSlackMonitorContext(params: {
   apiAppId: string;
 
   historyLimit: number;
+  dmHistoryLimit?: number;
   sessionScope: SessionScope;
   mainKey: string;
 
@@ -410,6 +408,7 @@ export function createSlackMonitorContext(params: {
     teamId: params.teamId,
     apiAppId: params.apiAppId,
     historyLimit: params.historyLimit,
+    dmHistoryLimit: Math.max(0, params.dmHistoryLimit ?? 0),
     channelHistories,
     sessionScope: params.sessionScope,
     mainKey: params.mainKey,
