@@ -16,6 +16,11 @@ import {
 } from "./channel-actions.js";
 import { whatsappChannelOutbound } from "./channel-outbound.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
+import {
+  matchWhatsAppAcpConversation,
+  normalizeWhatsAppAcpConversationId,
+  resolveWhatsAppConversationIdFromTarget,
+} from "./conversation-id.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import {
   resolveWhatsAppGroupIntroHint,
@@ -112,6 +117,28 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             accountId: accountId ?? undefined,
           });
           return level ? { level, channelLabel: "WhatsApp" } : undefined;
+        },
+      },
+      bindings: {
+        // Honors `bindings[]` route rules with `match.channel === "whatsapp"`
+        // (#75211). Without this block the gateway's binding registry treated
+        // every inbound WhatsApp message as unbound and routed it to the
+        // default agent regardless of configured rules, which is the
+        // security-relevant gap the reporter hit. Mirrors the same shape
+        // iMessage and BlueBubbles use.
+        compileConfiguredBinding: ({ conversationId }) =>
+          normalizeWhatsAppAcpConversationId(conversationId),
+        matchInboundConversation: ({ compiledBinding, conversationId }) =>
+          matchWhatsAppAcpConversation({
+            bindingConversationId: compiledBinding.conversationId,
+            conversationId,
+          }),
+        resolveCommandConversation: ({ originatingTo, commandTo, fallbackTo }) => {
+          const conversationId =
+            resolveWhatsAppConversationIdFromTarget(originatingTo ?? "") ??
+            resolveWhatsAppConversationIdFromTarget(commandTo ?? "") ??
+            resolveWhatsAppConversationIdFromTarget(fallbackTo ?? "");
+          return conversationId ? { conversationId } : null;
         },
       },
       messaging: {
