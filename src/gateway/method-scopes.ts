@@ -149,6 +149,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.invoke",
     "tools.invoke",
     "chat.send",
+    "chat.edit_user_message",
     "chat.abort",
     "sessions.create",
     "sessions.send",

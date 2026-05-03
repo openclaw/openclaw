@@ -4932,6 +4932,40 @@ public struct ChatHistoryParams: Codable, Sendable {
     }
 }
 
+public struct ChatEditUserMessageParams: Codable, Sendable {
+    public let sessionkey: String
+    public let messageid: String
+    public let content: String
+    public let expectedrevision: Double?
+    public let rerun: Bool?
+    public let idempotencykey: String
+
+    public init(
+        sessionkey: String,
+        messageid: String,
+        content: String,
+        expectedrevision: Double?,
+        rerun: Bool?,
+        idempotencykey: String)
+    {
+        self.sessionkey = sessionkey
+        self.messageid = messageid
+        self.content = content
+        self.expectedrevision = expectedrevision
+        self.rerun = rerun
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case messageid = "messageId"
+        case content
+        case expectedrevision = "expectedRevision"
+        case rerun
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
 public struct ChatSendParams: Codable, Sendable {
     public let sessionkey: String
     public let message: String

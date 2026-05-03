@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
@@ -607,6 +608,91 @@ describe("gateway server chat", () => {
       }
       await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     }
+  });
+  type RpcEnvelope<TPayload> = {
+    type?: "res";
+    id?: string;
+    ok: boolean;
+    payload?: TPayload;
+    error?: unknown;
+  };
+
+  test("chat.edit_user_message edits a user message and removes later active-branch turns", async () => {
+    await withMainSessionStore(async (dir) => {
+      const sessionKey = "main";
+      const transcriptPath = path.join(dir, "sess-main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: "sess-main",
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        })}\n`,
+        "utf-8",
+      );
+
+      const sessionManager = SessionManager.open(transcriptPath);
+      sessionManager.appendMessage({
+        role: "user",
+        content: "helo world",
+        timestamp: Date.now(),
+      });
+      sessionManager.appendMessage({
+        role: "assistant",
+        content: "assistant reply",
+        timestamp: Date.now() + 1,
+      });
+
+      const userEntry = sessionManager.getBranch().find((entry) => {
+        if (entry.type !== "message") {
+          return false;
+        }
+        const message = entry.message as { role?: unknown; content?: unknown };
+        return message.role === "user" && message.content === "helo world";
+      });
+
+      expect(userEntry).toBeTruthy();
+
+      const messageId = userEntry?.id;
+
+      expect(typeof messageId).toBe("string");
+
+      const editRes = (await rpcReq(ws, "chat.edit_user_message", {
+        sessionKey,
+        messageId,
+        content: "hello world",
+        idempotencyKey: `${sessionKey}:edit-1`,
+      })) as unknown as RpcEnvelope<{
+        sessionKey?: string;
+        editedMessageId?: string;
+        deletedMessageIds?: string[];
+        revision?: number;
+        rerunStarted?: boolean;
+      }>;
+
+      expect(editRes.ok).toBe(true);
+      expect(editRes.payload?.editedMessageId).toBe(messageId);
+      expect(editRes.payload?.revision).toBe(1);
+      expect(editRes.payload?.deletedMessageIds?.length).toBeGreaterThan(0);
+
+      const historyAfter = (await rpcReq(ws, "chat.history", {
+        sessionKey,
+      })) as unknown as RpcEnvelope<{
+        messages?: Array<Record<string, unknown>>;
+      }>;
+
+      expect(historyAfter.ok).toBe(true);
+
+      const afterMessages = historyAfter.payload?.messages ?? [];
+
+      expect(afterMessages).toHaveLength(1);
+      expect(afterMessages.at(-1)?.role).toBe("user");
+      expect(afterMessages.at(-1)?.content).toBe("hello world");
+      expect(afterMessages.some((message) => message.content === "helo world")).toBe(false);
+      expect(afterMessages.some((message) => message.content === "assistant reply")).toBe(false);
+    });
   });
 
   test("chat.history hides assistant NO_REPLY-only entries", async () => {

@@ -143,6 +143,7 @@ import {
 import {
   ChatAbortParamsSchema,
   ChatEventSchema,
+  ChatEditUserMessageParamsSchema,
   ChatHistoryParamsSchema,
   ChatInjectParamsSchema,
   ChatSendParamsSchema,
@@ -414,6 +415,7 @@ export const ProtocolSchemas = {
   DevicePairRequestedEvent: DevicePairRequestedEventSchema,
   DevicePairResolvedEvent: DevicePairResolvedEventSchema,
   ChatHistoryParams: ChatHistoryParamsSchema,
+  ChatEditUserMessageParams: ChatEditUserMessageParamsSchema,
   ChatSendParams: ChatSendParamsSchema,
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,

@@ -98,6 +98,7 @@ import {
   type ChatInjectParams,
   ChatInjectParamsSchema,
   ChatSendParamsSchema,
+  ChatEditUserMessageParamsSchema,
   type ConfigApplyParams,
   ConfigApplyParamsSchema,
   type ConfigGetParams,
@@ -602,6 +603,7 @@ export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeS
 export const validateLogsTailParams = ajv.compile<LogsTailParams>(LogsTailParamsSchema);
 export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
 export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
+export const validateChatEditUserMessageParams = ajv.compile(ChatEditUserMessageParamsSchema);
 export const validateChatAbortParams = ajv.compile<ChatAbortParams>(ChatAbortParamsSchema);
 export const validateChatInjectParams = ajv.compile<ChatInjectParams>(ChatInjectParamsSchema);
 export const validateChatEvent = ajv.compile(ChatEventSchema);
