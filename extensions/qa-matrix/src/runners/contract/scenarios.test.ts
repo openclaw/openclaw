@@ -2567,7 +2567,7 @@ describe("matrix live qa scenarios", () => {
           event: matrixQaMessageEvent({
             kind: "notice",
             eventId: previewEventId,
-            body: "Working...",
+            body: "One moment.",
           }),
           since: "driver-sync-preview",
         },
@@ -2575,7 +2575,7 @@ describe("matrix live qa scenarios", () => {
           event: matrixQaMessageEvent({
             kind: "notice",
             eventId: "$tool-progress-generic-update",
-            body: "Working...\n- `tool: exec_command`",
+            body: "- `tool: exec_command`",
             relatesTo: {
               relType: "m.replace",
               eventId: previewEventId,
@@ -2610,7 +2610,7 @@ describe("matrix live qa scenarios", () => {
     await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-generic-trigger",
-        previewBodyPreview: "Working...\n- `tool: exec_command`",
+        previewBodyPreview: "- `tool: exec_command`",
         previewEventId: "$tool-progress-generic-preview",
         reply: {
           eventId: "$tool-progress-generic-final",

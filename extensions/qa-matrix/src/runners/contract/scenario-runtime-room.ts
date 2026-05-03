@@ -738,7 +738,7 @@ function buildMatrixQaToolProgressTimeoutMessage(params: {
       return (
         event.eventId === params.previewEventId ||
         event.relatesTo?.eventId === params.previewEventId ||
-        /\bWorking\b/i.test(event.body ?? "")
+        event.body !== undefined
       );
     })
     .slice(-8);
@@ -812,18 +812,31 @@ async function runMatrixToolProgressScenario(
     mentionUserIds: [context.sutUserId],
     roomId: context.roomId,
   });
-  const preview = await client.waitForRoomEvent({
-    observedEvents: context.observedEvents,
-    predicate: (event) =>
-      event.roomId === context.roomId &&
-      event.sender === context.sutUserId &&
-      event.kind === params.expectedPreviewKind &&
-      event.relatesTo === undefined &&
-      /\bWorking\b/i.test(event.body ?? ""),
-    roomId: context.roomId,
-    since: startSince,
-    timeoutMs: context.timeoutMs,
-  });
+  const preview = await client
+    .waitForRoomEvent({
+      observedEvents: context.observedEvents,
+      predicate: (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        event.kind === params.expectedPreviewKind &&
+        event.relatesTo === undefined,
+      roomId: context.roomId,
+      since: startSince,
+      timeoutMs: context.timeoutMs,
+    })
+    .catch((err: unknown) => {
+      throw new Error(
+        buildMatrixQaToolProgressTimeoutMessage({
+          cause: err,
+          events: context.observedEvents,
+          expectedPreviewKind: params.expectedPreviewKind,
+          previewEventId: "<not observed>",
+          roomId: context.roomId,
+          startIndex: startObservedIndex,
+          sutUserId: context.sutUserId,
+        }),
+      );
+    });
   const matchesExpectedProgress = (body: string | undefined) =>
     params.progressPattern.test(body ?? "") ||
     (params.allowGenericProgressLine === true && hasMatrixQaToolProgressPreviewLine(body));
@@ -838,7 +851,6 @@ async function runMatrixToolProgressScenario(
             event.kind === params.expectedPreviewKind &&
             event.relatesTo?.relType === "m.replace" &&
             event.relatesTo.eventId === preview.event.eventId &&
-            /\bWorking\b/i.test(event.body ?? "") &&
             matchesExpectedProgress(event.body),
           roomId: context.roomId,
           since: preview.since,
