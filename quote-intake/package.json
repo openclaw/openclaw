@@ -1,0 +1,9 @@
+{
+  "name": "quote-intake",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test index.test.js",
+    "qa": "node qa/run-quote-intake-cases.js"
+  }
+}

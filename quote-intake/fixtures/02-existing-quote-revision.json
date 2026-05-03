@@ -1,0 +1,33 @@
+{
+  "id": "existing-quote-revision",
+  "name": "Existing quote revision removes declined option",
+  "description": "Synthetic existing quote revision. Should revise an existing quote and avoid creating a duplicate.",
+  "request": {
+    "thread": {
+      "subject": "RE: Synthetic Project pillow quote QU-0565",
+      "conversation_id": "synthetic-revision-conv",
+      "messages": [
+        {
+          "id": "synthetic-revision-msg",
+          "from": "Design Coordinator <designer@example.test>",
+          "to": ["chris@prestigiocustom.com"],
+          "date_utc": "2026-05-01T19:00:00Z",
+          "hasAttachments": false,
+          "body": "Please update QU-0565 to only show the 25/75 down pillow option and remove the 100% down option."
+        }
+      ]
+    },
+    "attachmentReview": { "summary": { "attachment_count": 0 }, "attachments": [] }
+  },
+  "expected": {
+    "category": "pillows",
+    "workflow": "revise-existing",
+    "formFields": {
+      "pillowType": "throw",
+      "pillowFill": "down-25"
+    },
+    "pricingDrivers": ["fill"],
+    "forbiddenActions": ["create_duplicate_quote", "xero_write", "send_email", "live_quote_write"],
+    "maxDecisionCardLines": 8
+  }
+}

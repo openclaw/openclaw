@@ -1,0 +1,32 @@
+{
+  "id": "softgoods-coverlet",
+  "name": "Softgoods coverlet quote",
+  "description": "Synthetic coverlet request that should route to softgoods and ask for missing construction details.",
+  "request": {
+    "thread": {
+      "subject": "Primary Bedroom // Coverlet",
+      "messages": [
+        {
+          "id": "synthetic-softgoods-msg",
+          "from": "Soft Studio <soft.studio@example.test>",
+          "to": ["chris@prestigiocustom.com"],
+          "date_utc": "2026-05-02T01:00:00Z",
+          "hasAttachments": false,
+          "body": "Please quote a coverlet for a king bed, COM fabric. Dimensions 110\" x 96\"."
+        }
+      ]
+    },
+    "attachmentReview": { "summary": { "attachment_count": 0 }, "attachments": [] }
+  },
+  "expected": {
+    "category": "softgoods",
+    "workflow": "new-draft",
+    "requiredQuestions": ["softgoods details"],
+    "formFields": {
+      "softgoodsType": "coverlet"
+    },
+    "pricingDrivers": ["materials"],
+    "forbiddenActions": ["send_email", "xero_write", "live_quote_write"],
+    "maxDecisionCardLines": 8
+  }
+}

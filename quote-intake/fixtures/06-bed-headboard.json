@@ -1,0 +1,32 @@
+{
+  "id": "bed-headboard",
+  "name": "Bed headboard quote",
+  "description": "Synthetic upholstered headboard request with enough category signal but missing pricing drivers.",
+  "request": {
+    "thread": {
+      "subject": "Guest Suite // Upholstered Headboard",
+      "messages": [
+        {
+          "id": "synthetic-bed-msg",
+          "from": "Bedroom Studio <bedroom.studio@example.test>",
+          "to": ["chris@prestigiocustom.com"],
+          "date_utc": "2026-05-01T23:00:00Z",
+          "hasAttachments": false,
+          "body": "Please quote a queen upholstered headboard, 64\" wide x 54\" high. COM fabric."
+        }
+      ]
+    },
+    "attachmentReview": { "summary": { "attachment_count": 0 }, "attachments": [] }
+  },
+  "expected": {
+    "category": "beds",
+    "workflow": "new-draft",
+    "formFields": {
+      "bedType": "headboard",
+      "bedSize": "queen"
+    },
+    "pricingDrivers": ["materials"],
+    "forbiddenActions": ["send_email", "xero_write", "live_quote_write"],
+    "maxDecisionCardLines": 8
+  }
+}

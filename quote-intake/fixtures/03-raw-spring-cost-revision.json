@@ -1,0 +1,33 @@
+{
+  "id": "raw-spring-cost-revision",
+  "name": "Raw spring cost add-on revision",
+  "description": "Synthetic quote revision where Chris gives raw internal spring cost. Should update repair field and cost breakdown, not only sell price.",
+  "request": {
+    "thread": {
+      "subject": "RE: QU-0605 Game Chairs spring replacement",
+      "messages": [
+        {
+          "id": "synthetic-springs-msg",
+          "from": "Chris Reyes <chris@prestigiocustom.com>",
+          "to": ["stitch@prestigiocustom.com"],
+          "date_utc": "2026-05-01T20:00:00Z",
+          "hasAttachments": false,
+          "body": "Revise existing quote QU-0605 for the 4 game chairs. Add spring replacement. $140 per chair is what it costs me, raw internal cost."
+        }
+      ]
+    },
+    "attachmentReview": { "summary": { "attachment_count": 0 }, "attachments": [] }
+  },
+  "expected": {
+    "category": "repairs",
+    "workflow": "revise-existing",
+    "requiredQuestions": ["confirm raw cost calculation"],
+    "formFields": {
+      "reupholsteryType": "chair",
+      "newSprings": true
+    },
+    "pricingDrivers": ["springs"],
+    "forbiddenActions": ["sell_price_only", "xero_write", "send_email", "live_quote_write"],
+    "maxDecisionCardLines": 8
+  }
+}

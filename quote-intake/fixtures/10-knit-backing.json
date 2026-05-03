@@ -1,0 +1,29 @@
+{
+  "id": "knit-backing",
+  "name": "Knit backing approval request",
+  "description": "Synthetic knit-backing workflow. Should not become a generic quote-builder row.",
+  "request": {
+    "thread": {
+      "subject": "Sample Project // Knit Backing",
+      "messages": [
+        {
+          "id": "synthetic-knit-msg",
+          "from": "Fabric Studio <fabric.studio@example.test>",
+          "to": ["chris@prestigiocustom.com"],
+          "date_utc": "2026-05-02T03:00:00Z",
+          "hasAttachments": false,
+          "body": "Please send the silk fabric out for knit backing approval. Use the normal Geltman process after the client approves."
+        }
+      ]
+    },
+    "attachmentReview": { "summary": { "attachment_count": 0 }, "attachments": [] }
+  },
+  "expected": {
+    "category": "knit-backing",
+    "workflow": "special-workflow",
+    "requiredQuestions": ["approval workflow confirmation"],
+    "pricingDrivers": ["knit-backing-pricing-model"],
+    "forbiddenActions": ["generic_quote_builder_row", "xero_write", "send_email", "live_quote_write"],
+    "maxDecisionCardLines": 8
+  }
+}

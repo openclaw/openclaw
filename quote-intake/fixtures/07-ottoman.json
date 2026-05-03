@@ -1,0 +1,32 @@
+{
+  "id": "ottoman",
+  "name": "Ottoman quote needs pricing drivers",
+  "description": "Synthetic ottoman quote request where Stitch should identify the category and ask for pricing inputs.",
+  "request": {
+    "thread": {
+      "subject": "Media Room // Ottoman",
+      "messages": [
+        {
+          "id": "synthetic-ottoman-msg",
+          "from": "Room Sender <room.sender@example.test>",
+          "to": ["chris@prestigiocustom.com"],
+          "date_utc": "2026-05-02T00:00:00Z",
+          "hasAttachments": false,
+          "body": "Please quote a new custom ottoman, 48\" x 36\" x 18\", COM fabric, tight top."
+        }
+      ]
+    },
+    "attachmentReview": { "summary": { "attachment_count": 0 }, "attachments": [] }
+  },
+  "expected": {
+    "category": "ottomans",
+    "workflow": "new-draft",
+    "requiredQuestions": ["pricing drivers"],
+    "formFields": {
+      "ottomanType": "ottoman"
+    },
+    "pricingDrivers": ["materials"],
+    "forbiddenActions": ["send_email", "xero_write", "live_quote_write"],
+    "maxDecisionCardLines": 8
+  }
+}

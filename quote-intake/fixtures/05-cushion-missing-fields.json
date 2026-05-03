@@ -1,0 +1,46 @@
+{
+  "id": "cushion-missing-fields",
+  "name": "Cushion quote with missing foam and construction",
+  "description": "Synthetic cushion request that should ask for foam/fill, thickness, and construction.",
+  "request": {
+    "thread": {
+      "subject": "Lake Room // Bench Cushion",
+      "messages": [
+        {
+          "id": "synthetic-cushion-msg",
+          "from": "Project Sender <project.sender@example.test>",
+          "to": ["chris@prestigiocustom.com"],
+          "date_utc": "2026-05-01T22:00:00Z",
+          "hasAttachments": true,
+          "body": "Can you quote a bench cushion for the lake room? Size is 72\" x 22\". COM fabric."
+        }
+      ]
+    },
+    "attachmentReview": {
+      "summary": { "attachment_count": 1, "pdf_count": 1 },
+      "attachments": [
+        {
+          "name": "synthetic-cushion-sketch.pdf",
+          "path": "/synthetic/cushion-sketch.pdf",
+          "kind": "pdf",
+          "size": 100,
+          "sha256": "synthetic-cushion",
+          "pdf": { "pages": 1 },
+          "extracted_text": "Bench cushion 72\" x 22\" COM fabric",
+          "rendered_pages": []
+        }
+      ]
+    }
+  },
+  "expected": {
+    "category": "cushions",
+    "workflow": "new-draft",
+    "requiredQuestions": ["foam or fill", "thickness", "construction"],
+    "formFields": {
+      "cushionType": "bench"
+    },
+    "pricingDrivers": ["materials"],
+    "forbiddenActions": ["send_email", "xero_write", "live_quote_write"],
+    "maxDecisionCardLines": 8
+  }
+}

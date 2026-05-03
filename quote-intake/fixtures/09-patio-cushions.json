@@ -1,0 +1,31 @@
+{
+  "id": "patio-cushions",
+  "name": "Patio cushion quote",
+  "description": "Synthetic outdoor cushion request with dryfast foam signal.",
+  "request": {
+    "thread": {
+      "subject": "Pool Terrace // Patio Cushions",
+      "messages": [
+        {
+          "id": "synthetic-patio-msg",
+          "from": "Outdoor Sender <outdoor.sender@example.test>",
+          "to": ["chris@prestigiocustom.com"],
+          "date_utc": "2026-05-02T02:00:00Z",
+          "hasAttachments": false,
+          "body": "Please quote outdoor patio seat cushions and back cushions with dryfast foam. COM outdoor fabric."
+        }
+      ]
+    },
+    "attachmentReview": { "summary": { "attachment_count": 0 }, "attachments": [] }
+  },
+  "expected": {
+    "category": "patio",
+    "workflow": "new-draft",
+    "formFields": {
+      "foamType": "dryfast"
+    },
+    "pricingDrivers": ["foam", "materials"],
+    "forbiddenActions": ["send_email", "xero_write", "live_quote_write"],
+    "maxDecisionCardLines": 8
+  }
+}

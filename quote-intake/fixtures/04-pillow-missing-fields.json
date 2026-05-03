@@ -1,0 +1,46 @@
+{
+  "id": "pillow-missing-fields",
+  "name": "Pillow quote with missing construction details",
+  "description": "Synthetic pillow schedule with dimensions and quantity but missing seam, zipper, and fill details.",
+  "request": {
+    "thread": {
+      "subject": "Sample House // Pillows",
+      "messages": [
+        {
+          "id": "synthetic-pillow-msg",
+          "from": "Studio Sender <studio.sender@example.test>",
+          "to": ["chris@prestigiocustom.com"],
+          "date_utc": "2026-05-01T21:00:00Z",
+          "hasAttachments": true,
+          "body": "Please quote the decorative pillows by room."
+        }
+      ]
+    },
+    "attachmentReview": {
+      "summary": { "attachment_count": 1, "pdf_count": 1 },
+      "attachments": [
+        {
+          "name": "synthetic-pillow-schedule.pdf",
+          "path": "/synthetic/pillow-schedule.pdf",
+          "kind": "pdf",
+          "size": 100,
+          "sha256": "synthetic-pillow",
+          "pdf": { "pages": 1 },
+          "extracted_text": "Living Room Pillow qty 3 20\" x 20\" plain COM fabric",
+          "rendered_pages": []
+        }
+      ]
+    }
+  },
+  "expected": {
+    "category": "pillows",
+    "workflow": "new-draft",
+    "requiredQuestions": ["construction", "zipper", "fill"],
+    "formFields": {
+      "pillowType": "throw"
+    },
+    "pricingDrivers": ["materials"],
+    "forbiddenActions": ["send_email", "xero_write", "live_quote_write"],
+    "maxDecisionCardLines": 8
+  }
+}

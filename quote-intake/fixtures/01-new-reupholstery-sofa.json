@@ -1,0 +1,51 @@
+{
+  "id": "new-reupholstery-sofa",
+  "name": "New sofa reupholstery request",
+  "description": "Synthetic Catherine-style sofa request. Should become a Prestigio draft recommendation, not an email draft.",
+  "request": {
+    "mailbox": "chris",
+    "thread": {
+      "subject": "quote for sofa",
+      "conversation_id": "synthetic-sofa-conv",
+      "messages": [
+        {
+          "id": "synthetic-sofa-msg",
+          "from": "North Client <north.client@example.test>",
+          "to": ["chris@prestigiocustom.com"],
+          "date_utc": "2026-05-01T18:00:00Z",
+          "hasAttachments": true,
+          "body": "Hi Chris, can you quote recovering my 84 inch sofa? It has a tight seat deck and 2 loose back cushions. Dimensions are 84\"W x 35.5\"D x 29\"H. I need COM yardage too."
+        }
+      ]
+    },
+    "attachmentReview": {
+      "summary": { "attachment_count": 2, "image_count": 2 },
+      "attachments": [
+        {
+          "name": "sofa-front-synthetic.jpg",
+          "path": "/synthetic/sofa-front.jpg",
+          "kind": "image",
+          "size": 12,
+          "sha256": "synthetic-a",
+          "extracted_text": "Reference image: sofa with tight seat deck and 2 loose back cushions",
+          "rendered_pages": []
+        }
+      ]
+    }
+  },
+  "expected": {
+    "category": "seating-reupholstery",
+    "workflow": "new-draft",
+    "requiredQuestions": ["condition", "labor hours"],
+    "formFields": {
+      "reupholsteryType": "sofa",
+      "scope": "full",
+      "seatStyle": "tight",
+      "backStyle": "loose-back-cushion"
+    },
+    "pricingDrivers": ["materials"],
+    "forbiddenActions": ["send_email", "xero_write", "live_quote_write"],
+    "maxDecisionCardLines": 8,
+    "mustNotContain": ["drafted in chris@", "client-facing reply"]
+  }
+}
