@@ -178,7 +178,7 @@ export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
-  auth: { senderIsOwner: boolean },
+  auth: McpLoopbackBearerContext,
 ): McpRequestContext {
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
