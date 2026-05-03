@@ -8,7 +8,7 @@
 
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, chmod, mkdir, open, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type * as LanceDB from "@lancedb/lancedb";
@@ -158,6 +158,11 @@ function resolveAutoCaptureStartIndex(
 // Serializes concurrent replace calls on the same ID so that a
 // delete/insert from one caller never races with another.
 // ============================================================================
+
+// Validates the UUID shape used by memory entry IDs. Hoisted to module scope
+// so delete/getById share a single source of truth instead of duplicating the
+// pattern at each call site.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const _memoryLocks = new Map<string, Promise<void>>();
 
@@ -314,8 +319,7 @@ class MemoryDB {
   async delete(id: string): Promise<boolean> {
     await this.ensureInitialized();
     // Validate UUID format to prevent injection
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(id)) {
+    if (!UUID_RE.test(id)) {
       throw new Error(`Invalid memory ID format: ${id}`);
     }
     await this.table!.delete(`id = '${id}'`);
@@ -325,8 +329,7 @@ class MemoryDB {
   async getById(id: string): Promise<MemoryEntry | null> {
     await this.ensureInitialized();
     // Validate UUID format to prevent injection
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(id)) {
+    if (!UUID_RE.test(id)) {
       throw new Error(`Invalid memory ID format: ${id}`);
     }
     const rows = await this.table!.query().where(`id = '${id}'`).toArray();
@@ -959,12 +962,30 @@ export default definePluginEntry({
 
           // ------------------------------------------------------------------
           // MODE 2: Atomic replace (memoryId provided)
-          // Check existence BEFORE calling embeddings.embed() so that a typo
+          // Pre-check existence BEFORE calling embeddings.embed() so a typo
           // or stale ID returns immediately without a wasted API call.
-          // Wrapped in withMemoryLock so concurrent calls on the same ID
-          // serialize correctly (no interleaved delete/insert races).
+          // Then embed OUTSIDE the per-id mutex so the slow remote call does
+          // not block other refreshes targeting the same id. Re-validate
+          // inside the lock to handle a concurrent forget/replace that
+          // dropped the row between the precheck and lock acquisition.
           // ------------------------------------------------------------------
+          const precheck = await db.getById(memoryId);
+          if (!precheck) {
+            return {
+              content: [{ type: "text", text: `Memory ${memoryId} not found.` }],
+              details: { operation: "error", error: "not_found", memoryId },
+            };
+          }
+
+          // Embed outside the lock — the remote API call dominates wall time
+          // for replace operations and has no shared state to protect.
+          const vector = await embeddings.embed(text);
+
           return withMemoryLock(memoryId, async () => {
+            // Re-validate inside the lock: a concurrent forget or another
+            // refresh that started between the precheck and lock acquisition
+            // could have removed the entry. Without this re-check the replace
+            // would resurrect a deleted memory under the same id.
             const existing = await db.getById(memoryId);
             if (!existing) {
               return {
@@ -979,7 +1000,6 @@ export default definePluginEntry({
             const resolvedCategory = category ?? existing.category;
             const resolvedImportance = importance ?? existing.importance;
 
-            const vector = await embeddings.embed(text);
             const oldTextPreview = existing.text.slice(0, 80);
 
             // Delete the old entry
@@ -1032,10 +1052,23 @@ export default definePluginEntry({
             }
 
             // Append to audit log (metadata only — memory text is private user data
-            // and must never be written to audit logs).
+            // and must never be written to audit logs). The directory and file
+            // are created with restrictive modes so the audit trail is not
+            // world-readable on multi-user hosts where the process umask is
+            // permissive (e.g. 0o022).
             const auditLogPath = path.join(homedir(), ".openclaw", "memory", "refresh-audit.jsonl");
             try {
-              await mkdir(path.dirname(auditLogPath), { recursive: true });
+              await mkdir(path.dirname(auditLogPath), { recursive: true, mode: 0o700 });
+              // Detect first-time creation so we can explicitly chmod after
+              // open(). open(path, "a", mode) honors mode only when the file
+              // does not yet exist, so for existing-but-loose files we still
+              // need an explicit chmod to enforce 0o600.
+              let preexisting = true;
+              try {
+                await stat(auditLogPath);
+              } catch {
+                preexisting = false;
+              }
               const auditEntry = {
                 ts: Date.now(),
                 operation: "replaced",
@@ -1043,7 +1076,17 @@ export default definePluginEntry({
                 new_id: newEntry.id,
                 similarity,
               };
-              await appendFile(auditLogPath, JSON.stringify(auditEntry) + "\n", "utf8");
+              const handle = await open(auditLogPath, "a", 0o600);
+              try {
+                await appendFile(handle, JSON.stringify(auditEntry) + "\n", "utf8");
+              } finally {
+                await handle.close();
+              }
+              if (!preexisting) {
+                // Belt-and-braces: even when open(..., 0o600) created the file,
+                // some platforms still apply the umask, so re-assert the mode.
+                await chmod(auditLogPath, 0o600);
+              }
             } catch (auditErr) {
               api.logger.warn(`memory-lancedb: audit log write failed: ${String(auditErr)}`);
             }

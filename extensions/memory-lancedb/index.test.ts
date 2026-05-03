@@ -2373,9 +2373,8 @@ describe("memory plugin e2e", () => {
 
       // Check audit log was written
       auditLogPath = `${getTmpDir()}/.openclaw/memory/refresh-audit.jsonl`;
-      const auditContent = await import("node:fs/promises").then((fsPromises) =>
-        fsPromises.readFile(auditLogPath!, "utf8").catch(() => null),
-      );
+      const fsPromises = await import("node:fs/promises");
+      const auditContent = await fsPromises.readFile(auditLogPath!, "utf8").catch(() => null);
       expect(auditContent).not.toBeNull();
       const auditLine = JSON.parse(auditContent!.trim());
       expect(auditLine.operation).toBe("replaced");
@@ -2385,6 +2384,18 @@ describe("memory plugin e2e", () => {
       expect(auditLine.old_text).toBeUndefined();
       expect(auditLine.new_text).toBeUndefined();
       expect(auditLine.ts).toBeGreaterThan(0);
+
+      // Audit log directory and file must not be world-readable: the file
+      // contains memory ids and timestamps that should not leak across users
+      // on shared hosts where the process umask is permissive (e.g. 0o022).
+      // On non-POSIX platforms (Windows) mode bits are not meaningfully
+      // enforced, so skip the assertion there.
+      if (process.platform !== "win32") {
+        const fileStat = await fsPromises.stat(auditLogPath!);
+        expect(fileStat.mode & 0o777).toBe(0o600);
+        const dirStat = await fsPromises.stat(`${getTmpDir()}/.openclaw/memory`);
+        expect(dirStat.mode & 0o777).toBe(0o700);
+      }
     } finally {
       vi.doUnmock("openai");
       vi.doUnmock("@lancedb/lancedb");
