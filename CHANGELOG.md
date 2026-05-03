@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Doctor/plugins: update configured plugin installs whose stale manifests still declare channels without `channelConfigs`, so beta upgrades repair old Discord-style package payloads during `doctor --fix`.
 - Doctor/plugins: repair configured external plugin installs whose persisted install record points at a missing package directory, so upgrades reconcile phantom npm metadata before plugin runtime validation. Thanks @vincentkoc.
 - Active Memory: keep non-empty `memory_search` results from being fast-failed as empty when debug telemetry reports zero hits.
+- Active Memory: preserve the target agent context when building embedded recall plugin tools so `memory_search` and `memory_get` stay available for explicit recall sessions. Fixes #76343. Thanks @Countermarch.
 - Plugins/externalization: repair missing configured plugin installs from npm by default, reserve ClawHub downloads for explicit `clawhubSpec` metadata, and cover agent-runtime/env-selected plugin repair. Thanks @vincentkoc.
 - Plugins/install: allow official catalog-matched npm channel plugins such as Feishu to pass the trusted install scanner path while keeping spoofed package names blocked. Thanks @vincentkoc.
 - Feishu: keep timeout env parsing separate from the HTTP client wrapper so package security scans no longer report a false env-harvesting hit during install. Thanks @vincentkoc.
