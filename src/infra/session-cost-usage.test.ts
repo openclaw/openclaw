@@ -225,6 +225,64 @@ describe("session cost usage", () => {
     });
   });
 
+  it("refreshes append-only durable aggregate cache by scanning only appended bytes", async () => {
+    const root = await makeSessionCostRoot("cost-cache-append");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-append.jsonl");
+    const entry = {
+      type: "message",
+      timestamp: "2026-02-05T12:00:00.000Z",
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: 10,
+          output: 20,
+          totalTokens: 30,
+          cost: { total: 0.03 },
+        },
+      },
+    };
+
+    await fs.writeFile(sessionFile, transcriptText("sess-cache-append", entry), "utf-8");
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const beforeCache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        files: Record<string, { parsedRecords: number; countedRecords: number }>;
+      };
+      expect(beforeCache.files[sessionFile]?.parsedRecords).toBe(1);
+
+      await fs.appendFile(
+        sessionFile,
+        `${JSON.stringify({
+          ...entry,
+          timestamp: "2026-02-05T12:01:00.000Z",
+        })}\n`,
+        "utf-8",
+      );
+      await refreshCostUsageCache();
+
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      const afterCache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        files: Record<string, { parsedRecords: number; countedRecords: number }>;
+      };
+
+      expect(summary.totals.totalTokens).toBe(60);
+      expect(summary.totals.totalCost).toBeCloseTo(0.06, 5);
+      expect(summary.cacheStatus?.status).toBe("fresh");
+      expect(afterCache.files[sessionFile]?.parsedRecords).toBe(2);
+      expect(afterCache.files[sessionFile]?.countedRecords).toBe(2);
+    });
+  });
+
   it("summarizes a single session file", async () => {
     const root = await makeSessionCostRoot("cost-session");
     const sessionFile = path.join(root, "session.jsonl");

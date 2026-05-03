@@ -139,6 +139,24 @@ const addTotals = (target: CostUsageTotals, source: CostUsageTotals): void => {
   target.missingCostEntries += source.missingCostEntries;
 };
 
+function mergeDailyTotals(
+  existing: UsageCostCachedDailyEntry[],
+  added: UsageCostCachedDailyEntry[],
+): UsageCostCachedDailyEntry[] {
+  const byDate = new Map<string, CostUsageTotals>();
+  for (const entry of existing) {
+    byDate.set(entry.date, cloneTotals(entry));
+  }
+  for (const entry of added) {
+    const bucket = byDate.get(entry.date) ?? emptyTotals();
+    addTotals(bucket, entry);
+    byDate.set(entry.date, bucket);
+  }
+  return Array.from(byDate.entries())
+    .map(([date, bucket]) => Object.assign({ date }, bucket))
+    .toSorted((a, b) => a.date.localeCompare(b.date));
+}
+
 function resolveUsageCostCachePath(agentId?: string): string {
   return path.join(resolveSessionTranscriptsDirForAgent(agentId), USAGE_COST_CACHE_FILE);
 }
@@ -544,8 +562,14 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
   totals.totalCost += costTotal;
 };
 
-async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
-  const fileStream = fs.createReadStream(filePath, { encoding: "utf-8" });
+async function* readJsonlRecords(
+  filePath: string,
+  startOffset = 0,
+): AsyncGenerator<Record<string, unknown>> {
+  const fileStream = fs.createReadStream(filePath, {
+    encoding: "utf-8",
+    start: Math.max(0, startOffset),
+  });
   const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
   try {
     for await (const line of rl) {
@@ -572,9 +596,10 @@ async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string
 async function scanTranscriptFile(params: {
   filePath: string;
   config?: OpenClawConfig;
+  startOffset?: number;
   onEntry: (entry: ParsedTranscriptEntry) => void;
 }): Promise<void> {
-  for await (const parsed of readJsonlRecords(params.filePath)) {
+  for await (const parsed of readJsonlRecords(params.filePath, params.startOffset)) {
     const entry = parseTranscriptEntry(parsed);
     if (!entry) {
       continue;
@@ -606,11 +631,13 @@ async function scanTranscriptFile(params: {
 async function scanUsageFile(params: {
   filePath: string;
   config?: OpenClawConfig;
+  startOffset?: number;
   onEntry: (entry: ParsedUsageEntry) => void;
 }): Promise<void> {
   await scanTranscriptFile({
     filePath: params.filePath,
     config: params.config,
+    startOffset: params.startOffset,
     onEntry: (entry) => {
       if (!entry.usage) {
         return;
@@ -785,15 +812,27 @@ export async function loadCostUsageSummary(params?: {
 async function scanUsageFileForCache(params: {
   file: UsageCostTranscriptFile;
   config?: OpenClawConfig;
+  previous?: UsageCostCacheFileEntry;
 }): Promise<UsageCostCacheFileEntry> {
+  const appendOnlyPrevious =
+    params.previous &&
+    params.previous.filePath === params.file.filePath &&
+    params.previous.size > 0 &&
+    params.previous.size < params.file.size &&
+    params.previous.mtimeMs <= params.file.mtimeMs
+      ? params.previous
+      : undefined;
   const dailyMap = new Map<string, CostUsageTotals>();
   const totals = emptyTotals();
   let parsedRecords = 0;
   let countedRecords = 0;
+  let firstDeltaActivity: number | undefined;
+  let lastDeltaActivity: number | undefined;
 
   await scanUsageFile({
     filePath: params.file.filePath,
     config: params.config,
+    startOffset: appendOnlyPrevious?.size,
     onEntry: (entry) => {
       parsedRecords += 1;
       const ts = entry.timestamp?.getTime();
@@ -801,6 +840,8 @@ async function scanUsageFileForCache(params: {
         return;
       }
       countedRecords += 1;
+      firstDeltaActivity = firstDeltaActivity === undefined ? ts : Math.min(firstDeltaActivity, ts);
+      lastDeltaActivity = lastDeltaActivity === undefined ? ts : Math.max(lastDeltaActivity, ts);
       const dayKey = formatDayKey(entry.timestamp ?? new Date(ts));
       const bucket = dailyMap.get(dayKey) ?? emptyTotals();
       applyUsageTotals(bucket, entry.usage);
@@ -820,6 +861,78 @@ async function scanUsageFileForCache(params: {
     },
   });
 
+  const daily = Array.from(dailyMap.entries())
+    .map(([date, bucket]) => Object.assign({ date }, cloneTotals(bucket)))
+    .toSorted((a, b) => a.date.localeCompare(b.date));
+
+  if (appendOnlyPrevious) {
+    const previousTotals = cloneTotals(appendOnlyPrevious.totals);
+    addTotals(previousTotals, totals);
+    const sessionSummary = appendOnlyPrevious.sessionSummary
+      ? { ...appendOnlyPrevious.sessionSummary }
+      : undefined;
+    if (sessionSummary) {
+      sessionSummary.input += totals.input;
+      sessionSummary.output += totals.output;
+      sessionSummary.cacheRead += totals.cacheRead;
+      sessionSummary.cacheWrite += totals.cacheWrite;
+      sessionSummary.totalTokens += totals.totalTokens;
+      sessionSummary.totalCost += totals.totalCost;
+      sessionSummary.inputCost += totals.inputCost;
+      sessionSummary.outputCost += totals.outputCost;
+      sessionSummary.cacheReadCost += totals.cacheReadCost;
+      sessionSummary.cacheWriteCost += totals.cacheWriteCost;
+      sessionSummary.missingCostEntries += totals.missingCostEntries;
+      sessionSummary.lastActivity =
+        sessionSummary.lastActivity === undefined
+          ? lastDeltaActivity
+          : lastDeltaActivity === undefined
+            ? sessionSummary.lastActivity
+            : Math.max(sessionSummary.lastActivity, lastDeltaActivity);
+      sessionSummary.firstActivity =
+        sessionSummary.firstActivity === undefined
+          ? firstDeltaActivity
+          : firstDeltaActivity === undefined
+            ? sessionSummary.firstActivity
+            : Math.min(sessionSummary.firstActivity, firstDeltaActivity);
+      sessionSummary.durationMs =
+        sessionSummary.firstActivity !== undefined && sessionSummary.lastActivity !== undefined
+          ? Math.max(0, sessionSummary.lastActivity - sessionSummary.firstActivity)
+          : undefined;
+      sessionSummary.activityDates = Array.from(
+        new Set([...(sessionSummary.activityDates ?? []), ...daily.map((entry) => entry.date)]),
+      ).toSorted();
+      const dailyBreakdownByDate = new Map(
+        (sessionSummary.dailyBreakdown ?? []).map((entry) => [
+          entry.date,
+          { tokens: entry.tokens, cost: entry.cost },
+        ]),
+      );
+      for (const entry of daily) {
+        const existing = dailyBreakdownByDate.get(entry.date) ?? { tokens: 0, cost: 0 };
+        dailyBreakdownByDate.set(entry.date, {
+          tokens: existing.tokens + entry.totalTokens,
+          cost: existing.cost + entry.totalCost,
+        });
+      }
+      sessionSummary.dailyBreakdown = Array.from(dailyBreakdownByDate.entries())
+        .map(([date, entry]) => ({ date, tokens: entry.tokens, cost: entry.cost }))
+        .toSorted((a, b) => a.date.localeCompare(b.date));
+    }
+
+    return {
+      ...appendOnlyPrevious,
+      size: params.file.size,
+      mtimeMs: params.file.mtimeMs,
+      scannedAt: Date.now(),
+      parsedRecords: appendOnlyPrevious.parsedRecords + parsedRecords,
+      countedRecords: appendOnlyPrevious.countedRecords + countedRecords,
+      daily: mergeDailyTotals(appendOnlyPrevious.daily, daily),
+      totals: previousTotals,
+      sessionSummary,
+    };
+  }
+
   const sessionId =
     parseUsageCountedSessionIdFromFileName(path.basename(params.file.filePath)) ?? undefined;
   const sessionSummary = await loadSessionCostSummary({
@@ -835,9 +948,7 @@ async function scanUsageFileForCache(params: {
     scannedAt: Date.now(),
     parsedRecords,
     countedRecords,
-    daily: Array.from(dailyMap.entries())
-      .map(([date, bucket]) => Object.assign({ date }, cloneTotals(bucket)))
-      .toSorted((a, b) => a.date.localeCompare(b.date)),
+    daily,
     totals,
     sessionId,
     sessionSummary: sessionSummary ?? undefined,
@@ -876,6 +987,7 @@ export async function refreshCostUsageCache(params?: {
       cache.files[file.filePath] = await scanUsageFileForCache({
         file,
         config: params?.config,
+        previous: cache.files[file.filePath],
       });
       cache.updatedAt = Date.now();
       await writeUsageCostCache(cachePath, cache);
