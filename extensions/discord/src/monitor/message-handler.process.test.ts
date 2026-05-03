@@ -67,7 +67,7 @@ vi.mock("../send.js", () => ({
 }));
 
 const discordTargetMocks = vi.hoisted(() => ({
-  resolveDiscordTargetChannelId: vi.fn(async (target: string) => ({
+  resolveDiscordTargetChannelId: vi.fn(async (target: string, _opts?: unknown) => ({
     channelId: target === "user:u1" ? "dm-u1" : target,
   })),
 }));
