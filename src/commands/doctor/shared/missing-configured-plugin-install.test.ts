@@ -125,6 +125,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           npmSpec: "@openclaw/plugin-matrix@1.2.3",
           expectedIntegrity: "sha512-test",
         },
+        trustedSourceLinkedOfficialInstall: true,
       },
     ]);
 
@@ -146,6 +147,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         extensionsDir: "/tmp/openclaw-plugins",
         expectedPluginId: "matrix",
         expectedIntegrity: "sha512-test",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
@@ -224,6 +226,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         install: {
           npmSpec: "@openclaw/plugin-matrix@1.2.3",
         },
+        trustedSourceLinkedOfficialInstall: true,
       },
     ]);
 
@@ -240,6 +243,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         spec: "@openclaw/plugin-matrix@1.2.3",
         extensionsDir: "/tmp/openclaw-plugins",
         expectedPluginId: "matrix",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
@@ -273,6 +277,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           clawhubSpec: "clawhub:@openclaw/plugin-matrix@stable",
           npmSpec: "@openclaw/plugin-matrix@1.2.3",
         },
+        trustedSourceLinkedOfficialInstall: true,
       },
     ]);
 
@@ -289,6 +294,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect.objectContaining({
         spec: "@openclaw/plugin-matrix@1.2.3",
         expectedPluginId: "matrix",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(result.changes).toEqual([
@@ -321,6 +327,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           npmSpec: "@openclaw/twitch",
           defaultChoice: "npm",
         },
+        trustedSourceLinkedOfficialInstall: true,
       },
     ]);
 
@@ -338,6 +345,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect.objectContaining({
         spec: "@openclaw/twitch",
         expectedPluginId: "twitch",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(result.changes).toEqual([
@@ -630,6 +638,90 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
+  it("defers channel-selected external payload repair during the package update doctor pass", async () => {
+    const records = {
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/missing/discord",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "discord",
+        pluginId: "discord",
+        meta: { label: "Discord" },
+        install: {
+          npmSpec: "@openclaw/discord",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        channels: {
+          discord: { enabled: true, token: "secret" },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      },
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      {},
+      {
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        },
+      },
+    );
+    expect(result).toEqual({
+      changes: [
+        'Deferred missing configured plugin "discord" install repair until post-update doctor.',
+      ],
+      warnings: [],
+    });
+  });
+
+  it("does not install channel-selected external plugins during the package update doctor pass", async () => {
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "discord",
+        pluginId: "discord",
+        meta: { label: "Discord" },
+        install: {
+          npmSpec: "@openclaw/discord",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        channels: {
+          discord: { enabled: true, token: "secret" },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      },
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(result).toEqual({ changes: [], warnings: [] });
+  });
+
   it("does not install configured plugins when plugins are globally disabled", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
@@ -729,6 +821,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         expectedPluginId: "wecom",
       }),
     );
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
     expect(result.changes).toEqual([
       'Installed missing configured plugin "wecom" from @wecom/wecom-openclaw-plugin@2026.4.23.',
     ]);
@@ -779,6 +876,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect.objectContaining({
         spec: "@openclaw/codex",
         expectedPluginId: "codex",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
@@ -856,6 +954,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect.objectContaining({
         spec: "@openclaw/codex",
         expectedPluginId: "codex",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
@@ -989,6 +1088,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         install: {
           npmSpec: "@openclaw/discord",
         },
+        trustedSourceLinkedOfficialInstall: true,
       },
     ]);
     mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
@@ -1048,6 +1148,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect.objectContaining({
         spec: "@openclaw/discord",
         expectedPluginId: "discord",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
@@ -1392,6 +1493,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect.objectContaining({
         spec: "@openclaw/brave-plugin",
         expectedPluginId: "brave",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(result.changes).toEqual([

@@ -6,6 +6,10 @@
       "source": "external",
       "kind": "channel",
       "openclaw": {
+        "plugin": {
+          "id": "wecom-openclaw-plugin",
+          "label": "WeCom"
+        },
         "channel": {
           "id": "wecom",
           "label": "WeCom",
@@ -30,6 +34,10 @@
       "source": "external",
       "kind": "channel",
       "openclaw": {
+        "plugin": {
+          "id": "openclaw-plugin-yuanbao",
+          "label": "Yuanbao"
+        },
         "channel": {
           "id": "yuanbao",
           "label": "Yuanbao",
@@ -168,7 +176,7 @@
           ]
         },
         "install": {
-          "npmSpec": "@openclaw/googlechat",
+          "npmSpec": "@openclaw/googlechat@beta",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
         }
@@ -193,7 +201,7 @@
           "quickstartAllowFrom": true
         },
         "install": {
-          "npmSpec": "@openclaw/line",
+          "npmSpec": "@openclaw/line@beta",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
         }

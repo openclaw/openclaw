@@ -74,6 +74,10 @@ describe("buildOfficialChannelCatalog", () => {
         expect.objectContaining({
           name: "@wecom/wecom-openclaw-plugin",
           openclaw: expect.objectContaining({
+            plugin: {
+              id: "wecom-openclaw-plugin",
+              label: "WeCom",
+            },
             channel: expect.objectContaining({
               id: "wecom",
               label: "WeCom",
@@ -89,6 +93,10 @@ describe("buildOfficialChannelCatalog", () => {
         expect.objectContaining({
           name: "openclaw-plugin-yuanbao",
           openclaw: expect.objectContaining({
+            plugin: {
+              id: "openclaw-plugin-yuanbao",
+              label: "Yuanbao",
+            },
             channel: expect.objectContaining({
               id: "yuanbao",
               label: "Yuanbao",

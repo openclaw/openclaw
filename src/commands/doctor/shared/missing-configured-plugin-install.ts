@@ -36,6 +36,7 @@ type DownloadableInstallCandidate = {
   npmSpec?: string;
   clawhubSpec?: string;
   expectedIntegrity?: string;
+  trustedSourceLinkedOfficialInstall?: boolean;
   defaultChoice?: PluginPackageInstall["defaultChoice"];
 };
 
@@ -44,12 +45,14 @@ const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[]
     pluginId: "acpx",
     label: "ACPX Runtime",
     npmSpec: "@openclaw/acpx",
+    trustedSourceLinkedOfficialInstall: true,
   },
   // Runtime-only configs do not have a provider/channel integration catalog entry.
   {
     pluginId: "codex",
     label: "Codex",
     npmSpec: "@openclaw/codex",
+    trustedSourceLinkedOfficialInstall: true,
   },
 ];
 
@@ -201,6 +204,9 @@ function collectDownloadableInstallCandidates(params: {
       ...(entry.install.expectedIntegrity
         ? { expectedIntegrity: entry.install.expectedIntegrity }
         : {}),
+      ...(entry.trustedSourceLinkedOfficialInstall
+        ? { trustedSourceLinkedOfficialInstall: true }
+        : {}),
       ...(entry.install.defaultChoice ? { defaultChoice: entry.install.defaultChoice } : {}),
     });
   }
@@ -229,6 +235,7 @@ function collectDownloadableInstallCandidates(params: {
       ...(entry.install.expectedIntegrity
         ? { expectedIntegrity: entry.install.expectedIntegrity }
         : {}),
+      ...(entry.origin === "bundled" ? { trustedSourceLinkedOfficialInstall: true } : {}),
       ...(entry.install.defaultChoice ? { defaultChoice: entry.install.defaultChoice } : {}),
     });
   }
@@ -256,6 +263,7 @@ function collectDownloadableInstallCandidates(params: {
       ...(npmSpec ? { npmSpec } : {}),
       ...(clawhubSpec ? { clawhubSpec } : {}),
       ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
+      trustedSourceLinkedOfficialInstall: true,
       ...(install.defaultChoice ? { defaultChoice: install.defaultChoice } : {}),
     });
   }
@@ -273,6 +281,27 @@ function collectDownloadableInstallCandidates(params: {
   return [...candidates.values()].toSorted((left, right) =>
     left.pluginId.localeCompare(right.pluginId),
   );
+}
+
+function collectUpdateDeferredPluginIds(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  configuredPluginIds: ReadonlySet<string>;
+  configuredChannelIds: ReadonlySet<string>;
+  blockedPluginIds?: ReadonlySet<string>;
+}): Set<string> {
+  const pluginIds = new Set(params.configuredPluginIds);
+  for (const candidate of collectDownloadableInstallCandidates({
+    cfg: params.cfg,
+    env: params.env,
+    missingPluginIds: new Set(),
+    configuredPluginIds: params.configuredPluginIds,
+    configuredChannelIds: params.configuredChannelIds,
+    blockedPluginIds: params.blockedPluginIds,
+  })) {
+    pluginIds.add(candidate.pluginId);
+  }
+  return pluginIds;
 }
 
 function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
@@ -398,6 +427,9 @@ async function installCandidate(params: {
     extensionsDir,
     expectedPluginId: candidate.pluginId,
     expectedIntegrity: candidate.expectedIntegrity,
+    ...(candidate.trustedSourceLinkedOfficialInstall
+      ? { trustedSourceLinkedOfficialInstall: true }
+      : {}),
     mode: "install",
   });
   if (!result.ok) {
@@ -515,7 +547,15 @@ async function repairMissingPluginInstalls(params: {
   }
 
   if (isUpdatePackageDoctorPass(env)) {
-    for (const pluginId of params.pluginIds) {
+    const updateDeferredPluginIds = collectUpdateDeferredPluginIds({
+      cfg: params.cfg,
+      env,
+      configuredPluginIds: params.pluginIds,
+      configuredChannelIds: params.channelIds,
+      blockedPluginIds: params.blockedPluginIds,
+    });
+    for (const pluginId of updateDeferredPluginIds) {
+      deferredPluginIds.add(pluginId);
       const record = nextRecords[pluginId];
       if (!record || !isInstalledRecordMissingOnDisk(record, env)) {
         continue;
@@ -524,7 +564,6 @@ async function repairMissingPluginInstalls(params: {
         nextRecords = { ...records };
       }
       delete nextRecords[pluginId];
-      deferredPluginIds.add(pluginId);
       changes.push(
         `Deferred missing configured plugin "${pluginId}" install repair until post-update doctor.`,
       );

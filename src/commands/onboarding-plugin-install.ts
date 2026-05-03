@@ -30,6 +30,7 @@ export type OnboardingPluginInstallEntry = {
   pluginId: string;
   label: string;
   install: PluginPackageInstall;
+  trustedSourceLinkedOfficialInstall?: boolean;
 };
 
 export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
@@ -273,11 +274,21 @@ function resolveInstallDefaultChoice(params: {
 }): InstallChoice {
   const { cfg, entry, localPath, bundledLocalPath, hasClawHubSpec, hasNpmSpec } = params;
   const hasRemoteSpec = hasClawHubSpec || hasNpmSpec;
+  const entryDefault = entry.install.defaultChoice;
+  const remoteDefault = (): InstallChoice => {
+    if (entryDefault === "clawhub" && hasClawHubSpec) {
+      return "clawhub";
+    }
+    if (entryDefault === "npm" && hasNpmSpec) {
+      return "npm";
+    }
+    return hasNpmSpec ? "npm" : "clawhub";
+  };
   if (!hasRemoteSpec) {
     return localPath ? "local" : "skip";
   }
   if (!localPath) {
-    return hasClawHubSpec ? "clawhub" : "npm";
+    return remoteDefault();
   }
   if (bundledLocalPath) {
     return "local";
@@ -287,19 +298,12 @@ function resolveInstallDefaultChoice(params: {
     return "local";
   }
   if (updateChannel === "stable" || updateChannel === "beta") {
-    return hasClawHubSpec ? "clawhub" : "npm";
-  }
-  const entryDefault = entry.install.defaultChoice;
-  if (entryDefault === "clawhub" && hasClawHubSpec) {
-    return "clawhub";
+    return remoteDefault();
   }
   if (entryDefault === "local") {
     return "local";
   }
-  if (entryDefault === "npm") {
-    return "npm";
-  }
-  return hasClawHubSpec ? "clawhub" : "local";
+  return remoteDefault();
 }
 
 async function promptInstallChoice(params: {
@@ -582,7 +586,11 @@ async function installPluginFromNpmSpecWithProgress(params: {
       installPluginFromNpmSpec({
         spec: params.npmSpec,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
+        expectedPluginId: params.entry.pluginId,
         expectedIntegrity: params.entry.install.expectedIntegrity,
+        ...(params.entry.trustedSourceLinkedOfficialInstall
+          ? { trustedSourceLinkedOfficialInstall: true }
+          : {}),
         extensionsDir: resolveDefaultPluginExtensionsDir(),
         logger: {
           info: updateProgress,

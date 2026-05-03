@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.2",
+  "version": "2026.5.3",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -694,6 +694,14 @@
     "./plugin-sdk/discord": {
       "types": "./dist/plugin-sdk/discord.d.ts",
       "default": "./dist/plugin-sdk/discord.js"
+    },
+    "./plugin-sdk/mattermost": {
+      "types": "./dist/plugin-sdk/mattermost.d.ts",
+      "default": "./dist/plugin-sdk/mattermost.js"
+    },
+    "./plugin-sdk/matrix": {
+      "types": "./dist/plugin-sdk/matrix.d.ts",
+      "default": "./dist/plugin-sdk/matrix.js"
     },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
@@ -1432,8 +1440,8 @@
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "perf:kova:summary": "node scripts/kova-ci-summary.mjs",
     "perf:source:summary": "node scripts/openclaw-performance-source-summary.mjs",
-    "plugin-sdk:api:check": "node --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
-    "plugin-sdk:api:gen": "node --import tsx scripts/generate-plugin-sdk-api-baseline.ts --write",
+    "plugin-sdk:api:check": "node --max-old-space-size=4096 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
+    "plugin-sdk:api:gen": "node --max-old-space-size=4096 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --write",
     "plugin-sdk:check-exports": "node scripts/sync-plugin-sdk-exports.mjs --check",
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
     "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
@@ -1543,12 +1551,14 @@
     "test:docker:local:all": "OPENCLAW_DOCKER_ALL_LIVE_MODE=skip node scripts/test-docker-all.mjs",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
     "test:docker:npm-onboard-channel-agent": "bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
+    "test:docker:npm-onboard-discord-channel-agent": "OPENCLAW_NPM_ONBOARD_CHANNEL=discord bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
     "test:docker:npm-telegram-live": "bash scripts/e2e/npm-telegram-live-docker.sh",
     "test:docker:onboard": "bash scripts/e2e/onboard-docker.sh",
     "test:docker:openai-image-auth": "bash scripts/e2e/openai-image-auth-docker.sh",
     "test:docker:openai-web-search-minimal": "bash scripts/e2e/openai-web-search-minimal-docker.sh",
     "test:docker:openwebui": "bash scripts/e2e/openwebui-docker.sh",
     "test:docker:pi-bundle-mcp-tools": "bash scripts/e2e/pi-bundle-mcp-tools-docker.sh",
+    "test:docker:plugin-lifecycle-matrix": "bash scripts/e2e/plugin-lifecycle-matrix-docker.sh",
     "test:docker:plugin-update": "bash scripts/e2e/plugin-update-unchanged-docker.sh",
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",
     "test:docker:published-upgrade-survivor": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} bash scripts/e2e/upgrade-survivor-docker.sh",
@@ -1697,13 +1707,14 @@
     "playwright-core": "1.59.1",
     "proxy-agent": "^8.0.1",
     "qrcode": "1.5.4",
-    "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tokenjuice": "0.7.0",
+    "tree-sitter-bash": "^0.25.1",
     "tslog": "^4.10.2",
     "typebox": "1.1.37",
     "undici": "8.1.0",
     "web-push": "^3.6.7",
+    "web-tree-sitter": "^0.26.8",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^4.4.1"
@@ -1731,6 +1742,9 @@
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
+  },
+  "optionalDependencies": {
+    "sqlite-vec": "0.1.9"
   },
   "overrides": {
     "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
@@ -1784,7 +1798,8 @@
       "sharp"
     ],
     "ignoredBuiltDependencies": [
-      "koffi"
+      "koffi",
+      "tree-sitter-bash"
     ],
     "packageExtensions": {
       "@mariozechner/pi-coding-agent": {

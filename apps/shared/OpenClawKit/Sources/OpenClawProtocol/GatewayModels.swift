@@ -2804,6 +2804,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
     public let channels: [String: AnyCodable]
     public let channelaccounts: [String: AnyCodable]
     public let channeldefaultaccountid: [String: AnyCodable]
+    public let eventloop: [String: AnyCodable]?
 
     public init(
         ts: Int,
@@ -2814,7 +2815,8 @@ public struct ChannelsStatusResult: Codable, Sendable {
         channelmeta: [[String: AnyCodable]]?,
         channels: [String: AnyCodable],
         channelaccounts: [String: AnyCodable],
-        channeldefaultaccountid: [String: AnyCodable])
+        channeldefaultaccountid: [String: AnyCodable],
+        eventloop: [String: AnyCodable]?)
     {
         self.ts = ts
         self.channelorder = channelorder
@@ -2825,6 +2827,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
         self.channels = channels
         self.channelaccounts = channelaccounts
         self.channeldefaultaccountid = channeldefaultaccountid
+        self.eventloop = eventloop
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2837,6 +2840,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
         case channels
         case channelaccounts = "channelAccounts"
         case channeldefaultaccountid = "channelDefaultAccountId"
+        case eventloop = "eventLoop"
     }
 }
 

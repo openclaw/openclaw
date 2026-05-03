@@ -8,6 +8,11 @@ import {
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
+  removeManagedNpmRootDependency,
+  resolveManagedNpmRootDependencySpec,
+  upsertManagedNpmRootDependency,
+} from "../infra/npm-managed-root.js";
+import {
   formatPrereleaseResolutionError,
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
@@ -110,7 +115,6 @@ type PluginInstallPolicyRequest = {
 };
 
 const defaultLogger: PluginInstallLogger = {};
-const TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES = new Map([["@openclaw/codex", "codex"]]);
 
 function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
   | {
@@ -186,26 +190,6 @@ function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
   );
 }
 
-function isTrustedOfficialNpmPluginInstall(params: {
-  installPolicyRequest?: PluginInstallPolicyRequest;
-  packageName: string;
-  pluginId: string;
-}): boolean {
-  if (params.installPolicyRequest?.kind !== "plugin-npm") {
-    return false;
-  }
-  const requested = parseRegistryNpmSpec(params.installPolicyRequest.requestedSpecifier ?? "");
-  if (!requested) {
-    return false;
-  }
-  const expectedPluginId = TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES.get(requested.name);
-  return (
-    expectedPluginId !== undefined &&
-    params.packageName === requested.name &&
-    params.pluginId === expectedPluginId
-  );
-}
-
 function buildBlockedInstallResult(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
 }): Extract<InstallPluginResult, { ok: false }> {
@@ -218,6 +202,55 @@ function buildBlockedInstallResult(params: {
         ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED }
         : {}),
   };
+}
+
+async function rollbackManagedNpmPluginInstall(params: {
+  npmRoot: string;
+  packageName: string;
+  targetDir: string;
+  timeoutMs: number;
+  logger: PluginInstallLogger;
+}): Promise<void> {
+  try {
+    await runCommandWithTimeout(
+      [
+        "npm",
+        "uninstall",
+        "--loglevel=error",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--prefix",
+        params.npmRoot,
+        params.packageName,
+      ],
+      {
+        timeoutMs: Math.max(params.timeoutMs, 300_000),
+        env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+      },
+    );
+  } catch (error) {
+    params.logger.warn?.(
+      `Failed to run npm uninstall rollback for ${params.packageName}: ${String(error)}`,
+    );
+  }
+  try {
+    await fs.rm(params.targetDir, { recursive: true, force: true });
+  } catch (error) {
+    params.logger.warn?.(
+      `Failed to remove failed plugin install directory ${params.targetDir}: ${String(error)}`,
+    );
+  }
+  try {
+    await removeManagedNpmRootDependency({
+      npmRoot: params.npmRoot,
+      packageName: params.packageName,
+    });
+  } catch (error) {
+    params.logger.warn?.(
+      `Failed to remove managed npm dependency ${params.packageName}: ${String(error)}`,
+    );
+  }
 }
 
 type PackageInstallCommonParams = InstallSafetyOverrides & {
@@ -718,19 +751,12 @@ async function validatePackagePluginInstallSource(params: {
   const scanMode = params.resolveEffectiveMode
     ? await params.resolveEffectiveMode(pluginId)
     : params.mode;
-  const trustedOfficialInstall =
-    params.trustedSourceLinkedOfficialInstall ||
-    isTrustedOfficialNpmPluginInstall({
-      installPolicyRequest: params.installPolicyRequest,
-      packageName: pkgName,
-      pluginId,
-    });
   const scanResult = await runInstallSourceScan({
     subject: `Plugin "${pluginId}"`,
     scan: async () =>
       await params.runtime.scanPackageInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        trustedSourceLinkedOfficialInstall: trustedOfficialInstall,
+        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
         packageDir: params.packageDir,
         pluginId,
         logger: params.logger,
@@ -773,6 +799,9 @@ async function scanAndLinkInstalledPackage(params: {
     subject: `Plugin "${params.pluginId}"`,
     scan: async () =>
       await params.runtime.scanInstalledPackageDependencyTree({
+        allowManagedNpmRootPackagePeerSymlinks:
+          params.dependencyScanRootDir !== undefined &&
+          path.resolve(params.dependencyScanRootDir) !== path.resolve(params.installedDir),
         logger: params.logger,
         packageDir: params.dependencyScanRootDir ?? params.installedDir,
         pluginId: params.pluginId,
@@ -1177,7 +1206,14 @@ export async function installPluginFromNpmSpec(
   }
 
   logger.info?.(`Installing ${spec} into ${npmRoot}…`);
-  await fs.mkdir(npmRoot, { recursive: true });
+  await upsertManagedNpmRootDependency({
+    npmRoot,
+    packageName: parsedSpec.name,
+    dependencySpec: resolveManagedNpmRootDependencySpec({
+      parsedSpec,
+      resolution: npmResolution,
+    }),
+  });
   const install = await runCommandWithTimeout(
     [
       "npm",
@@ -1197,6 +1233,10 @@ export async function installPluginFromNpmSpec(
     },
   );
   if (install.code !== 0) {
+    await removeManagedNpmRootDependency({
+      npmRoot,
+      packageName: parsedSpec.name,
+    });
     return {
       ok: false,
       error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
@@ -1209,6 +1249,7 @@ export async function installPluginFromNpmSpec(
     dependencyScanRootDir: npmRoot,
     logger,
     expectedPluginId,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     mode: effectiveMode,
     installPolicyRequest: {
       kind: "plugin-npm",
@@ -1216,6 +1257,13 @@ export async function installPluginFromNpmSpec(
     },
   });
   if (!result.ok) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: parsedSpec.name,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
     return result;
   }
   return {

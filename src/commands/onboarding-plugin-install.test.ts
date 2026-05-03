@@ -200,6 +200,7 @@ describe("ensureOnboardingPluginInstalled", () => {
           npmSpec: "@wecom/wecom-openclaw-plugin@1.2.3",
           expectedIntegrity: "sha512-wecom",
         },
+        trustedSourceLinkedOfficialInstall: true,
       },
       prompter: {
         select: vi.fn(async () => "npm"),
@@ -211,7 +212,9 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+        expectedPluginId: "demo-plugin",
         expectedIntegrity: "sha512-wecom",
+        trustedSourceLinkedOfficialInstall: true,
         timeoutMs: 300_000,
       }),
     );
@@ -317,7 +320,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
-  it("offers ClawHub as the default remote source when package metadata provides it", async () => {
+  it("defaults dual-source remote installs to npm unless ClawHub is explicit", async () => {
     let captured:
       | {
           options: Array<{
@@ -353,9 +356,39 @@ describe("ensureOnboardingPluginInstalled", () => {
       { value: "npm", label: "Download from npm (@openclaw/demo-plugin@2026.5.2)" },
       { value: "skip", label: "Skip for now" },
     ]);
-    expect(captured?.initialValue).toBe("clawhub");
+    expect(captured?.initialValue).toBe("npm");
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+  });
+
+  it("honors explicit ClawHub defaults for dual-source remote installs", async () => {
+    let captured:
+      | {
+          initialValue: "clawhub" | "npm" | "local" | "skip";
+        }
+      | undefined;
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "stable" } },
+      entry: {
+        pluginId: "demo-plugin",
+        label: "Demo Plugin",
+        install: {
+          clawhubSpec: "clawhub:demo-plugin@2026.5.2",
+          npmSpec: "@openclaw/demo-plugin@2026.5.2",
+          defaultChoice: "clawhub",
+        },
+      },
+      prompter: {
+        select: vi.fn(async (input) => {
+          captured = input;
+          return "skip";
+        }),
+      } as never,
+      runtime: {} as never,
+    });
+
+    expect(captured?.initialValue).toBe("clawhub");
   });
 
   it("does not offer local installs when the workspace only has a spoofed .git marker", async () => {

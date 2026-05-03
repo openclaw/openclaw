@@ -3363,13 +3363,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id uses built-in OpenClaw Pi.",
                   },
-                  fallback: {
-                    type: "string",
-                    enum: ["pi", "none"],
-                    title: "Default Agent Runtime Fallback",
-                    description:
-                      "Agent runtime fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
-                  },
                 },
                 additionalProperties: false,
                 title: "Default Agent Runtime Settings",
@@ -3383,12 +3376,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     title: "Default Legacy Embedded Harness Runtime",
                     description: "Legacy input for agents.defaults.agentRuntime.id.",
-                  },
-                  fallback: {
-                    type: "string",
-                    enum: ["pi", "none"],
-                    title: "Default Legacy Embedded Harness Fallback",
-                    description: "Legacy input for agents.defaults.agentRuntime.fallback.",
                   },
                 },
                 additionalProperties: false,
@@ -6298,13 +6285,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Per-agent agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id inherits the default OpenClaw Pi behavior.",
                     },
-                    fallback: {
-                      type: "string",
-                      enum: ["pi", "none"],
-                      title: "Agent Runtime Fallback",
-                      description:
-                        "Per-agent agent runtime fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
-                    },
                   },
                   additionalProperties: false,
                   title: "Agent Runtime",
@@ -6318,12 +6298,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "string",
                       title: "Agent Legacy Embedded Harness Runtime",
                       description: "Legacy input for agents.list.*.agentRuntime.id.",
-                    },
-                    fallback: {
-                      type: "string",
-                      enum: ["pi", "none"],
-                      title: "Agent Legacy Embedded Harness Fallback",
-                      description: "Legacy input for agents.list.*.agentRuntime.fallback.",
                     },
                   },
                   additionalProperties: false,
@@ -19082,7 +19056,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 enum: ["automatic", "message_tool"],
                 title: "Group Visible Replies",
                 description:
-                  'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+                  'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
               },
             },
             additionalProperties: false,
@@ -24815,11 +24789,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id uses built-in OpenClaw Pi.",
       tags: ["advanced"],
     },
-    "agents.defaults.agentRuntime.fallback": {
-      label: "Default Agent Runtime Fallback",
-      help: "Agent runtime fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
-      tags: ["reliability"],
-    },
     "agents.defaults.embeddedHarness": {
       label: "Default Legacy Embedded Harness Settings",
       help: "Legacy input for agents.defaults.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
@@ -24829,11 +24798,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Default Legacy Embedded Harness Runtime",
       help: "Legacy input for agents.defaults.agentRuntime.id.",
       tags: ["advanced"],
-    },
-    "agents.defaults.embeddedHarness.fallback": {
-      label: "Default Legacy Embedded Harness Fallback",
-      help: "Legacy input for agents.defaults.agentRuntime.fallback.",
-      tags: ["reliability"],
     },
     "agents.list": {
       label: "Agent List",
@@ -24885,11 +24849,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Per-agent agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id inherits the default OpenClaw Pi behavior.",
       tags: ["advanced"],
     },
-    "agents.list.*.agentRuntime.fallback": {
-      label: "Agent Runtime Fallback",
-      help: "Per-agent agent runtime fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
-      tags: ["reliability"],
-    },
     "agents.list.*.embeddedHarness": {
       label: "Agent Legacy Embedded Harness",
       help: "Legacy input for agents.list.*.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
@@ -24899,11 +24858,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Legacy Embedded Harness Runtime",
       help: "Legacy input for agents.list.*.agentRuntime.id.",
       tags: ["advanced"],
-    },
-    "agents.list.*.embeddedHarness.fallback": {
-      label: "Agent Legacy Embedded Harness Fallback",
-      help: "Legacy input for agents.list.*.agentRuntime.fallback.",
-      tags: ["reliability"],
     },
     "gateway.port": {
       label: "Gateway Port",
@@ -28575,7 +28529,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.groupChat.visibleReplies": {
       label: "Group Visible Replies",
-      help: 'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+      help: 'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
       tags: ["advanced"],
     },
     "messages.queue": {
@@ -29341,6 +29295,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.5.2",
+  version: "2026.5.3",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };
