@@ -112,6 +112,23 @@ function getToolResultText(result: AgentToolResult<unknown>): string | undefined
   return textBlocks.join("\n");
 }
 
+function isMissingFileError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ENOENT" || code === "ENOTDIR") {
+    return true;
+  }
+  const message = typeof error === "string" ? error : error instanceof Error ? error.message : "";
+  return /\b(?:ENOENT|ENOTDIR)\b|no such file or directory|not a directory/i.test(message);
+}
+
+function createReadMissingFileError(error: unknown, filePath: string): Error {
+  const message =
+    `read: file not found: ${filePath}. ` +
+    "Verify the exact path before retrying (for example with exec `ls`, `find`, or `pwd`), " +
+    "and use an absolute path or a path relative to the workspace.";
+  return new Error(message, { cause: error });
+}
+
 function withToolResultText(
   result: AgentToolResult<unknown>,
   text: string,
@@ -680,14 +697,22 @@ export function createOpenClawReadTool(
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
       assertRequiredParams(record, REQUIRED_PARAM_GROUPS.read, base.name);
-      const result = await executeReadWithAdaptivePaging({
-        base,
-        toolCallId,
-        args: record ?? {},
-        signal,
-        maxBytes: resolveAdaptiveReadMaxBytes(options),
-      });
       const filePath = typeof record?.path === "string" ? record.path : "<unknown>";
+      let result: AgentToolResult<unknown>;
+      try {
+        result = await executeReadWithAdaptivePaging({
+          base,
+          toolCallId,
+          args: record ?? {},
+          signal,
+          maxBytes: resolveAdaptiveReadMaxBytes(options),
+        });
+      } catch (error) {
+        if (isMissingFileError(error)) {
+          throw createReadMissingFileError(error, filePath);
+        }
+        throw error;
+      }
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
       return sanitizeToolResultImages(
