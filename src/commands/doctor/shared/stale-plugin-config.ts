@@ -4,17 +4,20 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
+const PLUGIN_SLOT_KEYS: readonly PluginSlotKey[] = ["memory", "contextEngine"];
 
-type StalePluginSurface = "allow" | "entries" | "channel" | "heartbeat" | "modelByChannel";
+type StalePluginSurface = "allow" | "entries" | "slot" | "channel" | "heartbeat" | "modelByChannel";
 
 type StalePluginConfigHit = {
   pluginId: string;
   pathLabel: string;
   surface: StalePluginSurface;
+  slotKey?: PluginSlotKey;
 };
 
 type StalePluginRegistryState = {
@@ -131,6 +134,11 @@ function scanStalePluginConfigWithState(
     }
   }
 
+  for (const hit of collectStalePluginSlotHits(cfg, registryState)) {
+    hits.push(hit);
+    staleEvidenceIds.add(normalizePluginId(hit.pluginId));
+  }
+
   const staleChannelIds = collectDanglingChannelIds({
     cfg,
     registryState,
@@ -147,6 +155,37 @@ function scanStalePluginConfigWithState(
     hits.push(hit);
   }
 
+  return hits;
+}
+
+function collectStalePluginSlotHits(
+  cfg: OpenClawConfig,
+  registryState: StalePluginRegistryState,
+): StalePluginConfigHit[] {
+  const slots = asObjectRecord(cfg.plugins?.slots);
+  if (!slots) {
+    return [];
+  }
+  const hits: StalePluginConfigHit[] = [];
+  for (const slotKey of PLUGIN_SLOT_KEYS) {
+    const rawPluginId = slots[slotKey];
+    if (typeof rawPluginId !== "string") {
+      continue;
+    }
+    const pluginId = normalizePluginId(rawPluginId);
+    if (!pluginId || pluginId.toLowerCase() === "none" || registryState.knownIds.has(pluginId)) {
+      continue;
+    }
+    if (slotKey === "contextEngine" && pluginId === defaultSlotIdForKey("contextEngine")) {
+      continue;
+    }
+    hits.push({
+      pluginId: rawPluginId,
+      pathLabel: `plugins.slots.${slotKey}`,
+      surface: "slot",
+      slotKey,
+    });
+  }
   return hits;
 }
 
@@ -239,6 +278,9 @@ function formatStalePluginHitWarning(hit: StalePluginConfigHit): string {
   if (hit.surface === "channel") {
     return `- ${hit.pathLabel}: dangling channel config for missing plugin "${hit.pluginId}" was found.`;
   }
+  if (hit.surface === "slot") {
+    return `- ${hit.pathLabel}: plugin slot references missing plugin "${hit.pluginId}".`;
+  }
   if (hit.surface === "heartbeat") {
     return `- ${hit.pathLabel}: heartbeat target references missing channel plugin "${hit.pluginId}".`;
   }
@@ -260,7 +302,7 @@ export function collectStalePluginConfigWarnings(params: {
     );
   } else {
     lines.push(
-      `- Run "${params.doctorFixCommand}" to remove stale plugin ids and dangling channel references.`,
+      `- Run "${params.doctorFixCommand}" to remove stale plugin ids, reset stale plugin slots, and remove dangling channel references.`,
     );
   }
   return lines.map((line) => sanitizeForLog(line));
@@ -310,6 +352,19 @@ export function maybeRepairStalePluginConfig(
     }
   }
 
+  const slotHits = hits.filter(
+    (hit): hit is StalePluginConfigHit & { slotKey: PluginSlotKey } =>
+      hit.surface === "slot" && hit.slotKey !== undefined,
+  );
+  if (slotHits.length > 0) {
+    const slots = next.plugins?.slots;
+    if (slots) {
+      for (const hit of slotHits) {
+        slots[hit.slotKey] = defaultSlotIdForKey(hit.slotKey);
+      }
+    }
+  }
+
   const channelIds = hits.filter((hit) => hit.surface === "channel").map((hit) => hit.pluginId);
   if (channelIds.length > 0) {
     removeDanglingChannelReferences(next, channelIds);
@@ -324,6 +379,14 @@ export function maybeRepairStalePluginConfig(
   if (entryIds.length > 0) {
     changes.push(
       `- plugins.entries: removed ${entryIds.length} stale plugin entr${entryIds.length === 1 ? "y" : "ies"} (${entryIds.join(", ")})`,
+    );
+  }
+  if (slotHits.length > 0) {
+    const resets = slotHits.map(
+      (hit) => `${hit.slotKey}: ${hit.pluginId} -> ${defaultSlotIdForKey(hit.slotKey)}`,
+    );
+    changes.push(
+      `- plugins.slots: reset ${slotHits.length} stale plugin slot${slotHits.length === 1 ? "" : "s"} (${resets.join(", ")})`,
     );
   }
   if (channelIds.length > 0) {

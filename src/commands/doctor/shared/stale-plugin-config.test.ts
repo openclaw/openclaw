@@ -41,7 +41,12 @@ describe("doctor stale plugin config helpers", () => {
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReset();
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({});
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [manifest("discord"), manifest("voice-call"), manifest("openai")],
+      plugins: [
+        manifest("discord"),
+        manifest("voice-call"),
+        manifest("openai"),
+        manifest("memory-core"),
+      ],
       diagnostics: [],
     });
   });
@@ -96,6 +101,55 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
+  it("resets stale plugin slots while removing matching stale allow and entry refs", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["discord", "openclaw-honcho"],
+        entries: {
+          discord: { enabled: true },
+          "openclaw-honcho": { enabled: true },
+        },
+        slots: {
+          memory: "openclaw-honcho",
+          contextEngine: "lossless-claw",
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([
+      "- plugins.allow: removed 1 stale plugin id (openclaw-honcho)",
+      "- plugins.entries: removed 1 stale plugin entry (openclaw-honcho)",
+      "- plugins.slots: reset 2 stale plugin slots (memory: openclaw-honcho -> memory-core, contextEngine: lossless-claw -> legacy)",
+    ]);
+    expect(result.config.plugins?.allow).toEqual(["discord"]);
+    expect(result.config.plugins?.entries).toEqual({
+      discord: { enabled: true },
+    });
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-core",
+      contextEngine: "legacy",
+    });
+  });
+
+  it("finds stale plugin slots even when the plugin is not listed in allow or entries", () => {
+    expect(
+      scanStalePluginConfig({
+        plugins: {
+          slots: {
+            memory: "openclaw-honcho",
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual([
+      {
+        pluginId: "openclaw-honcho",
+        pathLabel: "plugins.slots.memory",
+        surface: "slot",
+        slotKey: "memory",
+      },
+    ]);
+  });
+
   it("formats stale plugin warnings with a doctor hint", () => {
     const warnings = collectStalePluginConfigWarnings({
       hits: [
@@ -104,12 +158,21 @@ describe("doctor stale plugin config helpers", () => {
           pathLabel: "plugins.allow",
           surface: "allow",
         },
+        {
+          pluginId: "openclaw-honcho",
+          pathLabel: "plugins.slots.memory",
+          surface: "slot",
+          slotKey: "memory",
+        },
       ],
       doctorFixCommand: "openclaw doctor --fix",
     });
 
     expect(warnings).toEqual([
       expect.stringContaining('plugins.allow: stale plugin reference "acpx"'),
+      expect.stringContaining(
+        'plugins.slots.memory: plugin slot references missing plugin "openclaw-honcho"',
+      ),
       expect.stringContaining('Run "openclaw doctor --fix"'),
     ]);
   });
