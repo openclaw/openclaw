@@ -1,28 +1,33 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+/**
+ * Anthropic Provider Policy API
+ * Note: This file must remain zero-dependency to pass OpenClaw bundled extension checks.
+ * We avoid top-level imports from the plugin-sdk to stay within the extension boundary.
+ */
+
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 
-export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {
+export function normalizeConfig(params: { provider: string; providerConfig: any }) {
   return normalizeAnthropicProviderConfigForProvider(params);
 }
 
-export function applyConfigDefaults(params: Parameters<typeof applyAnthropicConfigDefaults>[0]) {
+export function applyConfigDefaults(params: any) {
   return applyAnthropicConfigDefaults(params);
 }
 
 /**
- * Resolves the thinking profile for Anthropic models.
- * Logic is inlined to satisfy zero-dependency rules for bundled extensions.
+ * Resolves thinking profiles for Claude models.
+ * Logic is inlined to avoid external SDK dependencies in the bundled artifact.
  */
 export function resolveThinkingProfile(params: { provider: string; modelId: string }) {
-  const p = params.provider.trim().toLowerCase();
+  const p = params.provider?.trim().toLowerCase();
   if (p !== "anthropic" && p !== "claude-cli") return null;
 
-  const id = params.modelId;
+  const id = params.modelId || "";
 
-  // Extended profile for Claude Opus 4.7
+  // Claude Opus 4.7: Extended Reasoning (max, xhigh, adaptive)
   if (id.includes("claude-opus-4-7") || id.includes("claude-opus-4.7")) {
     return {
       levels: [
@@ -39,7 +44,7 @@ export function resolveThinkingProfile(params: { provider: string; modelId: stri
     };
   }
 
-  // Profile for Sonnet 4.6 (includes adaptive)
+  // Claude Sonnet 4.6: Standard Reasoning + Adaptive
   if (id.includes("4-6") || id.includes("4.6")) {
     return {
       levels: [
@@ -54,7 +59,7 @@ export function resolveThinkingProfile(params: { provider: string; modelId: stri
     };
   }
 
-  // Standard profile for Haiku and legacy models
+  // Haiku / Legacy / Default: Base Reasoning
   return {
     levels: [
       { id: "off", name: "Off" },
