@@ -804,12 +804,26 @@ export function resolvePluginTools(params: {
     onlyPluginIds: runtimePluginIds,
     runtimeOptions,
   });
-  const registry = resolvePluginToolRegistry({
+  let registry = resolvePluginToolRegistry({
     loadOptions,
     onlyPluginIds: runtimePluginIds,
   });
   if (!registry) {
-    return tools;
+    // Cold registry: path-based plugins (origin "config") registered via plugins.load.paths
+    // are not pinned to any active channel/surface registry until explicitly loaded.
+    // Trigger a standalone load so their tool factories become available, then retry.
+    ensureStandaloneRuntimePluginRegistryLoaded({
+      surface: "channel",
+      requiredPluginIds: runtimePluginIds,
+      loadOptions,
+    });
+    registry = resolvePluginToolRegistry({
+      loadOptions,
+      onlyPluginIds: runtimePluginIds,
+    });
+    if (!registry) {
+      return tools;
+    }
   }
 
   const scopedPluginIds = new Set(runtimePluginIds);
