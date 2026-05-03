@@ -9,13 +9,21 @@ import { sweepSessionArchiveFiles } from "./session-archive-cleanup.js";
 // reading the real state dir.
 const mocks = vi.hoisted(() => ({
   resolveAgentSessionDirs: vi.fn<(stateDir: string) => Promise<string[]>>(),
+  resolveAgentSessionDirsFromAgentsDir: vi.fn<(agentsDir: string) => Promise<string[]>>(),
+  resolveAgentSessionDirsFromAgentsDirSync: vi.fn<(agentsDir: string) => string[]>(),
   resolveMaintenanceConfigFromInput: vi.fn(),
+  resolveAllAgentSessionStoreTargets: vi.fn(),
 }));
 vi.mock("../agents/session-dirs.js", () => ({
   resolveAgentSessionDirs: mocks.resolveAgentSessionDirs,
+  resolveAgentSessionDirsFromAgentsDir: mocks.resolveAgentSessionDirsFromAgentsDir,
+  resolveAgentSessionDirsFromAgentsDirSync: mocks.resolveAgentSessionDirsFromAgentsDirSync,
 }));
 vi.mock("../config/sessions/store-maintenance.js", () => ({
   resolveMaintenanceConfigFromInput: mocks.resolveMaintenanceConfigFromInput,
+}));
+vi.mock("../config/sessions/targets.js", () => ({
+  resolveAllAgentSessionStoreTargets: mocks.resolveAllAgentSessionStoreTargets,
 }));
 
 describe("sweepSessionArchiveFiles", () => {
@@ -29,6 +37,7 @@ describe("sweepSessionArchiveFiles", () => {
     fs.mkdirSync(sessionsDir, { recursive: true });
 
     mocks.resolveAgentSessionDirs.mockResolvedValue([sessionsDir]);
+    mocks.resolveAllAgentSessionStoreTargets.mockResolvedValue([]);
     mocks.resolveMaintenanceConfigFromInput.mockReturnValue({
       mode: "warn",
       pruneAfterMs: 30 * 24 * 60 * 60 * 1000,
