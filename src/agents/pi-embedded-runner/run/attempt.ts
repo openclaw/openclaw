@@ -58,7 +58,7 @@ import {
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
   buildBootstrapInjectionStats,
-  prependBootstrapPromptWarning,
+  appendBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
@@ -2585,7 +2585,7 @@ export async function runEmbeddedAttempt(
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
-        let effectivePrompt = prependBootstrapPromptWarning(
+        let effectivePrompt = appendBootstrapPromptWarning(
           params.prompt,
           bootstrapPromptWarning.lines,
           {
