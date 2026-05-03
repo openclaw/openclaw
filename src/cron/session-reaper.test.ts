@@ -70,7 +70,7 @@ describe("sweepCronRunSessions", () => {
     storePath = path.join(tmpDir, "sessions.json");
   });
 
-  it("prunes expired cron run sessions", async () => {
+  it("prunes expired cron sessions (both base and run)", async () => {
     const now = Date.now();
     const store: Record<string, { sessionId: string; updatedAt: number }> = {
       "agent:main:cron:job1": {
@@ -87,7 +87,7 @@ describe("sweepCronRunSessions", () => {
       },
       "agent:main:telegram:dm:123": {
         sessionId: "regular-session",
-        updatedAt: now - 100 * 3_600_000, // old but not a cron run
+        updatedAt: now - 100 * 3_600_000, // old but not a cron session
       },
     };
     fs.writeFileSync(storePath, JSON.stringify(store));
@@ -107,6 +107,50 @@ describe("sweepCronRunSessions", () => {
     expect(updated["agent:main:cron:job1:run:old-run"]).toBeUndefined();
     expect(updated["agent:main:cron:job1:run:recent-run"]).toBeDefined();
     expect(updated["agent:main:telegram:dm:123"]).toBeDefined();
+  });
+
+  it("prunes expired base cron sessions", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+      "agent:main:cron:job1": {
+        sessionId: "expired-base",
+        updatedAt: now - 25 * 3_600_000, // 25h ago — expired
+      },
+      "agent:main:cron:job2": {
+        sessionId: "fresh-base",
+        updatedAt: now - 1 * 3_600_000, // 1h ago — not expired
+      },
+      "agent:main:cron:job1:run:old-run": {
+        sessionId: "old-run",
+        updatedAt: now - 25 * 3_600_000, // 25h ago — expired
+      },
+      "agent:main:cron:job1:run:recent-run": {
+        sessionId: "recent-run",
+        updatedAt: now - 1 * 3_600_000, // 1h ago — not expired
+      },
+      "agent:main:telegram:dm:123": {
+        sessionId: "regular-session",
+        updatedAt: now - 100 * 3_600_000,
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(true);
+    expect(result.pruned).toBe(2); // expired base + expired run
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:cron:job1"]).toBeUndefined(); // expired base pruned
+    expect(updated["agent:main:cron:job2"]).toBeDefined(); // fresh base kept
+    expect(updated["agent:main:cron:job1:run:old-run"]).toBeUndefined(); // expired run pruned
+    expect(updated["agent:main:cron:job1:run:recent-run"]).toBeDefined(); // fresh run kept
+    expect(updated["agent:main:telegram:dm:123"]).toBeDefined(); // non-cron kept
   });
 
   it("archives transcript files for pruned run sessions that are no longer referenced", async () => {
