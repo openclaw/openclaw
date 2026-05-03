@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Control UI/Talk: fix Talk (OpenAI Realtime WebRTC) CORS failure by stripping server-side-only attribution headers (`originator`, `version`, `User-Agent`) from browser offer headers; `api.openai.com/v1/realtime/calls` only allows `authorization` and `content-type` in its CORS preflight, so forwarding these headers caused the browser SDP exchange to fail. Fixes #76435. Thanks @hclsys.
+- CLI/logs: auto-reconnect `openclaw logs --follow` on transient gateway disconnects (WebSocket close, timeout, connection drop) with bounded exponential backoff (up to 8 retries, capped at 30 s) and stderr retry warnings, while still exiting immediately on non-recoverable auth or configuration errors. Fixes #74782. (#75059) Thanks @shashank-poola.
 - Plugins/onboarding: trust optional official plugin and web-search installs selected from the official catalog so npm security scanning treats them like other source-linked official install paths. Thanks @vincentkoc.
 - Tests/plugins: expose the Discord npm onboarding Docker lane as a package script and assert planned Docker lanes point at real scripts, so external-channel onboarding coverage can actually run. Thanks @vincentkoc.
 - Plugins/ClawHub: explain unreleased ClawHub plugin artifacts as a rollout-state fallback to `npm:` installs instead of leaking raw archive metadata fields. Thanks @vincentkoc.
