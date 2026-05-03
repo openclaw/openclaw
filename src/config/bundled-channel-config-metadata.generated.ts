@@ -16353,6 +16353,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             minLength: 1,
           },
         },
+        groupInviteAllowlist: {
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+        },
         autoDiscoverChannels: {
           type: "boolean",
         },
@@ -16449,6 +16456,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
               },
               dmAllowlist: {
+                type: "array",
+                items: {
+                  type: "string",
+                  minLength: 1,
+                },
+              },
+              groupInviteAllowlist: {
                 type: "array",
                 items: {
                   type: "string",
