@@ -35,6 +35,7 @@ type McpRequestContext = {
   accountId: string | undefined;
   senderIsOwner: boolean;
   ownerOnlyToolAllowlist: string[] | undefined;
+  cronSelfRemoveOnlyJobId: string | undefined;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -187,5 +188,6 @@ export function resolveMcpRequestContext(
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     senderIsOwner: auth.senderIsOwner,
     ownerOnlyToolAllowlist: auth.ownerOnlyToolAllowlist,
+    cronSelfRemoveOnlyJobId: auth.cronSelfRemoveOnlyJobId,
   };
 }

@@ -193,6 +193,8 @@ export async function prepareCliRunContext(
     ? prepareDeps.createMcpLoopbackScopedBearerToken(mcpLoopbackRuntime, {
         senderIsOwner: params.senderIsOwner === true,
         ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
+        trigger: params.trigger,
+        jobId: params.jobId,
       })
     : undefined;
   const preparedBackend = await prepareCliBundleMcpConfig({

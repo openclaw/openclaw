@@ -352,6 +352,8 @@ describe("mcp loopback server", () => {
         ? createMcpLoopbackScopedBearerToken(runtime, {
             senderIsOwner: false,
             ownerOnlyToolAllowlist: ["cron"],
+            trigger: "cron",
+            jobId: "job-current",
           })
         : undefined,
       headers: {
@@ -366,9 +368,136 @@ describe("mcp loopback server", () => {
     const names = (payload.result?.tools ?? []).map((tool) => tool.name);
 
     expect(response.status).toBe(200);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cronSelfRemoveOnlyJobId: "job-current",
+      }),
+    );
     expect(names).toContain("message");
     expect(names).toContain("cron");
     expect(names).not.toContain("owner_probe");
+  });
+
+  it("keeps scoped non-owner cron grants limited to current-job removal", async () => {
+    const cronExecute = vi.fn(
+      async (
+        _toolCallId: string,
+        args: unknown,
+      ): Promise<{ content: Array<{ type: string; text: string }> }> => {
+        const input = (args ?? {}) as Record<string, unknown>;
+        if (input.action !== "remove" || input.jobId !== "job-current") {
+          throw new Error("Cron tool is restricted to removing the current cron job.");
+        }
+        return { content: [{ type: "text", text: "removed" }] };
+      },
+    );
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "cron",
+          description: "manage schedules",
+          parameters: { type: "object", properties: {} },
+          execute: cronExecute,
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime
+        ? createMcpLoopbackScopedBearerToken(runtime, {
+            senderIsOwner: false,
+            ownerOnlyToolAllowlist: ["cron"],
+            trigger: "cron",
+            jobId: "job-current",
+          })
+        : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "cron", arguments: { action: "list" } },
+      }),
+    });
+    const payload = (await response.json()) as {
+      result?: { content?: Array<{ text?: string }>; isError?: boolean };
+    };
+
+    expect(response.status).toBe(200);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cronSelfRemoveOnlyJobId: "job-current",
+      }),
+    );
+    expect(cronExecute).toHaveBeenCalledOnce();
+    expect(payload.result?.isError).toBe(true);
+    expect(payload.result?.content?.[0]?.text).toBe(
+      "Cron tool is restricted to removing the current cron job.",
+    );
+  });
+
+  it("does not mint scoped cron grants without an active cron job id", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        },
+        {
+          name: "cron",
+          description: "manage schedules",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "cron" }],
+          }),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const token = runtime
+      ? createMcpLoopbackScopedBearerToken(runtime, {
+          senderIsOwner: false,
+          ownerOnlyToolAllowlist: ["cron"],
+          trigger: "cron",
+        })
+      : undefined;
+    const response = await sendRaw({
+      port: server.port,
+      token,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const payload = (await response.json()) as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+
+    expect(token).toBe(runtime?.nonOwnerToken);
+    expect(response.status).toBe(200);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cronSelfRemoveOnlyJobId: undefined,
+      }),
+    );
+    expect(names).toContain("message");
+    expect(names).not.toContain("cron");
   });
 
   it("keeps owner-only tools available to owner loopback callers", async () => {

@@ -40,6 +40,7 @@ export function resolveGatewayScopedTools(params: {
   disablePluginTools?: boolean;
   senderIsOwner?: boolean;
   gatewayRequestedTools?: string[];
+  cronSelfRemoveOnlyJobId?: string;
 }) {
   const {
     agentId,
@@ -95,6 +96,7 @@ export function resolveGatewayScopedTools(params: {
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
     senderIsOwner: params.senderIsOwner,
+    cronSelfRemoveOnlyJobId: params.cronSelfRemoveOnlyJobId,
     config: params.cfg,
     workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([

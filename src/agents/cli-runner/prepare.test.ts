@@ -667,6 +667,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         timeoutMs: 1_000,
         runId: "run-test-scoped-loopback-token",
         config: createCliBackendConfig(),
+        trigger: "cron",
+        jobId: "job-current",
         senderIsOwner: false,
         ownerOnlyToolAllowlist: ["cron"],
       });
@@ -674,6 +676,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(createMcpLoopbackScopedBearerToken).toHaveBeenCalledWith(runtime, {
         senderIsOwner: false,
         ownerOnlyToolAllowlist: ["cron"],
+        trigger: "cron",
+        jobId: "job-current",
       });
       expect(context.preparedBackend.env?.OPENCLAW_MCP_TOKEN).toBe("scoped-non-owner-token");
 

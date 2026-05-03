@@ -9,10 +9,14 @@ type McpLoopbackRuntime = {
 export type McpLoopbackBearerContext = {
   senderIsOwner: boolean;
   ownerOnlyToolAllowlist?: string[];
+  cronSelfRemoveOnlyJobId?: string;
 };
 
 let activeRuntime: McpLoopbackRuntime | undefined;
-const scopedNonOwnerTokens = new Map<string, { ownerOnlyToolAllowlist: string[] }>();
+const scopedNonOwnerTokens = new Map<
+  string,
+  { ownerOnlyToolAllowlist: string[]; cronSelfRemoveOnlyJobId?: string }
+>();
 
 function normalizeOwnerOnlyToolAllowlist(value: string[] | undefined): string[] | undefined {
   const normalized = Array.from(
@@ -40,17 +44,34 @@ export function resolveMcpLoopbackBearerToken(
 
 export function createMcpLoopbackScopedBearerToken(
   runtime: McpLoopbackRuntime,
-  params: { senderIsOwner: boolean; ownerOnlyToolAllowlist?: string[] },
+  params: {
+    senderIsOwner: boolean;
+    ownerOnlyToolAllowlist?: string[];
+    trigger?: string;
+    jobId?: string;
+  },
 ): string {
   if (params.senderIsOwner) {
     return runtime.ownerToken;
   }
-  const ownerOnlyToolAllowlist = normalizeOwnerOnlyToolAllowlist(params.ownerOnlyToolAllowlist);
+  const normalizedAllowlist = normalizeOwnerOnlyToolAllowlist(params.ownerOnlyToolAllowlist);
+  const cronSelfRemoveOnlyJobId =
+    normalizedAllowlist?.includes("cron") && params.trigger === "cron" && params.jobId?.trim()
+      ? params.jobId.trim()
+      : undefined;
+  const scopedAllowlist = normalizedAllowlist?.filter(
+    (toolName) => toolName !== "cron" || Boolean(cronSelfRemoveOnlyJobId),
+  );
+  const ownerOnlyToolAllowlist =
+    scopedAllowlist && scopedAllowlist.length > 0 ? scopedAllowlist : undefined;
   if (!ownerOnlyToolAllowlist) {
     return runtime.nonOwnerToken;
   }
   const token = crypto.randomBytes(32).toString("hex");
-  scopedNonOwnerTokens.set(token, { ownerOnlyToolAllowlist });
+  scopedNonOwnerTokens.set(token, {
+    ownerOnlyToolAllowlist,
+    ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
+  });
   return token;
 }
 
@@ -65,7 +86,13 @@ export function resolveMcpLoopbackScopedBearerContext(
   if (!grant) {
     return undefined;
   }
-  return { senderIsOwner: false, ownerOnlyToolAllowlist: grant.ownerOnlyToolAllowlist };
+  return {
+    senderIsOwner: false,
+    ownerOnlyToolAllowlist: grant.ownerOnlyToolAllowlist,
+    ...(grant.cronSelfRemoveOnlyJobId
+      ? { cronSelfRemoveOnlyJobId: grant.cronSelfRemoveOnlyJobId }
+      : {}),
+  };
 }
 
 export function clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken: string): void {

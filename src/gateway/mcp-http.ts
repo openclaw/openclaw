@@ -116,6 +116,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           accountId: requestContext.accountId,
           senderIsOwner: requestContext.senderIsOwner,
           ownerOnlyToolAllowlist: requestContext.ownerOnlyToolAllowlist,
+          cronSelfRemoveOnlyJobId: requestContext.cronSelfRemoveOnlyJobId,
         });
 
         const messages = Array.isArray(parsed) ? parsed : [parsed];

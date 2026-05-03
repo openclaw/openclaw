@@ -28,6 +28,7 @@ export class McpLoopbackToolCache {
     accountId: string | undefined;
     senderIsOwner: boolean | undefined;
     ownerOnlyToolAllowlist: string[] | undefined;
+    cronSelfRemoveOnlyJobId: string | undefined;
   }): CachedScopedTools {
     const cacheKey = [
       params.sessionKey,
@@ -35,6 +36,7 @@ export class McpLoopbackToolCache {
       params.accountId ?? "",
       params.senderIsOwner === true ? "owner" : "non-owner",
       params.ownerOnlyToolAllowlist?.join(",") ?? "",
+      params.cronSelfRemoveOnlyJobId ?? "",
     ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
@@ -50,6 +52,7 @@ export class McpLoopbackToolCache {
       senderIsOwner: params.senderIsOwner,
       surface: "loopback",
       excludeToolNames: NATIVE_TOOL_EXCLUDE,
+      cronSelfRemoveOnlyJobId: params.cronSelfRemoveOnlyJobId,
     });
     const tools = applyOwnerOnlyToolPolicy(
       next.tools,
