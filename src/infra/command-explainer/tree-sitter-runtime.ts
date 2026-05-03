@@ -6,13 +6,29 @@ import * as TreeSitter from "web-tree-sitter";
 const require = createRequire(import.meta.url);
 
 let parserPromise: Promise<TreeSitter.Parser> | null = null;
+let parserLoader: () => Promise<TreeSitter.Parser> = loadParser;
 const MAX_COMMAND_EXPLANATION_SOURCE_CHARS = 128 * 1024;
 const MAX_COMMAND_EXPLANATION_PARSE_MS = 500;
 
-function resolvePackageFile(packageName: string, fileName: string): string {
-  let directory = path.dirname(require.resolve(packageName));
+export function resolvePackageFileForCommandExplanation(
+  packageName: string,
+  fileName: string,
+): string {
+  let packageEntry: string;
+  try {
+    packageEntry = require.resolve(packageName);
+  } catch (error) {
+    throw new Error(
+      `Unable to resolve ${packageName} while loading the shell command explainer parser`,
+      { cause: error },
+    );
+  }
+
+  let directory = path.dirname(packageEntry);
+  const searched: string[] = [];
   for (let depth = 0; depth < 5; depth += 1) {
     const candidate = path.join(directory, fileName);
+    searched.push(candidate);
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -22,15 +38,17 @@ function resolvePackageFile(packageName: string, fileName: string): string {
     }
     directory = parent;
   }
-  return path.join(path.dirname(require.resolve(packageName)), fileName);
+  throw new Error(
+    `Unable to locate ${fileName} in ${packageName} while loading the shell command explainer parser; searched ${searched.join(", ")}`,
+  );
 }
 
 function resolveWebTreeSitterFile(fileName: string): string {
-  return resolvePackageFile("web-tree-sitter", fileName);
+  return resolvePackageFileForCommandExplanation("web-tree-sitter", fileName);
 }
 
 function resolveBashWasmPath(): string {
-  return resolvePackageFile("tree-sitter-bash", "tree-sitter-bash.wasm");
+  return resolvePackageFileForCommandExplanation("tree-sitter-bash", "tree-sitter-bash.wasm");
 }
 
 async function loadParser(): Promise<TreeSitter.Parser> {
@@ -44,8 +62,18 @@ async function loadParser(): Promise<TreeSitter.Parser> {
 }
 
 export function getBashParserForCommandExplanation(): Promise<TreeSitter.Parser> {
-  parserPromise ??= loadParser();
+  parserPromise ??= parserLoader().catch((error: unknown) => {
+    parserPromise = null;
+    throw error;
+  });
   return parserPromise;
+}
+
+export function setBashParserLoaderForCommandExplanationForTest(
+  loader?: () => Promise<TreeSitter.Parser>,
+): void {
+  parserPromise = null;
+  parserLoader = loader ?? loadParser;
 }
 
 /**

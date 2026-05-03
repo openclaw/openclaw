@@ -37,8 +37,7 @@ type CommandArgument = {
   text: string;
   value: string;
   span: SourceSpan;
-  valueStartIndex: number;
-  valueStartPosition: SourceSpan["startPosition"];
+  decodedSourceOffsets: number[];
 };
 
 type CommandArgv = {
@@ -61,6 +60,7 @@ const SOURCE_EXECUTABLES = new Set([".", "source"]);
 type SpanBase = {
   startIndex: number;
   startPosition: SourceSpan["startPosition"];
+  mapOffset?: (offset: number) => { index: number; position: SourceSpan["startPosition"] };
 };
 
 const ROOT_SPAN_BASE: SpanBase = {
@@ -95,6 +95,16 @@ function translatePosition(
 }
 
 function translateSpan(span: SourceSpan, base: SpanBase): SourceSpan {
+  if (base.mapOffset) {
+    const start = base.mapOffset(span.startIndex);
+    const end = base.mapOffset(span.endIndex);
+    return {
+      startIndex: start.index,
+      endIndex: end.index,
+      startPosition: start.position,
+      endPosition: end.position,
+    };
+  }
   return {
     startIndex: base.startIndex + span.startIndex,
     endIndex: base.startIndex + span.endIndex,
@@ -149,6 +159,52 @@ function valuePrefixLength(node: TreeSitterNode): number {
   return 0;
 }
 
+type DecodedShellText = {
+  value: string;
+  sourceOffsets: number[];
+};
+
+function appendDecodedText(
+  decoded: DecodedShellText,
+  value: string,
+  sourceEndOffset: number,
+): void {
+  decoded.value += value;
+  for (let index = 0; index < value.length; index += 1) {
+    decoded.sourceOffsets.push(sourceEndOffset);
+  }
+}
+
+function identityDecodedShellText(text: string, sourceOffset = 0): DecodedShellText {
+  return {
+    value: text,
+    sourceOffsets: Array.from({ length: text.length + 1 }, (_, index) => sourceOffset + index),
+  };
+}
+
+function decodedSourceOffsetsForNode(node: TreeSitterNode, value: string): number[] {
+  let decoded: DecodedShellText;
+  switch (node.type) {
+    case "raw_string":
+      decoded = identityDecodedShellText(node.text.slice(1, -1), 1);
+      break;
+    case "string":
+      decoded = decodeDoubleQuotedTextWithOffsets(node.text);
+      break;
+    case "ansi_c_string":
+      decoded = decodeAnsiCStringWithOffsets(node.text);
+      break;
+    default:
+      decoded = decodeUnquotedShellTextWithOffsets(node.text);
+      break;
+  }
+  if (decoded.value === value && decoded.sourceOffsets.length === value.length + 1) {
+    return decoded.sourceOffsets;
+  }
+  const prefixLength = valuePrefixLength(node);
+  return Array.from({ length: value.length + 1 }, (_, index) => prefixLength + index);
+}
+
 function argumentFromNode(
   index: number,
   node: TreeSitterNode,
@@ -156,14 +212,13 @@ function argumentFromNode(
   base: SpanBase,
 ): CommandArgument {
   const span = spanFromNode(node, base);
-  const prefixLength = valuePrefixLength(node);
+  const decodedSourceOffsets = decodedSourceOffsetsForNode(node, value.value);
   return {
     index,
     text: node.text,
     value: value.value,
     span,
-    valueStartIndex: span.startIndex + prefixLength,
-    valueStartPosition: advancePosition(span.startPosition, node.text.slice(0, prefixLength)),
+    decodedSourceOffsets,
   };
 }
 
@@ -219,87 +274,107 @@ function hasUnescapedDynamicPattern(text: string): boolean {
   return false;
 }
 
-function decodeUnquotedShellText(text: string): string {
-  let output = "";
+function decodeUnquotedShellTextWithOffsets(text: string): DecodedShellText {
+  const decoded: DecodedShellText = { value: "", sourceOffsets: [0] };
   for (let index = 0; index < text.length; index += 1) {
     const ch = text[index];
     const next = text[index + 1];
     if (ch === "\\" && next !== undefined) {
       if (next === "\r" && text[index + 2] === "\n") {
+        decoded.sourceOffsets[decoded.value.length] = index + 3;
         index += 2;
         continue;
       }
       if (next === "\n" || next === "\r") {
+        decoded.sourceOffsets[decoded.value.length] = index + 2;
         index += 1;
         continue;
       }
-      output += next;
+      appendDecodedText(decoded, next, index + 2);
       index += 1;
       continue;
     }
-    output += ch;
+    appendDecodedText(decoded, ch, index + 1);
   }
-  return output;
+  return decoded;
 }
 
-function decodeDoubleQuotedText(text: string): string {
-  const body = text.startsWith('"') && text.endsWith('"') ? text.slice(1, -1) : text;
-  let output = "";
+function decodeUnquotedShellText(text: string): string {
+  return decodeUnquotedShellTextWithOffsets(text).value;
+}
+
+function decodeDoubleQuotedTextWithOffsets(text: string): DecodedShellText {
+  const hasQuotes = text.startsWith('"') && text.endsWith('"');
+  const bodyStart = hasQuotes ? 1 : 0;
+  const body = hasQuotes ? text.slice(1, -1) : text;
+  const decoded: DecodedShellText = { value: "", sourceOffsets: [bodyStart] };
   for (let index = 0; index < body.length; index += 1) {
     const ch = body[index];
     const next = body[index + 1];
+    const sourceOffset = bodyStart + index;
     if (ch === "\\" && next !== undefined) {
       if (next === "\r" && body[index + 2] === "\n") {
+        decoded.sourceOffsets[decoded.value.length] = sourceOffset + 3;
         index += 2;
         continue;
       }
       if (["\\", '"', "$", "`", "\n", "\r"].includes(next)) {
         if (next !== "\n" && next !== "\r") {
-          output += next;
+          appendDecodedText(decoded, next, sourceOffset + 2);
+        } else {
+          decoded.sourceOffsets[decoded.value.length] = sourceOffset + 2;
         }
         index += 1;
         continue;
       }
     }
-    output += ch;
+    appendDecodedText(decoded, ch, sourceOffset + 1);
   }
-  return output;
+  return decoded;
 }
 
-function decodeAnsiCString(text: string): string {
-  const body = text.startsWith("$'") && text.endsWith("'") ? text.slice(2, -1) : text;
-  let output = "";
+function decodeDoubleQuotedText(text: string): string {
+  return decodeDoubleQuotedTextWithOffsets(text).value;
+}
+
+const ANSI_C_SIMPLE_ESCAPES: Record<string, string> = {
+  "'": "'",
+  '"': '"',
+  "?": "?",
+  "\\": "\\",
+  a: "\u0007",
+  b: "\b",
+  e: "\u001B",
+  E: "\u001B",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  v: "\v",
+};
+
+function decodeAnsiCStringWithOffsets(text: string): DecodedShellText {
+  const hasQuotes = text.startsWith("$'") && text.endsWith("'");
+  const bodyStart = hasQuotes ? 2 : 0;
+  const body = hasQuotes ? text.slice(2, -1) : text;
+  const decoded: DecodedShellText = { value: "", sourceOffsets: [bodyStart] };
   for (let index = 0; index < body.length; index += 1) {
     const ch = body[index];
+    const sourceOffset = bodyStart + index;
     if (ch !== "\\") {
-      output += ch;
+      appendDecodedText(decoded, ch, sourceOffset + 1);
       continue;
     }
 
     const next = body[index + 1];
     if (next === undefined) {
-      output += "\\";
+      appendDecodedText(decoded, "\\", sourceOffset + 1);
       continue;
     }
 
-    const simpleEscapes: Record<string, string> = {
-      "'": "'",
-      '"': '"',
-      "?": "?",
-      "\\": "\\",
-      a: "\u0007",
-      b: "\b",
-      e: "\u001B",
-      E: "\u001B",
-      f: "\f",
-      n: "\n",
-      r: "\r",
-      t: "\t",
-      v: "\v",
-    };
-    const simple = simpleEscapes[next];
+    const simple = ANSI_C_SIMPLE_ESCAPES[next];
     if (simple !== undefined) {
-      output += simple;
+      appendDecodedText(decoded, simple, sourceOffset + 2);
       index += 1;
       continue;
     }
@@ -307,7 +382,11 @@ function decodeAnsiCString(text: string): string {
     if (next === "x") {
       const hex = body.slice(index + 2).match(/^[0-9A-Fa-f]{1,2}/)?.[0] ?? "";
       if (hex) {
-        output += String.fromCodePoint(Number.parseInt(hex, 16));
+        appendDecodedText(
+          decoded,
+          String.fromCodePoint(Number.parseInt(hex, 16)),
+          sourceOffset + 2 + hex.length,
+        );
         index += 1 + hex.length;
         continue;
       }
@@ -320,9 +399,13 @@ function decodeAnsiCString(text: string): string {
       if (hex) {
         const codePoint = Number.parseInt(hex, 16);
         try {
-          output += String.fromCodePoint(codePoint);
+          appendDecodedText(
+            decoded,
+            String.fromCodePoint(codePoint),
+            sourceOffset + 2 + hex.length,
+          );
         } catch {
-          output += `\\${next}${hex}`;
+          appendDecodedText(decoded, `\\${next}${hex}`, sourceOffset + 2 + hex.length);
         }
         index += 1 + hex.length;
         continue;
@@ -332,16 +415,24 @@ function decodeAnsiCString(text: string): string {
     if (/^[0-7]$/.test(next)) {
       const octal = body.slice(index + 1).match(/^[0-7]{1,3}/)?.[0] ?? "";
       if (octal) {
-        output += String.fromCodePoint(Number.parseInt(octal, 8));
+        appendDecodedText(
+          decoded,
+          String.fromCodePoint(Number.parseInt(octal, 8)),
+          sourceOffset + 1 + octal.length,
+        );
         index += octal.length;
         continue;
       }
     }
 
-    output += next;
+    appendDecodedText(decoded, next, sourceOffset + 2);
     index += 1;
   }
-  return output;
+  return decoded;
+}
+
+function decodeAnsiCString(text: string): string {
+  return decodeAnsiCStringWithOffsets(text).value;
 }
 
 function hasDynamicWordPart(node: TreeSitterNode): boolean {
@@ -650,10 +741,25 @@ function payloadBaseFromArgument(argument: CommandArgument, payload: string): Sp
   if (payloadOffset < 0) {
     return null;
   }
-  const prefix = argument.value.slice(0, payloadOffset);
+  const rawPayloadOffset = argument.decodedSourceOffsets[payloadOffset];
+  if (rawPayloadOffset === undefined) {
+    return null;
+  }
+  const prefix = argument.text.slice(0, rawPayloadOffset);
   return {
-    startIndex: argument.valueStartIndex + payloadOffset,
-    startPosition: advancePosition(argument.valueStartPosition, prefix),
+    startIndex: argument.span.startIndex + rawPayloadOffset,
+    startPosition: advancePosition(argument.span.startPosition, prefix),
+    mapOffset(offset) {
+      const rawOffset = argument.decodedSourceOffsets[payloadOffset + offset];
+      const mappedRawOffset = rawOffset ?? rawPayloadOffset + offset;
+      return {
+        index: argument.span.startIndex + mappedRawOffset,
+        position: advancePosition(
+          argument.span.startPosition,
+          argument.text.slice(0, mappedRawOffset),
+        ),
+      };
+    },
   };
 }
 

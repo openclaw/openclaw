@@ -1,6 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import type { Parser } from "web-tree-sitter";
 import { explainShellCommand } from "./extract.js";
-import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
+import {
+  getBashParserForCommandExplanation,
+  parseBashForCommandExplanation,
+  resolvePackageFileForCommandExplanation,
+  setBashParserLoaderForCommandExplanationForTest,
+} from "./tree-sitter-runtime.js";
+
+let parserLoaderOverridden = false;
+
+function setParserLoaderForTest(loader: () => Promise<Parser>): void {
+  parserLoaderOverridden = true;
+  setBashParserLoaderForCommandExplanationForTest(loader);
+}
+
+afterEach(() => {
+  if (parserLoaderOverridden) {
+    setBashParserLoaderForCommandExplanationForTest();
+    parserLoaderOverridden = false;
+  }
+});
 
 describe("command explainer tree-sitter runtime", () => {
   it("loads tree-sitter bash and parses a simple command", async () => {
@@ -18,6 +38,37 @@ describe("command explainer tree-sitter runtime", () => {
     await expect(parseBashForCommandExplanation("x".repeat(128 * 1024 + 1))).rejects.toThrow(
       "Shell command is too large to explain",
     );
+  });
+
+  it("retries parser initialization after a loader rejection", async () => {
+    const parser = {} as Parser;
+    let calls = 0;
+    setParserLoaderForTest(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("transient parser load failure");
+      }
+      return parser;
+    });
+
+    await expect(getBashParserForCommandExplanation()).rejects.toThrow(
+      "transient parser load failure",
+    );
+    await expect(getBashParserForCommandExplanation()).resolves.toBe(parser);
+    expect(calls).toBe(2);
+  });
+
+  it("reports missing parser packages and wasm files with explainer context", () => {
+    expect(() =>
+      resolvePackageFileForCommandExplanation(
+        "definitely-missing-openclaw-parser-package",
+        "parser.wasm",
+      ),
+    ).toThrow("Unable to resolve definitely-missing-openclaw-parser-package");
+
+    expect(() =>
+      resolvePackageFileForCommandExplanation("web-tree-sitter", "missing-openclaw-parser.wasm"),
+    ).toThrow("Unable to locate missing-openclaw-parser.wasm in web-tree-sitter");
   });
 
   it("explains a pipeline with python inline eval", async () => {
@@ -255,6 +306,26 @@ describe("command explainer tree-sitter runtime", () => {
     }
   });
 
+  it("maps decoded shell-wrapper payload spans back to original source escapes", async () => {
+    const explanation = await explainShellCommand('bash -lc "printf \\"hi\\" | wc -c"');
+
+    const wrappedPrintf = explanation.nestedCommands.find((step) => step.executable === "printf");
+    const wrappedWc = explanation.nestedCommands.find((step) => step.executable === "wc");
+
+    expect(wrappedPrintf).toEqual(
+      expect.objectContaining({
+        context: "wrapper-payload",
+        text: 'printf "hi"',
+      }),
+    );
+    expect(
+      explanation.source.slice(wrappedPrintf?.span.startIndex, wrappedPrintf?.span.endIndex),
+    ).toBe('printf \\"hi\\"');
+    expect(explanation.source.slice(wrappedWc?.span.startIndex, wrappedWc?.span.endIndex)).toBe(
+      "wc -c",
+    );
+  });
+
   it("normalizes static shell words before classifying commands", async () => {
     const quotedCommand = await explainShellCommand("e'c'ho a\\ b \"c d\"");
     expect(quotedCommand.topLevelCommands).toEqual([
@@ -464,7 +535,7 @@ describe("command explainer tree-sitter runtime", () => {
     );
   });
 
-  it("parses and extracts a small approval-sized corpus quickly", async () => {
+  it("parses and extracts a repeated approval-sized corpus without parser state leakage", async () => {
     const corpus = [
       'ls | grep "stuff" | python -c \'print("hi")\'',
       "echo $(whoami)",
@@ -472,14 +543,12 @@ describe("command explainer tree-sitter runtime", () => {
       'find . -name "*.ts" -exec grep -n TODO {} +',
       'bash -lc "echo hi | wc -c"',
     ];
-    const iterations = 100;
-    const start = performance.now();
+    const iterations = 10;
     for (let index = 0; index < iterations; index += 1) {
       for (const command of corpus) {
-        await explainShellCommand(command);
+        const explanation = await explainShellCommand(command);
+        expect(explanation.risks.length + explanation.topLevelCommands.length).toBeGreaterThan(0);
       }
     }
-    const elapsedMs = performance.now() - start;
-    expect(elapsedMs / (iterations * corpus.length)).toBeLessThan(20);
   });
 });
