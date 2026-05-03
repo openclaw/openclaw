@@ -22,7 +22,6 @@ Docs: https://docs.openclaw.ai
 - Core/performance: trim reply payload routing, heartbeat filtering, tool display, core tool assembly, channel directory, task status, and Slack approval formatting helper chains with direct bounded scans. Thanks @vincentkoc.
 - Core/performance: trim Slack allowlist/directory lookup, Telegram sender/API-root parsing, SDK event normalization, prompt prelude, QA env, and RTT summary helper chains with direct scans. Thanks @vincentkoc.
 - Core/performance: trim SDK run-option validation, agent tool/reply text assembly, channel media/status helpers, and Slack/Telegram message parsing by replacing more transient array chains with direct bounded assembly. Thanks @vincentkoc.
-- QA/RTT: add a Slack live transport harness with Convex credential leasing, mention-gating checks, and per-reply RTT artifacts so Slack can be measured beside Telegram and Discord. Thanks @vincentkoc.
 - QA/RTT: let the Telegram RTT package harness use Convex credential leasing via `--credential-source convex`, so cloud lanes can run live RTT proof without direct Telegram bot env vars. Thanks @vincentkoc.
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
 - Doctor/config: `doctor --fix` now commits safe legacy migrations even when unrelated validation issues (e.g. a missing plugin) prevent full validation from passing, so `agents.defaults.llm` and other known-legacy keys are always cleaned up by `doctor --fix` regardless of other config problems. Fixes #76798. (#76800) Thanks @hclsys.
