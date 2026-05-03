@@ -30,6 +30,7 @@ function createDraftStream(
   return createTelegramDraftStream({
     api: api as unknown as Bot["api"],
     chatId: 123,
+    chatSendIntervalMs: 0,
     ...overrides,
   });
 }
@@ -308,6 +309,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       onSupersededPreview,
     });
 
@@ -375,6 +377,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
     });
 
@@ -395,6 +398,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       maxChars: 100,
       renderText: () => ({ text: `<b>${"<".repeat(120)}</b>`, parseMode: "HTML" }),
       warn,
@@ -422,6 +426,7 @@ describe("draft stream initial message debounce", () => {
     return createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       minInitialChars,
     });
   }
@@ -525,6 +530,7 @@ describe("draft stream initial message debounce", () => {
       const stream = createTelegramDraftStream({
         api: api as unknown as Bot["api"],
         chatId: 123,
+        chatSendIntervalMs: 0,
       });
 
       stream.update("Hi");
@@ -548,6 +554,7 @@ describe("draft stream overflow chaining", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       maxChars: 20,
     });
 
@@ -573,6 +580,7 @@ describe("draft stream overflow chaining", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       maxChars: 10,
     });
 
@@ -597,6 +605,7 @@ describe("draft stream overflow chaining", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       maxChars: 10,
     });
 
@@ -617,6 +626,7 @@ describe("draft stream overflow chaining", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       maxChars: 10,
       renderText: (text) => ({ text, parseMode: "HTML" as const }),
       renderContinuationText: (text) => ({ text: `cont:${text}`, parseMode: "HTML" as const }),
@@ -639,6 +649,7 @@ describe("draft stream overflow chaining", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       maxChars: 20,
     });
 
@@ -668,6 +679,7 @@ describe("draft stream overflow chaining", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       maxChars: 20,
       onSupersededPreview,
     });
@@ -710,6 +722,7 @@ describe("draft stream 429 rate limit backoff", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       throttleMs: 0,
     });
 

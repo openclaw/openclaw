@@ -23,10 +23,14 @@ const _perChatSendGate = ((globalThis as Record<PropertyKey, unknown>)[
   Symbol.for("openclaw.perChatSendGate")
 ] ??= new Map<string | number, number>()) as Map<string | number, number>;
 
-function acquireChatSendGate(chatId: string | number): Promise<void> | null {
+function acquireChatSendGate(
+  chatId: string | number,
+  intervalMs: number,
+): Promise<void> | null {
+  if (intervalMs <= 0) return null;
   const lastSent = _perChatSendGate.get(chatId) ?? 0;
   const elapsed = Date.now() - lastSent;
-  const waitMs = elapsed < CHAT_SEND_INTERVAL_MS ? CHAT_SEND_INTERVAL_MS - elapsed : 0;
+  const waitMs = elapsed < intervalMs ? intervalMs - elapsed : 0;
   _perChatSendGate.set(chatId, Date.now() + waitMs);
   return waitMs > 0 ? new Promise((r) => setTimeout(r, waitMs)) : null;
 }
@@ -115,6 +119,8 @@ export function createTelegramDraftStream(params: {
   renderContinuationText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
+  /** Minimum ms between sends to the same chat. 0 disables. Default: 3000. */
+  chatSendIntervalMs?: number;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -123,6 +129,7 @@ export function createTelegramDraftStream(params: {
     TELEGRAM_STREAM_MAX_CHARS,
   );
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
+  const chatSendIntervalMs = params.chatSendIntervalMs ?? CHAT_SEND_INTERVAL_MS;
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   let textBaseOffset = 0;
@@ -268,7 +275,7 @@ export function createTelegramDraftStream(params: {
         resetStreamToNewMessage();
       }
     }
-    const gateWait = acquireChatSendGate(chatId);
+    const gateWait = acquireChatSendGate(chatId, chatSendIntervalMs);
     if (gateWait) {
       await gateWait;
       if (streamState.stopped && !streamState.final) return false;
@@ -381,13 +388,15 @@ export function createTelegramDraftStream(params: {
         // restores the failed snapshot when no newer update() arrived in-flight.
         return false;
       }
-      if (isRecoverableTelegramNetworkError(err, { allowMessageMatch: true })) {
-        lastSentText = "";
-        lastSentParseMode = undefined;
-        params.warn?.(
-          `telegram stream preview transient network error (will retry): ${formatErrorMessage(err)}`,
-        );
-        return false;
+      if (typeof streamMessageId === "number") {
+        if (isRecoverableTelegramNetworkError(err, { allowMessageMatch: true })) {
+          lastSentText = "";
+          lastSentParseMode = undefined;
+          params.warn?.(
+            `telegram stream preview transient network error (will retry): ${formatErrorMessage(err)}`,
+          );
+          return false;
+        }
       }
       streamState.stopped = true;
       params.warn?.(`telegram stream preview failed: ${formatErrorMessage(err)}`);
@@ -474,5 +483,10 @@ export function createTelegramDraftStream(params: {
 }
 
 export const __testing = {
-  resetTelegramDraftStreamForTests: () => {},
+  resetTelegramDraftStreamForTests: () => {
+    _perChatSendGate.clear();
+  },
+  clearPerChatSendGate: () => {
+    _perChatSendGate.clear();
+  },
 };
