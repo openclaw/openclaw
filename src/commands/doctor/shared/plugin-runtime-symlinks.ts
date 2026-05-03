@@ -12,6 +12,7 @@ interface FsLike {
   readlink(file: string): Promise<string>;
   stat(file: string): Promise<unknown>;
   rm(file: string, options: { force: true }): Promise<void>;
+  unlink?(file: string): Promise<void>;
 }
 
 interface DirentLike {
@@ -41,6 +42,7 @@ const DEFAULT_FS: FsLike = {
   readlink: (file) => fs.readlink(file),
   stat: (file) => fs.stat(file),
   rm: (file, options) => fs.rm(file, options),
+  unlink: (file) => fs.unlink(file),
 };
 
 export async function collectStalePluginRuntimeSymlinks(
@@ -126,7 +128,11 @@ export async function removeStalePluginRuntimeSymlinks(
   const warnings: string[] = [];
   for (const item of await collectStalePluginRuntimeSymlinks(packageRoot, options)) {
     try {
-      await fsApi.rm(item.path, { force: true });
+      if (fsApi.unlink) {
+        await fsApi.unlink(item.path);
+      } else {
+        await fsApi.rm(item.path, { force: true });
+      }
       changes.push(`Removed stale plugin-runtime symlink: ${item.path}`);
     } catch (error) {
       warnings.push(`Failed to remove stale plugin-runtime symlink ${item.path}: ${String(error)}`);

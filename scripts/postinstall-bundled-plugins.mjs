@@ -445,6 +445,7 @@ function collectLegacyPluginRuntimeDepsSymlinkPaths(roots, params = {}) {
 export function pruneLegacyPluginRuntimeDepsState(params = {}) {
   const pathExists = params.existsSync ?? existsSync;
   const removePath = params.rmSync ?? rmSync;
+  const unlinkPath = params.unlinkSync ?? unlinkSync;
   const log = params.log ?? console;
   const removed = [];
   const removedSymlinks = [];
@@ -452,7 +453,7 @@ export function pruneLegacyPluginRuntimeDepsState(params = {}) {
 
   for (const linkPath of collectLegacyPluginRuntimeDepsSymlinkPaths(roots, params)) {
     try {
-      removePath(linkPath, { force: true });
+      unlinkPath(linkPath);
       removedSymlinks.push(linkPath);
     } catch (error) {
       log.warn?.(
@@ -889,7 +890,10 @@ export function runBundledPluginPostinstall(params = {}) {
     env,
     packageRoot,
     existsSync: pathExists,
+    lstatSync: params.lstatSync,
+    readlinkSync: params.readlinkSync,
     rmSync: params.rmSync,
+    unlinkSync: params.unlinkSync,
     log,
     homedir: params.homedir,
   });
