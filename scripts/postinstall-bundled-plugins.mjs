@@ -887,6 +887,7 @@ export function runBundledPluginPostinstall(params = {}) {
   }
   pruneLegacyPluginRuntimeDepsState({
     env,
+    packageRoot,
     existsSync: pathExists,
     rmSync: params.rmSync,
     log,

@@ -395,7 +395,9 @@ describe("bundled plugin postinstall", () => {
   });
 
   it("prunes legacy plugin runtime deps state during packaged postinstall", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-state-cleanup-");
+    const prefix = await createTempDirAsync("openclaw-packaged-prefix-");
+    const packageRoot = path.join(prefix, "lib", "node_modules", "openclaw");
+    const nodeModulesRoot = path.dirname(packageRoot);
     const home = await createTempDirAsync("openclaw-packaged-home-");
     const stateOverride = path.join(home, "custom-state");
     const systemState = path.join(home, "system-state");
@@ -411,6 +413,15 @@ describe("bundled plugin postinstall", () => {
       "node_modules",
     );
     const currentFile = path.join(packageRoot, "dist", "entry.js");
+    const legacySymlinkTarget = path.join(
+      defaultLegacyRoot,
+      "openclaw-2026.4.29-slack",
+      "node_modules",
+      "@slack",
+      "web-api",
+    );
+    const slackScope = path.join(nodeModulesRoot, "@slack");
+    const legacySymlink = path.join(slackScope, "web-api");
 
     await fs.mkdir(path.dirname(currentFile), { recursive: true });
     await fs.writeFile(currentFile, "export {};\n");
@@ -425,6 +436,9 @@ describe("bundled plugin postinstall", () => {
       await fs.mkdir(root, { recursive: true });
       await fs.writeFile(path.join(root, "package.json"), "{}\n");
     }
+    await fs.mkdir(legacySymlinkTarget, { recursive: true });
+    await fs.mkdir(slackScope, { recursive: true });
+    await fs.symlink(legacySymlinkTarget, legacySymlink, "dir");
 
     const log = { log: vi.fn(), warn: vi.fn() };
     runBundledPluginPostinstall({
@@ -441,6 +455,7 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(oldBrandLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(overrideLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(systemLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(legacySymlink)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(thirdPartyNodeModules)).resolves.toBeTruthy();
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
