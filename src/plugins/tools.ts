@@ -94,6 +94,9 @@ function isOptionalToolAllowed(params: {
   if (params.allowlist.size === 0) {
     return false;
   }
+  if (params.allowlist.has("*")) {
+    return true;
+  }
   const toolName = normalizeToolName(params.toolName);
   if (params.allowlist.has(toolName)) {
     return true;
@@ -112,6 +115,9 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
 }): boolean {
   if (params.allowlist.size === 0) {
     return false;
+  }
+  if (params.allowlist.has("*")) {
+    return true;
   }
   const pluginKey = normalizeToolName(params.pluginId);
   if (params.allowlist.has(pluginKey) || params.allowlist.has("group:plugins")) {
