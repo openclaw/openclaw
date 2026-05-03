@@ -47,6 +47,12 @@ export type CreateTelegramSendChatActionHandlerParams = {
   sendChatActionFn: SendChatActionFn;
   logger: TelegramSendChatActionLogger;
   maxConsecutive401?: number;
+  /**
+   * Best-effort per-chat/action coalescing window. Kept opt-in so tests and
+   * non-typing callers can preserve exact sendChatAction semantics.
+   */
+  minIntervalMs?: number;
+  now?: () => number;
 };
 
 const BACKOFF_POLICY: BackoffPolicy = {
@@ -79,14 +85,26 @@ export function createTelegramSendChatActionHandler({
   sendChatActionFn,
   logger,
   maxConsecutive401 = 10,
+  minIntervalMs = 0,
+  now = () => Date.now(),
 }: CreateTelegramSendChatActionHandlerParams): TelegramSendChatActionHandler {
   let consecutive401Failures = 0;
   let suspended = false;
+  const pendingKeys = new Set<string>();
+  const lastAttemptAtByKey = new Map<string, number>();
 
   const reset = () => {
     consecutive401Failures = 0;
     suspended = false;
+    pendingKeys.clear();
+    lastAttemptAtByKey.clear();
   };
+
+  const coalesceKey = (chatId: number | string, action: ChatAction) =>
+    // The Telegram API throttler keys group traffic by chat_id, not thread ID.
+    // Coalescing at the same level keeps topic typing cues from filling the
+    // shared outbound lane ahead of real replies.
+    `${String(chatId)}:${action}`;
 
   const sendChatAction = async (
     chatId: number | string,
@@ -95,6 +113,21 @@ export function createTelegramSendChatActionHandler({
   ): Promise<void> => {
     if (suspended) {
       return;
+    }
+
+    const shouldCoalesce = Number.isFinite(minIntervalMs) && minIntervalMs > 0;
+    const key = shouldCoalesce ? coalesceKey(chatId, action) : undefined;
+    if (key) {
+      if (pendingKeys.has(key)) {
+        return;
+      }
+      const currentTime = now();
+      const lastAttemptAt = lastAttemptAtByKey.get(key);
+      if (lastAttemptAt !== undefined && currentTime - lastAttemptAt < minIntervalMs) {
+        return;
+      }
+      pendingKeys.add(key);
+      lastAttemptAtByKey.set(key, currentTime);
     }
 
     if (consecutive401Failures > 0) {
@@ -132,6 +165,10 @@ export function createTelegramSendChatActionHandler({
         }
       }
       throw error;
+    } finally {
+      if (key) {
+        pendingKeys.delete(key);
+      }
     }
   };
 
