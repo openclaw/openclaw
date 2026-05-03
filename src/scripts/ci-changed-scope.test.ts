@@ -205,7 +205,7 @@ describe("detectChangedScope", () => {
   });
 
   it("runs Python skill tests when shared Python config changes", () => {
-    expect(detectChangedScope(["pyproject.toml"])).toEqual({
+    expect(detectChangedScope(["skills/pyproject.toml"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,
