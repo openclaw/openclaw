@@ -155,6 +155,41 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
+  it("keeps unknown actions on the local preload path", async () => {
+    mockChannelExecutionModes({ discord: "gateway" });
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("custom-action", {
+        ...baseSendOptions,
+        target: "channel:12345",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["discord"],
+    });
+    expect(messageCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "custom-action",
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("preloads when the scoped channel plugin is not cheaply available", async () => {
+    getChannelPluginMock.mockReturnValue(undefined);
+
+    await runSendAction({ target: "channel:12345" });
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["discord"],
+    });
+  });
+
   it("keeps target-prefixed Telegram sends from local plugin preload", async () => {
     await runSendAction({ channel: undefined, target: "telegram:12345" });
 

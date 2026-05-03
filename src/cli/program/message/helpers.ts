@@ -1,6 +1,9 @@
 import type { Command } from "commander";
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
-import type { ChannelMessageActionName } from "../../../channels/plugins/types.public.js";
+import {
+  CHANNEL_MESSAGE_ACTION_NAMES,
+  type ChannelMessageActionName,
+} from "../../../channels/plugins/types.public.js";
 import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
 import { messageCommand } from "../../../commands/message.js";
 import { danger, setVerbose } from "../../../globals.js";
@@ -20,6 +23,12 @@ export type MessageCliHelpers = {
 
 const GATEWAY_STOP_TIMEOUT_MS = 2500;
 const ACTIONS_WITHOUT_STOP_HOOKS = new Set(["read"]);
+const CHANNEL_MESSAGE_ACTION_NAME_SET = new Set<string>(CHANNEL_MESSAGE_ACTION_NAMES);
+
+type MessagePluginLoadOptions = { scope: PluginRegistryScope; onlyChannelIds?: string[] };
+type MessagePluginPreloadPlan =
+  | { preload: true; loadOptions: MessagePluginLoadOptions }
+  | { preload: false };
 
 function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
   const { account, ...rest } = opts;
@@ -59,29 +68,36 @@ function resolveScopedMessageChannel(opts: Record<string, unknown>): string | un
   }).channel;
 }
 
-function resolveMessagePluginLoadOptions(
-  opts: Record<string, unknown>,
-): { scope: PluginRegistryScope; onlyChannelIds?: string[] } | undefined {
-  const scopedChannel = resolveScopedMessageChannel(opts);
-  if (scopedChannel) {
-    return { scope: "configured-channels", onlyChannelIds: [scopedChannel] };
-  }
-  return { scope: "configured-channels" };
+function asChannelMessageActionName(action: string): ChannelMessageActionName | undefined {
+  return CHANNEL_MESSAGE_ACTION_NAME_SET.has(action)
+    ? (action as ChannelMessageActionName)
+    : undefined;
 }
 
-function shouldPreloadMessagePlugins(action: string, opts: Record<string, unknown>): boolean {
-  if (opts.dryRun === true) {
-    return true;
-  }
-  const scopedChannel = resolveScopedMessageChannel(opts);
-  if (!scopedChannel) {
-    return true;
+function isGatewayOwnedMessageAction(action: string, scopedChannel: string | undefined): boolean {
+  const messageAction = asChannelMessageActionName(action);
+  if (!messageAction || !scopedChannel) {
+    return false;
   }
   const plugin = getChannelPlugin(scopedChannel);
   const executionMode = plugin?.actions?.resolveExecutionMode?.({
-    action: action as ChannelMessageActionName,
+    action: messageAction,
   });
-  return executionMode !== "gateway";
+  return executionMode === "gateway";
+}
+
+function resolveMessagePluginPreloadPlan(
+  action: string,
+  opts: Record<string, unknown>,
+): MessagePluginPreloadPlan {
+  const scopedChannel = resolveScopedMessageChannel(opts);
+  const loadOptions = scopedChannel
+    ? { scope: "configured-channels" as const, onlyChannelIds: [scopedChannel] }
+    : { scope: "configured-channels" as const };
+  if (opts.dryRun === true || !isGatewayOwnedMessageAction(action, scopedChannel)) {
+    return { preload: true, loadOptions };
+  }
+  return { preload: false };
 }
 
 export function createMessageCliHelpers(
@@ -107,8 +123,9 @@ export function createMessageCliHelpers(
     await runCommandWithRuntime(
       defaultRuntime,
       async () => {
-        if (shouldPreloadMessagePlugins(action, opts)) {
-          ensurePluginRegistryLoaded(resolveMessagePluginLoadOptions(opts));
+        const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
+        if (preloadPlan.preload) {
+          ensurePluginRegistryLoaded(preloadPlan.loadOptions);
         }
         const deps = createDefaultDeps();
         await messageCommand(
