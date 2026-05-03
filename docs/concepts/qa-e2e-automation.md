@@ -47,7 +47,7 @@ script aliases; both forms are supported.
 | `qa matrix`                                         | Live transport lane against a disposable Tuwunel homeserver. See [Matrix QA](/concepts/qa-matrix).                                                                     |
 | `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                             |
 | `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                      |
-| `qa mantis`                                         | Planned before and after verification runner for live transport bugs. See [Mantis](/concepts/mantis).                                                                  |
+| `qa mantis`                                         | Before and after verification runner for live transport bugs, with the first Discord status-reactions scenario. See [Mantis](/concepts/mantis).                        |
 
 ## Operator flow
 

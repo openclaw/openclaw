@@ -48,6 +48,7 @@ const {
   runQaProviderServerCommand,
   runQaSuiteCommand,
   runQaTelegramCommand,
+  runMantisBeforeAfterCommand,
   runMantisDiscordSmokeCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
@@ -57,6 +58,7 @@ const {
   runQaProviderServerCommand: vi.fn(),
   runQaSuiteCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
+  runMantisBeforeAfterCommand: vi.fn(),
   runMantisDiscordSmokeCommand: vi.fn(),
 }));
 
@@ -75,6 +77,7 @@ vi.mock("./live-transports/telegram/cli.runtime.js", () => ({
 }));
 
 vi.mock("./mantis/cli.runtime.js", () => ({
+  runMantisBeforeAfterCommand,
   runMantisDiscordSmokeCommand,
 }));
 
@@ -101,6 +104,7 @@ describe("qa cli registration", () => {
     runQaProviderServerCommand.mockReset();
     runQaSuiteCommand.mockReset();
     runQaTelegramCommand.mockReset();
+    runMantisBeforeAfterCommand.mockReset();
     runMantisDiscordSmokeCommand.mockReset();
     listQaRunnerCliContributions
       .mockReset()
@@ -158,6 +162,49 @@ describe("qa cli registration", () => {
       tokenFileEnv: undefined,
       message: "hello from mantis",
       skipPost: true,
+    });
+  });
+
+  it("routes mantis before/after flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "run",
+      "--transport",
+      "discord",
+      "--scenario",
+      "discord-status-reactions-tool-only",
+      "--baseline",
+      "origin/main",
+      "--candidate",
+      "HEAD",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/local-discord-status-reactions",
+      "--credential-source",
+      "convex",
+      "--credential-role",
+      "maintainer",
+      "--skip-install",
+      "--skip-build",
+    ]);
+
+    expect(runMantisBeforeAfterCommand).toHaveBeenCalledWith({
+      baseline: "origin/main",
+      candidate: "HEAD",
+      credentialRole: "maintainer",
+      credentialSource: "convex",
+      fastMode: true,
+      outputDir: ".artifacts/qa-e2e/mantis/local-discord-status-reactions",
+      providerMode: "live-frontier",
+      repoRoot: "/tmp/openclaw-repo",
+      scenario: "discord-status-reactions-tool-only",
+      skipBuild: true,
+      skipInstall: true,
+      transport: "discord",
     });
   });
 

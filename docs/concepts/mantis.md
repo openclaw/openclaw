@@ -72,7 +72,7 @@ pnpm openclaw qa mantis discord-smoke \
   --output-dir .artifacts/qa-e2e/mantis/discord-smoke
 ```
 
-The later before and after runner should accept this shape:
+The local before and after runner accepts this shape:
 
 ```bash
 pnpm openclaw qa mantis run \
@@ -82,6 +82,12 @@ pnpm openclaw qa mantis run \
   --candidate HEAD \
   --output-dir .artifacts/qa-e2e/mantis/local-discord-status-reactions
 ```
+
+The runner creates detached baseline and candidate worktrees under the output
+directory, installs dependencies, builds each ref, runs the scenario with
+`--allow-failures`, then writes `baseline/`, `candidate/`, `comparison.json`,
+and `mantis-report.md`. For the first Discord scenario, a successful verification
+means baseline status is `fail` and candidate status is `pass`.
 
 The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
 workflow for the first real scenario is `Mantis Discord Status Reactions`. It
