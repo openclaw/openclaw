@@ -353,9 +353,18 @@ export function createSessionStatusTool(opts?: {
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
 
-      // When sessionKey is literally "current" and a runSessionKey is provided,
-      // resolve directly to the live run session instead of falling through to
-      // stale sandbox/policy key resolution (#76708).
+      // Track whether this is a semantic-current request (literal "current" or a
+      // current-client alias) BEFORE any rewrite, so visibility treats it as self.
+      const isSemanticCurrentRequest =
+        requestedKeyRaw === "current" ||
+        Boolean(
+          resolveCurrentSessionClientAlias({
+            key: requestedKeyRaw ?? "",
+            requesterInternalKey: effectiveRequesterKey,
+          }),
+        );
+
+      // Resolve "current" to the live run session key for lookup purposes (#76708).
       if (requestedKeyRaw === "current" && opts?.runSessionKey) {
         requestedKeyRaw = opts.runSessionKey;
       }
@@ -365,9 +374,6 @@ export function createSessionStatusTool(opts?: {
         requesterInternalKey: effectiveRequesterKey,
       });
       if (currentSessionAlias) {
-        // When a runSessionKey is provided (e.g. the live run session key), prefer it
-        // over the sandbox/policy key so "current" resolves to the active run session
-        // instead of a stale sandbox key (e.g. a Telegram direct peer key).
         requestedKeyRaw = opts?.runSessionKey ?? currentSessionAlias;
       }
       const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
@@ -391,7 +397,7 @@ export function createSessionStatusTool(opts?: {
         }
       };
 
-      if (requestedKeyRaw.startsWith("agent:")) {
+      if (requestedKeyRaw.startsWith("agent:") && !isSemanticCurrentRequest) {
         const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyRaw);
         ensureAgentAccess(requestedAgentId);
         const access = visibilityGuard.check(
@@ -518,6 +524,7 @@ export function createSessionStatusTool(opts?: {
 
       // Preserve caller-scoped raw-key/current lookups as "self" for visibility checks.
       const shouldTreatVisibilityTargetAsSelf =
+        isSemanticCurrentRequest ||
         resolvedViaImplicitCurrentFallback ||
         (!resolvedViaSessionId &&
           (requestedKeyInput === "current" || resolved.key === requestedKeyInput));
