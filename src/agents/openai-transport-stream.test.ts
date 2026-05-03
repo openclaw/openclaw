@@ -4226,3 +4226,62 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
 });
+
+describe("sanitizeCompletionsUserMessageNames", () => {
+  const { sanitizeCompletionsUserMessageNames } = __testing;
+
+  it("sanitizes non-conforming name on user message", () => {
+    const messages = [{ role: "user", content: "hello", name: "José García" }];
+    sanitizeCompletionsUserMessageNames(messages);
+    expect((messages[0] as Record<string, unknown>).name).toBe("Jos_Garc_a");
+  });
+
+  it("removes name when all characters are non-conforming", () => {
+    const messages = [{ role: "user", content: "hi", name: "张三" }];
+    sanitizeCompletionsUserMessageNames(messages);
+    expect("name" in (messages[0] as Record<string, unknown>)).toBe(false);
+  });
+
+  it("preserves clean ASCII names", () => {
+    const messages = [{ role: "user", content: "hello", name: "Alice" }];
+    sanitizeCompletionsUserMessageNames(messages);
+    expect((messages[0] as Record<string, unknown>).name).toBe("Alice");
+  });
+
+  it("truncates names exceeding 64 characters", () => {
+    const longName = "A".repeat(100);
+    const messages = [{ role: "user", content: "hello", name: longName }];
+    sanitizeCompletionsUserMessageNames(messages);
+    expect((messages[0] as Record<string, unknown>).name).toBe("A".repeat(64));
+  });
+
+  it("does not add name to user messages without one", () => {
+    const messages = [{ role: "user", content: "hello" }];
+    sanitizeCompletionsUserMessageNames(messages);
+    expect("name" in (messages[0] as Record<string, unknown>)).toBe(false);
+  });
+
+  it("does not modify non-user messages", () => {
+    const messages = [{ role: "assistant", content: "hi", name: "bot 🤖" }];
+    sanitizeCompletionsUserMessageNames(messages);
+    expect((messages[0] as Record<string, unknown>).name).toBe("bot 🤖");
+  });
+
+  it("replaces spaces with underscores", () => {
+    const messages = [{ role: "user", content: "hello", name: "John Doe" }];
+    sanitizeCompletionsUserMessageNames(messages);
+    expect((messages[0] as Record<string, unknown>).name).toBe("John_Doe");
+  });
+
+  it("removes non-string name values", () => {
+    const messages = [{ role: "user", content: "hello", name: 42 }];
+    sanitizeCompletionsUserMessageNames(messages);
+    expect("name" in (messages[0] as Record<string, unknown>)).toBe(false);
+  });
+
+  it("handles emoji-only names by removing the field", () => {
+    const messages = [{ role: "user", content: "hello", name: "🚀🎉" }];
+    sanitizeCompletionsUserMessageNames(messages);
+    expect("name" in (messages[0] as Record<string, unknown>)).toBe(false);
+  });
+});

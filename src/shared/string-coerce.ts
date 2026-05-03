@@ -82,3 +82,24 @@ export function normalizeOptionalStringifiedId(value: unknown): string | undefin
 export function hasNonEmptyString(value: unknown): value is string {
   return normalizeOptionalString(value) !== undefined;
 }
+
+/**
+ * Sanitize a sender display name for use as the `name` field in model API
+ * messages. The OpenAI API (and compatible providers) restrict this field to
+ * characters matching `[a-zA-Z0-9_-]` with a maximum length of 64 characters.
+ *
+ * Telegram (and other channel) display names routinely contain spaces, accents,
+ * CJK characters, and emoji which cause a 400 rejection when sent unsanitized.
+ *
+ * Returns `undefined` when the result would be empty after sanitization so the
+ * caller can omit the field entirely.
+ */
+export function sanitizeSenderNameForModel(value: string | null | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const sanitized = value.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+  // Collapse consecutive underscores and trim leading/trailing underscores
+  const collapsed = sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "");
+  return collapsed || undefined;
+}

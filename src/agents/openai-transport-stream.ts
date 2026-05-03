@@ -23,6 +23,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import { sanitizeSenderNameForModel } from "../shared/string-coerce.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";
@@ -55,6 +56,40 @@ import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transpor
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const log = createSubsystemLogger("openai-transport");
+
+/**
+ * Sanitize `name` fields on user-role messages in an OpenAI completions payload.
+ *
+ * The OpenAI Chat Completions API restricts the optional `name` field on user
+ * messages to `[a-zA-Z0-9_-]` with a maximum length of 64 characters. Channel
+ * display names (Telegram, Discord, etc.) routinely contain spaces, accents,
+ * CJK characters, and emoji which cause a 400 rejection when sent unsanitized.
+ *
+ * This runs at the transport boundary — after `convertMessages` builds the
+ * completions payload and before it is sent to the provider — so upstream
+ * callers retain the raw name for group policy matching and display purposes.
+ */
+function sanitizeCompletionsUserMessageNames(messages: unknown[]): void {
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const record = msg as Record<string, unknown>;
+    if (record.role !== "user" || !("name" in record)) {
+      continue;
+    }
+    if (typeof record.name !== "string") {
+      delete record.name;
+      continue;
+    }
+    const sanitized = sanitizeSenderNameForModel(record.name);
+    if (sanitized) {
+      record.name = sanitized;
+    } else {
+      delete record.name;
+    }
+  }
+}
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -1848,6 +1883,7 @@ export function buildOpenAICompletionsParams(
       }
     : context;
   const messages = convertMessages(model as never, completionsContext, compat as never);
+  sanitizeCompletionsUserMessageNames(messages);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const params: Record<string, unknown> = {
@@ -1973,4 +2009,5 @@ export const __testing = {
   sanitizeOpenAICodexResponsesParams,
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
+  sanitizeCompletionsUserMessageNames,
 };
