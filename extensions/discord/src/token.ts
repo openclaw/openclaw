@@ -2,7 +2,7 @@ import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { isSecretRef, normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 export type DiscordTokenSource = "env" | "config" | "none";
 
@@ -11,6 +11,11 @@ export type DiscordTokenResolution = BaseTokenResolution & {
 };
 
 export function normalizeDiscordToken(raw: unknown, path: string): string | undefined {
+  // If raw is a SecretRef object, we cannot normalize it without a runtime snapshot.
+  // Return undefined to signal that the token is not available in the current snapshot.
+  if (isSecretRef(raw)) {
+    return undefined;
+  }
   const trimmed = normalizeResolvedSecretInputString({ value: raw, path });
   if (!trimmed) {
     return undefined;

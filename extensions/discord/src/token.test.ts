@@ -91,7 +91,7 @@ describe("resolveDiscordToken", () => {
     expect(res.source).toBe("config");
   });
 
-  it("throws when token is an unresolved SecretRef object", () => {
+  it("returns none source when token is an unresolved SecretRef object", () => {
     const cfg = {
       channels: {
         discord: {
@@ -100,8 +100,10 @@ describe("resolveDiscordToken", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(() => resolveDiscordToken(cfg)).toThrow(
-      /channels\.discord\.token: unresolved SecretRef/i,
-    );
+    // SecretRef tokens are treated as configured-unavailable in runtime snapshot context
+    // to avoid crashing the gateway during health monitoring
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
   });
 });
