@@ -422,39 +422,69 @@ async function callDiscordApi<T>(params: {
   init?: RequestInit;
   timeoutMs?: number;
 }): Promise<T> {
-  const headers = new Headers(params.init?.headers);
-  headers.set("authorization", `Bot ${params.token}`);
-  if (params.init?.body) {
-    headers.set("content-type", "application/json");
-  }
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${DISCORD_API_BASE_URL}${params.path}`,
-    init: {
-      ...params.init,
-      headers,
-    },
-    signal: AbortSignal.timeout(params.timeoutMs ?? 15_000),
-    policy: { hostnameAllowlist: ["discord.com"] },
-    auditContext: "qa-lab-discord-live",
-  });
-  try {
-    const text = await response.text();
-    const payload = text.trim() ? (JSON.parse(text) as unknown) : undefined;
-    if (!response.ok) {
-      const message =
-        typeof payload === "object" &&
-        payload !== null &&
-        typeof (payload as { message?: unknown }).message === "string"
-          ? (payload as { message: string }).message
-          : text.trim();
-      throw new Error(
-        message || `Discord API ${params.path} failed with status ${response.status}`,
-      );
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const headers = new Headers(params.init?.headers);
+    headers.set("authorization", `Bot ${params.token}`);
+    if (params.init?.body) {
+      headers.set("content-type", "application/json");
     }
-    return payload as T;
-  } finally {
-    await release();
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${DISCORD_API_BASE_URL}${params.path}`,
+      init: {
+        ...params.init,
+        headers,
+      },
+      signal: AbortSignal.timeout(params.timeoutMs ?? 15_000),
+      policy: { hostnameAllowlist: ["discord.com"] },
+      auditContext: "qa-lab-discord-live",
+    });
+    let retryAfterMs: number | null = null;
+    try {
+      const text = await response.text();
+      const payload = text.trim() ? (JSON.parse(text) as unknown) : undefined;
+      if (response.status === 429 && attempt < maxAttempts) {
+        retryAfterMs = resolveDiscordRateLimitRetryAfterMs(response, payload);
+      } else if (!response.ok) {
+        const message =
+          typeof payload === "object" &&
+          payload !== null &&
+          typeof (payload as { message?: unknown }).message === "string"
+            ? (payload as { message: string }).message
+            : text.trim();
+        throw new Error(
+          message || `Discord API ${params.path} failed with status ${response.status}`,
+        );
+      } else {
+        return payload as T;
+      }
+    } finally {
+      await release();
+    }
+    if (retryAfterMs !== null) {
+      await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+    }
   }
+  throw new Error(`Discord API ${params.path} stayed rate limited after ${maxAttempts} attempts`);
+}
+
+function resolveDiscordRateLimitRetryAfterMs(response: Response, payload: unknown) {
+  const payloadRetryAfter =
+    typeof payload === "object" &&
+    payload !== null &&
+    typeof (payload as { retry_after?: unknown }).retry_after === "number"
+      ? (payload as { retry_after: number }).retry_after
+      : undefined;
+  const headerRetryAfter =
+    Number(response.headers.get("retry-after")) ||
+    Number(response.headers.get("x-ratelimit-reset-after"));
+  const seconds =
+    typeof payloadRetryAfter === "number" && Number.isFinite(payloadRetryAfter)
+      ? payloadRetryAfter
+      : Number.isFinite(headerRetryAfter)
+        ? headerRetryAfter
+        : 1;
+  return Math.max(0, Math.ceil(seconds * 1000));
 }
 
 async function getCurrentDiscordUser(token: string) {
@@ -1343,6 +1373,7 @@ export const __testing = {
   normalizeDiscordObservedMessage,
   parseDiscordQaCredentialPayload,
   renderDiscordStatusReactionHtml,
+  resolveDiscordRateLimitRetryAfterMs,
   resolveDiscordQaRuntimeEnv,
   waitForDiscordChannelRunning,
 };

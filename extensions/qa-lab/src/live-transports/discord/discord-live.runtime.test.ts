@@ -535,6 +535,55 @@ describe("discord live qa runtime", () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it("retries Discord REST requests after a 429 rate limit", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ message: "You are being rate limited.", retry_after: 0 }), {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: "423456789012345678" }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          }),
+        ),
+    );
+
+    await expect(
+      __testing.callDiscordApi({
+        token: "token",
+        path: "/users/@me",
+      }),
+    ).resolves.toEqual({
+      id: "423456789012345678",
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves Discord rate-limit retry delay from payload before headers", () => {
+    const response = new Response("{}", {
+      status: 429,
+      headers: {
+        "retry-after": "10",
+      },
+    });
+
+    expect(
+      __testing.resolveDiscordRateLimitRetryAfterMs(response, {
+        retry_after: 0.25,
+      }),
+    ).toBe(250);
+  });
+
   it("redacts observed message content by default in artifacts", () => {
     expect(
       __testing.buildObservedMessagesArtifact({
