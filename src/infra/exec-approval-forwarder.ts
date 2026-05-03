@@ -285,6 +285,9 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
       : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
   );
   lines.push(`Reply with: /approve <id> ${decisionText}`);
+  lines.push(
+    `Tip: reply directly to this message with \`/approve ${decisionText}\` to skip the ID, or pass a unique ID prefix.`,
+  );
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
       "Allow Always is unavailable because the effective policy requires approval every time.",

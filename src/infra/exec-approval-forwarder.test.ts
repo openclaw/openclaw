@@ -572,6 +572,9 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Command: `echo hello`");
     expect(text).toContain("Expires in: 5s");
     expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
+    expect(text).toContain(
+      "Tip: reply directly to this message with `/approve allow-once|allow-always|deny` to skip the ID, or pass a unique ID prefix.",
+    );
   });
 
   it("includes command analysis warnings in fallback delivery text", async () => {

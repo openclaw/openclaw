@@ -68,6 +68,9 @@ export function buildPluginApprovalRequestMessage(
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
   lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
+  lines.push(
+    "Tip: reply directly to this message with `/approve allow-once|allow-always|deny` to skip the ID, or pass a unique ID prefix.",
+  );
   return lines.join("\n");
 }
 
