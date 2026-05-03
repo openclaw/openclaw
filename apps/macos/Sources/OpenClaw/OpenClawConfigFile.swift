@@ -642,13 +642,20 @@ enum OpenClawConfigFile {
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let url = configURL.deletingLastPathComponent()
             .appendingPathComponent("\(configURL.lastPathComponent).rejected.\(self.configTimestampToken(timestamp))")
-        guard !FileManager().fileExists(atPath: url.path) else { return url.path }
-        do {
-            try data.write(to: url, options: [])
+        let fileManager = FileManager()
+        let privatePermissions: NSNumber = 0o600
+        if fileManager.fileExists(atPath: url.path) {
+            try? fileManager.setAttributes([.posixPermissions: privatePermissions], ofItemAtPath: url.path)
             return url.path
-        } catch {
+        }
+        guard fileManager.createFile(
+            atPath: url.path,
+            contents: data,
+            attributes: [.posixPermissions: privatePermissions])
+        else {
             return nil
         }
+        return url.path
     }
 
     private static func observeConfigRead(data: Data, root: [String: Any]?, configURL: URL, valid: Bool) {

@@ -424,6 +424,9 @@ struct OpenClawConfigFileTests {
             #expect(blocking.contains("gateway-mode-removed"))
             if let rejectedPath = auditRoot?["rejectedPath"] as? String {
                 #expect(FileManager().fileExists(atPath: rejectedPath))
+                let attributes = try FileManager().attributesOfItem(atPath: rejectedPath)
+                let mode = attributes[.posixPermissions] as? NSNumber
+                #expect(mode?.intValue == 0o600)
             } else {
                 Issue.record("Missing rejected payload path")
             }
