@@ -130,6 +130,10 @@ describe("plugin scheduled turns", () => {
     workflowMocks.callGatewayTool.mockImplementation(async (method: string, _opts, body) => {
       if (method === "cron.add") {
         expect(validateCronAddParams(body)).toBe(true);
+        expect((body as { delivery?: unknown }).delivery).toEqual({
+          mode: "announce",
+          channel: "last",
+        });
         return { id: "cron-compatible-job" };
       }
       return { ok: true };
@@ -144,7 +148,6 @@ describe("plugin scheduled turns", () => {
           message: "wake",
           delayMs: 1_000,
           tag: "nudge",
-          deliveryMode: "announce",
         },
       }),
     ).resolves.toMatchObject({ id: "cron-compatible-job" });
