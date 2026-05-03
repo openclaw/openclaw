@@ -1697,7 +1697,6 @@
     "playwright-core": "1.59.1",
     "proxy-agent": "^8.0.1",
     "qrcode": "1.5.4",
-    "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tokenjuice": "0.7.0",
     "tree-sitter-bash": "^0.25.1",
@@ -1733,6 +1732,9 @@
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
+  },
+  "optionalDependencies": {
+    "sqlite-vec": "0.1.9"
   },
   "overrides": {
     "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
