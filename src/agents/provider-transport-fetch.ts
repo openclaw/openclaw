@@ -172,7 +172,11 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
-function buildManagedResponse(response: Response, release: () => Promise<void>): Response {
+function buildManagedResponse(
+  response: Response,
+  release: () => Promise<void>,
+  refreshTimeout?: () => void,
+): Response {
   if (!response.body) {
     void release();
     return response;
@@ -199,6 +203,7 @@ function buildManagedResponse(response: Response, release: () => Promise<void>):
           await finalize();
           return;
         }
+        refreshTimeout?.();
         controller.enqueue(chunk.value);
       } catch (error) {
         controller.error(error);
@@ -315,7 +320,7 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         headers,
       });
     }
-    response = sanitizeOpenAISdkSseResponse(response);
-    return buildManagedResponse(response, result.release);
+    response = buildManagedResponse(response, result.release, result.refreshTimeout);
+    return sanitizeOpenAISdkSseResponse(response);
   };
 }

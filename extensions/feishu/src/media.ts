@@ -12,6 +12,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
@@ -76,6 +77,7 @@ type FeishuDownloadResponse =
   | Awaited<ReturnType<Lark.Client["im"]["messageResource"]["get"]>>;
 
 type FeishuHeaderMap = Record<string, string | string[]>;
+type FeishuMessageResourceDownloadType = "image" | "file" | "media";
 
 function asHeaderMap(value: object | undefined): FeishuHeaderMap | undefined {
   if (!value) {
@@ -144,6 +146,27 @@ function readHeaderValue(
     }
   }
   return undefined;
+}
+
+function readHttpStatusFromError(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const response = (error as { response?: unknown }).response;
+  if (response && typeof response === "object") {
+    const status = (response as { status?: unknown }).status;
+    if (typeof status === "number") {
+      return status;
+    }
+  }
+
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : undefined;
+}
+
+function isHttpStatusError(error: unknown, status: number): boolean {
+  return readHttpStatusFromError(error) === status;
 }
 
 function containsEastAsianScript(value: string): boolean {
@@ -304,6 +327,25 @@ export async function downloadImageFeishu(params: {
   return { buffer, contentType: meta.contentType };
 }
 
+async function downloadMessageResourceWithType(params: {
+  client: ReturnType<typeof createFeishuClient>;
+  messageId: string;
+  fileKey: string;
+  type: FeishuMessageResourceDownloadType;
+}): Promise<DownloadMessageResourceResult> {
+  const response = await params.client.im.messageResource.get({
+    path: { message_id: params.messageId, file_key: params.fileKey },
+    params: { type: params.type },
+  });
+
+  const buffer = await readFeishuResponseBuffer({
+    response,
+    tmpDirPrefix: "openclaw-feishu-resource-",
+    errorPrefix: "Feishu message resource download failed",
+  });
+  return { buffer, ...extractFeishuDownloadMetadata(response) };
+}
+
 /**
  * Download a message resource (file/image/audio/video) from Feishu.
  * Used for downloading files, audio, and video from messages.
@@ -322,17 +364,28 @@ export async function downloadMessageResourceFeishu(params: {
   }
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
-  const response = await client.im.messageResource.get({
-    path: { message_id: messageId, file_key: normalizedFileKey },
-    params: { type },
-  });
-
-  const buffer = await readFeishuResponseBuffer({
-    response,
-    tmpDirPrefix: "openclaw-feishu-resource-",
-    errorPrefix: "Feishu message resource download failed",
-  });
-  return { buffer, ...extractFeishuDownloadMetadata(response) };
+  try {
+    return await downloadMessageResourceWithType({
+      client,
+      messageId,
+      fileKey: normalizedFileKey,
+      type,
+    });
+  } catch (err) {
+    if (type !== "file" || !isHttpStatusError(err, 502)) {
+      throw err;
+    }
+    try {
+      return await downloadMessageResourceWithType({
+        client,
+        messageId,
+        fileKey: normalizedFileKey,
+        type: "media",
+      });
+    } catch {
+      throw err;
+    }
+  }
 }
 
 export type UploadImageResult = {
@@ -346,6 +399,7 @@ export type UploadFileResult = {
 export type SendMediaResult = {
   messageId: string;
   chatId: string;
+  voiceIntentDegradedToFile?: boolean;
 };
 
 /**
@@ -366,12 +420,17 @@ export async function uploadImageFeishu(params: {
   // See: https://github.com/larksuite/node-sdk/issues/121
   const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
 
-  const response = await client.im.image.create({
-    data: {
-      image_type: imageType,
-      image: imageData,
-    },
-  });
+  const response = await requestFeishuApi(
+    () =>
+      client.im.image.create({
+        data: {
+          image_type: imageType,
+          image: imageData,
+        },
+      }),
+    "Feishu image upload failed",
+    { includeNestedErrorLogId: true },
+  );
 
   return {
     imageKey: extractFeishuUploadKey(response, {
@@ -417,14 +476,19 @@ export async function uploadFileFeishu(params: {
 
   const safeFileName = sanitizeFileNameForUpload(fileName);
 
-  const response = await client.im.file.create({
-    data: {
-      file_type: fileType,
-      file_name: safeFileName,
-      file: fileData,
-      ...(duration !== undefined && { duration }),
-    },
-  });
+  const response = await requestFeishuApi(
+    () =>
+      client.im.file.create({
+        data: {
+          file_type: fileType,
+          file_name: safeFileName,
+          file: fileData,
+          ...(duration !== undefined && { duration }),
+        },
+      }),
+    "Feishu file upload failed",
+    { includeNestedErrorLogId: true },
+  );
 
   return {
     fileKey: extractFeishuUploadKey(response, {
@@ -454,26 +518,36 @@ export async function sendImageFeishu(params: {
   const content = JSON.stringify({ image_key: imageKey });
 
   if (replyToMessageId) {
-    const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
-      data: {
-        content,
-        msg_type: "image",
-        ...(replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    const response = await requestFeishuApi(
+      () =>
+        client.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: {
+            content,
+            msg_type: "image",
+            ...(replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      "Feishu image reply failed",
+      { includeNestedErrorLogId: true },
+    );
     assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
     return toFeishuSendResult(response, receiveId);
   }
 
-  const response = await client.im.message.create({
-    params: { receive_id_type: receiveIdType },
-    data: {
-      receive_id: receiveId,
-      content,
-      msg_type: "image",
-    },
-  });
+  const response = await requestFeishuApi(
+    () =>
+      client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: {
+          receive_id: receiveId,
+          content,
+          msg_type: "image",
+        },
+      }),
+    "Feishu image send failed",
+    { includeNestedErrorLogId: true },
+  );
   assertFeishuMessageApiSuccess(response, "Feishu image send failed");
   return toFeishuSendResult(response, receiveId);
 }
@@ -501,26 +575,36 @@ export async function sendFileFeishu(params: {
   const content = JSON.stringify({ file_key: fileKey });
 
   if (replyToMessageId) {
-    const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
-      data: {
-        content,
-        msg_type: msgType,
-        ...(replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    const response = await requestFeishuApi(
+      () =>
+        client.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: {
+            content,
+            msg_type: msgType,
+            ...(replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      "Feishu file reply failed",
+      { includeNestedErrorLogId: true },
+    );
     assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
     return toFeishuSendResult(response, receiveId);
   }
 
-  const response = await client.im.message.create({
-    params: { receive_id_type: receiveIdType },
-    data: {
-      receive_id: receiveId,
-      content,
-      msg_type: msgType,
-    },
-  });
+  const response = await requestFeishuApi(
+    () =>
+      client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: {
+          receive_id: receiveId,
+          content,
+          msg_type: msgType,
+        },
+      }),
+    "Feishu file send failed",
+    { includeNestedErrorLogId: true },
+  );
   assertFeishuMessageApiSuccess(response, "Feishu file send failed");
   return toFeishuSendResult(response, receiveId);
 }
@@ -609,6 +693,41 @@ function isFeishuNativeVoiceAudio(params: { fileName: string; contentType?: stri
   return (
     ext === ".opus" || ext === ".ogg" || contentType === "audio/ogg" || contentType === "audio/opus"
   );
+}
+
+function normalizeMediaNameForExtension(raw: string): string {
+  try {
+    return new URL(raw).pathname;
+  } catch {
+    return raw.split(/[?#]/, 1)[0] ?? raw;
+  }
+}
+
+export function shouldSuppressFeishuTextForVoiceMedia(params: {
+  mediaUrl?: string;
+  fileName?: string;
+  contentType?: string;
+  audioAsVoice?: boolean;
+}): boolean {
+  if (params.audioAsVoice === true) {
+    return true;
+  }
+  if (
+    params.fileName &&
+    isFeishuNativeVoiceAudio({
+      fileName: params.fileName,
+      contentType: params.contentType,
+    })
+  ) {
+    return true;
+  }
+  if (!params.mediaUrl) {
+    return false;
+  }
+  return isFeishuNativeVoiceAudio({
+    fileName: normalizeMediaNameForExtension(params.mediaUrl),
+    contentType: params.contentType,
+  });
 }
 
 function isLikelyTranscodableAudio(params: { fileName: string; contentType?: string }): boolean {
@@ -754,10 +873,22 @@ export async function sendMediaFeishu(params: {
   contentType = prepared.contentType;
 
   const routing = resolveFeishuOutboundMediaKind({ fileName: name, contentType });
+  const voiceIntentDegradedToFile = audioAsVoice === true && routing.msgType !== "audio";
 
   if (routing.msgType === "image") {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
-    return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
+    const result = await sendImageFeishu({
+      cfg,
+      to,
+      imageKey,
+      replyToMessageId,
+      replyInThread,
+      accountId,
+    });
+    return {
+      ...result,
+      ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
+    };
   }
   const { fileKey } = await uploadFileFeishu({
     cfg,
@@ -766,7 +897,7 @@ export async function sendMediaFeishu(params: {
     fileType: routing.fileType ?? "stream",
     accountId,
   });
-  return sendFileFeishu({
+  const result = await sendFileFeishu({
     cfg,
     to,
     fileKey,
@@ -775,4 +906,8 @@ export async function sendMediaFeishu(params: {
     replyInThread,
     accountId,
   });
+  return {
+    ...result,
+    ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
+  };
 }

@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   acquireSessionWriteLock,
+  appendSessionTranscriptMessage,
   emitSessionTranscriptUpdate,
+  resolveSessionWriteLockAcquireTimeoutMs,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
+  type SessionWriteLockAcquireTimeoutConfig,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 export async function mirrorCodexAppServerTranscript(params: {
@@ -14,6 +15,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
+  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<void> {
   const messages = params.messages.filter(
     (message) => message.role === "user" || message.role === "assistant",
@@ -22,14 +24,12 @@ export async function mirrorCodexAppServerTranscript(params: {
     return;
   }
 
-  await fs.mkdir(path.dirname(params.sessionFile), { recursive: true });
   const lock = await acquireSessionWriteLock({
     sessionFile: params.sessionFile,
-    timeoutMs: 10_000,
+    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
   });
   try {
     const existingIdempotencyKeys = await readTranscriptIdempotencyKeys(params.sessionFile);
-    const sessionManager = SessionManager.open(params.sessionFile);
     for (const [index, message] of messages.entries()) {
       const idempotencyKey = params.idempotencyScope
         ? `${params.idempotencyScope}:${message.role}:${index}`
@@ -40,7 +40,7 @@ export async function mirrorCodexAppServerTranscript(params: {
       const transcriptMessage = {
         ...message,
         ...(idempotencyKey ? { idempotencyKey } : {}),
-      } as Parameters<SessionManager["appendMessage"]>[0];
+      } as AgentMessage;
       const nextMessage = runAgentHarnessBeforeMessageWriteHook({
         message: transcriptMessage,
         agentId: params.agentId,
@@ -49,13 +49,19 @@ export async function mirrorCodexAppServerTranscript(params: {
       if (!nextMessage) {
         continue;
       }
-      const messageToAppend = (idempotencyKey
-        ? {
-            ...(nextMessage as unknown as Record<string, unknown>),
-            idempotencyKey,
-          }
-        : nextMessage) as unknown as Parameters<SessionManager["appendMessage"]>[0];
-      sessionManager.appendMessage(messageToAppend);
+      const messageToAppend = (
+        idempotencyKey
+          ? {
+              ...(nextMessage as unknown as Record<string, unknown>),
+              idempotencyKey,
+            }
+          : nextMessage
+      ) as AgentMessage;
+      await appendSessionTranscriptMessage({
+        transcriptPath: params.sessionFile,
+        message: messageToAppend,
+        config: params.config,
+      });
       if (idempotencyKey) {
         existingIdempotencyKeys.add(idempotencyKey);
       }

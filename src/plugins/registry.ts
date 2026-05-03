@@ -92,10 +92,10 @@ import {
 import {
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
+  registerMemoryFlushPlanResolverForPlugin,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
+  registerMemoryPromptSectionForPlugin,
+  registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -127,6 +127,11 @@ import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
+  findUndeclaredPluginToolNames,
+  normalizePluginToolContractNames,
+  normalizePluginToolNames,
+} from "./tool-contracts.js";
+import {
   isConversationHookName,
   isPluginHookName,
   isPromptInjectionHookName,
@@ -147,6 +152,7 @@ import type {
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeInvokePolicy,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   MediaUnderstandingProviderPlugin,
@@ -236,6 +242,31 @@ const constrainLegacyPromptInjectionHook = (
 
 export { createEmptyPluginRegistry } from "./registry-empty.js";
 
+export function resolvePluginPath(input: string, rootDir: string | undefined): string {
+  const trimmed = input.trim();
+  if (!trimmed || path.isAbsolute(trimmed) || trimmed.startsWith("~")) {
+    return resolveUserPath(input);
+  }
+  return rootDir ? path.resolve(rootDir, trimmed) : resolveUserPath(input);
+}
+
+function isOfficialNpmCodexPluginRecord(record: Pick<PluginRecord, "id" | "rootDir" | "source">) {
+  if (record.id !== "codex") {
+    return false;
+  }
+  const sourcePath = path
+    .normalize(record.rootDir ?? record.source)
+    .split(path.sep)
+    .join("/");
+  return sourcePath.includes("/node_modules/@openclaw/codex");
+}
+
+function canClaimReservedCommandOwnership(
+  record: Pick<PluginRecord, "id" | "origin" | "rootDir" | "source">,
+) {
+  return record.origin === "bundled" || isOfficialNpmCodexPluginRecord(record);
+}
+
 const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
 const activePluginHookRegistrations = resolveGlobalSingleton<
   Map<string, Array<{ event: string; handler: Parameters<typeof registerInternalHook>[1] }>>
@@ -247,7 +278,7 @@ type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration
 type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */
   capabilityHandlers: boolean;
-  /** Runtime channel registration is suppressed for setup-only metadata loads. */
+  /** Runtime channel registration is suppressed for setup-only and tool discovery loads. */
   runtimeChannel: boolean;
 };
 
@@ -259,18 +290,23 @@ type PluginRegistrationCapabilities = {
 function resolvePluginRegistrationCapabilities(
   mode: PluginRegistrationMode,
 ): PluginRegistrationCapabilities {
+  const capabilityHandlers = mode === "full" || mode === "discovery" || mode === "tool-discovery";
   return {
-    capabilityHandlers: mode === "full" || mode === "discovery",
-    runtimeChannel: mode !== "setup-only",
+    capabilityHandlers,
+    runtimeChannel: mode !== "setup-only" && mode !== "tool-discovery",
   };
 }
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
-  const coreGatewayMethods = new Set([
-    ...(registryParams.coreGatewayMethodNames ?? []),
-    ...Object.keys(registryParams.coreGatewayHandlers ?? {}),
-  ]);
+  const coreGatewayMethodNames = Array.from(
+    new Set([
+      ...(registryParams.coreGatewayMethodNames ?? []),
+      ...Object.keys(registryParams.coreGatewayHandlers ?? {}),
+    ]),
+  ).toSorted();
+  registry.coreGatewayMethodNames = coreGatewayMethodNames;
+  const coreGatewayMethods = new Set(coreGatewayMethodNames);
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
 
@@ -434,7 +470,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     if (pluginsWithChannelRegistrationConflict.has(record.id)) {
       return;
     }
-    const names = opts?.names ?? (opts?.name ? [opts.name] : []);
+    const declaredNames = normalizePluginToolContractNames(record.contracts);
+    if (declaredNames.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "plugin must declare contracts.tools before registering agent tools",
+      });
+      return;
+    }
+    const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
     const optional = opts?.optional === true;
     const factory: OpenClawPluginToolFactory =
       typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
@@ -443,7 +489,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names.push(tool.name);
     }
 
-    const normalized = names.map((name) => name.trim()).filter(Boolean);
+    const normalized = normalizePluginToolNames(names);
+    const undeclared = findUndeclaredPluginToolNames({
+      declaredNames,
+      toolNames: normalized,
+    });
+    if (undeclared.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+      });
+      return;
+    }
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
@@ -452,6 +511,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       factory,
       names: normalized,
+      declaredNames,
       optional,
       source: record.source,
       rootDir: record.rootDir,
@@ -757,7 +817,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
-    record.channelIds.push(id);
+    if (!record.channelIds.includes(id)) {
+      record.channelIds.push(id);
+    }
     registry.channelSetups.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -799,7 +861,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    record.providerIds.push(id);
+    if (!record.providerIds.includes(id)) {
+      record.providerIds.push(id);
+    }
     registry.providers.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -956,7 +1020,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    params.ownedIds.push(id);
+    if (!params.ownedIds.includes(id)) {
+      params.ownedIds.push(id);
+    }
     params.registrations.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1240,6 +1306,57 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerNodeInvokePolicy = (
+    record: PluginRecord,
+    policy: OpenClawPluginNodeInvokePolicy,
+    pluginConfig?: Record<string, unknown>,
+  ) => {
+    const commands = Array.isArray(policy.commands)
+      ? policy.commands.map((command) => command.trim()).filter(Boolean)
+      : [];
+    if (commands.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "node invoke policy registration missing commands",
+      });
+      return;
+    }
+    if (typeof policy.handle !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `node invoke policy registration missing handler: ${commands.join(", ")}`,
+      });
+      return;
+    }
+    registry.nodeInvokePolicies ??= [];
+    for (const command of commands) {
+      const existing = registry.nodeInvokePolicies.find((entry) =>
+        entry.policy.commands.includes(command),
+      );
+      if (existing) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `node invoke policy already registered for ${command} (${existing.pluginId})`,
+        });
+        return;
+      }
+    }
+    registry.nodeInvokePolicies.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      policy: { ...policy, commands },
+      pluginConfig,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerSecurityAuditCollector = (
     record: PluginRecord,
     collector: OpenClawPluginSecurityAuditCollector,
@@ -1328,7 +1445,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const allowReservedCommandNames = command.ownership === "reserved";
-    if (allowReservedCommandNames && record.origin !== "bundled") {
+    if (allowReservedCommandNames && !canClaimReservedCommandOwnership(record)) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -1554,6 +1671,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "tool metadata registration missing toolName",
+      });
+      return;
+    }
+    const declaredNames = normalizePluginToolContractNames(record.contracts);
+    const undeclared = findUndeclaredPluginToolNames({
+      declaredNames,
+      toolNames: [toolName],
+    });
+    if (undeclared.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.tools for tool metadata: ${undeclared.join(", ")}`,
       });
       return;
     }
@@ -2020,7 +2151,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig: params.pluginConfig,
       runtime: resolvePluginRuntime(record.id),
       logger: normalizeLogger(registryParams.logger),
-      resolvePath: (input: string) => resolveUserPath(input),
+      resolvePath: (input: string) => resolvePluginPath(input, record.rootDir),
       handlers: {
         ...(registrationCapabilities.capabilityHandlers
           ? {
@@ -2068,6 +2199,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerTextTransforms: (transforms) => registerTextTransforms(record, transforms),
               registerReload: (registration) => registerReload(record, registration),
               registerNodeHostCommand: (command) => registerNodeHostCommand(record, command),
+              registerNodeInvokePolicy: (policy) =>
+                registerNodeInvokePolicy(record, policy, params.pluginConfig),
               registerSecurityAuditCollector: (collector) =>
                 registerSecurityAuditCollector(record, collector),
               registerInteractiveHandler: (registration) => {
@@ -2264,7 +2397,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryPromptSection(builder);
+                registerMemoryPromptSectionForPlugin(record.id, builder);
               },
               registerMemoryPromptSupplement: (builder) => {
                 if (typeof builder !== "function") {
@@ -2299,7 +2432,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryFlushPlanResolver(resolver);
+                registerMemoryFlushPlanResolverForPlugin(record.id, resolver);
               },
               registerMemoryRuntime: (runtime) => {
                 if (!hasKind(record.kind, "memory")) {
@@ -2319,7 +2452,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryRuntime(runtime);
+                registerMemoryRuntimeForPlugin(record.id, runtime);
               },
               registerMemoryEmbeddingProvider: (adapter) => {
                 if (hasKind(record.kind, "memory")) {

@@ -1210,7 +1210,7 @@ describe("qa mock openai server", () => {
       }),
     });
     expect(activeMemorySearch.status).toBe(200);
-    expect(await activeMemorySearch.text()).toContain('"name":"memory_recall"');
+    expect(await activeMemorySearch.text()).toContain('"name":"memory_search"');
 
     const activeMemoryStreamSummary = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",

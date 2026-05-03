@@ -420,6 +420,18 @@ describe("gateway bonjour advertiser", () => {
       expect.stringContaining("suppressing ciao netmask assertion"),
     );
 
+    logger.warn.mockClear();
+    expect(
+      handler?.(
+        new Error(
+          "Can't probe for a service which is announced already. Received announcing for service OpenClaw Gateway._openclaw._tcp.local.",
+        ),
+      ),
+    ).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing ciao self-probe race"),
+    );
+
     await started.stop();
   });
 
@@ -709,22 +721,65 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    await vi.advanceTimersByTimeAsync(105_000);
+    await vi.advanceTimersByTimeAsync(55_000);
 
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("disabling advertiser after 3 failed restarts"),
+      expect.stringContaining("disabling advertiser after 1 stuck-state restart"),
     );
-    expect(createService).toHaveBeenCalledTimes(4);
-    expect(advertise).toHaveBeenCalledTimes(4);
-    expect(destroy).toHaveBeenCalledTimes(4);
+    expect(createService).toHaveBeenCalledTimes(2);
+    expect(advertise).toHaveBeenCalledTimes(2);
+    expect(destroy).toHaveBeenCalledTimes(2);
     expect(shutdown).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(createService).toHaveBeenCalledTimes(4);
-    expect(advertise).toHaveBeenCalledTimes(4);
+    expect(createService).toHaveBeenCalledTimes(2);
+    expect(advertise).toHaveBeenCalledTimes(2);
 
     await started.stop();
     expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables bonjour when the advertiser flaps within a sliding window", async () => {
+    enableAdvertiserUnitMode();
+    vi.useFakeTimers();
+
+    const stateRef = { value: "announced" };
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy, stateRef });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    for (let cycle = 0; cycle < 12; cycle += 1) {
+      stateRef.value = "announced";
+      await vi.advanceTimersByTimeAsync(5_000);
+      stateRef.value = "probing";
+      await vi.advanceTimersByTimeAsync(25_000);
+      if (
+        logger.warn.mock.calls.some(
+          (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
+        )
+      ) {
+        break;
+      }
+    }
+
+    const disableLog = logger.warn.mock.calls.find(
+      (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
+    );
+    expect(disableLog).toBeDefined();
+    expect(String(disableLog?.[0])).toMatch(/restarts within \d+ minutes/);
+
+    const advertiseCallsAtDisable = advertise.mock.calls.length;
+    const createServiceCallsAtDisable = createService.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(advertise).toHaveBeenCalledTimes(advertiseCallsAtDisable);
+    expect(createService).toHaveBeenCalledTimes(createServiceCallsAtDisable);
+
+    await started.stop();
   });
 
   it("normalizes hostnames with domains for service names", async () => {

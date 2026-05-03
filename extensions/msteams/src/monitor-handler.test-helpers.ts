@@ -40,6 +40,26 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       };
     },
   );
+  const run = vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+    const input = await params.adapter.ingest(params.raw);
+    if (!input) {
+      return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+    }
+    const eventClass = (await params.adapter.classify?.(input)) ?? {
+      kind: "message" as const,
+      canStartAgentTurn: true,
+    };
+    const preflightResult = await params.adapter.preflight?.(input, eventClass);
+    const preflight =
+      preflightResult && "kind" in preflightResult
+        ? { admission: preflightResult }
+        : (preflightResult ?? {});
+    const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
+    if ("runDispatch" in turn) {
+      return await runPrepared(turn);
+    }
+    throw new Error("msteams test runtime only supports prepared turn dispatch");
+  });
   setMSTeamsRuntime({
     logging: { shouldLogVerbose: () => false },
     system: { enqueueSystemEvent: options.enqueueSystemEvent ?? vi.fn() },
@@ -90,6 +110,7 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         ...(options.resolveStorePath ? { resolveStorePath: options.resolveStorePath } : {}),
       },
       turn: {
+        run: run as unknown as PluginRuntime["channel"]["turn"]["run"],
         runPrepared: runPrepared as unknown as PluginRuntime["channel"]["turn"]["runPrepared"],
       },
     },

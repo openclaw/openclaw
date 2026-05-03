@@ -5,20 +5,26 @@ class FakeWebSocket {
   public readonly sent: string[] = [];
   private readonly openListeners: Array<() => void> = [];
   private readonly messageListeners: Array<(data: Buffer) => void | Promise<void>> = [];
+  private readonly pongListeners: Array<(data: Buffer) => void> = [];
   private readonly closeListeners: Array<(code: number, reason: Buffer) => void> = [];
   private readonly errorListeners: Array<(err: unknown) => void> = [];
 
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: Buffer) => void | Promise<void>): void;
+  on(event: "pong", listener: (data: Buffer) => void): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
-  on(event: "open" | "message" | "close" | "error", listener: unknown): void {
+  on(event: "open" | "message" | "pong" | "close" | "error", listener: unknown): void {
     if (event === "open") {
       this.openListeners.push(listener as () => void);
       return;
     }
     if (event === "message") {
       this.messageListeners.push(listener as (data: Buffer) => void | Promise<void>);
+      return;
+    }
+    if (event === "pong") {
+      this.pongListeners.push(listener as (data: Buffer) => void);
       return;
     }
     if (event === "close") {
@@ -31,6 +37,8 @@ class FakeWebSocket {
   send(data: string): void {
     this.sent.push(data);
   }
+
+  ping(): void {}
 
   close(): void {}
 
@@ -168,6 +176,27 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       };
     },
   );
+  const run = vi.fn(
+    async (params: {
+      raw: unknown;
+      adapter: {
+        ingest: (raw: unknown) => unknown;
+        resolveTurn: (
+          input: unknown,
+          eventClass: { kind: "message"; canStartAgentTurn: true },
+          preflight: Record<string, never>,
+        ) => Parameters<typeof runPrepared>[0];
+      };
+    }) => {
+      const input = params.adapter.ingest(params.raw);
+      const turn = params.adapter.resolveTurn(
+        input,
+        { kind: "message", canStartAgentTurn: true },
+        {},
+      );
+      return await runPrepared(turn);
+    },
+  );
   return {
     config: {
       current: () => cfg,
@@ -252,6 +281,7 @@ function createRuntimeCore(cfg: OpenClawConfig) {
         updateLastRoute: vi.fn(async () => {}),
       },
       turn: {
+        run,
         runPrepared,
       },
       text: {
@@ -373,5 +403,80 @@ describe("mattermost inbound user posts", () => {
       OriginatingChannel: "mattermost",
       Provider: "mattermost",
     });
+  });
+
+  it("pins direct-message main route updates to the configured owner", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const directConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "allowlist",
+          groupPolicy: "open",
+          allowFrom: ["user-1"],
+        },
+      },
+    };
+    const runtimeCore = createRuntimeCore(directConfig);
+    mockState.runtimeCore = runtimeCore;
+    mockState.resolveChannelInfo.mockResolvedValue({
+      id: "dm-1",
+      name: "",
+      display_name: "",
+      team_id: "team-1",
+      type: "D",
+    });
+    const { monitorMattermostProvider } = await import("./monitor.js");
+
+    const monitor = monitorMattermostProvider({
+      config: directConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "dm-1",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-dm-1",
+          channel_id: "dm-1",
+          user_id: "user-1",
+          message: "direct hello",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "dm-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(runtimeCore.channel.session.recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        updateLastRoute: expect.objectContaining({
+          channel: "mattermost",
+          to: "user:user-1",
+          mainDmOwnerPin: expect.objectContaining({
+            ownerRecipient: "user-1",
+            senderRecipient: "user-1",
+          }),
+        }),
+      }),
+    );
   });
 });

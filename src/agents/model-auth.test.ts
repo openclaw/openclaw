@@ -9,6 +9,11 @@ import {
 } from "./model-auth-markers.js";
 
 vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
   loadPluginManifestRegistryForPluginRegistry: () => ({
     diagnostics: [],
     plugins: [
@@ -321,6 +326,10 @@ describe("resolveModelAuthMode", () => {
 
     try {
       expect(resolveModelAuthMode("codex", undefined, { version: 1, profiles: {} })).toBe("oauth");
+      expect(readCodexCliCredentialsCached).toHaveBeenCalledWith({
+        ttlMs: 5_000,
+        allowKeychainPrompt: false,
+      });
     } finally {
       readCodexCliCredentialsCached.mockRestore();
     }

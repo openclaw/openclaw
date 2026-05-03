@@ -12,6 +12,7 @@ import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js"
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   createWebInboundDeliverySpies,
+  createAcceptedWhatsAppSendResult,
   createMockWebListener,
   createScriptedWebListenerFactory,
   createWebListenerFactoryCapture,
@@ -713,7 +714,7 @@ describe("web auto-reply connection", () => {
 
       try {
         const sendMedia = vi.fn();
-        const reply = vi.fn().mockResolvedValue(undefined);
+        const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
         const sendComposing = vi.fn();
         const resolver = vi.fn().mockResolvedValue({ text: "ok" });
 
@@ -861,9 +862,9 @@ describe("web auto-reply connection", () => {
       markDispatchIdle,
       cleanup: vi.fn(),
     };
-    const reply = vi.fn().mockResolvedValue(undefined);
+    const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
     const sendComposing = vi.fn().mockResolvedValue(undefined);
-    const sendMedia = vi.fn().mockResolvedValue(undefined);
+    const sendMedia = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1"));
 
     const replyResolver = vi.fn().mockImplementation(async (ctx, opts) => {
       void ctx;

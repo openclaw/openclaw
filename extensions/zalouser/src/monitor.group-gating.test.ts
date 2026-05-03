@@ -102,13 +102,23 @@ function installRuntime(params: {
       updateLastRoute: turn.record?.updateLastRoute,
       onRecordError: turn.record?.onRecordError ?? (() => undefined),
     });
+    if ("runDispatch" in turn) {
+      const dispatchResult = await turn.runDispatch();
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+        dispatchResult,
+      };
+    }
     const dispatchResult = await turn.dispatchReplyWithBufferedBlockDispatcher({
       ctx: turn.ctxPayload,
       cfg: turn.cfg,
       dispatcherOptions: {
         ...turn.dispatcherOptions,
-        deliver: async (payload, info) => {
-          await turn.delivery.deliver(payload, info);
+        deliver: async (...args: Parameters<typeof turn.delivery.deliver>) => {
+          await turn.delivery.deliver(...args);
         },
         onError: turn.delivery.onError,
       },

@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 
+/** Placeholder for blank user messages — preserves the user turn so strict
+ * providers that require at least one user message don't reject the transcript. */
+export const BLANK_USER_FALLBACK_TEXT = "(continue)";
+
 type RepairReport = {
   repaired: boolean;
   droppedLines: number;
@@ -12,14 +16,9 @@ type RepairReport = {
   reason?: string;
 };
 
-// Persisted assistant entries with `content: []` (written by older builds when
-// a stream/provider error fired before any block was produced) are valid JSON
-// but not valid for AWS Bedrock Converse replay; rewriting them on disk lets a
-// poisoned session recover across gateway restarts instead of needing a fresh
-// session. The sentinel text is shared with stream-message-shared.ts and
-// replay-history.ts so a session repaired offline reads byte-identically to a
-// live stream-error turn — that byte-identity is what makes the repair pass
-// idempotent (a healed entry is then indistinguishable from a fresh one).
+// The sentinel text is shared with stream-message-shared.ts and
+// replay-history.ts so a repaired entry is byte-identical to a live
+// stream-error turn, keeping the repair pass idempotent.
 
 type SessionMessageEntry = {
   type: "message";
@@ -53,11 +52,8 @@ function isAssistantEntryWithEmptyContent(entry: unknown): entry is SessionMessa
   if (!Array.isArray(message.content) || message.content.length !== 0) {
     return false;
   }
-  // Only error turns are eligible for on-disk rewrite. A clean stop with
-  // empty content (silent-reply / NO_REPLY path documented in
-  // run.empty-error-retry.test.ts) is a valid historical assistant turn —
-  // mutating it into a synthetic failure message would permanently corrupt
-  // the transcript and replay fabricated failure text on future requests.
+  // Only error stops — clean stops with empty content (NO_REPLY path) are
+  // valid silent replies that must not be overwritten with synthetic text.
   return message.stopReason === "error";
 }
 
@@ -79,7 +75,19 @@ type UserEntryRepair =
 function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEntryRepair {
   const content = entry.message.content;
   if (typeof content === "string") {
-    return content.trim() ? { kind: "keep" } : { kind: "drop" };
+    if (content.trim()) {
+      return { kind: "keep" };
+    }
+    return {
+      kind: "rewrite",
+      entry: {
+        ...entry,
+        message: {
+          ...entry.message,
+          content: BLANK_USER_FALLBACK_TEXT,
+        },
+      },
+    };
   }
   if (!Array.isArray(content)) {
     return { kind: "keep" };
@@ -101,7 +109,16 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
     return false;
   });
   if (nextContent.length === 0) {
-    return { kind: "drop" };
+    return {
+      kind: "rewrite",
+      entry: {
+        ...entry,
+        message: {
+          ...entry.message,
+          content: [{ type: "text", text: BLANK_USER_FALLBACK_TEXT }],
+        },
+      },
+    };
   }
   if (!touched) {
     return { kind: "keep" };
@@ -137,13 +154,12 @@ function buildRepairSummaryParts(params: {
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
   }
-  // Caller only invokes this once at least one counter is non-zero, so the
-  // empty-array branch is unreachable in production. Kept for defensive output.
   return parts.length > 0 ? parts.join(", ") : "no changes";
 }
 
 export async function repairSessionFileIfNeeded(params: {
   sessionFile: string;
+  debug?: (message: string) => void;
   warn?: (message: string) => void;
 }): Promise<RepairReport> {
   const sessionFile = params.sessionFile.trim();
@@ -260,7 +276,7 @@ export async function repairSessionFileIfNeeded(params: {
     };
   }
 
-  params.warn?.(
+  params.debug?.(
     `session file repaired: ${buildRepairSummaryParts({
       droppedLines,
       rewrittenAssistantMessages,

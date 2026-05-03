@@ -3,13 +3,13 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
 
-export type NativeCommandSpecMock = {
+type NativeCommandSpecMock = {
   name: string;
   description: string;
   acceptsArgs: boolean;
 };
 
-export type PluginCommandSpecMock = {
+type PluginCommandSpecMock = {
   name: string;
   description: string;
   acceptsArgs: boolean;
@@ -65,7 +65,7 @@ type ProviderMonitorTestMocks = {
   voiceRuntimeModuleLoadedMock: Mock<() => void>;
 };
 
-export function baseDiscordAccountConfig() {
+function baseDiscordAccountConfig() {
   return {
     commands: { native: true, nativeSkills: false },
     voice: { enabled: false },
@@ -192,17 +192,6 @@ const {
 
 export function getProviderMonitorTestMocks(): typeof providerMonitorTestMocks {
   return providerMonitorTestMocks;
-}
-
-export function mockResolvedDiscordAccountConfig(overrides: Record<string, unknown>) {
-  resolveDiscordAccountMock.mockImplementation(() => ({
-    accountId: "default",
-    token: "cfg-token",
-    config: {
-      ...baseDiscordAccountConfig(),
-      ...overrides,
-    },
-  }));
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe handler params shape.
@@ -451,6 +440,8 @@ vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
 
 vi.mock(buildDiscordSourceModuleId("accounts.js"), () => ({
   resolveDiscordAccount: resolveDiscordAccountMock,
+  resolveDiscordAccountAllowFrom: () => undefined,
+  resolveDiscordAccountDmPolicy: () => undefined,
 }));
 
 vi.mock(buildDiscordSourceModuleId("probe.js"), () => ({
