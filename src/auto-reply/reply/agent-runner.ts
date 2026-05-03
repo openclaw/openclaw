@@ -27,6 +27,7 @@ import {
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   estimateUsageCost,
   formatTokenCount,
@@ -885,6 +886,28 @@ function refreshSessionEntryFromStore(params: {
   }
 }
 
+function shouldUseEmbeddedStreamingSteer(params: {
+  shouldSteer: boolean;
+  isStreaming: boolean;
+  sessionCtx: TemplateContext;
+  followupRun: FollowupRun;
+}): boolean {
+  if (!params.shouldSteer || !params.isStreaming) {
+    return false;
+  }
+  const channel = resolveOriginMessageProvider({
+    originatingChannel: params.sessionCtx.OriginatingChannel,
+    provider:
+      params.sessionCtx.Surface ??
+      params.sessionCtx.Provider ??
+      params.followupRun.run.messageProvider,
+  });
+  // External delivery channels need the follow-up queue so each inbound turn
+  // reopens the transcript from the latest persisted leaf instead of mutating
+  // an in-flight embedded session from a stale in-memory branch.
+  return isInternalMessageChannel(channel);
+}
+
 export async function runReplyAgent(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -999,7 +1022,14 @@ export async function runReplyAgent(params: {
     }
   };
 
-  if (effectiveShouldSteer && isStreaming) {
+  if (
+    shouldUseEmbeddedStreamingSteer({
+      shouldSteer: effectiveShouldSteer,
+      isStreaming,
+      sessionCtx,
+      followupRun,
+    })
+  ) {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
