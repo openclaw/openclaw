@@ -6,6 +6,7 @@ import { createCacheTrace, resolveCacheTraceConfig } from "./cache-trace.js";
 import {
   DEFAULT_CACHE_TRACE_MAX_ARCHIVES,
   DEFAULT_CACHE_TRACE_MAX_FILE_BYTES,
+  MAX_DIAGNOSTIC_JSONL_ARCHIVES,
 } from "./diagnostic-jsonl-rotation.js";
 
 describe("createCacheTrace", () => {
@@ -226,6 +227,23 @@ describe("createCacheTrace", () => {
     });
 
     expect(cfg.maxFileBytes).toBeUndefined();
+  });
+
+  it("clamps excessive cache trace archive env overrides", () => {
+    const cfg = resolveCacheTraceConfig({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {
+        OPENCLAW_CACHE_TRACE_MAX_ARCHIVES: "1000000",
+      },
+    });
+
+    expect(cfg.maxArchives).toBe(MAX_DIAGNOSTIC_JSONL_ARCHIVES);
   });
 
   it("sanitizes cache-trace payloads before writing", () => {

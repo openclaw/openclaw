@@ -284,7 +284,7 @@ export type DiagnosticsCacheTraceConfig = {
   includeSystem?: boolean;
   /** Maximum active cache trace JSONL size in bytes before rotation. Default: 50 MB. Set 0 to disable the cap. */
   maxFileBytes?: number;
-  /** Number of numbered cache trace archives to keep. Default: 3. Set 0 to suppress writes after the cap. */
+  /** Number of numbered cache trace archives to keep. Default: 3; maximum: 10. Set 0 to suppress writes after the cap. */
   maxArchives?: number;
 };
 
@@ -293,7 +293,7 @@ export type DiagnosticsAnthropicPayloadLogConfig = {
   filePath?: string;
   /** Maximum active provider payload JSONL size in bytes before rotation. Default: 100 MB. Set 0 to disable the cap. */
   maxFileBytes?: number;
-  /** Number of numbered provider payload archives to keep. Default: 5. Set 0 to suppress writes after the cap. */
+  /** Number of numbered provider payload archives to keep. Default: 5; maximum: 10. Set 0 to suppress writes after the cap. */
   maxArchives?: number;
 };
 

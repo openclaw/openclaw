@@ -65,4 +65,27 @@ describe("diagnostics JSONL rotation config", () => {
       ).toBe(true);
     }
   });
+
+  it("rejects excessive diagnostics JSONL archive retention settings", () => {
+    const res = validateConfigObject({
+      diagnostics: {
+        cacheTrace: {
+          maxArchives: 11,
+        },
+        anthropicPayloadLog: {
+          maxArchives: 11,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "diagnostics.cacheTrace.maxArchives")).toBe(
+        true,
+      );
+      expect(
+        res.issues.some((issue) => issue.path === "diagnostics.anthropicPayloadLog.maxArchives"),
+      ).toBe(true);
+    }
+  });
 });

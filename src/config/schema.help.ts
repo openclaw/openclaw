@@ -641,7 +641,7 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.cacheTrace.maxFileBytes":
     "Maximum active cache trace JSONL size in bytes before rotation (default: 52428800 = 50 MB). Set 0 to disable the size cap.",
   "diagnostics.cacheTrace.maxArchives":
-    "Number of numbered cache trace JSONL archives to keep beside the active file (default: 3). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+    "Number of numbered cache trace JSONL archives to keep beside the active file (default: 3; maximum: 10). Set 0 to suppress writes after the active file reaches maxFileBytes.",
   "diagnostics.anthropicPayloadLog.enabled":
     "Log sanitized Anthropic provider request payloads and usage events for embedded agent runs (default: false).",
   "diagnostics.anthropicPayloadLog.filePath":
@@ -649,7 +649,7 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.anthropicPayloadLog.maxFileBytes":
     "Maximum active Anthropic provider payload JSONL size in bytes before rotation (default: 104857600 = 100 MB). Set 0 to disable the size cap.",
   "diagnostics.anthropicPayloadLog.maxArchives":
-    "Number of numbered Anthropic provider payload JSONL archives to keep beside the active file (default: 5). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+    "Number of numbered Anthropic provider payload JSONL archives to keep beside the active file (default: 5; maximum: 10). Set 0 to suppress writes after the active file reaches maxFileBytes.",
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":

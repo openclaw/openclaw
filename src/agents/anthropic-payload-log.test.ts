@@ -6,6 +6,7 @@ import { createAnthropicPayloadLogger, resolvePayloadLogConfig } from "./anthrop
 import {
   DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_ARCHIVES,
   DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_FILE_BYTES,
+  MAX_DIAGNOSTIC_JSONL_ARCHIVES,
 } from "./diagnostic-jsonl-rotation.js";
 
 describe("createAnthropicPayloadLogger", () => {
@@ -47,6 +48,23 @@ describe("createAnthropicPayloadLogger", () => {
     expect(overridden.enabled).toBe(false);
     expect(overridden.maxFileBytes).toBeUndefined();
     expect(overridden.maxArchives).toBe(2);
+  });
+
+  it("clamps excessive provider payload archive env overrides", () => {
+    const cfg = resolvePayloadLogConfig({
+      cfg: {
+        diagnostics: {
+          anthropicPayloadLog: {
+            enabled: true,
+          },
+        },
+      },
+      env: {
+        OPENCLAW_ANTHROPIC_PAYLOAD_LOG_MAX_ARCHIVES: "1000000",
+      },
+    });
+
+    expect(cfg.maxArchives).toBe(MAX_DIAGNOSTIC_JSONL_ARCHIVES);
   });
 
   it("sanitizes credential fields and image base64 payload data before writing logs", async () => {

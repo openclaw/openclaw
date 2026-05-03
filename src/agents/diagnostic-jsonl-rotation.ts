@@ -2,6 +2,7 @@ export const DEFAULT_CACHE_TRACE_MAX_FILE_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_CACHE_TRACE_MAX_ARCHIVES = 3;
 export const DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_FILE_BYTES = 100 * 1024 * 1024;
 export const DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_ARCHIVES = 5;
+export const MAX_DIAGNOSTIC_JSONL_ARCHIVES = 10;
 
 type RotationInput = {
   configMaxFileBytes?: number;
@@ -50,6 +51,6 @@ export function resolveDiagnosticJsonlRotation(
 
   return {
     maxFileBytes: resolvedMaxFileBytes > 0 ? resolvedMaxFileBytes : undefined,
-    maxArchives: resolvedMaxArchives,
+    maxArchives: Math.min(resolvedMaxArchives, MAX_DIAGNOSTIC_JSONL_ARCHIVES),
   };
 }

@@ -349,10 +349,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               maxArchives: {
                 type: "integer",
                 minimum: 0,
-                maximum: 9007199254740991,
+                maximum: 10,
                 title: "Cache Trace Max Archives",
                 description:
-                  "Number of numbered cache trace JSONL archives to keep beside the active file (default: 3). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+                  "Number of numbered cache trace JSONL archives to keep beside the active file (default: 3; maximum: 10). Set 0 to suppress writes after the active file reaches maxFileBytes.",
               },
             },
             additionalProperties: false,
@@ -386,10 +386,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               maxArchives: {
                 type: "integer",
                 minimum: 0,
-                maximum: 9007199254740991,
+                maximum: 10,
                 title: "Anthropic Payload Log Max Archives",
                 description:
-                  "Number of numbered Anthropic provider payload JSONL archives to keep beside the active file (default: 5). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+                  "Number of numbered Anthropic provider payload JSONL archives to keep beside the active file (default: 5; maximum: 10). Set 0 to suppress writes after the active file reaches maxFileBytes.",
               },
             },
             additionalProperties: false,
@@ -24775,7 +24775,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "diagnostics.cacheTrace.maxArchives": {
       label: "Cache Trace Max Archives",
-      help: "Number of numbered cache trace JSONL archives to keep beside the active file (default: 3). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+      help: "Number of numbered cache trace JSONL archives to keep beside the active file (default: 3; maximum: 10). Set 0 to suppress writes after the active file reaches maxFileBytes.",
       tags: ["observability", "performance", "storage"],
     },
     "diagnostics.anthropicPayloadLog": {
@@ -24800,7 +24800,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "diagnostics.anthropicPayloadLog.maxArchives": {
       label: "Anthropic Payload Log Max Archives",
-      help: "Number of numbered Anthropic provider payload JSONL archives to keep beside the active file (default: 5). Set 0 to suppress writes after the active file reaches maxFileBytes.",
+      help: "Number of numbered Anthropic provider payload JSONL archives to keep beside the active file (default: 5; maximum: 10). Set 0 to suppress writes after the active file reaches maxFileBytes.",
       tags: ["observability", "performance"],
     },
     "agents.list.*.identity.avatar": {

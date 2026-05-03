@@ -381,7 +381,7 @@ export const OpenClawSchema = z
             includePrompt: z.boolean().optional(),
             includeSystem: z.boolean().optional(),
             maxFileBytes: z.number().int().nonnegative().optional(),
-            maxArchives: z.number().int().nonnegative().optional(),
+            maxArchives: z.number().int().min(0).max(10).optional(),
           })
           .strict()
           .optional(),
@@ -390,7 +390,7 @@ export const OpenClawSchema = z
             enabled: z.boolean().optional(),
             filePath: z.string().optional(),
             maxFileBytes: z.number().int().nonnegative().optional(),
-            maxArchives: z.number().int().nonnegative().optional(),
+            maxArchives: z.number().int().min(0).max(10).optional(),
           })
           .strict()
           .optional(),
