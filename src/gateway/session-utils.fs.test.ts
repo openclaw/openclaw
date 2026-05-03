@@ -24,6 +24,7 @@ import {
   readSessionMessagesAsync,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
+  readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
@@ -470,6 +471,23 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
     expect(second.lastMessagePreview).toBe("New");
     expect(readSpy.mock.calls.length).toBeGreaterThan(readsAfterFirst);
     readSpy.mockRestore();
+  });
+
+  test("keeps async title extraction bounded like the sync path", async () => {
+    const sessionId = "test-cache-async-bounded";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      ...Array.from({ length: 30 }, (_, index) => ({
+        message: { role: "assistant", content: `filler ${index} ${"x".repeat(512)}` },
+      })),
+      { message: { role: "user", content: "late title should not require a full scan" } },
+      { message: { role: "assistant", content: "tail preview" } },
+    ]);
+
+    await expect(readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath)).resolves.toEqual({
+      firstUserMessage: null,
+      lastMessagePreview: "tail preview",
+    });
   });
 });
 
