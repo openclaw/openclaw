@@ -302,6 +302,27 @@ This is independent of `maxActiveTranscriptBytes`: the byte-size guard runs
 before a turn opens, while mid-turn precheck runs later in the embedded Pi tool
 loop after new tool results have been appended.
 
+### Irreducible overflow detection
+
+Before selecting a compaction or truncation recovery route, the preflight
+precheck estimates the **baseline** token cost: system prompt + user prompt with
+zero session history. If that baseline alone exceeds the model's context token
+budget, no amount of compaction or history truncation can fit the prompt.
+
+When this state is detected, the precheck returns the `irreducible_overflow`
+route instead of `compact_only`. The attempt handler skips compaction entirely
+and the outer run loop immediately returns an error to the user:
+
+> *Context overflow: your system prompt and current message exceed the model's
+> context window even without any conversation history. Reduce active
+> skills/plugins or switch to a model with a larger context window.*
+
+This prevents the run loop from burning ~20 seconds of synchronous event loop
+time per compaction attempt (up to `MAX_OVERFLOW_COMPACTION_ATTEMPTS`), which
+would stall all other gateway operations. If you see this error, either reduce
+the agent's system prompt size (fewer skills/plugins) or assign a model with a
+larger context window.
+
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)

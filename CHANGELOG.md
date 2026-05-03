@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/compaction: detect irreducible context overflow (system prompt + user prompt alone exceeding the model context window) in the preemptive compaction precheck and fail fast with an actionable error instead of entering the compaction retry loop, which starved the Node.js event loop for ~60 seconds per message and effectively DoS-ed the gateway. Thanks @jlapenna.
 - Google Meet: route stateful CLI session commands through the gateway-owned runtime so joined realtime sessions survive after the starting CLI process exits. Fixes #76344. Thanks @coltonharris-wq.
 - Memory/status: split builtin sqlite-vec store readiness from embedding-provider readiness in `memory status --deep` and `openclaw status`, so local vector-store failures no longer look like provider failures and provider failures no longer hide a healthy local vector store.
 - Memory/status: keep plain `openclaw memory status` and `openclaw memory status --json` on the cheap read-only path by reserving vector and embedding provider probes for `--deep` or `--index`. Fixes #76769. Thanks @daruire.
