@@ -2069,6 +2069,17 @@ export async function runEmbeddedPiAgent(
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
           });
+          const timedOutDuringPrompt =
+            timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
+          const hasPartialAssistantTextAfterPromptTimeout =
+            timedOutDuringPrompt &&
+            (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !attempt.didSendViaMessagingTool &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
+            (attempt.toolMetas?.length ?? 0) === 0;
           const attemptToolSummary = buildTraceToolSummary({
             toolMetas: attempt.toolMetas,
             hadFailure: Boolean(attempt.lastToolError),
@@ -2078,14 +2089,11 @@ export async function runEmbeddedPiAgent(
             lastToolError: attempt.lastToolError,
           });
 
-          // Timeout aborts can leave the run without any assistant payloads.
-          // Emit an explicit timeout error instead of silently completing, so
-          // callers do not lose the turn as an orphaned user message.
+          // Timeout aborts can leave the run without payloads or with only a
+          // partial assistant fragment. Emit an explicit timeout error instead.
           if (
-            timedOut &&
-            !timedOutDuringCompaction &&
-            !timedOutDuringToolExecution &&
-            !payloadsWithToolMedia?.length
+            timedOutDuringPrompt &&
+            (!payloadsWithToolMedia?.length || hasPartialAssistantTextAfterPromptTimeout)
           ) {
             const timeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
@@ -2094,7 +2102,7 @@ export async function runEmbeddedPiAgent(
                 "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
             const replayInvalid = resolveReplayInvalidForAttempt(null);
             const livenessState = resolveRunLivenessState({
-              payloadCount: payloads.length,
+              payloadCount: hasPartialAssistantTextAfterPromptTimeout ? 0 : payloads.length,
               aborted,
               timedOut,
               attempt,

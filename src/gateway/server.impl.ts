@@ -68,7 +68,7 @@ import {
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
-import { buildGatewayCronService } from "./server-cron.js";
+import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
@@ -81,6 +81,7 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import {
   activateGatewayScheduledServices,
+  startGatewayCronWithLogging,
   startGatewayRuntimeServices,
 } from "./server-runtime-services.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -835,7 +836,7 @@ export async function startGatewayServer(
   runtimeState = createGatewayServerLiveState({
     hooksConfig: initialHooksConfig,
     hookClientIpConfig: initialHookClientIpConfig,
-    cronState: buildGatewayCronService({
+    cronState: createLazyGatewayCronState({
       cfg: cfgAtStart,
       deps,
       broadcast,
@@ -1306,6 +1307,7 @@ export async function startGatewayServer(
         deps,
         sessionDeliveryRecoveryMaxEnqueuedAt,
         cron: runtimeState.cronState.cron,
+        startCron: false,
         logCron,
         log,
         pluginLookUpTable,
@@ -1423,6 +1425,12 @@ export async function startGatewayServer(
     await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err) => {
       log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });
+    if (!minimalTestGateway) {
+      startGatewayCronWithLogging({
+        cron: runtimeState.cronState.cron,
+        logCron,
+      });
+    }
   } catch (err) {
     await closeOnStartupFailure();
     throw err;

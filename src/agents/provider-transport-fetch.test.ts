@@ -204,6 +204,46 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("refreshes the guarded timeout while consuming streaming response chunks", async () => {
+    const encoder = new TextEncoder();
+    const refreshTimeout = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode("event: message\n\n"));
+            controller.enqueue(encoder.encode('data: {"ok": true}\n\n'));
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: "https://api.openai.com/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+      refreshTimeout,
+    });
+
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-completions",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://api.openai.com/v1/chat/completions",
+      { method: "POST" },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([{ ok: true }]);
+    expect(refreshTimeout).toHaveBeenCalledTimes(2);
+  });
+
   describe("long retry-after handling", () => {
     const anthropicModel = {
       id: "sonnet-4.6",

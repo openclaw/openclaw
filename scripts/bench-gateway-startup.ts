@@ -60,6 +60,7 @@ type CaseResult = {
 
 type CliOptions = {
   cases: GatewayBenchCase[];
+  cpuProfDir?: string;
   entry: string;
   json: boolean;
   output?: string;
@@ -201,6 +202,7 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 function parseOptions(): CliOptions {
   return {
     cases: resolveCases(parseRepeatableFlag("--case")),
+    cpuProfDir: parseFlagValue("--cpu-prof-dir"),
     entry: parseFlagValue("--entry") ?? DEFAULT_ENTRY,
     json: hasFlag("--json"),
     output: parseFlagValue("--output"),
@@ -223,6 +225,7 @@ Options:
   --runs <n>           Measured runs per case (default: ${DEFAULT_RUNS})
   --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
+  --cpu-prof-dir <dir> Write one V8 CPU profile per run
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
@@ -658,7 +661,9 @@ function readProcessTreeCpuMs(rootPid: number | undefined): number | null {
 
 async function runGatewaySample(options: {
   benchCase: GatewayBenchCase;
+  cpuProfDir?: string;
   entry: string;
+  sampleIndex: number;
   timeoutMs: number;
 }): Promise<GatewaySample> {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-bench-"));
@@ -674,24 +679,34 @@ async function runGatewaySample(options: {
   let readyLogMs: number | null = null;
   let childExited = false;
 
-  const child = spawn(
-    process.execPath,
-    [
-      options.entry,
-      "gateway",
-      "run",
-      "--port",
-      String(port),
-      "--bind",
-      "loopback",
-      "--auth",
-      "none",
-      "--tailscale",
-      "off",
-      "--allow-unconfigured",
-    ],
-    { cwd: process.cwd(), detached: process.platform !== "win32", env },
-  );
+  const childArgs = [
+    ...(options.cpuProfDir
+      ? [
+          "--cpu-prof",
+          "--cpu-prof-dir",
+          options.cpuProfDir,
+          "--cpu-prof-name",
+          `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
+        ]
+      : []),
+    options.entry,
+    "gateway",
+    "run",
+    "--port",
+    String(port),
+    "--bind",
+    "loopback",
+    "--auth",
+    "none",
+    "--tailscale",
+    "off",
+    "--allow-unconfigured",
+  ];
+  const child = spawn(process.execPath, childArgs, {
+    cwd: process.cwd(),
+    detached: process.platform !== "win32",
+    env,
+  });
   const cpuStartMs = readProcessTreeCpuMs(child.pid);
   const sampleRss = () => {
     const rssMb = readProcessRssMb(child.pid);
@@ -773,6 +788,7 @@ async function runGatewaySample(options: {
 
 async function runCase(options: {
   benchCase: GatewayBenchCase;
+  cpuProfDir?: string;
   entry: string;
   runs: number;
   timeoutMs: number;
@@ -783,7 +799,9 @@ async function runCase(options: {
   for (let index = 0; index < total; index += 1) {
     const sample = await runGatewaySample({
       benchCase: options.benchCase,
+      cpuProfDir: options.cpuProfDir,
       entry: options.entry,
+      sampleIndex: index + 1,
       timeoutMs: options.timeoutMs,
     });
     if (index >= options.warmup) {
@@ -828,11 +846,15 @@ async function main() {
   }
 
   const options = parseOptions();
+  if (options.cpuProfDir) {
+    mkdirSync(options.cpuProfDir, { recursive: true });
+  }
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
     results.push(
       await runCase({
         benchCase,
+        cpuProfDir: options.cpuProfDir,
         entry: options.entry,
         runs: options.runs,
         timeoutMs: options.timeoutMs,

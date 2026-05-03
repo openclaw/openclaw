@@ -111,7 +111,7 @@ These suites are skipped by `stable` and included by `full`:
 | Area                             | Full-only coverage                                                                                                          |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Docker live models               | OpenCode Go, OpenRouter, xAI, Z.ai, and Fireworks.                                                                          |
-| Docker live gateway              | Advisory shard for DeepSeek, Fireworks, OpenCode Go, OpenRouter, xAI, and Z.ai.                                             |
+| Docker live gateway              | Advisory providers split into DeepSeek/Fireworks, OpenCode Go/OpenRouter, and xAI/Z.ai shards.                              |
 | Native gateway provider profiles | Full Anthropic Opus and Sonnet/Haiku shards, Fireworks, DeepSeek, full OpenCode Go model shards, OpenRouter, xAI, and Z.ai. |
 | Native plugin live shards        | Plugins A-K, L-N, O-Z other, Moonshot, and xAI.                                                                             |
 | Native media live shards         | Audio, Google music, MiniMax music, and video groups A-D.                                                                   |
@@ -148,6 +148,9 @@ Valid filter ids are defined in the reusable live/E2E workflow, including
 `live-gateway-minimax-docker`, `live-gateway-advisory-docker`,
 `live-cli-backend-docker`, `live-acp-bind-docker`, and
 `live-codex-harness-docker`.
+
+The `live-gateway-advisory-docker` handle is an aggregate rerun handle for its
+three provider shards, so it still fans out to all advisory Docker gateway jobs.
 
 ## Evidence to keep
 

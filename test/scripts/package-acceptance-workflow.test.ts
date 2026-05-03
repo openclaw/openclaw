@@ -312,10 +312,25 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('add_profile_suite live-gateway-docker "minimum stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
+    expect(workflow).toContain(
+      'add_profile_suite live-gateway-advisory-docker-deepseek-fireworks "full"',
+    );
+    expect(workflow).toContain(
+      'add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"',
+    );
+    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai-zai "full"');
     expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
     );
+    expect(workflow).toContain("suite_id: live-gateway-advisory-docker-deepseek-fireworks");
+    expect(workflow).toContain("suite_id: live-gateway-advisory-docker-opencode-openrouter");
+    expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai-zai");
+    expect(workflow).toContain("suite_group: live-gateway-advisory-docker");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai");
+    expect(workflow).toContain("inputs.live_suite_filter == 'live-gateway-advisory-docker'");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");

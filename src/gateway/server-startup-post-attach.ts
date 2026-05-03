@@ -103,6 +103,27 @@ function scheduleGatewayMemoryBackend(params: {
   timer.unref?.();
 }
 
+function schedulePostAttachUpdateSentinelRefresh(params: {
+  startupTrace?: GatewayStartupTrace;
+  log: { warn: (msg: string) => void };
+  refreshLatestUpdateRestartSentinel: () => Awaitable<
+    ReturnType<typeof refreshLatestUpdateRestartSentinel>
+  >;
+}): void {
+  const handle = setImmediate(() => {
+    void measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
+      try {
+        await params.refreshLatestUpdateRestartSentinel();
+      } catch (err) {
+        params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
+      }
+    }).catch((err) => {
+      params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
+    });
+  });
+  handle.unref?.();
+}
+
 function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlugins>): boolean {
   return pluginRegistry.typedHooks.some((hook) => hook.hookName === "gateway_start");
 }
@@ -597,14 +618,6 @@ export async function startGatewayPostAttachRuntime(
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
-  await measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
-    try {
-      await runtimeDeps.refreshLatestUpdateRestartSentinel();
-    } catch (err) {
-      params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
-    }
-  });
-
   let pluginRegistry = params.pluginRegistry;
   if (!params.minimalTestGateway && params.loadStartupPlugins) {
     params.onStartupPluginsLoading?.();
@@ -691,6 +704,11 @@ export async function startGatewayPostAttachRuntime(
       if (params.minimalTestGateway) {
         return;
       }
+      schedulePostAttachUpdateSentinelRefresh({
+        startupTrace: params.startupTrace,
+        log: params.log,
+        refreshLatestUpdateRestartSentinel: runtimeDeps.refreshLatestUpdateRestartSentinel,
+      });
       if (!hasGatewayStartHooks(sidecarsResult.pluginRegistry)) {
         return;
       }
