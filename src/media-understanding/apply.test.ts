@@ -136,7 +136,7 @@ function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): Open
 async function createTempMediaFile(params: { fileName: string; content: Buffer | string }) {
   const normalizedContent =
     typeof params.content === "string" ? Buffer.from(params.content) : params.content;
-  const contentHash = crypto.createHash("sha1").update(normalizedContent).digest("hex");
+  const contentHash = crypto.createHash("sha256").update(normalizedContent).digest("hex");
   const cacheKey = `${params.fileName}:${contentHash}`;
   const cachedPath = tempMediaFileCache.get(cacheKey);
   if (cachedPath) {

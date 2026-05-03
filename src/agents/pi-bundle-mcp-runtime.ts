@@ -140,7 +140,7 @@ async function disposeSession(session: BundleMcpSession) {
 }
 
 function createCatalogFingerprint(servers: Record<string, unknown>): string {
-  return crypto.createHash("sha1").update(JSON.stringify(servers)).digest("hex");
+  return crypto.createHash("sha256").update(JSON.stringify(servers)).digest("hex");
 }
 
 function loadSessionMcpConfig(params: {
