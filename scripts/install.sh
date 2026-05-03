@@ -32,6 +32,14 @@ cleanup_tmpfiles() {
 }
 trap cleanup_tmpfiles EXIT
 
+abort_install() {
+    cleanup_tmpfiles
+    echo ""
+    ui_warn "Installation interrupted"
+    exit 130
+}
+trap abort_install INT TERM
+
 mktempfile() {
     local f
     f="$(mktemp)"
@@ -2606,7 +2614,6 @@ main() {
     fi
     if [[ "$run_doctor_after" == "true" ]]; then
         run_doctor
-        should_open_dashboard=true
     fi
 
     # Step 7: If BOOTSTRAP.md is still present in the workspace, resume onboarding
@@ -2690,12 +2697,20 @@ main() {
             fi
             ui_info "Running openclaw doctor"
             local doctor_ok=0
+            local doctor_exit=0
             if (( ${#doctor_args[@]} )); then
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null && doctor_ok=1
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null || doctor_exit=$?
             else
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor </dev/tty && doctor_ok=1
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor </dev/tty || doctor_exit=$?
+            fi
+            if (( doctor_exit == 130 )); then
+                abort_install
+            fi
+            if (( doctor_exit == 0 )); then
+                doctor_ok=1
             fi
             if (( doctor_ok )); then
+                should_open_dashboard=true
                 ui_info "Updating plugins"
                 OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all || true
             else
