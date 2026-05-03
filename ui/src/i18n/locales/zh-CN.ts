@@ -713,6 +713,15 @@ export const zh_CN: TranslationMap = {
       dailyCsv: "每日 CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning: "用量缓存正在后台重建。显示的总计可能不是最新的。",
+      title: "{status}: {pending} 个待处理，{stale} 个过期，{cached} 个已缓存",
+      status: {
+        refreshing: "正在刷新",
+        stale: "过期",
+        partial: "部分",
+      },
+    },
     empty: {
       title: "从日期范围开始",
       subtitle: "加载使用数据以比较成本、检查会话，并深入查看时间线，无需离开仪表板。",

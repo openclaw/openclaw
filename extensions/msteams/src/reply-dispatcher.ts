@@ -1,3 +1,7 @@
+import {
+  resolveChannelPreviewStreamMode,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createChannelReplyPipeline,
@@ -147,12 +151,16 @@ export function createMSTeamsReplyDispatcher(params: {
     context: params.context,
     feedbackLoopEnabled,
     log: params.log,
+    msteamsConfig: msteamsCfg,
+    progressSeed: `${params.accountId ?? "default"}:${params.conversationRef.conversation?.id ?? ""}`,
   });
   // Wire the forward-declared gate used by sendTypingIndicator.
   streamActiveRef.current = () => streamController.isStreamActive();
 
-  const blockStreamingEnabled =
-    typeof msteamsCfg?.blockStreaming === "boolean" ? msteamsCfg.blockStreaming : false;
+  const teamsStreamMode = resolveChannelPreviewStreamMode(msteamsCfg, "partial");
+  const resolvedBlockStreamingEnabled =
+    teamsStreamMode === "block" ? true : resolveChannelStreamingBlockEnabled(msteamsCfg);
+  const blockStreamingEnabled = resolvedBlockStreamingEnabled ?? false;
   const typingIndicatorEnabled =
     typeof msteamsCfg?.typingIndicator === "boolean" ? msteamsCfg.typingIndicator : true;
 
@@ -268,7 +276,7 @@ export function createMSTeamsReplyDispatcher(params: {
     },
     typingCallbacks,
     deliver: async (payload) => {
-      const preparedPayload = streamController.preparePayload(payload);
+      const preparedPayload = await streamController.preparePayload(payload);
       if (!preparedPayload) {
         return;
       }
@@ -338,7 +346,9 @@ export function createMSTeamsReplyDispatcher(params: {
           }
         : {}),
       disableBlockStreaming:
-        typeof msteamsCfg?.blockStreaming === "boolean" ? !msteamsCfg.blockStreaming : undefined,
+        typeof resolvedBlockStreamingEnabled === "boolean"
+          ? !resolvedBlockStreamingEnabled
+          : undefined,
       onModelSelected,
     },
     markDispatchIdle,

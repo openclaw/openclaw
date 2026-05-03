@@ -11,6 +11,7 @@ import {
   QueueSchema,
   TypingModeSchema,
   TtsConfigSchema,
+  VisibleRepliesSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -53,9 +54,14 @@ export const SessionSchema = z
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
-    parentForkMaxTokens: z.number().int().nonnegative().optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
+    writeLock: z
+      .object({
+        acquireTimeoutMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),
@@ -67,6 +73,8 @@ export const SessionSchema = z
         enabled: z.boolean().optional(),
         idleHours: z.number().nonnegative().optional(),
         maxAgeHours: z.number().nonnegative().optional(),
+        spawnSessions: z.boolean().optional(),
+        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
       })
       .strict()
       .optional(),
@@ -145,7 +153,7 @@ export const SessionSchema = z
 export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
-    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
+    visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,

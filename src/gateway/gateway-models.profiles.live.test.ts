@@ -1163,7 +1163,10 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
   if (!entry?.sessionId) {
     return [];
   }
-  const messages = await readSessionMessagesAsync(entry.sessionId, storePath, entry.sessionFile);
+  const messages = await readSessionMessagesAsync(entry.sessionId, storePath, entry.sessionFile, {
+    mode: "full",
+    reason: "live model assistant text verification",
+  });
   const assistantTexts: string[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {

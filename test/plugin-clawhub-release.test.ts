@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectClawHubPublishablePluginPackages,
@@ -11,7 +11,10 @@ import {
   resolveSelectedClawHubPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-clawhub-release.ts";
-import { OPENCLAW_PLUGIN_NPM_REPOSITORY_URL } from "../scripts/lib/plugin-npm-release.ts";
+import {
+  collectPublishablePluginPackages,
+  OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+} from "../scripts/lib/plugin-npm-release.ts";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -101,6 +104,60 @@ describe("collectClawHubPublishablePluginPackages", () => {
   });
 });
 
+describe("OpenClaw dual-published plugin metadata", () => {
+  const dualPublishedPlugins = [
+    {
+      extensionId: "diagnostics-otel",
+      packageName: "@openclaw/diagnostics-otel",
+    },
+    {
+      extensionId: "diagnostics-prometheus",
+      packageName: "@openclaw/diagnostics-prometheus",
+    },
+  ] as const;
+
+  it("keeps diagnostics plugins selectable through both ClawHub and npm release paths", () => {
+    const packageNames = dualPublishedPlugins.map((plugin) => plugin.packageName);
+    const clawHubPublishable = collectClawHubPublishablePluginPackages(undefined, {
+      packageNames,
+    });
+    const npmPublishable = collectPublishablePluginPackages(undefined, {
+      packageNames,
+    });
+
+    expect(clawHubPublishable.map((plugin) => plugin.packageName)).toEqual(packageNames);
+    expect(npmPublishable.map((plugin) => plugin.packageName)).toEqual(packageNames);
+
+    for (const plugin of dualPublishedPlugins) {
+      const packageJson = JSON.parse(
+        readFileSync(`extensions/${plugin.extensionId}/package.json`, "utf8"),
+      ) as {
+        openclaw?: {
+          install?: {
+            clawhubSpec?: string;
+            defaultChoice?: string;
+            npmSpec?: string;
+          };
+          release?: {
+            publishToClawHub?: boolean;
+            publishToNpm?: boolean;
+          };
+        };
+      };
+
+      expect(packageJson.openclaw?.install).toMatchObject({
+        clawhubSpec: `clawhub:${plugin.packageName}`,
+        defaultChoice: "npm",
+        npmSpec: plugin.packageName,
+      });
+      expect(packageJson.openclaw?.release).toMatchObject({
+        publishToClawHub: true,
+        publishToNpm: true,
+      });
+    }
+  });
+});
+
 describe("collectClawHubVersionGateErrors", () => {
   it("requires a version bump when a publishable plugin changes", () => {
     const repoDir = createTempPluginRepo();
@@ -153,6 +210,9 @@ describe("collectClawHubVersionGateErrors", () => {
             extensions: ["./index.ts"],
             compat: {
               pluginApi: ">=2026.4.1",
+            },
+            install: {
+              npmSpec: "@openclaw/demo-plugin",
             },
             build: {
               openclawVersion: "2026.4.1",
@@ -302,6 +362,69 @@ describe("collectPluginClawHubReleasePlan", () => {
   });
 });
 
+describe("plugin-clawhub-publish.sh", () => {
+  it("previews the publish command through the ClawHub CLI dry-run preflight", () => {
+    const repoDir = createTempPluginRepo();
+    const binDir = join(repoDir, "bin");
+    const markerPath = join(repoDir, "clawhub-invoked");
+    mkdirSync(binDir, { recursive: true });
+    const clawhubPath = join(binDir, "clawhub");
+    writeFileSync(
+      clawhubPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> ${JSON.stringify(markerPath)}
+if [[ "\${1:-}" == "package" && "\${2:-}" == "pack" ]]; then
+  pack_destination=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --pack-destination)
+        pack_destination="\${2:-}"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+  mkdir -p "$pack_destination"
+  pack_path="$pack_destination/openclaw-demo-plugin-2026.4.1.tgz"
+  printf 'fake tgz\\n' > "$pack_path"
+  printf '{"path":"%s","name":"@openclaw/demo-plugin","version":"2026.4.1"}\\n' "$pack_path"
+fi
+exit 0
+`,
+    );
+    chmodSync(clawhubPath, 0o755);
+
+    const output = execFileSync(
+      "bash",
+      [
+        join(process.cwd(), "scripts/plugin-clawhub-publish.sh"),
+        "--dry-run",
+        "extensions/demo-plugin",
+      ],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(output).toContain("Publish command: CLAWHUB_WORKDIR=");
+    expect(output).toContain("Resolved ClawPack:");
+    const invocations = readFileSync(markerPath, "utf8");
+    expect(invocations).toContain("package pack ./extensions/demo-plugin");
+    expect(invocations).toContain("package publish ");
+    expect(invocations).toContain(".tgz --tags latest");
+    expect(invocations).toContain("--dry-run");
+  });
+});
+
 describe("collectPluginClawHubReleasePathsFromGitRange", () => {
   it("rejects unsafe git refs", () => {
     const repoDir = createTempPluginRepo();
@@ -360,6 +483,9 @@ function createTempPluginRepo(
                     openclawVersion: "2026.4.1",
                   },
                 }),
+            install: {
+              npmSpec: `@openclaw/${currentExtensionId}`,
+            },
             release: {
               publishToClawHub: options.publishToClawHub ?? true,
             },

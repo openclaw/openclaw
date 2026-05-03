@@ -579,6 +579,8 @@ Example:
     - configured mention patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot behavior in supported cases
 
+    When writing outbound Discord messages, use canonical mention syntax: `<@USER_ID>` for users, `<#CHANNEL_ID>` for channels, and `<@&ROLE_ID>` for roles. Do not use the legacy `<@!USER_ID>` nickname mention form.
+
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
     `ignoreOtherMentions` optionally drops messages that mention another user/role but not the bot (excluding @everyone/@here).
 
@@ -620,7 +622,7 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 
 - `commands.native` defaults to `"auto"` and is enabled for Discord.
 - Per-channel override: `channels.discord.commands.native`.
-- `commands.native=false` explicitly clears previously registered Discord native commands.
+- `commands.native=false` skips Discord slash-command registration and cleanup during startup. Previously registered commands may remain visible in Discord until you remove them from the Discord app.
 - Native command auth uses the same Discord allowlists/policies as normal message handling.
 - Commands may still be visible in Discord UI for users who are not authorized; execution still enforces OpenClaw auth and returns "not authorized".
 
@@ -658,7 +660,7 @@ Default slash command settings:
   </Accordion>
 
   <Accordion title="Live stream preview">
-    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. `channels.discord.streaming` takes `off` (default) | `partial` | `block` | `progress`. `progress` maps to `partial` on Discord; `streamMode` is a legacy alias and is auto-migrated.
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. `channels.discord.streaming` takes `off` (default) | `partial` | `block` | `progress`. `progress` keeps one editable status draft and updates it with tool progress until final delivery; `streamMode` is a legacy alias and is auto-migrated.
 
     Default stays `off` because Discord preview edits hit rate limits quickly when multiple bots or gateways share an account.
 
@@ -738,7 +740,8 @@ Default slash command settings:
         enabled: true,
         idleHours: 24,
         maxAgeHours: 0,
-        spawnSubagentSessions: false, // opt-in
+        spawnSessions: true,
+        defaultSpawnContext: "fork",
       },
     },
   },
@@ -749,8 +752,9 @@ Default slash command settings:
 
     - `session.threadBindings.*` sets global defaults.
     - `channels.discord.threadBindings.*` overrides Discord behavior.
-    - `spawnSubagentSessions` must be true to auto-create/bind threads for `sessions_spawn({ thread: true })`.
-    - `spawnAcpSessions` must be true to auto-create/bind threads for ACP (`/acp spawn ... --thread ...` or `sessions_spawn({ runtime: "acp", thread: true })`).
+    - `spawnSessions` controls auto-create/bind threads for `sessions_spawn({ thread: true })` and ACP thread spawns. Default: `true`.
+    - `defaultSpawnContext` controls native subagent context for thread-bound spawns. Default: `"fork"`.
+    - Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by `openclaw doctor --fix`.
     - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
 
     See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
@@ -816,7 +820,7 @@ Default slash command settings:
 
     - `/acp spawn codex --bind here` binds the current channel or thread in place and keeps future messages on the same ACP session. Thread messages inherit the parent channel binding.
     - In a bound channel or thread, `/new` and `/reset` reset the same ACP session in place. Temporary thread bindings can override target resolution while active.
-    - `spawnAcpSessions` is only required when OpenClaw needs to create/bind a child thread via `--thread auto|here`.
+    - `spawnSessions` gates child thread creation/binding via `--thread auto|here`.
 
     See [ACP Agents](/tools/acp-agents) for binding behavior details.
 
@@ -1315,6 +1319,29 @@ openclaw logs --follow
 
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
     Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
+
+```json5
+{
+  channels: {
+    discord: {
+      accounts: {
+        mantis: {
+          // Mantis listens to other bots only when they mention her.
+          allowBots: "mentions",
+        },
+        molty: {
+          // Molty listens to all bot-authored Discord messages.
+          allowBots: true,
+          mentionAliases: {
+            // Lets Molty write "@Mantis" and send a real Discord mention.
+            Mantis: "MANTIS_DISCORD_USER_ID",
+          },
+        },
+      },
+    },
+  },
+}
+```
 
   </Accordion>
 

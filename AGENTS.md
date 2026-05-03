@@ -18,7 +18,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 ## Map
 
-- Core TS: `src/`, `ui/`, `packages/`; plugins: `extensions/`; SDK: `src/plugin-sdk/*`; channels: `src/channels/*`; loader: `src/plugins/*`; protocol: `src/gateway/protocol/*`; docs/apps: `docs/`, `apps/`, `Swabble/`.
+- Core TS: `src/`, `ui/`, `packages/`; plugins: `extensions/`; SDK: `src/plugin-sdk/*`; channels: `src/channels/*`; loader: `src/plugins/*`; protocol: `src/gateway/protocol/*`; docs/apps: `docs/`, `apps/`.
 - Installers: sibling `../openclaw.ai`.
 - Scoped guides exist in: `extensions/`, `src/{plugin-sdk,channels,plugins,gateway,gateway/protocol,agents}/`, `test/helpers*/`, `docs/`, `ui/`, `scripts/`.
 
@@ -70,6 +70,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - PR shortlist: `gh pr list ...`; then `gh pr view <n> --json number,title,body,closingIssuesReferences,files,statusCheckRollup,reviewDecision`.
 - After landing PR: search duplicate open issues/PRs. Before closing: comment why + canonical link.
 - GH comments with markdown backticks, `$`, or shell snippets: avoid inline double-quoted `--body`; use single quotes or `--body-file`.
+- PR create: body required. Include concise Summary + Verification sections; mention issue/PR refs, behavior changed, and exact local/Testbox/CI proof. Never open an empty-body or placeholder-body PR.
 - PR execution artifacts/screenshots: attach them to the PR, comment, or an external artifact store. Do not add `.github/pr-assets` or other PR-only assets to the repo.
 - PR review answer must explicitly cover: what bug/behavior we are trying to fix; PR/issue URL(s) and affected endpoint/surface; whether this is the best possible fix, with high-certainty evidence from code, tests, CI, and shipped/current behavior.
 - When working on an issue or PR, always end the user-facing final answer with the full GitHub URL.
@@ -126,12 +127,14 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 ## Tests
 
-- Vitest. Colocated `*.test.ts`; e2e `*.e2e.test.ts`; example models `sonnet-4.6`, `gpt-5.5`; test GPT with 5.5 preferred, 5.4 ok, no GPT-4.x agent-smoke defaults.
+- Vitest. Colocated `*.test.ts`; e2e `*.e2e.test.ts`; example models `sonnet-4.6`, `gpt-5.5`; test GPT with 5.5 preferred, 5.4 ok; no GPT-4.x agent-smoke defaults.
 - Avoid brittle tests that grep workflow/docs strings for operator policy. Prefer executable behavior, parsed config/schema checks, or live run proof; put release/CI policy reminders in AGENTS/docs instead.
 - Clean timers/env/globals/mocks/sockets/temp dirs/module state; `--isolate=false` safe.
 - Hot tests: avoid per-test `vi.resetModules()` + heavy imports. Measure with `pnpm test:perf:imports <file>` / `pnpm test:perf:hotspots --limit N`.
 - Seam depth: pure helper/contract unit tests; one integration smoke per boundary.
 - Mock expensive seams directly: scanners, manifests, registries, fs crawls, provider SDKs, network/process launch.
+- Plugin tests mocking `plugin-registry` need both manifest-registry and metadata-snapshot exports; missing `loadPluginRegistrySnapshotWithMetadata` masks install/slot behavior.
+- Thread-bound subagent tests that do not create a requester transcript should set `context: "isolated"` so fork-context validation does not hide lifecycle cleanup paths.
 - Prefer injection; if module mocking, mock narrow local `*.runtime.ts`, not broad barrels or `openclaw/plugin-sdk/*`.
 - Share fixtures/builders; delete duplicate assertions; assert behavior that can regress here.
 - Do not edit baseline/inventory/ignore/snapshot/expected-failure files to silence checks without explicit approval.
@@ -139,13 +142,14 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Test workers max 16. Memory pressure: `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`.
 - Live: `OPENCLAW_LIVE_TEST=1 pnpm test:live`; verbose `OPENCLAW_LIVE_TEST_QUIET=0`.
 - Guide: `docs/help/testing.md`.
+- Package manifest plugin-local assertions must agree with `pnpm deps:root-ownership:check`; intentionally internalized bundled plugin runtime deps are root-owned while the package acceptance path needs them.
 
 ## Docs / Changelog
 
 - Docs change with behavior/API. Use docs list/read_when hints; docs links per `docs/AGENTS.md`.
 - Docs final answers: when doc files changed, end with the relevant full `https://docs.openclaw.ai/...` URL(s).
 - Changelog user-facing only; fixing an issue or landing/merging a PR needs one unless pure test/internal.
-- Changelog placement: active version `### Changes`/`### Fixes`; contributor-facing added entries should include at least one `Thanks @author` attribution, using credited human GitHub username(s). Never add `Thanks @codex`, `Thanks @openclaw`, `Thanks @clawsweeper`, or `Thanks @steipete`; for maintainer-owned or automation-only changes, omit the thanks instead of inventing credit.
+- Changelog placement: active version `### Changes`/`### Fixes`; contributor-facing added entries should include at least one `Thanks @author` attribution, using credited human GitHub username(s). Never add `Thanks @codex`, `Thanks @openclaw`, `Thanks @clawsweeper`, or `Thanks @steipete`; if the real credited human is unknown, leave attribution blank instead of guessing or adding a random person.
 - Changelog bullets are always single-line. No wrapping/continuation across multiple lines. Long entries stay on one long line so dedupe, PR-ref, and credit-audit tooling work and so the visual style stays uniform.
 
 ## Git

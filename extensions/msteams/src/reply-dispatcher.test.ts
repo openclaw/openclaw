@@ -344,6 +344,21 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(dispatcher.replyOptions.disableBlockStreaming).toBe(false);
   });
 
+  it("maps streaming.mode=block to block delivery without native Teams streaming", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
+
+    const dispatcher = createDispatcher("personal", { streaming: { mode: "block" } });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.deliver({ text: "block content" });
+
+    expect(streamInstances).toHaveLength(0);
+    expect(dispatcher.replyOptions.onPartialReply).toBeUndefined();
+    expect(dispatcher.replyOptions.disableBlockStreaming).toBe(false);
+    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
+  });
+
   it("sets disableBlockStreaming=true when blockStreaming=false", () => {
     const dispatcher = createDispatcher("personal", { blockStreaming: false });
 
@@ -431,7 +446,15 @@ describe("createMSTeamsReplyDispatcher", () => {
 
 describe("pickInformativeStatusText", () => {
   it("selects a deterministic status line for a fixed random source", () => {
-    expect(pickInformativeStatusText(() => 0)).toBe("Thinking...");
-    expect(pickInformativeStatusText(() => 0.99)).toBe("Putting an answer together...");
+    expect(pickInformativeStatusText(() => 0)).toBe("Thinking");
+    expect(pickInformativeStatusText(() => 0.99)).toBe("Surfacing");
+  });
+
+  it("honors disabled progress labels", () => {
+    expect(
+      pickInformativeStatusText({
+        config: { streaming: { progress: { label: false } } } as never,
+      }),
+    ).toBeUndefined();
   });
 });

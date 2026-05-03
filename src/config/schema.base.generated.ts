@@ -1688,6 +1688,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
                 },
+                params: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {},
+                  title: "Model Provider Runtime Parameters",
+                  description:
+                    "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
+                },
                 headers: {
                   type: "object",
                   propertyNames: {
@@ -3353,13 +3363,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id uses built-in OpenClaw Pi.",
                   },
-                  fallback: {
-                    type: "string",
-                    enum: ["pi", "none"],
-                    title: "Default Agent Runtime Fallback",
-                    description:
-                      "Agent runtime fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
-                  },
                 },
                 additionalProperties: false,
                 title: "Default Agent Runtime Settings",
@@ -3373,12 +3376,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     title: "Default Legacy Embedded Harness Runtime",
                     description: "Legacy input for agents.defaults.agentRuntime.id.",
-                  },
-                  fallback: {
-                    type: "string",
-                    enum: ["pi", "none"],
-                    title: "Default Legacy Embedded Harness Fallback",
-                    description: "Legacy input for agents.defaults.agentRuntime.fallback.",
                   },
                 },
                 additionalProperties: false,
@@ -4203,6 +4200,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     reliability: {
                       type: "object",
                       properties: {
+                        outputLimits: {
+                          type: "object",
+                          properties: {
+                            maxTurnRawChars: {
+                              type: "integer",
+                              minimum: 1024,
+                              maximum: 67108864,
+                            },
+                            maxTurnLines: {
+                              type: "integer",
+                              minimum: 100,
+                              maximum: 100000,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
                         watchdog: {
                           type: "object",
                           properties: {
@@ -6272,13 +6285,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Per-agent agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id inherits the default OpenClaw Pi behavior.",
                     },
-                    fallback: {
-                      type: "string",
-                      enum: ["pi", "none"],
-                      title: "Agent Runtime Fallback",
-                      description:
-                        "Per-agent agent runtime fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
-                    },
                   },
                   additionalProperties: false,
                   title: "Agent Runtime",
@@ -6292,12 +6298,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "string",
                       title: "Agent Legacy Embedded Harness Runtime",
                       description: "Legacy input for agents.list.*.agentRuntime.id.",
-                    },
-                    fallback: {
-                      type: "string",
-                      enum: ["pi", "none"],
-                      title: "Agent Legacy Embedded Harness Fallback",
-                      description: "Legacy input for agents.list.*.agentRuntime.fallback.",
                     },
                   },
                   additionalProperties: false,
@@ -7388,8 +7388,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       maximum: 9007199254740991,
                     },
                     visibleReplies: {
-                      type: "string",
-                      enum: ["automatic", "message_tool"],
+                      anyOf: [
+                        {
+                          type: "string",
+                          enum: ["automatic", "message_tool"],
+                        },
+                        {
+                          type: "boolean",
+                        },
+                      ],
                     },
                   },
                   additionalProperties: false,
@@ -8751,6 +8758,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Web Fetch Readability Extraction",
                     description:
                       "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+                  },
+                  useTrustedEnvProxy: {
+                    type: "boolean",
+                    title: "Web Fetch Trusted Env Proxy",
+                    description:
+                      "Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy is operator-controlled and enforces outbound policy after DNS resolution.",
                   },
                   ssrfPolicy: {
                     type: "object",
@@ -19019,8 +19032,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
           },
           visibleReplies: {
-            type: "string",
-            enum: ["automatic", "message_tool"],
+            anyOf: [
+              {
+                type: "string",
+                enum: ["automatic", "message_tool"],
+              },
+              {
+                type: "boolean",
+              },
+            ],
             title: "Visible Replies",
             description:
               'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
@@ -19052,11 +19072,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
               },
               visibleReplies: {
-                type: "string",
-                enum: ["automatic", "message_tool"],
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["automatic", "message_tool"],
+                  },
+                  {
+                    type: "boolean",
+                  },
+                ],
                 title: "Group Visible Replies",
                 description:
-                  'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+                  'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
               },
             },
             additionalProperties: false,
@@ -20682,14 +20709,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
           },
-          parentForkMaxTokens: {
-            type: "integer",
-            minimum: 0,
-            maximum: 9007199254740991,
-            title: "Session Parent Fork Max Tokens",
-            description:
-              "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
-          },
           mainKey: {
             type: "string",
             title: "Session Main Key",
@@ -20798,6 +20817,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
           },
+          writeLock: {
+            type: "object",
+            properties: {
+              acquireTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Session Write Lock Acquire Timeout",
+                description:
+                  "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+              },
+            },
+            additionalProperties: false,
+            title: "Session Write Lock",
+            description:
+              "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+          },
           agentToAgent: {
             type: "object",
             properties: {
@@ -20837,6 +20873,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Thread Binding Max Age (hours)",
                 description:
                   "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
+              },
+              spawnSessions: {
+                type: "boolean",
+                title: "Thread-Bound Session Spawns",
+                description:
+                  "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+              },
+              defaultSpawnContext: {
+                type: "string",
+                enum: ["isolated", "fork"],
+                title: "Thread Spawn Context",
+                description:
+                  'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
               },
             },
             additionalProperties: false,
@@ -21780,6 +21829,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       ],
                     },
+                    artifactKind: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "legacy-zip",
+                        },
+                        {
+                          type: "string",
+                          const: "npm-pack",
+                        },
+                      ],
+                    },
+                    artifactFormat: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "zip",
+                        },
+                        {
+                          type: "string",
+                          const: "tgz",
+                        },
+                      ],
+                    },
+                    npmIntegrity: {
+                      type: "string",
+                    },
+                    npmShasum: {
+                      type: "string",
+                    },
+                    npmTarballName: {
+                      type: "string",
+                    },
                     clawpackSha256: {
                       type: "string",
                     },
@@ -21934,12 +22016,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           "Web channel runtime settings for heartbeat and reconnect behavior when operating web-based chat surfaces. Use reconnect values tuned to your network reliability profile and expected uptime needs.",
       },
       channels: {
+        type: "object",
+        properties: {},
+        additionalProperties: true,
         title: "Channels",
         description:
           "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.",
-        properties: {},
         required: [],
-        additionalProperties: true,
       },
       discovery: {
         type: "object",
@@ -22244,6 +22327,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Allow External Control UI Embed URLs",
                 description:
                   "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+              },
+              chatMessageMaxWidth: {
+                title: "Control UI Chat Message Max Width",
+                description:
+                  'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
               },
               allowedOrigins: {
                 type: "array",
@@ -24009,6 +24097,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
                     },
+                    timeoutMs: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 600000,
+                      title: "Plugin Hook Timeout (ms)",
+                      description:
+                        "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. Use this to bound slow plugin hooks without changing plugin code; per-hook values in hooks.timeouts take precedence.",
+                    },
+                    timeouts: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 600000,
+                      },
+                      title: "Plugin Hook Timeout Overrides",
+                      description:
+                        "Per-hook timeout overrides in milliseconds keyed by typed hook name, capped at 600000. Use narrow overrides for known slow hooks such as before_prompt_build or agent_end instead of raising every hook timeout.",
+                    },
                   },
                   additionalProperties: false,
                   title: "Plugin Hook Policy",
@@ -24729,11 +24839,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id uses built-in OpenClaw Pi.",
       tags: ["advanced"],
     },
-    "agents.defaults.agentRuntime.fallback": {
-      label: "Default Agent Runtime Fallback",
-      help: "Agent runtime fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
-      tags: ["reliability"],
-    },
     "agents.defaults.embeddedHarness": {
       label: "Default Legacy Embedded Harness Settings",
       help: "Legacy input for agents.defaults.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
@@ -24743,11 +24848,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Default Legacy Embedded Harness Runtime",
       help: "Legacy input for agents.defaults.agentRuntime.id.",
       tags: ["advanced"],
-    },
-    "agents.defaults.embeddedHarness.fallback": {
-      label: "Default Legacy Embedded Harness Fallback",
-      help: "Legacy input for agents.defaults.agentRuntime.fallback.",
-      tags: ["reliability"],
     },
     "agents.list": {
       label: "Agent List",
@@ -24799,11 +24899,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Per-agent agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id inherits the default OpenClaw Pi behavior.",
       tags: ["advanced"],
     },
-    "agents.list.*.agentRuntime.fallback": {
-      label: "Agent Runtime Fallback",
-      help: "Per-agent agent runtime fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
-      tags: ["reliability"],
-    },
     "agents.list.*.embeddedHarness": {
       label: "Agent Legacy Embedded Harness",
       help: "Legacy input for agents.list.*.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
@@ -24813,11 +24908,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Legacy Embedded Harness Runtime",
       help: "Legacy input for agents.list.*.agentRuntime.id.",
       tags: ["advanced"],
-    },
-    "agents.list.*.embeddedHarness.fallback": {
-      label: "Agent Legacy Embedded Harness Fallback",
-      help: "Legacy input for agents.list.*.agentRuntime.fallback.",
-      tags: ["reliability"],
     },
     "gateway.port": {
       label: "Gateway Port",
@@ -25903,6 +25993,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
       tags: ["tools"],
     },
+    "tools.web.fetch.useTrustedEnvProxy": {
+      label: "Web Fetch Trusted Env Proxy",
+      help: "Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy is operator-controlled and enforces outbound policy after DNS resolution.",
+      tags: ["tools"],
+    },
     "tools.web.fetch.ssrfPolicy": {
       label: "Web Fetch SSRF Policy",
       help: "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
@@ -25939,6 +26034,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Allow External Control UI Embed URLs",
       help: "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
       tags: ["security", "access", "network", "advanced"],
+    },
+    "gateway.controlUi.chatMessageMaxWidth": {
+      label: "Control UI Chat Message Max Width",
+      help: 'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
+      tags: ["advanced"],
     },
     "gateway.controlUi.allowedOrigins": {
       label: "Control UI Allowed Origins",
@@ -26994,6 +27094,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
       tags: ["models"],
     },
+    "models.providers.*.params": {
+      label: "Model Provider Runtime Parameters",
+      help: "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
+      tags: ["models"],
+    },
     "models.providers.*.headers": {
       label: "Model Provider Headers",
       help: "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
@@ -27813,11 +27918,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
       tags: ["storage"],
     },
-    "session.parentForkMaxTokens": {
-      label: "Session Parent Fork Max Tokens",
-      help: "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
-      tags: ["security", "auth", "performance", "storage"],
-    },
     "session.mainKey": {
       label: "Session Main Key",
       help: 'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
@@ -27868,6 +27968,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
       tags: ["access", "storage"],
     },
+    "session.writeLock": {
+      label: "Session Write Lock",
+      help: "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+      tags: ["storage"],
+    },
+    "session.writeLock.acquireTimeoutMs": {
+      label: "Session Write Lock Acquire Timeout",
+      help: "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+      tags: ["performance", "storage"],
+    },
     "session.agentToAgent": {
       label: "Session Agent-to-Agent",
       help: "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
@@ -27897,6 +28007,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Thread Binding Max Age (hours)",
       help: "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
       tags: ["performance", "storage"],
+    },
+    "session.threadBindings.spawnSessions": {
+      label: "Thread-Bound Session Spawns",
+      help: "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+      tags: ["storage"],
+    },
+    "session.threadBindings.defaultSpawnContext": {
+      label: "Thread Spawn Context",
+      help: 'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+      tags: ["storage"],
     },
     "session.maintenance": {
       label: "Session Maintenance",
@@ -28464,7 +28584,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.groupChat.visibleReplies": {
       label: "Group Visible Replies",
-      help: 'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+      help: 'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
       tags: ["advanced"],
     },
     "messages.queue": {
@@ -28779,6 +28899,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Allow Prompt Injection Hooks",
       help: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
       tags: ["access"],
+    },
+    "plugins.entries.*.hooks.timeoutMs": {
+      label: "Plugin Hook Timeout (ms)",
+      help: "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. Use this to bound slow plugin hooks without changing plugin code; per-hook values in hooks.timeouts take precedence.",
+      tags: ["performance"],
+    },
+    "plugins.entries.*.hooks.timeouts": {
+      label: "Plugin Hook Timeout Overrides",
+      help: "Per-hook timeout overrides in milliseconds keyed by typed hook name, capped at 600000. Use narrow overrides for known slow hooks such as before_prompt_build or agent_end instead of raising every hook timeout.",
+      tags: ["performance"],
     },
     "plugins.entries.*.subagent": {
       label: "Plugin Subagent Policy",
@@ -29230,6 +29360,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.30",
+  version: "2026.5.3",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

@@ -6,6 +6,7 @@ import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import {
@@ -50,6 +51,12 @@ const InstalledPluginIndexStartupSchema = z.object({
   agentHarnesses: StringArraySchema,
 });
 
+const InstalledPluginFileSignatureSchema = z.object({
+  size: z.number(),
+  mtimeMs: z.number(),
+  ctimeMs: z.number().optional(),
+});
+
 const InstalledPluginIndexRecordSchema = z.object({
   pluginId: z.string(),
   packageName: z.string().optional(),
@@ -60,6 +67,7 @@ const InstalledPluginIndexRecordSchema = z.object({
   packageChannel: z.unknown().optional(),
   manifestPath: z.string(),
   manifestHash: z.string(),
+  manifestFile: InstalledPluginFileSignatureSchema.optional(),
   format: z.string().optional(),
   bundleFormat: z.string().optional(),
   source: z.string().optional(),
@@ -68,12 +76,14 @@ const InstalledPluginIndexRecordSchema = z.object({
     .object({
       path: z.string(),
       hash: z.string(),
+      fileSignature: InstalledPluginFileSignatureSchema.optional(),
     })
     .optional(),
   rootDir: z.string(),
   origin: z.string(),
   enabled: z.boolean(),
   enabledByDefault: z.boolean().optional(),
+  enabledByDefaultOnPlatforms: StringArraySchema.optional(),
   syntheticAuthRefs: StringArraySchema.optional(),
   startup: InstalledPluginIndexStartupSchema,
   compat: z.array(z.string()),
@@ -243,7 +253,7 @@ function refreshPersistedPolicyState(
         origin: plugin.origin,
         config: normalizedConfig,
         rootConfig: params.config,
-        enabledByDefault: plugin.enabledByDefault,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
       }).enabled,
     })),
   };

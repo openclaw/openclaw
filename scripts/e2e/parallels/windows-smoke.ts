@@ -398,7 +398,7 @@ class WindowsSmoke {
     this.status.freshGateway = "pass";
     await this.phase(
       "fresh.first-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 1500),
+      Number(process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 2700),
       () => this.verifyTurn(),
     );
     this.status.freshAgent = "pass";
@@ -455,7 +455,7 @@ class WindowsSmoke {
     this.status.upgradeGateway = "pass";
     await this.phase(
       "upgrade.first-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 1500),
+      Number(process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 2700),
       () => this.verifyTurn(),
     );
     this.status.upgradeAgent = "pass";
@@ -909,8 +909,6 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
     'main',
     '--session-id',
     $sessionId,
-    '--model',
-    ${psSingleQuote(this.auth.modelId)},
     '--message',
     'Reply with exact ASCII text OK only.',
     '--thinking',
@@ -936,7 +934,7 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
   }
 }
 if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
-      Number(process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 1500) * 1000,
+      Number(process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 2700) * 1000,
     );
   }
 

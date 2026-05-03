@@ -127,19 +127,27 @@ Modes:
 - `block`: preview updates in chunked/appended steps.
 - `progress`: progress/status preview during generation, final answer at completion.
 
+`streaming.mode: "block"` is a preview-streaming mode for edit-capable channels
+such as Discord and Telegram. It does not enable channel block delivery there.
+Use `streaming.block.enabled` or the legacy `blockStreaming` channel key when
+you want normal block replies. Microsoft Teams is the exception: it has no
+draft-preview block transport, so `streaming.mode: "block"` maps to Teams block
+delivery instead of native partial/progress streaming.
+
 ### Channel mapping
 
-| Channel    | `off` | `partial` | `block` | `progress`        |
-| ---------- | ----- | --------- | ------- | ----------------- |
-| Telegram   | ✅    | ✅        | ✅      | maps to `partial` |
-| Discord    | ✅    | ✅        | ✅      | maps to `partial` |
-| Slack      | ✅    | ✅        | ✅      | ✅                |
-| Mattermost | ✅    | ✅        | ✅      | ✅                |
+| Channel    | `off` | `partial` | `block` | `progress`              |
+| ---------- | ----- | --------- | ------- | ----------------------- |
+| Telegram   | ✅    | ✅        | ✅      | editable progress draft |
+| Discord    | ✅    | ✅        | ✅      | editable progress draft |
+| Slack      | ✅    | ✅        | ✅      | ✅                      |
+| Mattermost | ✅    | ✅        | ✅      | ✅                      |
+| MS Teams   | ✅    | ✅        | ✅      | native progress stream  |
 
 Slack-only:
 
 - `channels.slack.streaming.nativeTransport` toggles Slack native streaming API calls when `channels.slack.streaming.mode="partial"` (default: `true`).
-- Slack native streaming and Slack assistant thread status require a reply thread target; top-level DMs do not show that thread-style preview.
+- Slack native streaming and Slack assistant thread status require a reply thread target. Top-level DMs do not show that thread-style preview, but they can still use Slack draft preview posts and edits.
 
 Legacy key migration:
 
@@ -168,6 +176,7 @@ Slack:
 - `partial` can use Slack native streaming (`chat.startStream`/`append`/`stop`) when available.
 - `block` uses append-style draft previews.
 - `progress` uses status preview text, then final answer.
+- Top-level DMs without a reply thread use draft preview posts and edits instead of Slack native streaming.
 - Native and draft preview streaming suppress block replies for that turn, so a Slack reply is streamed by one delivery path only.
 - Final media/error payloads and progress finals do not create throwaway draft messages; only text/block finals that can edit the preview flush pending draft text.
 
@@ -188,11 +197,12 @@ Preview streaming can also include **tool-progress** updates — short status li
 
 Supported surfaces:
 
-- **Discord**, **Slack**, **Telegram**, and **Matrix** stream tool-progress into the live preview edit by default when preview streaming is active.
+- **Discord**, **Slack**, **Telegram**, and **Matrix** stream tool-progress into the live preview edit by default when preview streaming is active. Microsoft Teams uses its native progress stream in personal chats.
 - Telegram has shipped with tool-progress preview updates enabled since `v2026.4.22`; keeping them enabled preserves that released behavior.
 - **Mattermost** already folds tool activity into its single draft preview post (see above).
-- Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message. On Telegram, `streaming.mode: "off"` is final-only: generic progress chatter is also suppressed instead of being delivered as standalone "Working..." messages, while approval prompts, media payloads, and errors still route normally.
+- Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message. On Telegram, `streaming.mode: "off"` is final-only: generic progress chatter is also suppressed instead of being delivered as standalone status messages, while approval prompts, media payloads, and errors still route normally.
 - To keep preview streaming but hide tool-progress lines, set `streaming.preview.toolProgress` to `false` for that channel. To disable preview edits entirely, set `streaming.mode` to `off`.
+- Telegram selected quote replies are an exception: when `replyToMode` is not `"off"` and selected quote text is present, OpenClaw skips the answer preview stream for that turn so tool-progress preview lines cannot render. Current-message replies without selected quote text still keep preview streaming. See [Telegram channel docs](/channels/telegram) for details.
 
 Example:
 
@@ -213,6 +223,7 @@ Example:
 
 ## Related
 
+- [Progress drafts](/concepts/progress-drafts) — visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) — message lifecycle and delivery
 - [Retry](/concepts/retry) — retry behavior on delivery failure
 - [Channels](/channels) — per-channel streaming support

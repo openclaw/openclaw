@@ -21,14 +21,6 @@ import {
   shouldStripProviderAuthEnvVarsForAcpServer,
 } from "./client-helpers.js";
 
-export {
-  buildAcpClientStripKeys,
-  resolveAcpClientSpawnEnv,
-  resolveAcpClientSpawnInvocation,
-  resolvePermissionRequest,
-  shouldStripProviderAuthEnvVarsForAcpServer,
-} from "./client-helpers.js";
-
 type AcpClientOptions = {
   cwd?: string;
   serverCommand?: string;

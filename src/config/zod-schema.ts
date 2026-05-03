@@ -6,6 +6,10 @@ import {
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import {
+  isValidControlUiChatMessageMaxWidth,
+  normalizeControlUiChatMessageMaxWidth,
+} from "./control-ui-css.js";
+import {
   SilentReplyPolicyConfigSchema,
   SilentReplyRewriteConfigSchema,
 } from "./zod-schema.agent-defaults.js";
@@ -186,6 +190,8 @@ const PluginEntrySchema = z
       .object({
         allowPromptInjection: z.boolean().optional(),
         allowConversationAccess: z.boolean().optional(),
+        timeoutMs: z.number().int().positive().max(600_000).optional(),
+        timeouts: z.record(z.string(), z.number().int().positive().max(600_000)).optional(),
       })
       .strict()
       .optional(),
@@ -784,6 +790,14 @@ export const OpenClawSchema = z
               .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
               .optional(),
             allowExternalEmbedUrls: z.boolean().optional(),
+            chatMessageMaxWidth: z
+              .string()
+              .transform((value) => normalizeControlUiChatMessageMaxWidth(value))
+              .refine((value) => isValidControlUiChatMessageMaxWidth(value), {
+                message:
+                  "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
+              })
+              .optional(),
             allowedOrigins: z.array(z.string()).optional(),
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),

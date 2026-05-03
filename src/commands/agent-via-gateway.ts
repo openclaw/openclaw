@@ -120,7 +120,7 @@ function createGatewayTimeoutFallbackSession(agentId?: string): {
   };
 }
 
-export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
+async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   protectJsonStdout(opts);
   const body = (opts.message ?? "").trim();
   if (!body) {
@@ -201,7 +201,9 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? response.summary : "No reply from agent.");
+    if (response?.status !== "ok") {
+      runtime.log(response?.summary ? response.summary : "No reply from agent.");
+    }
     return response;
   }
 

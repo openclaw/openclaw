@@ -5,6 +5,9 @@
   },
   "name": "Diffs",
   "description": "Read-only diff viewer and file renderer for agents.",
+  "contracts": {
+    "tools": ["diffs"]
+  },
   "skills": ["./skills"],
   "uiHints": {
     "viewerBaseUrl": {

@@ -727,6 +727,17 @@ export const pl: TranslationMap = {
       dailyCsv: "CSV dzienne",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Pamięć podręczna użycia jest odbudowywana w tle. Wyświetlane sumy mogą być nieaktualne.",
+      title:
+        "{status}: oczekujące: {pending}, nieaktualne: {stale}, z pamięci podręcznej: {cached}",
+      status: {
+        refreshing: "odświeżanie",
+        stale: "nieaktualne",
+        partial: "częściowe",
+      },
+    },
     empty: {
       title: "Zacznij od zakresu dat",
       subtitle:

@@ -723,6 +723,16 @@ export const id: TranslationMap = {
       dailyCsv: "CSV Harian",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Cache penggunaan sedang dibangun ulang di latar belakang. Total yang ditampilkan mungkin sudah kedaluwarsa.",
+      title: "{status}: {pending} tertunda, {stale} kedaluwarsa, {cached} tersimpan dalam cache",
+      status: {
+        refreshing: "menyegarkan",
+        stale: "kedaluwarsa",
+        partial: "sebagian",
+      },
+    },
     empty: {
       title: "Mulai dengan rentang tanggal",
       subtitle:

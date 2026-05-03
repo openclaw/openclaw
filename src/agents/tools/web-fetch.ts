@@ -4,6 +4,7 @@ import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/ne
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -33,8 +34,6 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
-
-export { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
@@ -83,19 +82,21 @@ type WebGuardedFetchModule = Pick<
   "fetchWithWebToolsNetworkGuard"
 >;
 
-let webFetchRuntimePromise: Promise<WebFetchRuntimeModule> | null = null;
-let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
+const webFetchRuntimeLoader = createLazyImportLoader<WebFetchRuntimeModule>(
+  () => import("../../web-fetch/runtime.js"),
+);
+const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
+  () => import("./web-guarded-fetch.js"),
+);
 
 async function loadWebFetchRuntime(): Promise<WebFetchRuntimeModule> {
-  webFetchRuntimePromise ??= import("../../web-fetch/runtime.js");
-  return await webFetchRuntimePromise;
+  return await webFetchRuntimeLoader.load();
 }
 
 async function loadWebGuardedFetch(): Promise<
   WebGuardedFetchModule["fetchWithWebToolsNetworkGuard"]
 > {
-  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
-  return (await webGuardedFetchPromise).fetchWithWebToolsNetworkGuard;
+  return (await webGuardedFetchLoader.load()).fetchWithWebToolsNetworkGuard;
 }
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
@@ -114,6 +115,10 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
     return fetch.readability;
   }
   return true;
+}
+
+function resolveFetchUseTrustedEnvProxy(fetch?: WebFetchConfig): boolean {
+  return fetch?.useTrustedEnvProxy === true;
 }
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
@@ -272,6 +277,7 @@ type WebFetchRuntimeParams = {
   userAgent: string;
   readabilityEnabled: boolean;
   config?: OpenClawConfig;
+  useTrustedEnvProxy: boolean;
   ssrfPolicy?: {
     allowRfc2544BenchmarkRange?: boolean;
     allowIpv6UniqueLocalRange?: boolean;
@@ -391,6 +397,7 @@ async function maybeFetchProviderWebFetchPayload(
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
   const allowIpv6UniqueLocalRange = params.ssrfPolicy?.allowIpv6UniqueLocalRange === true;
+  const useTrustedEnvProxy = params.useTrustedEnvProxy;
   const ssrfPolicy: SsrFPolicy | undefined =
     allowRfc2544BenchmarkRange || allowIpv6UniqueLocalRange
       ? {
@@ -399,7 +406,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         }
       : undefined;
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -427,6 +434,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
+      useEnvProxy: useTrustedEnvProxy,
       policy: ssrfPolicy,
       init: {
         headers: {
@@ -660,6 +668,7 @@ export function createWebFetchTool(options?: {
         userAgent,
         readabilityEnabled,
         config: options?.config,
+        useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(fetch),
         ssrfPolicy: fetch?.ssrfPolicy,
         lookupFn: options?.lookupFn,
         resolveProviderFallback,

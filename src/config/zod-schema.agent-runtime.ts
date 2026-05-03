@@ -351,6 +351,7 @@ const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    useTrustedEnvProxy: z.boolean().optional(),
     ssrfPolicy: z
       .object({
         allowRfc2544BenchmarkRange: z.boolean().optional(),
@@ -813,7 +814,6 @@ const AgentRuntimeSchema = z
 export const AgentEmbeddedHarnessSchema = z
   .object({
     runtime: z.string().optional(),
-    fallback: z.enum(["pi", "none"]).optional(),
   })
   .strict()
   .optional();
@@ -821,7 +821,6 @@ export const AgentEmbeddedHarnessSchema = z
 export const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
-    fallback: z.enum(["pi", "none"]).optional(),
   })
   .strict()
   .optional();

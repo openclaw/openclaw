@@ -59,6 +59,7 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -96,44 +97,39 @@ import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
-let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
-let getReplyFromConfigRuntimePromise: Promise<
-  typeof import("./get-reply-from-config.runtime.js")
-> | null = null;
-let abortRuntimePromise: Promise<typeof import("./abort.runtime.js")> | null = null;
-let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
-let runtimePluginsPromise: Promise<typeof import("./runtime-plugins.runtime.js")> | null = null;
-let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
-  null;
+const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
+const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
+  () => import("./get-reply-from-config.runtime.js"),
+);
+const abortRuntimeLoader = createLazyImportLoader(() => import("./abort.runtime.js"));
+const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
+const runtimePluginsLoader = createLazyImportLoader(() => import("./runtime-plugins.runtime.js"));
+const replyMediaPathsRuntimeLoader = createLazyImportLoader(
+  () => import("./reply-media-paths.runtime.js"),
+);
 
 function loadRouteReplyRuntime() {
-  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
-  return routeReplyRuntimePromise;
+  return routeReplyRuntimeLoader.load();
 }
 
 function loadGetReplyFromConfigRuntime() {
-  getReplyFromConfigRuntimePromise ??= import("./get-reply-from-config.runtime.js");
-  return getReplyFromConfigRuntimePromise;
+  return getReplyFromConfigRuntimeLoader.load();
 }
 
 function loadAbortRuntime() {
-  abortRuntimePromise ??= import("./abort.runtime.js");
-  return abortRuntimePromise;
+  return abortRuntimeLoader.load();
 }
 
 function loadTtsRuntime() {
-  ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
-  return ttsRuntimePromise;
+  return ttsRuntimeLoader.load();
 }
 
 function loadRuntimePlugins() {
-  runtimePluginsPromise ??= import("./runtime-plugins.runtime.js");
-  return runtimePluginsPromise;
+  return runtimePluginsLoader.load();
 }
 
 function loadReplyMediaPathsRuntime() {
-  replyMediaPathsRuntimePromise ??= import("./reply-media-paths.runtime.js");
-  return replyMediaPathsRuntimePromise;
+  return replyMediaPathsRuntimeLoader.load();
 }
 
 async function maybeApplyTtsToReplyPayload(
@@ -758,6 +754,12 @@ export async function dispatchReplyFromConfig(
     suppressHookUserDelivery,
     suppressHookReplyLifecycle,
   } = sourceReplyPolicy;
+  const attachSourceReplyDeliveryMode = (
+    result: DispatchFromConfigResult,
+  ): DispatchFromConfigResult =>
+    sourceReplyDeliveryMode === "message_tool_only"
+      ? { ...result, sourceReplyDeliveryMode }
+      : result;
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -801,7 +803,10 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           commitInboundDedupeIfClaimed();
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return attachSourceReplyDeliveryMode({
+            queuedFinal: false,
+            counts: dispatcher.getQueuedCounts(),
+          });
         }
         case "missing_plugin":
         case "no_handler": {
@@ -828,7 +833,10 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_declined");
           recordProcessed("completed", { reason: "plugin-bound-declined" });
           commitInboundDedupeIfClaimed();
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return attachSourceReplyDeliveryMode({
+            queuedFinal: false,
+            counts: dispatcher.getQueuedCounts(),
+          });
         }
         case "error": {
           logVerbose(
@@ -841,7 +849,10 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_error");
           recordProcessed("completed", { reason: "plugin-bound-error" });
           commitInboundDedupeIfClaimed();
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return attachSourceReplyDeliveryMode({
+            queuedFinal: false,
+            counts: dispatcher.getQueuedCounts(),
+          });
         }
       }
     }
@@ -914,7 +925,7 @@ export async function dispatchReplyFromConfig(
       recordProcessed("completed", { reason: "fast_abort" });
       markIdle("message_completed");
       commitInboundDedupeIfClaimed();
-      return { queuedFinal, counts };
+      return attachSourceReplyDeliveryMode({ queuedFinal, counts });
     }
 
     const isSlackNonDirectSurface =
@@ -993,7 +1004,7 @@ export async function dispatchReplyFromConfig(
         recordProcessed("completed", { reason: "before_dispatch_handled" });
         markIdle("message_completed");
         commitInboundDedupeIfClaimed();
-        return { queuedFinal, counts };
+        return attachSourceReplyDeliveryMode({ queuedFinal, counts });
       }
     }
 
@@ -1027,10 +1038,10 @@ export async function dispatchReplyFromConfig(
       );
       if (replyDispatchResult?.handled) {
         commitInboundDedupeIfClaimed();
-        return {
+        return attachSourceReplyDeliveryMode({
           queuedFinal: replyDispatchResult.queuedFinal,
           counts: replyDispatchResult.counts,
-        };
+        });
       }
     }
 
@@ -1196,6 +1207,8 @@ export async function dispatchReplyFromConfig(
     });
     const suppressDefaultToolProgressMessages =
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
+    const shouldSuppressDefaultToolProgressMessages = () =>
+      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1261,7 +1274,7 @@ export async function dispatchReplyFromConfig(
             if (!deliveryPayload) {
               return;
             }
-            if (suppressDefaultToolProgressMessages) {
+            if (shouldSuppressDefaultToolProgressMessages()) {
               const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
               const execApproval =
                 deliveryPayload.channelData &&
@@ -1290,7 +1303,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onPlanUpdateFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "update" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
@@ -1301,7 +1314,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onApprovalEventFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "requested" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           const label = summarizeApprovalLabel({
@@ -1320,7 +1333,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onPatchSummaryFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "end" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           const label = summarizePatchLabel({ summary: payload.summary, title: payload.title });
@@ -1445,10 +1458,10 @@ export async function dispatchReplyFromConfig(
           },
         );
         if (tailDispatchResult?.handled) {
-          return {
+          return attachSourceReplyDeliveryMode({
             queuedFinal: tailDispatchResult.queuedFinal,
             counts: tailDispatchResult.counts,
-          };
+          });
         }
       }
     }
@@ -1537,7 +1550,7 @@ export async function dispatchReplyFromConfig(
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
-    return { queuedFinal, counts };
+    return attachSourceReplyDeliveryMode({ queuedFinal, counts });
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
       if (inboundDedupeReplayUnsafe) {

@@ -103,6 +103,8 @@ const normalizeTelegramTargetForDeliveryTest = vi.fn((raw: string): string | und
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   normalizeTelegramTargetForDeliveryTest.mockClear();
+  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReset();
+  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue([]);
   vi.mocked(resolveOutboundTarget).mockReset();
   setActivePluginRegistry(
     createTestRegistry([
@@ -234,9 +236,8 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "alpha",
       lastTo: "room-denied",
     });
-    setStoredAlphaAllowFrom(["room-allowed"]);
 
-    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: ["room-allowed"] } } });
     const result = await resolveLastTarget(cfg);
 
     expect(result.channel).toBe("alpha");
@@ -249,9 +250,8 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "alpha",
       lastTo: "room-denied",
     });
-    setStoredAlphaAllowFrom(["room-allowed"]);
 
-    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: ["room-allowed"] } } });
     const result = await resolveDeliveryTarget(
       cfg,
       AGENT_ID,
@@ -281,6 +281,19 @@ describe("resolveDeliveryTarget", () => {
     });
 
     expect(result.to).toBe("room-denied");
+  });
+
+  it("does not use pairing-store entries as implicit automation recipients", async () => {
+    setMainSessionEntry(undefined);
+    setStoredAlphaAllowFrom(["room-paired"]);
+
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.ok).toBe(false);
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBeUndefined();
+    expect(readChannelAllowFromStoreEntriesSync).not.toHaveBeenCalled();
   });
 
   it("falls back to bound accountId when session has no lastAccountId", async () => {

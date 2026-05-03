@@ -26,6 +26,63 @@ async function loadCachedPluginModuleLoader(scope: string) {
 }
 
 describe("getCachedPluginModuleLoader", () => {
+  it("resolves deterministic cache entries for equivalent alias maps", async () => {
+    const { resolvePluginModuleLoaderCacheEntry } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(import.meta.url, "./plugin-module-loader-cache.js?scope=cache-entry-alias-order");
+
+    const first = resolvePluginModuleLoaderCacheEntry({
+      modulePath: "/repo/extensions/demo/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      loaderFilename: "/repo/src/plugins/loader.ts",
+      aliasMap: {
+        alpha: "/repo/alpha.js",
+        zeta: "/repo/zeta.js",
+      },
+      tryNative: false,
+    });
+    const second = resolvePluginModuleLoaderCacheEntry({
+      modulePath: "/repo/extensions/demo/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      loaderFilename: "/repo/src/plugins/loader.ts",
+      aliasMap: {
+        zeta: "/repo/zeta.js",
+        alpha: "/repo/alpha.js",
+      },
+      tryNative: false,
+    });
+
+    expect(second.cacheKey).toBe(first.cacheKey);
+    expect(second.scopedCacheKey).toBe(first.scopedCacheKey);
+    expect(first.loaderFilename).toBe("/repo/src/plugins/loader.ts");
+  });
+
+  it("keeps explicit shared cache scope keys independent of loader options", async () => {
+    const { resolvePluginModuleLoaderCacheEntry } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(import.meta.url, "./plugin-module-loader-cache.js?scope=cache-entry-shared-scope");
+
+    const first = resolvePluginModuleLoaderCacheEntry({
+      modulePath: "/repo/dist/extensions/demo-a/api.js",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      loaderFilename: "/repo/src/plugins/public-surface-loader.ts",
+      aliasMap: { demo: "/repo/demo-a.js" },
+      tryNative: true,
+      sharedCacheScopeKey: "bundled:native",
+    });
+    const second = resolvePluginModuleLoaderCacheEntry({
+      modulePath: "/repo/dist/extensions/demo-b/api.js",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      loaderFilename: "/repo/src/plugins/public-surface-loader.ts",
+      aliasMap: { demo: "/repo/demo-b.js" },
+      tryNative: false,
+      sharedCacheScopeKey: "bundled:native",
+    });
+
+    expect(first.cacheKey).not.toBe(second.cacheKey);
+    expect(first.scopedCacheKey).toBe(second.scopedCacheKey);
+  });
+
   it("reuses cached loaders for the same module config and filename", async () => {
     const { createJiti, getCachedPluginModuleLoader } =
       await loadCachedPluginModuleLoader("cached-loader");
@@ -314,7 +371,7 @@ describe("getCachedPluginModuleLoader", () => {
         p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader } = await importFreshModule<
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
       typeof import("./plugin-module-loader-cache.js")
     >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-fastpath");
 
@@ -336,6 +393,13 @@ describe("getCachedPluginModuleLoader", () => {
     expect(nativeStub).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js", {
       allowWindows: true,
     });
+    expect(getPluginModuleLoaderStats()).toMatchObject({
+      calls: 1,
+      nativeHits: 1,
+      nativeMisses: 0,
+      sourceTransformFallbacks: 0,
+      sourceTransformForced: 0,
+    });
   });
 
   it("falls back to source transform when the native-require helper declines", async () => {
@@ -346,7 +410,7 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
-    const { getCachedPluginModuleLoader } = await importFreshModule<
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
       typeof import("./plugin-module-loader-cache.js")
     >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-fallback");
 
@@ -361,6 +425,14 @@ describe("getCachedPluginModuleLoader", () => {
     const result = loader("/repo/dist/extensions/demo/api.js") as { fromSourceTransform: boolean };
     expect(result.fromSourceTransform).toBe(true);
     expect(fromSourceTransformer).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
+    expect(getPluginModuleLoaderStats()).toMatchObject({
+      calls: 1,
+      nativeHits: 0,
+      nativeMisses: 1,
+      sourceTransformFallbacks: 1,
+      sourceTransformForced: 0,
+      topSourceTransformTargets: [{ target: "/repo/dist/extensions/demo/api.js", count: 1 }],
+    });
   });
 
   it("normalizes Windows absolute paths before creating and calling the source transformer", async () => {
@@ -405,7 +477,7 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader } = await importFreshModule<
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
       typeof import("./plugin-module-loader-cache.js")
     >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-opt-out");
 
@@ -425,6 +497,14 @@ describe("getCachedPluginModuleLoader", () => {
     // so its alias rewrites still apply; native require must not be consulted.
     expect(nativeStub).not.toHaveBeenCalled();
     expect(fromSourceTransformer).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
+    expect(getPluginModuleLoaderStats()).toMatchObject({
+      calls: 1,
+      nativeHits: 0,
+      nativeMisses: 0,
+      sourceTransformFallbacks: 0,
+      sourceTransformForced: 1,
+      topSourceTransformTargets: [{ target: "/repo/dist/extensions/demo/api.js", count: 1 }],
+    });
   });
 
   it("normalizes Windows absolute paths when native loading is disabled", async () => {

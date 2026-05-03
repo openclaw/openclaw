@@ -444,6 +444,28 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("passes mediaAccess workspaceDir when loading relative media attachments", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", "", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrl: "chart.png",
+      mediaAccess: {
+        workspaceDir: "/tmp/agent-workspace",
+      },
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "chart.png",
+      expect.objectContaining({
+        workspaceDir: "/tmp/agent-workspace",
+      }),
+    );
+  });
+
   it("prefers the caller-provided filename for media attachments", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg", channel_id: "789" });

@@ -308,12 +308,12 @@ describe("loadPluginManifestRegistry", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
-    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default function () {}", "utf-8");
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify({
         name: "@openclaw/cached-manifest",
-        openclaw: { extensions: ["./index.ts"] },
+        openclaw: { extensions: ["./index.js"] },
       }),
       "utf-8",
     );
@@ -400,6 +400,36 @@ describe("loadPluginManifestRegistry", () => {
     expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
+  it("deduplicates compatibility diagnostics when a config plugin replaces a global candidate", () => {
+    const globalDir = makeTempDir();
+    const configDir = makeTempDir();
+    const manifest = {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    };
+    writeManifest(globalDir, manifest);
+    writeManifest(configDir, manifest);
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "external-chat",
+        rootDir: globalDir,
+        origin: "global",
+      }),
+      createPluginCandidate({
+        idHint: "external-chat",
+        rootDir: configDir,
+        origin: "config",
+      }),
+    ]);
+
+    const channelConfigWarnings = registry.diagnostics.filter((diagnostic) =>
+      diagnostic.message.includes("without channelConfigs metadata"),
+    );
+    expect(channelConfigWarnings).toHaveLength(1);
+  });
+
   it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
@@ -471,6 +501,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, {
       id: "openai",
       enabledByDefault: true,
+      enabledByDefaultOnPlatforms: ["darwin", "not-a-platform"],
       providers: ["openai", "openai-codex"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
@@ -594,6 +625,7 @@ describe("loadPluginManifestRegistry", () => {
       "openai-codex": "openai",
     });
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
+    expect(registry.plugins[0]?.enabledByDefaultOnPlatforms).toEqual(["darwin"]);
     expect(registry.plugins[0]?.providerAuthChoices).toEqual([
       {
         provider: "openai",
@@ -923,6 +955,35 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
+  it("does not report deprecated providerAuthEnvVars when setup providers mirror env vars", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-openai",
+      providers: ["openai"],
+      setup: {
+        providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }],
+      },
+      providerAuthEnvVars: {
+        openai: ["OPENAI_API_KEY"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-openai",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.diagnostics).not.toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "providerAuthEnvVars is deprecated compatibility metadata",
+        ),
+      }),
+    );
+  });
+
   it("sanitizes manifest-controlled fields in provider auth compatibility diagnostics", () => {
     const dir = makeTempDir();
     const lineBreak = String.fromCharCode(10);
@@ -1194,6 +1255,37 @@ describe("loadPluginManifestRegistry", () => {
       id: "openai",
       contracts: {
         mediaUnderstandingProviders: ["openai"],
+        imageGenerationProviders: ["openai"],
+        tools: ["image_generate"],
+      },
+      imageGenerationProviderMetadata: {
+        openai: {
+          aliases: ["openai-codex"],
+          authProviders: ["openai"],
+          authSignals: [
+            {
+              provider: "openai-codex",
+              providerBaseUrl: {
+                provider: "openai",
+                defaultBaseUrl: "https://api.openai.com/v1",
+                allowedBaseUrls: ["https://api.openai.com/v1"],
+              },
+            },
+          ],
+          configSignals: [
+            {
+              rootPath: "plugins.entries.openai.config",
+              overlayPath: "image",
+              mode: {
+                path: "mode",
+                default: "local",
+                allowed: ["local"],
+              },
+              requiredAny: ["workflow", "workflowPath"],
+              required: ["promptNodeId"],
+            },
+          ],
+        },
       },
       mediaUnderstandingProviderMetadata: {
         openai: {
@@ -1211,6 +1303,22 @@ describe("loadPluginManifestRegistry", () => {
           nativeDocumentInputs: ["pdf", "docx"],
         },
       },
+      toolMetadata: {
+        image_generate: {
+          authSignals: [
+            {
+              provider: "openai-codex",
+            },
+          ],
+          configSignals: [
+            {
+              rootPath: "plugins.entries.openai.config",
+              overlayPath: "image",
+              required: ["apiKey"],
+            },
+          ],
+        },
+      },
       configSchema: { type: "object" },
     });
 
@@ -1220,6 +1328,35 @@ describe("loadPluginManifestRegistry", () => {
       origin: "bundled",
     });
 
+    expect(registry.plugins[0]?.imageGenerationProviderMetadata).toEqual({
+      openai: {
+        aliases: ["openai-codex"],
+        authProviders: ["openai"],
+        authSignals: [
+          {
+            provider: "openai-codex",
+            providerBaseUrl: {
+              provider: "openai",
+              defaultBaseUrl: "https://api.openai.com/v1",
+              allowedBaseUrls: ["https://api.openai.com/v1"],
+            },
+          },
+        ],
+        configSignals: [
+          {
+            rootPath: "plugins.entries.openai.config",
+            overlayPath: "image",
+            mode: {
+              path: "mode",
+              default: "local",
+              allowed: ["local"],
+            },
+            requiredAny: ["workflow", "workflowPath"],
+            required: ["promptNodeId"],
+          },
+        ],
+      },
+    });
     expect(registry.plugins[0]?.mediaUnderstandingProviderMetadata).toEqual({
       openai: {
         capabilities: ["image", "audio"],
@@ -1232,6 +1369,22 @@ describe("loadPluginManifestRegistry", () => {
           audio: 20,
         },
         nativeDocumentInputs: ["pdf"],
+      },
+    });
+    expect(registry.plugins[0]?.toolMetadata).toEqual({
+      image_generate: {
+        authSignals: [
+          {
+            provider: "openai-codex",
+          },
+        ],
+        configSignals: [
+          {
+            rootPath: "plugins.entries.openai.config",
+            overlayPath: "image",
+            required: ["apiKey"],
+          },
+        ],
       },
     });
   });

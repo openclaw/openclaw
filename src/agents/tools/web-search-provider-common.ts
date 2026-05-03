@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
@@ -16,16 +17,23 @@ import {
 
 type WebGuardedFetchModule = Pick<
   typeof import("./web-guarded-fetch.js"),
-  "withTrustedWebToolsEndpoint"
+  "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
 >;
 
-let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
+const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
+  () => import("./web-guarded-fetch.js"),
+);
 
 async function loadTrustedWebToolsEndpoint(): Promise<
   WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
 > {
-  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
-  return (await webGuardedFetchPromise).withTrustedWebToolsEndpoint;
+  return (await webGuardedFetchLoader.load()).withTrustedWebToolsEndpoint;
+}
+
+async function loadSelfHostedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
+> {
+  return (await webGuardedFetchLoader.load()).withSelfHostedWebToolsEndpoint;
 }
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
@@ -85,6 +93,27 @@ export async function withTrustedWebSearchEndpoint<T>(
 ): Promise<T> {
   const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
   return withTrustedWebToolsEndpoint(
+    {
+      url: params.url,
+      init: params.init,
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+    },
+    async ({ response }) => run(response),
+  );
+}
+
+export async function withSelfHostedWebSearchEndpoint<T>(
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    signal?: AbortSignal;
+  },
+  run: (response: Response) => Promise<T>,
+): Promise<T> {
+  const withSelfHostedWebToolsEndpoint = await loadSelfHostedWebToolsEndpoint();
+  return withSelfHostedWebToolsEndpoint(
     {
       url: params.url,
       init: params.init,
@@ -166,7 +195,7 @@ export const FRESHNESS_TO_RECENCY: Record<string, string> = {
   pm: "month",
   py: "year",
 };
-export const RECENCY_TO_FRESHNESS: Record<string, string> = {
+const RECENCY_TO_FRESHNESS: Record<string, string> = {
   day: "pd",
   week: "pw",
   month: "pm",

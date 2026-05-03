@@ -25,6 +25,7 @@ import {
   type PluginManifestActivation,
   type PluginManifestConfigContracts,
   type PluginManifest,
+  type PluginManifestCapabilityProviderMetadata,
   type PluginManifestChannelCommandDefaults,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
@@ -37,6 +38,7 @@ import {
   type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
   type PluginManifestSetup,
+  type PluginManifestToolMetadata,
   type PluginPackageChannel,
   type PluginPackageInstall,
 } from "./manifest.js";
@@ -44,6 +46,7 @@ import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.js";
 
 /**
  * Resolve a plugin source path, falling back from .ts to .js when the
@@ -102,6 +105,7 @@ export type PluginManifestRecord = {
   packageVersion?: string;
   packageDescription?: string;
   enabledByDefault?: boolean;
+  enabledByDefaultOnPlatforms?: string[];
   autoEnableWhenConfiguredProviders?: string[];
   legacyPluginIds?: string[];
   format?: PluginFormat;
@@ -128,6 +132,8 @@ export type PluginManifestRecord = {
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
   packageManifest?: OpenClawPackageManifest;
+  packageDependencies?: PluginDependencySpecMap;
+  packageOptionalDependencies?: PluginDependencySpecMap;
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
   qaRunners?: PluginManifestQaRunner[];
@@ -149,6 +155,10 @@ export type PluginManifestRecord = {
     string,
     PluginManifestMediaUnderstandingProviderMetadata
   >;
+  imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  toolMetadata?: Record<string, PluginManifestToolMetadata>;
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
@@ -281,6 +291,7 @@ function buildRecord(params: {
     packageVersion: params.candidate.packageVersion,
     packageDescription: params.candidate.packageDescription,
     enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
+    enabledByDefaultOnPlatforms: params.manifest.enabledByDefaultOnPlatforms,
     autoEnableWhenConfiguredProviders: params.manifest.autoEnableWhenConfiguredProviders,
     legacyPluginIds: params.manifest.legacyPluginIds,
     format: params.candidate.format ?? "openclaw",
@@ -310,6 +321,8 @@ function buildRecord(params: {
     activation: params.manifest.activation,
     setup: params.manifest.setup,
     packageManifest: params.candidate.packageManifest,
+    packageDependencies: params.candidate.packageDependencies,
+    packageOptionalDependencies: params.candidate.packageOptionalDependencies,
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
     qaRunners: params.manifest.qaRunners,
@@ -330,6 +343,10 @@ function buildRecord(params: {
     configUiHints: params.manifest.uiHints,
     contracts: params.manifest.contracts,
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
+    imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
+    videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,
+    musicGenerationProviderMetadata: params.manifest.musicGenerationProviderMetadata,
+    toolMetadata: params.manifest.toolMetadata,
     configContracts: params.manifest.configContracts,
     channelConfigs,
     ...(params.candidate.packageManifest?.channel?.id
@@ -375,6 +392,8 @@ function buildBundleRecord(params: {
     packageVersion: params.candidate.packageVersion,
     packageDescription: params.candidate.packageDescription,
     packageManifest: params.candidate.packageManifest,
+    packageDependencies: params.candidate.packageDependencies,
+    packageOptionalDependencies: params.candidate.packageOptionalDependencies,
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
     format: "bundle",
@@ -408,8 +427,19 @@ function pushProviderAuthEnvVarsCompatDiagnostic(params: {
   if (params.record.origin === "bundled" || !params.record.providerAuthEnvVars) {
     return;
   }
+  const setupProviderEnvVars = new Map(
+    (params.record.setup?.providers ?? []).map(
+      (provider) => [provider.id, new Set(provider.envVars ?? [])] as const,
+    ),
+  );
   const providerIds = Object.entries(params.record.providerAuthEnvVars)
-    .filter(([providerId, envVars]) => providerId.trim() && envVars.length > 0)
+    .filter(([providerId, envVars]) => {
+      if (!providerId.trim() || envVars.length === 0) {
+        return false;
+      }
+      const mirroredEnvVars = setupProviderEnvVars.get(providerId);
+      return !mirroredEnvVars || envVars.some((envVar) => !mirroredEnvVars.has(envVar));
+    })
     .map(([providerId]) => providerId)
     .toSorted((left, right) => left.localeCompare(right));
   if (providerIds.length === 0) {
@@ -458,6 +488,20 @@ function pushManifestCompatibilityDiagnostics(params: {
 }): void {
   pushProviderAuthEnvVarsCompatDiagnostic(params);
   pushNonBundledChannelConfigDescriptorDiagnostic(params);
+}
+
+function dedupePluginDiagnostics(diagnostics: PluginDiagnostic[]): PluginDiagnostic[] {
+  const seen = new Set<string>();
+  const deduped: PluginDiagnostic[] = [];
+  for (const diagnostic of diagnostics) {
+    const key = JSON.stringify([diagnostic.level, diagnostic.pluginId ?? "", diagnostic.message]);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(diagnostic);
+  }
+  return deduped;
 }
 
 function matchesInstalledPluginRecord(params: {
@@ -743,7 +787,10 @@ export function loadPluginManifestRegistry(
         level: "warn",
         pluginId: manifest.id,
         source: overriddenCandidate.source,
-        message: `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
+        message:
+          winnerCandidate.origin === "config"
+            ? `duplicate plugin id resolved by explicit config-selected plugin; ${overriddenCandidate.origin} plugin will be overridden by config plugin (${winnerCandidate.source})`
+            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
       });
       continue;
     }
@@ -753,6 +800,6 @@ export function loadPluginManifestRegistry(
     pushManifestCompatibilityDiagnostics({ record, diagnostics });
   }
 
-  const registry = { plugins: records, diagnostics };
+  const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
