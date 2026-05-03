@@ -512,16 +512,11 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "steer",
       nativeName: "steer",
-      description: "Send guidance to a running subagent.",
+      description: "Send guidance to the active run in this session.",
       textAlias: "/steer",
       category: "management",
       tier: "standard",
       args: [
-        {
-          name: "target",
-          description: "Label, run id, or index",
-          type: "string",
-        },
         {
           name: "message",
           description: "Steering message",

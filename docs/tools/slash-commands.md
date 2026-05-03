@@ -145,6 +145,7 @@ Current source-of-truth:
     - `/model [name|#|status]` shows or sets the model.
     - `/models [provider] [page] [limit=<n>|size=<n>|all]` lists configured/auth-available providers or models for a provider; add `all` to browse that provider's full catalog.
     - `/queue <mode>` manages queue behavior (`steer`, legacy `queue`, `followup`, `collect`, `steer-backlog`, `interrupt`) plus options like `debounce:0.5s cap:25 drop:summarize`; `/queue default` or `/queue reset` clears the session override. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
+    - `/steer <message>` injects guidance into the active run for the current session, independent of `/queue` mode. It does not start a new run when the session is idle. Alias: `/tell`.
 
   </Accordion>
   <Accordion title="Discovery and status">
@@ -174,7 +175,7 @@ Current source-of-truth:
     - `/unfocus` removes the current binding.
     - `/agents` lists thread-bound agents for the current session.
     - `/kill <id|#|all>` aborts one or all running sub-agents.
-    - `/steer <id|#> <message>` sends steering to a running sub-agent. Alias: `/tell`.
+    - `/subagents steer <id|#> <message>` sends steering to a running sub-agent.
 
   </Accordion>
   <Accordion title="Owner-only writes and admin">
