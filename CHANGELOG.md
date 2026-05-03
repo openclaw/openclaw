@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI/Sessions: avoid full `sessions.list` reloads for chat-turn `sessions.changed` payloads, so large session stores no longer add multi-second delays while chat responses are being delivered. (#76676) Thanks @VACInc.
 - Discord/status: honor explicit `messages.statusReactions.enabled: true` in tool-only guild channels so queued ack reactions can progress through thinking/done lifecycle reactions instead of stopping at the initial emoji. Thanks @Marvinthebored.
 - Agents/OpenAI: omit Chat Completions `reasoning_effort` for `gpt-5.4-mini` only when function tools are present while preserving tool-free Chat and Responses reasoning support, preventing Telegram-routed fallback runs from hanging after OpenAI rejects tool payloads. Fixes #76176. Thanks @ThisIsAdilah and @chinar-amrutkar.
 - Agents/models: forward model `maxTokens` as the default output-token limit for OpenAI-compatible Responses and Completions transports when no runtime override is provided, preventing provider defaults from silently truncating larger outputs. (#76645) Thanks @joeyfrasier.
