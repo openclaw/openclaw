@@ -1,6 +1,12 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBundleMcpJsonSchemaValidator } from "./pi-bundle-mcp-runtime.js";
-import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
+import {
+  cleanupBundleMcpHarness,
+  makeTempDir,
+  waitForFileText,
+  writeBundleProbeMcpServer,
+} from "./pi-bundle-mcp-test-harness.js";
 import {
   __testing,
   getOrCreateSessionMcpRuntime,
@@ -496,5 +502,56 @@ describe("session MCP runtime", () => {
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
     expect(manager.listSessionIds()).toEqual(["session-no-ttl"]);
     expect(disposed).toEqual([]);
+  });
+
+  it("evicts the cached session runtime when a stdio MCP child exits unexpectedly", async () => {
+    // Repro for the staleness bug: an MCP subprocess dies (idle-exit, OOM,
+    // crash) but SessionMcpRuntime keeps the cached BundleMcpSession. The
+    // SDK's Protocol nulls its _transport on transport.onclose, so every
+    // subsequent callTool throws "Not connected" until session rollover.
+    // Fix: wire transport.onclose to evict the runtime so the next
+    // getOrCreate respawns cleanly.
+    const tempDir = await makeTempDir("openclaw-mcp-onclose-");
+    const serverScriptPath = path.join(tempDir, "probe.mjs");
+    const pidPath = path.join(tempDir, "probe.pid");
+    await writeBundleProbeMcpServer(serverScriptPath, { pidPath });
+
+    const cfg = {
+      mcp: {
+        servers: {
+          probe: {
+            command: "node",
+            args: [serverScriptPath],
+            env: { BUNDLE_PROBE_TEXT: "alive" },
+          },
+        },
+      },
+    };
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-onclose",
+      sessionKey: "agent:test:session-onclose",
+      workspaceDir: tempDir,
+      cfg,
+    });
+    // Force catalog materialization → real spawn + connectWithTimeout, which
+    // is the moment the fix wires transport.onclose.
+    await runtime.getCatalog();
+    expect(__testing.getCachedSessionIds()).toContain("session-onclose");
+
+    const pidStr = await waitForFileText(pidPath, 5_000);
+    const pid = Number.parseInt(pidStr.trim(), 10);
+    expect(pid).toBeGreaterThan(0);
+    process.kill(pid, "SIGKILL");
+
+    // child.close → transport.onclose → onTransportClosed → manager.disposeSession
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      if (!__testing.getCachedSessionIds().includes("session-onclose")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(__testing.getCachedSessionIds()).not.toContain("session-onclose");
   });
 });
