@@ -1269,7 +1269,7 @@ function renderMemoryPalaceSection(props: DreamingProps) {
   `;
 }
 
-function renderDiaryDayChips(content: string, props: DreamingProps) {
+function renderDiaryDayChips(content: string | null, props: DreamingProps) {
   if (typeof content !== "string") return nothing;
   const entries = parseDiaryEntries(content);
   if (entries.length === 0) return nothing;
