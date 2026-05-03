@@ -180,6 +180,8 @@ function resolveOptionalMediaToolFactoryPlan(params: {
   const explicitPdf =
     hasToolModelConfig(coercePdfModelConfig(params.config)) ||
     hasToolModelConfig(coerceImageModelConfig(params.config));
+
+  // Fast path for disabled plugins
   if (params.config?.plugins?.enabled === false) {
     return {
       imageGenerate: false,
@@ -188,10 +190,12 @@ function resolveOptionalMediaToolFactoryPlan(params: {
       pdf: false,
     };
   }
+
   const snapshot = loadCapabilityMetadataSnapshot({
     config: params.config,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
+
   return {
     imageGenerate:
       allowImageGenerate &&

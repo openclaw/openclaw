@@ -5,6 +5,11 @@ import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
+import {
+  createPluginCacheKey,
+  resolveConfigScopedRuntimeCacheValue,
+  type ConfigScopedRuntimeCache,
+} from "../plugins/plugin-cache-primitives.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   parseRawSessionConversationRef,
@@ -395,7 +400,12 @@ function detectImplicitProfileGrants(params: {
   return implicit.size > 0 ? Array.from(implicit) : undefined;
 }
 
-export function resolveEffectiveToolPolicy(params: {
+// Cache for effective tool policy resolution
+const effectiveToolPolicyCache: ConfigScopedRuntimeCache<
+  ReturnType<typeof resolveEffectiveToolPolicyUncached>
+> = new WeakMap();
+
+function resolveEffectiveToolPolicyUncached(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
@@ -470,6 +480,30 @@ export function resolveEffectiveToolPolicy(params: {
         ? providerPolicy?.alsoAllow
         : undefined,
   };
+}
+
+export function resolveEffectiveToolPolicy(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string;
+  modelProvider?: string;
+  modelId?: string;
+}): ReturnType<typeof resolveEffectiveToolPolicyUncached> {
+  if (!params.config) {
+    return resolveEffectiveToolPolicyUncached(params);
+  }
+  const cacheKey = createPluginCacheKey([
+    params.sessionKey ?? "",
+    params.agentId ?? "",
+    params.modelProvider ?? "",
+    params.modelId ?? "",
+  ]);
+  return resolveConfigScopedRuntimeCacheValue({
+    cache: effectiveToolPolicyCache,
+    config: params.config,
+    key: cacheKey,
+    load: () => resolveEffectiveToolPolicyUncached(params),
+  });
 }
 
 export function resolveGroupToolPolicy(params: {
