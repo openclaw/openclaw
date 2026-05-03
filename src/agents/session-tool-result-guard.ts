@@ -26,6 +26,30 @@ import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcr
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 /**
+ * Creates a simple serializing async mutex.
+ * Each call to `run` queues `fn` behind all previously-queued work so that
+ * concurrent callers execute sequentially in arrival order.
+ *
+ * This is intentionally minimal — no timeout, no fairness guarantees beyond
+ * FIFO promise resolution. Sufficient for low-throughput session appends.
+ */
+function createMutex() {
+  let queue: Promise<void> = Promise.resolve();
+  return {
+    run<T>(fn: () => T | Promise<T>): Promise<T> {
+      const result = queue.then(() => fn());
+      // Advance the queue regardless of whether fn() throws, so a failed
+      // append does not permanently block subsequent calls.
+      queue = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    },
+  };
+}
+
+/**
  * Truncate oversized text content blocks in a tool result message.
  * Returns the original message if under the limit, or a new message with
  * truncated text blocks otherwise.
@@ -311,6 +335,8 @@ export function installSessionToolResultGuard(
   const originalAppend = getRawSessionAppendMessage(sessionManager);
   setRawSessionAppendMessage(sessionManager, originalAppend);
   const pendingState = createPendingToolCallState();
+  const appendMutex = createMutex();
+
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
     return transformer ? transformer(message) : message;
@@ -377,7 +403,7 @@ export function installSessionToolResultGuard(
     pendingState.clear();
   };
 
-  const guardedAppend = (message: AgentMessage) => {
+  const guardedAppendInner = (message: AgentMessage) => {
     let nextMessage = message;
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
@@ -446,6 +472,12 @@ export function installSessionToolResultGuard(
       flushPendingToolResults();
     }
 
+    // Register tool calls BEFORE appending so that a racing toolResult handler
+    // (which may arrive during an awaited originalAppend) finds the IDs in pending.
+    if (toolCalls.length > 0) {
+      pendingState.trackToolCalls(toolCalls);
+    }
+
     const finalMessage = applyBeforeWriteHook(persistMessage(nextMessage));
     if (!finalMessage) {
       return undefined;
@@ -464,11 +496,13 @@ export function installSessionToolResultGuard(
       });
     }
 
-    if (toolCalls.length > 0) {
-      pendingState.trackToolCalls(toolCalls);
-    }
-
     return result;
+  };
+
+  const guardedAppend = (message: AgentMessage): ReturnType<typeof originalAppend> => {
+    return appendMutex.run(() => guardedAppendInner(message)) as unknown as ReturnType<
+      typeof originalAppend
+    >;
   };
 
   // Monkey-patch appendMessage with our guarded version.
