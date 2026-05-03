@@ -12,7 +12,7 @@ import { runGatewayUpdate } from "./update-runner.js";
 
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
-const WHATSAPP_LIGHT_RUNTIME_API = bundledDistPluginFile("whatsapp", "light-runtime-api.js");
+const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-" });
 
 function toCommandResult(response?: CommandResponse): CommandResult {
@@ -1549,15 +1549,16 @@ describe("runGatewayUpdate", () => {
       pkgRoot,
       npmRootOutput: nodeModules,
       installCommand: expectedInstallCommand,
-      onInstall: async () => {
+      onInstall: async (options) => {
+        const packageRoot = options?.packageRoot ?? pkgRoot;
         await fs.writeFile(
-          path.join(pkgRoot, "package.json"),
+          path.join(packageRoot, "package.json"),
           JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           "utf-8",
         );
-        await writeBundledRuntimeSidecars(pkgRoot);
-        await writePackageDistInventory(pkgRoot);
-        await fs.rm(path.join(pkgRoot, WHATSAPP_LIGHT_RUNTIME_API), { force: true });
+        await writeBundledRuntimeSidecars(packageRoot);
+        await writePackageDistInventory(packageRoot);
+        await fs.rm(path.join(packageRoot, MATRIX_HELPER_API), { force: true });
       },
     });
 
@@ -1566,7 +1567,7 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("global-install-failed");
     expect(result.steps.at(-1)?.stderrTail).toContain(
-      `missing packaged dist file ${WHATSAPP_LIGHT_RUNTIME_API}`,
+      `missing packaged dist file ${MATRIX_HELPER_API}`,
     );
   });
 
