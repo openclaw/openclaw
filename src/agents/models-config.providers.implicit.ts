@@ -81,16 +81,23 @@ function resolveProviderDiscoveryFilter(params: {
   const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
   if (testRaw) {
-    const ids = testRaw
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
+    const ids: string[] = [];
+    for (const value of testRaw.split(",")) {
+      const id = value.trim();
+      if (id) {
+        ids.push(id);
+      }
+    }
     return ids.length > 0 ? [...new Set(ids)] : undefined;
   }
-  const scopedProviderIds = params.providerIds
-    ?.map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  if (scopedProviderIds) {
+  const scopedProviderIds: string[] = [];
+  for (const value of params.providerIds ?? []) {
+    const id = value.trim();
+    if (id) {
+      scopedProviderIds.push(id);
+    }
+  }
+  if (scopedProviderIds.length > 0) {
     return resolveProviderPluginScopeFromProviderIds({
       providerIds: scopedProviderIds,
       config,
@@ -111,10 +118,15 @@ function resolveProviderDiscoveryFilter(params: {
   if (rawValues.length === 0) {
     return undefined;
   }
-  const ids = rawValues
-    .flatMap((value) => value.split(","))
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const ids: string[] = [];
+  for (const raw of rawValues) {
+    for (const value of raw.split(",")) {
+      const id = value.trim();
+      if (id) {
+        ids.push(id);
+      }
+    }
+  }
   if (ids.length === 0) {
     return undefined;
   }

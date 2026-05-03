@@ -40,10 +40,21 @@ type DefineChatCommandInput = {
   tier?: CommandTier;
 };
 
+function normalizeCommandAliases(raw: readonly string[]): string[] {
+  const aliases: string[] = [];
+  for (const alias of raw) {
+    const trimmed = alias.trim();
+    if (trimmed) {
+      aliases.push(trimmed);
+    }
+  }
+  return aliases;
+}
+
 export function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
-  const aliases = (command.textAliases ?? (command.textAlias ? [command.textAlias] : []))
-    .map((alias) => alias.trim())
-    .filter(Boolean);
+  const aliases = normalizeCommandAliases(
+    command.textAliases ?? (command.textAlias ? [command.textAlias] : []),
+  );
   const scope =
     command.scope ?? (command.nativeName ? (aliases.length ? "both" : "native") : "text");
   const acceptsArgs = command.acceptsArgs ?? Boolean(command.args?.length);
@@ -51,7 +62,9 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   return {
     key: command.key,
     nativeName: command.nativeName,
-    nativeAliases: command.nativeAliases?.map((alias) => alias.trim()).filter(Boolean),
+    nativeAliases: command.nativeAliases
+      ? normalizeCommandAliases(command.nativeAliases)
+      : undefined,
     description: command.description,
     acceptsArgs,
     args: command.args,

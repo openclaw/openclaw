@@ -456,7 +456,10 @@ async function executeMusicGenerationJob(params: {
     ),
   );
   const ignoredOverrides = result.ignoredOverrides ?? [];
-  const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
+  const ignoredOverrideKeys = new Set<string>();
+  for (const entry of ignoredOverrides) {
+    ignoredOverrideKeys.add(entry.key);
+  }
   const requestedDurationSeconds =
     result.normalization?.durationSeconds?.requested ??
     (typeof result.metadata?.requestedDurationSeconds === "number" &&

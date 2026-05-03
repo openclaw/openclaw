@@ -75,9 +75,15 @@ function resolveProviderFromContext(
   if (direct) {
     return { providerId: direct, hadResolutionError: false };
   }
-  const candidates = [ctx.From, ctx.To]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .flatMap((value) => value.split(":").map((part) => part.trim()));
+  const candidates: string[] = [];
+  for (const value of [ctx.From, ctx.To]) {
+    if (!value?.trim()) {
+      continue;
+    }
+    for (const part of value.split(":")) {
+      candidates.push(part.trim());
+    }
+  }
   for (const candidate of candidates) {
     const normalizedCandidateChannel = normalizeMessageChannel(candidate);
     if (normalizedCandidateChannel === INTERNAL_MESSAGE_CHANNEL) {

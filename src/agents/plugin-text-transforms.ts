@@ -6,8 +6,12 @@ import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
 export function mergePluginTextTransforms(
   ...transforms: Array<PluginTextTransforms | undefined>
 ): PluginTextTransforms | undefined {
-  const input = transforms.flatMap((entry) => entry?.input ?? []);
-  const output = transforms.flatMap((entry) => entry?.output ?? []);
+  const input: NonNullable<PluginTextTransforms["input"]> = [];
+  const output: NonNullable<PluginTextTransforms["output"]> = [];
+  for (const entry of transforms) {
+    input.push(...(entry?.input ?? []));
+    output.push(...(entry?.output ?? []));
+  }
   if (input.length === 0 && output.length === 0) {
     return undefined;
   }

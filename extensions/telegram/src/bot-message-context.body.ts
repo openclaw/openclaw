@@ -227,7 +227,12 @@ export async function resolveTelegramInboundBody(params: {
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
         MediaTypes:
           allMedia.length > 0
-            ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
+            ? allMedia.reduce<string[]>((types, media) => {
+                if (media.contentType) {
+                  types.push(media.contentType);
+                }
+                return types;
+              }, [])
             : undefined,
       };
       preflightTranscript = await transcribeFirstAudio({

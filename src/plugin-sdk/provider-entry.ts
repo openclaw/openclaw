@@ -97,13 +97,23 @@ function resolveEnvVars(params: {
   envVars?: string[];
   auth?: SingleProviderPluginApiKeyAuthOptions[];
 }): string[] | undefined {
-  const combined = [
-    ...(params.envVars ?? []),
-    ...(params.auth ?? []).map((entry) => entry.envVar).filter(Boolean),
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return combined.length > 0 ? [...new Set(combined)] : undefined;
+  const seen = new Set<string>();
+  const combined: string[] = [];
+  const append = (value: string | undefined) => {
+    const trimmed = value?.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return;
+    }
+    seen.add(trimmed);
+    combined.push(trimmed);
+  };
+  for (const value of params.envVars ?? []) {
+    append(value);
+  }
+  for (const entry of params.auth ?? []) {
+    append(entry.envVar);
+  }
+  return combined.length > 0 ? combined : undefined;
 }
 
 export function defineSingleProviderPluginEntry(options: SingleProviderPluginOptions) {

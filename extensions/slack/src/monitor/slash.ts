@@ -801,9 +801,13 @@ export async function registerSlackMonitorSlashCommands(params: {
       skillCommands,
       provider: "slack",
     });
-    const existingNativeNames = new Set(
-      nativeCommands.map((c) => normalizeLowercaseStringOrEmpty(c.name)).filter(Boolean),
-    );
+    const existingNativeNames = new Set<string>();
+    for (const command of nativeCommands) {
+      const normalizedName = normalizeLowercaseStringOrEmpty(command.name);
+      if (normalizedName) {
+        existingNativeNames.add(normalizedName);
+      }
+    }
     const { listProviderPluginCommandSpecs } = await loadSlackPluginCommandsRuntime();
     for (const pluginCommand of listProviderPluginCommandSpecs("slack")) {
       const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);

@@ -680,7 +680,10 @@ async function executeVideoGenerationJob(params: {
       ? result.metadata.requestedDurationSeconds
       : params.durationSeconds);
   const ignoredOverrides = result.ignoredOverrides ?? [];
-  const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
+  const ignoredOverrideKeys = new Set<string>();
+  for (const entry of ignoredOverrides) {
+    ignoredOverrideKeys.add(entry.key);
+  }
   const warning =
     ignoredOverrides.length > 0
       ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map(formatIgnoredVideoGenerationOverride).join(", ")}.`

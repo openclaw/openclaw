@@ -282,7 +282,14 @@ export function splitTopLevelStages(command: string): string[] {
   });
 
   parts.push(command.slice(start));
-  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+  const trimmedParts: string[] = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed.length > 0) {
+      trimmedParts.push(trimmed);
+    }
+  }
+  return trimmedParts;
 }
 
 export function splitTopLevelPipes(command: string): string[] {
@@ -298,7 +305,14 @@ export function splitTopLevelPipes(command: string): string[] {
   });
 
   parts.push(command.slice(start));
-  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+  const trimmedParts: string[] = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed.length > 0) {
+      trimmedParts.push(trimmed);
+    }
+  }
+  return trimmedParts;
 }
 
 function parseChdirTarget(head: string): string | undefined {
