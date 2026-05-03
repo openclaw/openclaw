@@ -3,6 +3,7 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
+import { getLiveStreamPreviewText } from "../stream-dedupe.ts";
 import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
 
 const CHAT_HISTORY_RENDER_LIMIT = 200;
@@ -270,6 +271,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     };
   }
   const segments = props.streamSegments ?? [];
+  const liveStreamText = getLiveStreamPreviewText(segments, props.stream);
   const maxLen = Math.max(segments.length, tools.length);
   for (let i = 0; i < maxLen; i++) {
     if (i < segments.length && segments[i].text.trim().length > 0) {
@@ -291,11 +293,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    if ((liveStreamText ?? "").trim().length > 0) {
       items.push({
         kind: "stream",
         key,
-        text: props.stream,
+        text: liveStreamText ?? "",
         startedAt: props.streamStartedAt ?? Date.now(),
       });
     } else {

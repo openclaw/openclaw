@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MessageGroup } from "../types/chat-types.ts";
+import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 
 function createProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
@@ -22,6 +22,10 @@ function messageGroups(props: Partial<BuildChatItemsProps>): MessageGroup[] {
 function firstMessageContent(group: MessageGroup): unknown[] {
   const message = group.messages[0]?.message as { content?: unknown };
   return Array.isArray(message.content) ? message.content : [];
+}
+
+function chatItems(props: Partial<BuildChatItemsProps>): Array<ChatItem | MessageGroup> {
+  return buildChatItems(createProps(props));
 }
 
 describe("buildChatItems", () => {
@@ -183,6 +187,37 @@ describe("buildChatItems", () => {
       },
     });
   });
+
+  it("dedupes live stream preview against committed stream segments", () => {
+    const items = chatItems({
+      streamSegments: [
+        { text: "abc", ts: 1 },
+        { text: "abc", ts: 2 },
+      ],
+      stream: "abcabcdef",
+      streamStartedAt: 3,
+    });
+
+    const streamTexts = items
+      .filter((item): item is Extract<ChatItem, { kind: "stream" }> => item.kind === "stream")
+      .map((item) => item.text);
+
+    expect(streamTexts).toEqual(["abc", "abc", "def"]);
+  });
+
+  it("shows a reading indicator instead of replaying an unchanged cumulative stream", () => {
+    const items = chatItems({
+      streamSegments: [{ text: "abc", ts: 1 }],
+      stream: "abc",
+      streamStartedAt: 2,
+    });
+
+    expect(items.filter((item) => item.kind === "stream").map((item) => item.key)).toEqual([
+      "stream-seg:main:0",
+    ]);
+    expect(items.some((item) => item.kind === "reading-indicator")).toBe(true);
+  });
+
 });
 
 function isCanvasBlock(block: unknown): boolean {

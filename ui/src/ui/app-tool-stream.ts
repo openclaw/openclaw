@@ -1,4 +1,5 @@
 import { formatUnknownText, truncateText } from "./format.ts";
+import { getIncrementalStreamText } from "./stream-dedupe.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const TOOL_STREAM_LIMIT = 50;
@@ -507,7 +508,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       host.chatStream &&
       host.chatStream.trim().length > 0
     ) {
-      host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+      const incrementalText = getIncrementalStreamText(host.chatStreamSegments, host.chatStream);
+      if (incrementalText.trim().length > 0) {
+        host.chatStreamSegments = [...host.chatStreamSegments, { text: incrementalText, ts: now }];
+      }
       host.chatStream = null;
       host.chatStreamStartedAt = null;
     }
