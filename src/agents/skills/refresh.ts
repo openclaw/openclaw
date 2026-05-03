@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import chokidar, { type FSWatcher } from "chokidar";
+import { watch as chokidarWatch, type FSWatcher } from "chokidar";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -139,7 +139,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     void existing.watcher.close().catch(() => {});
   }
 
-  const watcher = chokidar.watch(watchTargets, {
+  const watcher = chokidarWatch(watchTargets, {
     ignoreInitial: true,
     awaitWriteFinish: {
       stabilityThreshold: debounceMs,

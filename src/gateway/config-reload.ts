@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import chokidar from "chokidar";
+import { watch as chokidarWatch } from "chokidar";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
 import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines, formatConfigIssueSummary } from "../config/issue-format.js";
@@ -515,7 +515,7 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  const watcher = chokidar.watch(opts.watchPath, {
+  const watcher = chokidarWatch(opts.watchPath, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     usePolling: Boolean(process.env.VITEST),

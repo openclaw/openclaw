@@ -1,5 +1,10 @@
-import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const chokidarWatchMock = vi.hoisted(() => vi.fn());
+vi.mock("chokidar", () => ({
+  watch: chokidarWatchMock,
+}));
+
 import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
@@ -590,7 +595,7 @@ function createReloaderHarness(
   } = {},
 ) {
   const watcher = createWatcherMock();
-  vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+  chokidarWatchMock.mockReturnValue(watcher as unknown as never);
   const onHotReload = vi.fn(async () => {});
   const onRestart = vi.fn();
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
