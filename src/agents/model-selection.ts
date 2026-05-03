@@ -12,6 +12,7 @@ import {
 } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { isModelDefaultSentinel, normalizeStoredModelOverride } from "./model-default-sentinel.js";
 export { resolveThinkingDefault } from "./model-thinking-default.js";
 import {
   type ModelRef,
@@ -87,7 +88,7 @@ export function resolvePersistedOverrideModelRef(params: {
   const defaultProvider = params.defaultProvider.trim();
   const overrideProvider = params.overrideProvider?.trim();
   const overrideModel = params.overrideModel?.trim();
-  if (!overrideModel) {
+  if (!overrideModel || isModelDefaultSentinel(overrideModel)) {
     return null;
   }
   const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
@@ -278,8 +279,13 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
+  // `@default` in the spawn override means "use the live default" — the
+  // sentinel-aware wrapper falls through to the configured/runtime default.
+  // Object-shape overrides (`{ primary, fallbacks }`) are deliberately not
+  // sentinel-aware: that form is reserved for `defaults.model` config,
+  // never a stored override.
   const raw =
-    normalizeModelSelection(params.modelOverride) ??
+    normalizeStoredModelOverride(params.modelOverride) ??
     resolveSubagentConfiguredModelSelection({
       cfg: params.cfg,
       agentId: params.agentId,

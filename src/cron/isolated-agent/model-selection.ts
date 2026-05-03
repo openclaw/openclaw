@@ -1,3 +1,4 @@
+import { normalizeStoredModelOverride } from "../../agents/model-default-sentinel.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
@@ -5,7 +6,6 @@ import {
   DEFAULT_PROVIDER,
   getModelRefStatus,
   loadModelCatalog,
-  normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
@@ -69,10 +69,13 @@ export async function resolveCronModelSelection(
     return catalog;
   };
 
+  // Agent-config subagent overrides flow through the sentinel-aware
+  // normalizer so `@default` (or `{ primary: "@default" }`) here also
+  // falls through to the live default.
   const subagentModelRaw =
-    normalizeModelSelection(params.agentConfigOverride?.subagents?.model) ??
-    normalizeModelSelection(params.agentConfigOverride?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model);
+    normalizeStoredModelOverride(params.agentConfigOverride?.subagents?.model) ??
+    normalizeStoredModelOverride(params.agentConfigOverride?.model) ??
+    normalizeStoredModelOverride(params.cfg.agents?.defaults?.subagents?.model);
   if (subagentModelRaw) {
     const resolvedSubagent = resolveAllowedModelRef({
       cfg: params.cfgWithAgentDefaults,
@@ -109,8 +112,12 @@ export async function resolveCronModelSelection(
     }
   }
 
+  // `@default` in the stored payload means "follow defaults.primary at fire
+  // time" — fall through to the default already resolved above instead of
+  // pinning to a stale value. `normalizeStoredModelOverride` returns
+  // `undefined` for sentinels and empty/whitespace strings.
   const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
-  const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
+  const modelOverride = normalizeStoredModelOverride(modelOverrideRaw);
   if (modelOverride !== undefined && modelOverride.length > 0) {
     const resolvedOverride = resolveAllowedModelRef({
       cfg: params.cfgWithAgentDefaults,
@@ -130,7 +137,9 @@ export async function resolveCronModelSelection(
   }
 
   if (!modelOverride && !hooksGmailModelApplied) {
-    const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
+    // Same sentinel semantics as the payload override: `@default` means
+    // "no pin, use the live default."
+    const sessionModelOverride = normalizeStoredModelOverride(params.sessionEntry.modelOverride);
     if (sessionModelOverride) {
       const sessionProviderOverride =
         params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
