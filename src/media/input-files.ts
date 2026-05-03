@@ -148,7 +148,7 @@ export function parseContentType(value: string | undefined): {
   const mimeType = normalizeMimeType(parts[0]);
   let charset: string | undefined;
   for (let index = 1; index < parts.length; index++) {
-    const part = parts[index]!.trim();
+    const part = parts[index].trim();
     const match = part.match(/^charset=(.+)$/i);
     if (!match) {
       continue;

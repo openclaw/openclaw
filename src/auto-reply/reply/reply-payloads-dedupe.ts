@@ -52,7 +52,7 @@ export function filterMessagingToolMediaDuplicates(params: {
 
   let nextPayloads: ReplyPayload[] | undefined;
   for (let index = 0; index < payloads.length; index++) {
-    const payload = payloads[index]!;
+    const payload = payloads[index];
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
     const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
@@ -61,7 +61,7 @@ export function filterMessagingToolMediaDuplicates(params: {
     let strippedMediaUrls = false;
     if (mediaUrls?.length) {
       for (let mediaIndex = 0; mediaIndex < mediaUrls.length; mediaIndex++) {
-        const url = mediaUrls[mediaIndex]!;
+        const url = mediaUrls[mediaIndex];
         if (sentSet.has(normalizeMediaForDedupe(url))) {
           strippedMediaUrls = true;
           if (!filteredUrls) {

@@ -91,7 +91,7 @@ export class EventHub<T> {
                 break;
               }
               if (queueIndex < queue.length) {
-                const value = queue[queueIndex++]!;
+                const value = queue[queueIndex++];
                 if (queueIndex === queue.length) {
                   queue.length = 0;
                   queueIndex = 0;
