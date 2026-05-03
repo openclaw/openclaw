@@ -501,16 +501,18 @@ export const buildTelegramMessageContext = async ({
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
     statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldAckReaction();
-  const resolvedStatusReactionEmojis = resolveTelegramStatusReactionEmojis({
-    initialEmoji: ackReaction,
-    overrides: statusReactionsConfig?.emojis,
-  });
-  const statusReactionVariantsByEmoji = buildTelegramStatusReactionVariants(
-    resolvedStatusReactionEmojis,
-  );
+  const resolvedStatusReactionEmojis = statusReactionsEnabled
+    ? resolveTelegramStatusReactionEmojis({
+        initialEmoji: ackReaction,
+        overrides: statusReactionsConfig?.emojis,
+      })
+    : null;
+  const statusReactionVariantsByEmoji = resolvedStatusReactionEmojis
+    ? buildTelegramStatusReactionVariants(resolvedStatusReactionEmojis)
+    : new Map<string, string[]>();
   let allowedStatusReactionEmojisPromise: Promise<Set<TelegramReactionEmoji> | null> | null = null;
   const createStatusReactionController =
-    statusReactionsEnabled && msg.message_id
+    statusReactionsEnabled && resolvedStatusReactionEmojis && msg.message_id
       ? (runtime?.createStatusReactionController ??
         (await loadTelegramMessageContextRuntime()).createStatusReactionController)
       : null;
