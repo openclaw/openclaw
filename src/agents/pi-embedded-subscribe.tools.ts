@@ -249,9 +249,12 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "x_search",
   "write",
 ]);
-const TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS = new Set(
-  pluginRegistrationContractRegistry.flatMap((entry) => entry.toolNames),
-);
+const TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS = new Set<string>();
+for (const entry of pluginRegistrationContractRegistry) {
+  for (const toolName of entry.toolNames) {
+    TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS.add(toolName);
+  }
+}
 const HTTP_URL_RE = /^https?:\/\//i;
 
 function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {

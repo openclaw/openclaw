@@ -420,10 +420,14 @@ export function createOpenClawTools(
     return tools;
   }
 
+  const existingToolNames = new Set<string>();
+  for (const tool of tools) {
+    existingToolNames.add(tool.name);
+  }
   const wrappedPluginTools = resolveOpenClawPluginToolsForOptions({
     options,
     resolvedConfig,
-    existingToolNames: new Set(tools.map((tool) => tool.name)),
+    existingToolNames,
   });
   options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
 
