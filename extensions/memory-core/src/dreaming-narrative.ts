@@ -89,13 +89,28 @@ const NARRATIVE_SYSTEM_PROMPT = [
 
 // Narrative generation is best-effort. Keep the timeout bounded so a stalled
 // diary subagent does not leave the parent dreaming cron job "running" for
-// many minutes after the reports have already been written. The previous 15 s
-// limit was empirically too tight for warm-gateway runs across light, REM, and
-// deep phases — even unblocked LLM calls hit it on the first sweep after a
-// restart. 60 s gives realistic latency headroom while still capping the
-// worst case at one minute, well below the multi-minute stall the original
-// comment warned against.
-const NARRATIVE_TIMEOUT_MS = 60_000;
+// many minutes after the reports have already been written. The previous 60 s
+// limit was empirically too tight for warm-gateway runs once embedded-agent
+// prep cost grew (workspace-sandbox + core-plugin-tools + system-prompt now
+// regularly consume 13–22 s before the first token streams), leaving every
+// dreaming phase reliably timing out on hosts with many workspaces. 240 s
+// keeps a hard upper bound on stuck runs while giving realistic latency
+// headroom; operators on faster hosts (or with smaller dreaming prompts) can
+// override via OPENCLAW_DREAMING_NARRATIVE_TIMEOUT_MS to tighten or relax it.
+const DEFAULT_NARRATIVE_TIMEOUT_MS = 240_000;
+const NARRATIVE_TIMEOUT_MS = resolveNarrativeTimeoutMs();
+
+function resolveNarrativeTimeoutMs(): number {
+  const raw = process.env.OPENCLAW_DREAMING_NARRATIVE_TIMEOUT_MS;
+  if (typeof raw !== "string" || raw.length === 0) {
+    return DEFAULT_NARRATIVE_TIMEOUT_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_NARRATIVE_TIMEOUT_MS;
+  }
+  return parsed;
+}
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
