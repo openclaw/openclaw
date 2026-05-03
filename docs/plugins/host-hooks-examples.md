@@ -197,13 +197,6 @@ export default definePluginEntry({
     api.registerSessionExtension({
       namespace: "review-status",
       description: "Per-session review state: pending | in_review | approved",
-      sessionEntrySlotKey: "reviewStatus",
-      sessionEntrySlotSchema: {
-        type: "object",
-        properties: {
-          status: { type: "string" },
-        },
-      },
       project: ({ state }) => {
         // Show a friendly summary; persist the raw record
         if (!state || typeof state !== "object" || Array.isArray(state)) {
@@ -1352,10 +1345,11 @@ api.registerControlUiDescriptor({
 });
 ```
 
-The web Control UI, the macOS app, and the iOS app each ship a `meter`
-renderer that knows how to find the matching `pluginExtensions[]` entry by
-`pluginId` and `namespace`, then read `valuePath` and `capPath` relative to
-that entry. The plugin only ships data — never UI code.
+This descriptor is a companion-implementation contract, not a stable-client
+promise. A client that implements a `meter` renderer can find the matching
+`pluginExtensions[]` entry by `pluginId` and `namespace`, then read `valuePath`
+and `capPath` relative to that entry. The plugin only ships data — never UI
+code.
 
 **Common pitfalls**
 
