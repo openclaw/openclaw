@@ -1,16 +1,37 @@
+import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionStoreCacheEntry = {
   store: Record<string, SessionEntry>;
-  loadedAt: number;
-  storePath: string;
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
 };
 
-const SESSION_STORE_CACHE = new Map<string, SessionStoreCacheEntry>();
+const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
+
+const SESSION_STORE_CACHE = createExpiringMapCache<string, SessionStoreCacheEntry>({
+  ttlMs: getSessionStoreTtl,
+});
 const SESSION_STORE_SERIALIZED_CACHE = new Map<string, string>();
+
+export function cloneSessionStoreRecord(
+  store: Record<string, SessionEntry>,
+  serialized?: string,
+): Record<string, SessionEntry> {
+  return JSON.parse(serialized ?? JSON.stringify(store)) as Record<string, SessionEntry>;
+}
+
+export function getSessionStoreTtl(): number {
+  return resolveCacheTtlMs({
+    envValue: process.env.OPENCLAW_SESSION_CACHE_TTL_MS,
+    defaultTtlMs: DEFAULT_SESSION_STORE_TTL_MS,
+  });
+}
+
+export function isSessionStoreCacheEnabled(): boolean {
+  return isCacheEnabled(getSessionStoreTtl());
+}
 
 export function clearSessionStoreCaches(): void {
   SESSION_STORE_CACHE.clear();
@@ -40,7 +61,26 @@ export function dropSessionStoreObjectCache(storePath: string): void {
 
 export function readSessionStoreCache(params: {
   storePath: string;
-  ttlMs: number;
+  mtimeMs?: number;
+  sizeBytes?: number;
+  clone?: boolean;
+}): Record<string, SessionEntry> | null {
+  const cached = SESSION_STORE_CACHE.get(params.storePath);
+  if (!cached) {
+    return null;
+  }
+  if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
+    invalidateSessionStoreCache(params.storePath);
+    return null;
+  }
+  if (params.clone === false) {
+    return cached.store;
+  }
+  return cloneSessionStoreRecord(cached.store, cached.serialized);
+}
+
+export function takeMutableSessionStoreCache(params: {
+  storePath: string;
   mtimeMs?: number;
   sizeBytes?: number;
 }): Record<string, SessionEntry> | null {
@@ -48,16 +88,12 @@ export function readSessionStoreCache(params: {
   if (!cached) {
     return null;
   }
-  const now = Date.now();
-  if (now - cached.loadedAt > params.ttlMs) {
-    invalidateSessionStoreCache(params.storePath);
-    return null;
-  }
   if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
-  return structuredClone(cached.store);
+  SESSION_STORE_CACHE.delete(params.storePath);
+  return cached.store;
 }
 
 export function writeSessionStoreCache(params: {
@@ -68,9 +104,7 @@ export function writeSessionStoreCache(params: {
   serialized?: string;
 }): void {
   SESSION_STORE_CACHE.set(params.storePath, {
-    store: structuredClone(params.store),
-    loadedAt: Date.now(),
-    storePath: params.storePath,
+    store: params.serialized === undefined ? cloneSessionStoreRecord(params.store) : params.store,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
     serialized: params.serialized,

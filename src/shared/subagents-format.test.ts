@@ -9,9 +9,10 @@ import {
 } from "./subagents-format.js";
 
 describe("shared/subagents-format", () => {
-  it("formats compact durations across minute, hour, and day buckets", () => {
-    expect(formatDurationCompact()).toBe("n/a");
-    expect(formatDurationCompact(30_000)).toBe("1m");
+  it("re-exports the canonical formatter with second-level precision", () => {
+    expect(formatDurationCompact()).toBeUndefined();
+    expect(formatDurationCompact(30_000)).toBe("30s");
+    expect(formatDurationCompact(90_000)).toBe("1m30s");
     expect(formatDurationCompact(60 * 60_000)).toBe("1h");
     expect(formatDurationCompact(61 * 60_000)).toBe("1h1m");
     expect(formatDurationCompact(24 * 60 * 60_000)).toBe("1d");

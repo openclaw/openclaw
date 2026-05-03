@@ -1,6 +1,14 @@
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
-import { setAbortMemory } from "./abort.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { setAbortMemory } from "./abort-primitives.js";
+
+const sessionStoreRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/store.runtime.js"),
+);
+
+function loadSessionStoreRuntime() {
+  return sessionStoreRuntimeLoader.load();
+}
 
 export async function applySessionHints(params: {
   baseBody: string;
@@ -23,6 +31,7 @@ export async function applySessionHints(params: {
       params.sessionStore[params.sessionKey] = params.sessionEntry;
       if (params.storePath) {
         const sessionKey = params.sessionKey;
+        const { updateSessionStore } = await loadSessionStoreRuntime();
         await updateSessionStore(params.storePath, (store) => {
           const entry = store[sessionKey] ?? params.sessionEntry;
           if (!entry) {

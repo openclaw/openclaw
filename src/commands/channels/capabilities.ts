@@ -1,19 +1,31 @@
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
   resolveMessageActionDiscoveryForPlugin,
 } from "../../channels/plugins/message-action-discovery.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import type {
   ChannelCapabilities,
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../channels/plugins/types.public.js";
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
+import {
+  readConfigFileSnapshot,
+  replaceConfigFile,
+  type OpenClawConfig,
+} from "../../config/config.js";
 import { danger } from "../../globals.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
+import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
 export type ChannelsCapabilitiesOptions = {
@@ -25,6 +37,7 @@ export type ChannelsCapabilitiesOptions = {
 };
 
 type ChannelCapabilitiesReport = {
+  plugin: ChannelPlugin;
   channel: string;
   accountId: string;
   accountName?: string;
@@ -155,7 +168,7 @@ async function resolveChannelReports(params: {
           cfg,
         });
       } catch (err) {
-        probe = { ok: false, error: err instanceof Error ? err.message : String(err) };
+        probe = { ok: false, error: formatErrorMessage(err) };
       }
     }
 
@@ -179,15 +192,16 @@ async function resolveChannelReports(params: {
       includeActions: true,
     }).actions;
     const actions = Array.from(
-      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => String(action))]),
+      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => action)]),
     );
 
     reports.push({
+      plugin,
       channel: plugin.id,
       accountId,
       accountName:
         typeof (resolvedAccount as { name?: string }).name === "string"
-          ? (resolvedAccount as { name?: string }).name?.trim() || undefined
+          ? normalizeOptionalString((resolvedAccount as { name?: string }).name)
           : undefined,
       configured,
       enabled,
@@ -204,13 +218,15 @@ export async function channelsCapabilitiesCommand(
   opts: ChannelsCapabilitiesOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
+  const loadedCfg = await requireValidConfig(runtime);
+  if (!loadedCfg) {
     return;
   }
+  let cfg = loadedCfg;
   const timeoutMs = normalizeTimeout(opts.timeout, 10_000);
-  const rawChannel = typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
-  const rawTarget = typeof opts.target === "string" ? opts.target.trim() : "";
+  const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
+  const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
   if (opts.account && (!rawChannel || rawChannel === "all")) {
     runtime.error(danger("--account requires a specific --channel."));
@@ -223,16 +239,51 @@ export async function channelsCapabilitiesCommand(
     return;
   }
 
-  const plugins = listChannelPlugins();
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    includeSetupFallbackPlugins: true,
+  });
   const selected =
     !rawChannel || rawChannel === "all"
       ? plugins
-      : (() => {
-          const plugin = getChannelPlugin(rawChannel);
-          if (!plugin) {
-            return null;
+      : await (async () => {
+          const resolved = await resolveInstallableChannelPlugin({
+            cfg,
+            runtime,
+            rawChannel,
+            allowInstall: true,
+          });
+          if (resolved.configChanged) {
+            cfg = resolved.cfg;
+            const shouldMovePluginInstalls = Boolean(
+              cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
+            );
+            if (shouldMovePluginInstalls) {
+              const committed = await commitConfigWithPendingPluginInstalls({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+              cfg = committed.config;
+              await refreshPluginRegistryAfterConfigMutation({
+                config: cfg,
+                reason: "source-changed",
+                installRecords: committed.installRecords,
+                logger: { warn: (message) => runtime.log(message) },
+              });
+            } else {
+              await replaceConfigFile({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+              if (resolved.pluginInstalled) {
+                await refreshPluginRegistryAfterConfigMutation({
+                  config: cfg,
+                  reason: "source-changed",
+                  logger: { warn: (message) => runtime.log(message) },
+                });
+              }
+            }
           }
-          return [plugin];
+          return resolved.plugin ? [resolved.plugin] : null;
         })();
 
   if (!selected || selected.length === 0) {
@@ -243,7 +294,7 @@ export async function channelsCapabilitiesCommand(
 
   const reports: ChannelCapabilitiesReport[] = [];
   for (const plugin of selected) {
-    const accountOverride = opts.account?.trim() || undefined;
+    const accountOverride = normalizeOptionalString(opts.account);
     reports.push(
       ...(await resolveChannelReports({
         plugin,
@@ -256,7 +307,7 @@ export async function channelsCapabilitiesCommand(
   }
 
   if (opts.json) {
-    runtime.log(JSON.stringify({ channels: reports }, null, 2));
+    writeRuntimeJson(runtime, { channels: reports });
     return;
   }
 
@@ -266,6 +317,7 @@ export async function channelsCapabilitiesCommand(
       channel: report.channel,
       accountId: report.accountId,
       name: report.accountName,
+      channelLabel: report.plugin.meta.label ?? report.channel,
       channelStyle: theme.accent,
       accountStyle: theme.heading,
     });
@@ -280,7 +332,7 @@ export async function channelsCapabilitiesCommand(
       lines.push(`Status: ${configuredLabel}, ${enabledLabel}`);
     }
     const probeLines =
-      getChannelPlugin(report.channel)?.status?.formatCapabilitiesProbe?.({
+      report.plugin.status?.formatCapabilitiesProbe?.({
         probe: report.probe,
       }) ?? formatGenericProbeLines(report.probe);
     if (probeLines.length > 0) {

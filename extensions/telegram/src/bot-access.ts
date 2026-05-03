@@ -2,9 +2,10 @@ import {
   firstDefined,
   isSenderIdAllowed,
   mergeDmAllowFromSources,
-} from "openclaw/plugin-sdk/channel-runtime";
-import type { AllowlistMatch } from "openclaw/plugin-sdk/channel-runtime";
+  type AllowlistMatch,
+} from "openclaw/plugin-sdk/allow-from";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -13,7 +14,7 @@ export type NormalizedAllowFrom = {
   invalidEntries: string[];
 };
 
-export type AllowFromMatch = AllowlistMatch<"wildcard" | "id">;
+type AllowFromMatch = AllowlistMatch<"wildcard" | "id">;
 
 const warnedInvalidEntries = new Set<string>();
 const log = createSubsystemLogger("telegram/bot-access");
@@ -40,7 +41,9 @@ function warnInvalidAllowFromEntries(entries: string[]) {
 }
 
 export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
-  const entries = (list ?? []).map((value) => String(value).trim()).filter(Boolean);
+  const entries = (list ?? [])
+    .map((value) => normalizeOptionalString(String(value)) ?? "")
+    .filter(Boolean);
   const hasWildcard = entries.includes("*");
   const normalized = entries
     .filter((value) => value !== "*")

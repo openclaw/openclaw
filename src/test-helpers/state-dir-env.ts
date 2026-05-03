@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { captureEnv } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 
 export function snapshotStateDirEnv() {
-  return captureEnv(["OPENCLAW_STATE_DIR", "CLAWDBOT_STATE_DIR"]);
+  return captureEnv(["OPENCLAW_STATE_DIR"]);
 }
 
 export function restoreStateDirEnv(snapshot: ReturnType<typeof snapshotStateDirEnv>): void {
@@ -13,7 +14,6 @@ export function restoreStateDirEnv(snapshot: ReturnType<typeof snapshotStateDirE
 
 export function setStateDirEnv(stateDir: string): void {
   process.env.OPENCLAW_STATE_DIR = stateDir;
-  delete process.env.CLAWDBOT_STATE_DIR;
 }
 
 export async function withStateDirEnv<T>(
@@ -28,6 +28,7 @@ export async function withStateDirEnv<T>(
   try {
     return await fn({ tempRoot, stateDir });
   } finally {
+    await cleanupSessionStateForTest().catch(() => undefined);
     restoreStateDirEnv(snapshot);
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

@@ -1,14 +1,19 @@
 import type { OpenClawConfig } from "./config.js";
 
-export type DangerousNameMatchingConfig = {
+type DangerousNameMatchingConfig = {
   dangerouslyAllowNameMatching?: boolean;
 };
 
-export type ProviderDangerousNameMatchingScope = {
+type ProviderDangerousNameMatchingScope = {
   prefix: string;
   account: Record<string, unknown>;
   dangerousNameMatchingEnabled: boolean;
   dangerousFlagPath: string;
+};
+
+type DangerousNameMatchingResolverInput = {
+  providerConfig?: DangerousNameMatchingConfig | null | undefined;
+  accountConfig?: DangerousNameMatchingConfig | null | undefined;
 };
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -26,6 +31,15 @@ export function isDangerousNameMatchingEnabled(
   config: DangerousNameMatchingConfig | null | undefined,
 ): boolean {
   return config?.dangerouslyAllowNameMatching === true;
+}
+
+export function resolveDangerousNameMatchingEnabled(
+  input: DangerousNameMatchingResolverInput,
+): boolean {
+  if (typeof input.accountConfig?.dangerouslyAllowNameMatching === "boolean") {
+    return input.accountConfig.dangerouslyAllowNameMatching;
+  }
+  return isDangerousNameMatchingEnabled(input.providerConfig);
 }
 
 export function collectProviderDangerousNameMatchingScopes(

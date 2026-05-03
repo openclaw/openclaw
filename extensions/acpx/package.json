@@ -1,14 +1,38 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.3.14",
-  "description": "OpenClaw ACP runtime backend via acpx",
+  "version": "2026.5.2",
+  "description": "OpenClaw ACP runtime backend",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
-    "acpx": "0.3.0"
+    "@agentclientprotocol/claude-agent-acp": "0.31.4",
+    "@zed-industries/codex-acp": "0.12.0",
+    "acpx": "0.6.1"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "npmSpec": "@openclaw/acpx",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.25"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.2"
+    },
+    "build": {
+      "openclawVersion": "2026.5.2"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
   }
 }

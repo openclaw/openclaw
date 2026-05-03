@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
-import { validateConfigObjectWithPlugins } from "./config.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { validateConfigObjectWithPlugins } from "./validation.js";
+
+vi.unmock("../version.js");
 
 async function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -72,27 +73,59 @@ async function writeManifestlessClaudeBundleFixture(params: { dir: string }) {
   await fs.writeFile(path.join(params.dir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
 }
 
+function expectRemovedPluginWarnings(
+  result: { ok: boolean; warnings?: Array<{ path: string; message: string }> },
+  removedId: string,
+  removedLabel: string,
+) {
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    const message = `plugin removed: ${removedLabel} (stale config entry ignored; remove it from plugins config)`;
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        { path: `plugins.entries.${removedId}`, message },
+        { path: "plugins.allow", message },
+        { path: "plugins.deny", message },
+        { path: "plugins.slots.memory", message },
+      ]),
+    );
+  }
+}
+
 describe("config plugin validation", () => {
   let fixtureRoot = "";
   let suiteHome = "";
   let badPluginDir = "";
   let enumPluginDir = "";
   let bluebubblesPluginDir = "";
+  let googleOverridePluginDir = "";
   let voiceCallSchemaPluginDir = "";
   let bundlePluginDir = "";
   let manifestlessClaudeBundleDir = "";
   const suiteEnv = () =>
     ({
-      ...process.env,
       HOME: suiteHome,
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
-      CLAWDBOT_STATE_DIR: undefined,
-      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: undefined,
+      VITEST: "true",
     }) satisfies NodeJS.ProcessEnv;
 
   const validateInSuite = (raw: unknown) =>
     validateConfigObjectWithPlugins(raw, { env: suiteEnv() });
+
+  const validateRemovedPluginConfig = (removedId: string) =>
+    validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: false,
+        entries: { [removedId]: { enabled: true } },
+        allow: [removedId],
+        deny: [removedId],
+        slots: { memory: removedId },
+      },
+    });
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
@@ -134,6 +167,17 @@ describe("config plugin validation", () => {
       channels: ["bluebubbles"],
       schema: { type: "object" },
     });
+    googleOverridePluginDir = path.join(suiteHome, "google");
+    await writePluginFixture({
+      dir: googleOverridePluginDir,
+      id: "google",
+      schema: {
+        type: "object",
+        properties: {
+          apiKey: { type: "string" },
+        },
+      },
+    });
     bundlePluginDir = path.join(suiteHome, "bundle-plugin");
     await writeBundleFixture({
       dir: bundlePluginDir,
@@ -162,36 +206,18 @@ describe("config plugin validation", () => {
       id: "voice-call-schema-fixture",
       schema: voiceCallManifest.configSchema,
     });
-    clearPluginManifestRegistryCache();
-    // Warm the plugin manifest cache once so path-based validations can reuse
-    // parsed manifests across test cases.
-    validateInSuite({
-      plugins: {
-        enabled: false,
-        load: {
-          paths: [
-            badPluginDir,
-            bluebubblesPluginDir,
-            bundlePluginDir,
-            manifestlessClaudeBundleDir,
-            voiceCallSchemaPluginDir,
-          ],
-        },
-      },
-    });
   });
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
-    clearPluginManifestRegistryCache();
   });
 
-  it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
+  it("reports missing plugin refs across entries and allowlist surfaces", async () => {
     const missingPath = path.join(suiteHome, "missing-plugin-dir");
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: {
-        enabled: false,
+        enabled: true,
         load: { paths: [missingPath] },
         entries: { "missing-plugin": { enabled: true } },
         allow: ["missing-allow"],
@@ -201,25 +227,150 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(
-        res.issues.some(
-          (issue) =>
-            issue.path === "plugins.load.paths" && issue.message.includes("plugin path not found"),
-        ),
-      ).toBe(true);
       expect(res.issues).toEqual(
         expect.arrayContaining([
-          { path: "plugins.allow", message: "plugin not found: missing-allow" },
           { path: "plugins.deny", message: "plugin not found: missing-deny" },
           { path: "plugins.slots.memory", message: "plugin not found: missing-slot" },
         ]),
       );
+      expect(res.warnings).toContainEqual({
+        path: "plugins.allow",
+        message:
+          "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
+      });
       expect(res.warnings).toContainEqual({
         path: "plugins.entries.missing-plugin",
         message:
           "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
       });
     }
+  });
+
+  it("warns instead of failing for stale channel config backed by missing plugin refs", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      channels: {
+        "missing-chat": { token: "stale" },
+      },
+      plugins: {
+        allow: ["missing-chat"],
+        entries: { "missing-chat": { enabled: true } },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toContainEqual({
+      path: "channels.missing-chat",
+      message:
+        "unknown channel id: missing-chat (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
+    });
+    expect(res.warnings).toContainEqual({
+      path: "plugins.allow",
+      message:
+        "plugin not found: missing-chat (stale config entry ignored; remove it from plugins config)",
+    });
+    expect(res.warnings).toContainEqual({
+      path: "plugins.entries.missing-chat",
+      message:
+        "plugin not found: missing-chat (stale config entry ignored; remove it from plugins config)",
+    });
+  });
+
+  it("keeps unknown channel typos fatal when there is no stale plugin evidence", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      channels: {
+        telegarm: { botToken: "typo" },
+      },
+      plugins: {
+        allow: ["telegram"],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toContainEqual({
+      path: "channels.telegarm",
+      message: "unknown channel id: telegarm",
+    });
+    expect(res.warnings).not.toContainEqual(expect.objectContaining({ path: "channels.telegarm" }));
+  });
+
+  it("uses persisted installed-plugin records as stale channel evidence", async () => {
+    const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
+    await mkdirSafe(path.dirname(installedPluginIndexPath));
+    await fs.writeFile(
+      installedPluginIndexPath,
+      JSON.stringify(
+        {
+          installRecords: {
+            "missing-sms": {
+              source: "npm",
+              spec: "missing-sms@1.0.0",
+              installedAt: "2026-04-12T00:00:00.000Z",
+            },
+          },
+          plugins: [],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    try {
+      const res = validateInSuite({
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          "missing-sms": { token: "stale" },
+        },
+      });
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) {
+        return;
+      }
+      expect(res.warnings).toContainEqual({
+        path: "channels.missing-sms",
+        message:
+          "unknown channel id: missing-sms (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
+      });
+    } finally {
+      await fs.rm(installedPluginIndexPath, { force: true });
+    }
+  });
+
+  it("warns with actionable guidance when a runtime command name is used in plugins.allow", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        allow: ["dreaming"],
+        entries: {
+          "memory-core": {
+            config: { dreaming: { enabled: true } },
+          },
+        },
+      },
+    });
+    // Should not produce the generic "plugin not found" warning.
+    expect(
+      res.warnings?.some(
+        (w) => w.path === "plugins.allow" && w.message.includes("plugin not found: dreaming"),
+      ),
+    ).toBe(false);
+    // Should produce a helpful redirect to the parent plugin.
+    expect(
+      res.warnings?.some(
+        (w) =>
+          w.path === "plugins.allow" &&
+          w.message.includes('"dreaming" is not a plugin') &&
+          w.message.includes("memory-core"),
+      ),
+    ).toBe(true);
   });
 
   it("does not fail validation for the implicit default memory slot when plugins config is explicit", async () => {
@@ -242,84 +393,41 @@ describe("config plugin validation", () => {
 
   it("warns for removed legacy plugin ids instead of failing validation", async () => {
     const removedId = "google-antigravity-auth";
-    const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
-      plugins: {
-        enabled: false,
-        entries: { [removedId]: { enabled: true } },
-        allow: [removedId],
-        deny: [removedId],
-        slots: { memory: removedId },
-      },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.warnings).toEqual(
-        expect.arrayContaining([
-          {
-            path: `plugins.entries.${removedId}`,
-            message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-          },
-          {
-            path: "plugins.allow",
-            message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-          },
-          {
-            path: "plugins.deny",
-            message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-          },
-          {
-            path: "plugins.slots.memory",
-            message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-          },
-        ]),
-      );
-    }
+    const res = validateRemovedPluginConfig(removedId);
+    expectRemovedPluginWarnings(res, removedId, removedId);
   });
 
   it("warns for removed google gemini auth plugin ids instead of failing validation", async () => {
     const removedId = "google-gemini-cli-auth";
+    const res = validateRemovedPluginConfig(removedId);
+    expectRemovedPluginWarnings(res, removedId, removedId);
+  });
+
+  it("does not auto-allow config-loaded overrides of bundled web search plugin ids", async () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
       plugins: {
-        enabled: false,
-        entries: { [removedId]: { enabled: true } },
-        allow: [removedId],
-        deny: [removedId],
-        slots: { memory: removedId },
+        allow: ["bluebubbles", "memory-core"],
+        load: {
+          paths: [googleOverridePluginDir],
+        },
+        entries: {
+          google: {
+            config: {
+              apiKey: "test-google-key",
+            },
+          },
+        },
       },
     });
+
     expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.warnings).toEqual(
-        expect.arrayContaining([
-          {
-            path: `plugins.entries.${removedId}`,
-            message:
-              "plugin removed: google-gemini-cli-auth (stale config entry ignored; remove it from plugins config)",
-          },
-          {
-            path: "plugins.allow",
-            message:
-              "plugin removed: google-gemini-cli-auth (stale config entry ignored; remove it from plugins config)",
-          },
-          {
-            path: "plugins.deny",
-            message:
-              "plugin removed: google-gemini-cli-auth (stale config entry ignored; remove it from plugins config)",
-          },
-          {
-            path: "plugins.slots.memory",
-            message:
-              "plugin removed: google-gemini-cli-auth (stale config entry ignored; remove it from plugins config)",
-          },
-        ]),
-      );
+    if (!res.ok) {
+      return;
     }
+    expect(res.warnings).toContainEqual({
+      path: "plugins.entries.google",
+      message: "plugin disabled (not in allowlist) but config is present",
+    });
   });
 
   it("surfaces plugin config diagnostics", async () => {
@@ -430,11 +538,13 @@ describe("config plugin validation", () => {
           "voice-call-schema-fixture": {
             config: {
               tts: {
-                openai: {
-                  baseUrl: "http://localhost:8880/v1",
-                  voice: "alloy",
-                  speed: 1.5,
-                  instructions: "Speak in a cheerful tone",
+                providers: {
+                  openai: {
+                    baseUrl: "http://localhost:8880/v1",
+                    voice: "alloy",
+                    speed: 1.5,
+                    instructions: "Speak in a cheerful tone",
+                  },
                 },
               },
             },
@@ -443,6 +553,106 @@ describe("config plugin validation", () => {
       },
     });
     expect(res.ok).toBe(true);
+  });
+
+  it("accepts voice-call SecretRef credentials declared by the plugin schema", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              provider: "twilio",
+              twilio: {
+                accountSid: "twilio-account-sid-placeholder",
+                authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
+              },
+              tts: {
+                providers: {
+                  openai: {
+                    apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                  },
+                  elevenlabs: {
+                    apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects out-of-range voice-call OpenAI TTS speed values", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              tts: {
+                providers: {
+                  openai: {
+                    speed: 10,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path ===
+            "plugins.entries.voice-call-schema-fixture.config.tts.providers.openai.speed",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects out-of-range voice-call ElevenLabs voice settings", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              tts: {
+                providers: {
+                  elevenlabs: {
+                    voiceSettings: {
+                      stability: 5,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path ===
+            "plugins.entries.voice-call-schema-fixture.config.tts.providers.elevenlabs.voiceSettings.stability",
+        ),
+      ).toBe(true);
+    }
   });
 
   it("accepts known plugin ids and valid channel/heartbeat enums", async () => {
@@ -454,7 +664,7 @@ describe("config plugin validation", () => {
       channels: {
         modelByChannel: {
           openai: {
-            whatsapp: "openai/gpt-5.2",
+            whatsapp: "openai/gpt-5.4",
           },
         },
       },

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   ExecApprovalsAllowlistEntry,
   ExecApprovalsFile,
@@ -9,7 +10,7 @@ import {
   resolveNodeTargets,
   type NodeTargetOption,
 } from "./nodes-shared.ts";
-import type { NodesProps } from "./nodes.ts";
+import type { NodesProps } from "./nodes.types.ts";
 
 type ExecSecurity = "deny" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";
@@ -88,7 +89,7 @@ function resolveExecApprovalsDefaults(
     security: normalizeSecurity(defaults.security),
     ask: normalizeAsk(defaults.ask),
     askFallback: normalizeSecurity(defaults.askFallback ?? "deny"),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? false),
+    autoAllowSkills: defaults.autoAllowSkills ?? false,
   };
 }
 
@@ -211,18 +212,16 @@ export function renderExecApprovals(state: ExecApprovalsState) {
       </div>
 
       ${renderExecApprovalsTarget(state)}
-
       ${
         !ready
           ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
             <div class="muted">Load exec approvals to edit allowlists.</div>
             <button class="btn" ?disabled=${state.loading || !targetReady} @click=${state.onLoad}>
-              ${state.loading ? "Loading…" : "Load approvals"}
+              ${state.loading ? t("common.loading") : t("common.loadApprovals")}
             </button>
           </div>`
           : html`
-            ${renderExecApprovalsTabs(state)}
-            ${renderExecApprovalsPolicy(state)}
+            ${renderExecApprovalsTabs(state)} ${renderExecApprovalsPolicy(state)}
             ${
               state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
                 ? nothing
@@ -242,9 +241,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
       <div class="list-item">
         <div class="list-main">
           <div class="list-title">Target</div>
-          <div class="list-sub">
-            Gateway edits local approvals; node edits the selected node.
-          </div>
+          <div class="list-sub">Gateway edits local approvals; node edits the selected node.</div>
         </div>
         <div class="list-meta">
           <label class="field">
@@ -282,10 +279,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
                     <option value="" ?selected=${nodeValue === ""}>Select node</option>
                     ${state.targetNodes.map(
                       (node) =>
-                        html`<option
-                          value=${node.id}
-                          ?selected=${nodeValue === node.id}
-                        >
+                        html`<option value=${node.id} ?selected=${nodeValue === node.id}>
                           ${node.label}
                         </option>`,
                     )}
@@ -313,7 +307,9 @@ function renderExecApprovalsTabs(state: ExecApprovalsState) {
       <span class="label">Scope</span>
       <div class="row" style="gap: 8px; flex-wrap: wrap;">
         <button
-          class="btn btn--sm ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE ? "active" : ""}"
+          class="btn btn--sm ${
+            state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE ? "active" : ""
+          }"
           @click=${() => state.onSelectScope(EXEC_APPROVALS_DEFAULT_SCOPE)}
         >
           Defaults
@@ -383,10 +379,7 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
               }
               ${SECURITY_OPTIONS.map(
                 (option) =>
-                  html`<option
-                    value=${option.value}
-                    ?selected=${securityValue === option.value}
-                  >
+                  html`<option value=${option.value} ?selected=${securityValue === option.value}>
                     ${option.label}
                   </option>`,
               )}
@@ -426,10 +419,7 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
               }
               ${ASK_OPTIONS.map(
                 (option) =>
-                  html`<option
-                    value=${option.value}
-                    ?selected=${askValue === option.value}
-                  >
+                  html`<option value=${option.value} ?selected=${askValue === option.value}>
                     ${option.label}
                   </option>`,
               )}
@@ -473,10 +463,7 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
               }
               ${SECURITY_OPTIONS.map(
                 (option) =>
-                  html`<option
-                    value=${option.value}
-                    ?selected=${askFallbackValue === option.value}
-                  >
+                  html`<option value=${option.value} ?selected=${askFallbackValue === option.value}>
                     ${option.label}
                   </option>`,
               )}

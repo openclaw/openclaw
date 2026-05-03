@@ -11,7 +11,7 @@ export type NodeHostGatewayConfig = {
   tlsFingerprint?: string;
 };
 
-export type NodeHostConfig = {
+type NodeHostConfig = {
   version: 1;
   nodeId: string;
   token?: string;
@@ -21,7 +21,7 @@ export type NodeHostConfig = {
 
 const NODE_HOST_FILE = "node.json";
 
-export function resolveNodeHostConfigPath(): string {
+function resolveNodeHostConfigPath(): string {
   return path.join(resolveStateDir(), NODE_HOST_FILE);
 }
 

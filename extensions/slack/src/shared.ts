@@ -1,128 +1,27 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
+  adaptScopedAccountAccessor,
+  createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  formatDocsLink,
-  hasConfiguredSecretInput,
-  patchChannelConfigForAccount,
-} from "openclaw/plugin-sdk/setup";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  SlackConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/slack-core";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
+  resolveSlackConfigAccessorAccount,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
+  type SlackConfigAccessorAccount,
   type ResolvedSlackAccount,
 } from "./accounts.js";
+import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
+import { SlackChannelConfigSchema } from "./config-schema.js";
+import { slackDoctor } from "./doctor.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { slackSecurityAdapter } from "./security.js";
+import { SLACK_CHANNEL } from "./setup-shared.js";
 
-export const SLACK_CHANNEL = "slack" as const;
-
-function buildSlackManifest(botName: string) {
-  const safeName = botName.trim() || "OpenClaw";
-  const manifest = {
-    display_information: {
-      name: safeName,
-      description: `${safeName} connector for OpenClaw`,
-    },
-    features: {
-      bot_user: {
-        display_name: safeName,
-        always_online: false,
-      },
-      app_home: {
-        messages_tab_enabled: true,
-        messages_tab_read_only_enabled: false,
-      },
-      slash_commands: [
-        {
-          command: "/openclaw",
-          description: "Send a message to OpenClaw",
-          should_escape: false,
-        },
-      ],
-    },
-    oauth_config: {
-      scopes: {
-        bot: [
-          "chat:write",
-          "channels:history",
-          "channels:read",
-          "groups:history",
-          "im:history",
-          "mpim:history",
-          "users:read",
-          "app_mentions:read",
-          "reactions:read",
-          "reactions:write",
-          "pins:read",
-          "pins:write",
-          "emoji:read",
-          "commands",
-          "files:read",
-          "files:write",
-        ],
-      },
-    },
-    settings: {
-      socket_mode_enabled: true,
-      event_subscriptions: {
-        bot_events: [
-          "app_mention",
-          "message.channels",
-          "message.groups",
-          "message.im",
-          "message.mpim",
-          "reaction_added",
-          "reaction_removed",
-          "member_joined_channel",
-          "member_left_channel",
-          "channel_rename",
-          "pin_added",
-          "pin_removed",
-        ],
-      },
-    },
-  };
-  return JSON.stringify(manifest, null, 2);
-}
-
-export function buildSlackSetupLines(botName = "OpenClaw"): string[] {
-  return [
-    "1) Slack API -> Create App -> From scratch or From manifest (with the JSON below)",
-    "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
-    "3) Install App to workspace to get the xoxb- bot token",
-    "4) Enable Event Subscriptions (socket) for message events",
-    "5) App Home -> enable the Messages tab for DMs",
-    "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
-    `Docs: ${formatDocsLink("/slack", "slack")}`,
-    "",
-    "Manifest (JSON):",
-    buildSlackManifest(botName),
-  ];
-}
-
-export function setSlackChannelAllowlist(
-  cfg: OpenClawConfig,
-  accountId: string,
-  channelKeys: string[],
-): OpenClawConfig {
-  const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
-  return patchChannelConfigForAccount({
-    cfg,
-    channel: SLACK_CHANNEL,
-    accountId,
-    patch: { channels },
-  });
-}
+export { setSlackChannelAllowlist, SLACK_CHANNEL } from "./setup-shared.js";
 
 export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): boolean {
   const mode = account.config.mode ?? "socket";
@@ -136,28 +35,20 @@ export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): b
   return Boolean(account.appToken?.trim());
 }
 
-export function isSlackSetupAccountConfigured(account: ResolvedSlackAccount): boolean {
-  const hasConfiguredBotToken =
-    Boolean(account.botToken?.trim()) || hasConfiguredSecretInput(account.config.botToken);
-  const hasConfiguredAppToken =
-    Boolean(account.appToken?.trim()) || hasConfiguredSecretInput(account.config.appToken);
-  return hasConfiguredBotToken && hasConfiguredAppToken;
-}
-
-export const slackConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
-  resolveAllowFrom: (account: ResolvedSlackAccount) => account.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account: ResolvedSlackAccount) => account.config.defaultTo,
-});
-
-export const slackConfigBase = createScopedChannelConfigBase({
+export const slackConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedSlackAccount,
+  SlackConfigAccessorAccount
+>({
   sectionKey: SLACK_CHANNEL,
   listAccountIds: listSlackAccountIds,
-  resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
-  inspectAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
+  resolveAccessorAccount: resolveSlackConfigAccessorAccount,
+  inspectAccount: adaptScopedAccountAccessor(inspectSlackAccount),
   defaultAccountId: resolveDefaultSlackAccountId,
   clearBaseFields: ["botToken", "appToken", "name"],
+  resolveAllowFrom: (account) => account.allowFrom,
+  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  resolveDefaultTo: (account) => account.defaultTo,
 });
 
 export function createSlackPluginBase(params: {
@@ -169,12 +60,16 @@ export function createSlackPluginBase(params: {
   | "meta"
   | "setupWizard"
   | "capabilities"
+  | "commands"
+  | "doctor"
   | "agentPrompt"
   | "streaming"
   | "reload"
   | "configSchema"
   | "config"
   | "setup"
+  | "security"
+  | "secrets"
 > {
   return {
     id: SLACK_CHANNEL,
@@ -190,10 +85,28 @@ export function createSlackPluginBase(params: {
       media: true,
       nativeCommands: true,
     },
+    commands: {
+      nativeCommandsAutoEnabled: false,
+      nativeSkillsAutoEnabled: false,
+      resolveNativeCommandName: ({ commandKey, defaultName }) =>
+        commandKey === "status" ? "agentstatus" : defaultName,
+    },
+    doctor: slackDoctor,
     agentPrompt: {
+      inboundFormattingHints: () => ({
+        text_markup: "slack_mrkdwn",
+        rules: [
+          "Use Slack mrkdwn, not standard Markdown.",
+          "Bold uses *single asterisks*.",
+          "Links use <url|label>.",
+          "Code blocks use triple backticks without a language identifier.",
+          "Do not use markdown headings or pipe tables.",
+        ],
+      }),
       messageToolHints: ({ cfg, accountId }) =>
         isSlackInteractiveRepliesEnabled({ cfg, accountId })
           ? [
+              "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
               "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
               "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
             ]
@@ -205,20 +118,45 @@ export function createSlackPluginBase(params: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.slack"] },
-    configSchema: buildChannelConfigSchema(SlackConfigSchema),
+    security: slackSecurityAdapter,
+    configSchema: SlackChannelConfigSchema,
     config: {
-      ...slackConfigBase,
+      ...slackConfigAdapter,
+      hasConfiguredState: ({ env }) =>
+        ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"].some(
+          (key) => typeof env?.[key] === "string" && env[key]?.trim().length > 0,
+        ),
       isConfigured: (account) => isSlackPluginAccountConfigured(account),
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: isSlackPluginAccountConfigured(account),
-        botTokenSource: account.botTokenSource,
-        appTokenSource: account.appTokenSource,
-      }),
-      ...slackConfigAccessors,
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: isSlackPluginAccountConfigured(account),
+          extra: {
+            botTokenSource: account.botTokenSource,
+            appTokenSource: account.appTokenSource,
+          },
+        }),
+    },
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
     },
     setup: params.setup,
-  };
+  } as Pick<
+    ChannelPlugin<ResolvedSlackAccount>,
+    | "id"
+    | "meta"
+    | "setupWizard"
+    | "capabilities"
+    | "commands"
+    | "doctor"
+    | "agentPrompt"
+    | "streaming"
+    | "reload"
+    | "configSchema"
+    | "config"
+    | "setup"
+    | "security"
+    | "secrets"
+  >;
 }

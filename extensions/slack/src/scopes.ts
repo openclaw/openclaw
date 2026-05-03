@@ -1,5 +1,6 @@
 import type { WebClient } from "@slack/web-api";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createSlackWebClient } from "./client.js";
 
 export type SlackScopesResult = {
@@ -10,6 +11,7 @@ export type SlackScopesResult = {
 };
 
 type SlackScopesSource = "auth.scopes" | "apps.permissions.info";
+type SlackScopesMethod = "auth.test" | SlackScopesSource;
 
 function collectScopes(value: unknown, into: string[]) {
   if (!value) {
@@ -57,6 +59,9 @@ function extractScopes(payload: unknown): string[] {
   const scopes: string[] = [];
   collectScopes(payload.scopes, scopes);
   collectScopes(payload.scope, scopes);
+  if (isRecord(payload.response_metadata)) {
+    collectScopes(payload.response_metadata.scopes, scopes);
+  }
   if (isRecord(payload.info)) {
     collectScopes(payload.info.scopes, scopes);
     collectScopes(payload.info.scope, scopes);
@@ -66,17 +71,9 @@ function extractScopes(payload: unknown): string[] {
   return normalizeScopes(scopes);
 }
 
-function readError(payload: unknown): string | undefined {
-  if (!isRecord(payload)) {
-    return undefined;
-  }
-  const error = payload.error;
-  return typeof error === "string" && error.trim() ? error.trim() : undefined;
-}
-
 async function callSlack(
   client: WebClient,
-  method: SlackScopesSource,
+  method: SlackScopesMethod,
 ): Promise<Record<string, unknown> | null> {
   try {
     const result = await client.apiCall(method);
@@ -84,7 +81,7 @@ async function callSlack(
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }
@@ -94,7 +91,7 @@ export async function fetchSlackScopes(
   timeoutMs: number,
 ): Promise<SlackScopesResult> {
   const client = createSlackWebClient(token, { timeout: timeoutMs });
-  const attempts: SlackScopesSource[] = ["auth.scopes", "apps.permissions.info"];
+  const attempts: SlackScopesMethod[] = ["auth.test", "auth.scopes", "apps.permissions.info"];
   const errors: string[] = [];
 
   for (const method of attempts) {
@@ -103,7 +100,7 @@ export async function fetchSlackScopes(
     if (scopes.length > 0) {
       return { ok: true, scopes, source: method };
     }
-    const error = readError(result);
+    const error = isRecord(result) ? normalizeOptionalString(result.error) : undefined;
     if (error) {
       errors.push(`${method}: ${error}`);
     }

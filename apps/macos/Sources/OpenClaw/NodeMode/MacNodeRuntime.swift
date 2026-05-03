@@ -63,6 +63,8 @@ actor MacNodeRuntime {
                 return try await self.handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await self.handleLocationInvoke(req)
+            case MacNodeScreenCommand.snapshot.rawValue:
+                return try await self.handleScreenSnapshotInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
             case OpenClawSystemCommand.run.rawValue:
@@ -352,6 +354,34 @@ actor MacNodeRuntime {
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
+    private func handleScreenSnapshotInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = (try? Self.decodeParams(MacNodeScreenSnapshotParams.self, from: req.paramsJSON)) ??
+            MacNodeScreenSnapshotParams()
+        let services = await self.mainActorServices()
+        let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let res = try await services.snapshotScreen(
+            screenIndex: params.screenIndex,
+            maxWidth: params.maxWidth,
+            quality: params.quality,
+            format: params.format)
+        struct ScreenSnapshotPayload: Encodable {
+            var format: String
+            var base64: String
+            var width: Int
+            var height: Int
+            var screenIndex: Int?
+            var capturedAtMs: Int64
+        }
+        let payload = try Self.encodePayload(ScreenSnapshotPayload(
+            format: res.format.rawValue,
+            base64: res.data.base64EncodedString(),
+            width: res.width,
+            height: res.height,
+            screenIndex: params.screenIndex,
+            capturedAtMs: capturedAtMs))
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
     private func mainActorServices() async -> any MacNodeRuntimeMainActorServices {
         if let cachedMainActorServices { return cachedMainActorServices }
         let services = await self.makeMainActorServices()
@@ -465,6 +495,23 @@ actor MacNodeRuntime {
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
         let runId = UUID().uuidString
+        let envOverrideDiagnostics = HostEnvSanitizer.inspectOverrides(
+            overrides: params.env,
+            blockPathOverrides: true)
+        if !envOverrideDiagnostics.blockedKeys.isEmpty || !envOverrideDiagnostics.invalidKeys.isEmpty {
+            var details: [String] = []
+            if !envOverrideDiagnostics.blockedKeys.isEmpty {
+                details.append("blocked override keys: \(envOverrideDiagnostics.blockedKeys.joined(separator: ", "))")
+            }
+            if !envOverrideDiagnostics.invalidKeys.isEmpty {
+                details.append(
+                    "invalid non-portable override keys: \(envOverrideDiagnostics.invalidKeys.joined(separator: ", "))")
+            }
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "SYSTEM_RUN_DENIED: environment override rejected (\(details.joined(separator: "; ")))")
+        }
         let evaluation = await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: params.rawCommand,
@@ -507,8 +554,7 @@ actor MacNodeRuntime {
             persistAllowlist: persistAllowlist,
             security: evaluation.security,
             agentId: evaluation.agentId,
-            command: command,
-            allowlistResolutions: evaluation.allowlistResolutions)
+            allowAlwaysPatterns: evaluation.allowAlwaysPatterns)
 
         if evaluation.security == .allowlist, !evaluation.allowlistSatisfied, !evaluation.skillAllow, !approvedByAsk {
             await self.emitExecEvent(
@@ -795,18 +841,12 @@ extension MacNodeRuntime {
         persistAllowlist: Bool,
         security: ExecSecurity,
         agentId: String?,
-        command: [String],
-        allowlistResolutions: [ExecCommandResolution])
+        allowAlwaysPatterns: [String])
     {
         guard persistAllowlist, security == .allowlist else { return }
         var seenPatterns = Set<String>()
-        for candidate in allowlistResolutions {
-            guard let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: candidate) else {
-                continue
-            }
-            if seenPatterns.insert(pattern).inserted {
-                ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
-            }
+        for pattern in allowAlwaysPatterns where seenPatterns.insert(pattern).inserted {
+            ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
         }
     }
 

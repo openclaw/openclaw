@@ -1,7 +1,9 @@
 import type { HealthSummary } from "../commands/health.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
@@ -26,13 +28,17 @@ export function startGatewayMaintenanceTimers(params: {
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
   getPresenceVersion: () => number;
   getHealthVersion: () => number;
-  refreshGatewayHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
+  refreshGatewayHealthSnapshot: (opts?: {
+    probe?: boolean;
+    includeSensitive?: boolean;
+  }) => Promise<HealthSummary>;
   logHealth: { error: (msg: string) => void };
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: { abortedRuns: Map<string, number> };
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -64,7 +70,7 @@ export function startGatewayMaintenanceTimers(params: {
   // periodic keepalive
   const tickInterval = setInterval(() => {
     const payload = { ts: Date.now() };
-    params.broadcast("tick", payload, { dropIfSlow: true });
+    params.broadcast("tick", payload);
     params.nodeSendToAllSubscribed("tick", payload);
   }, TICK_INTERVAL_MS);
 
@@ -117,6 +123,7 @@ export function startGatewayMaintenanceTimers(params: {
           chatAbortControllers: params.chatAbortControllers,
           chatRunBuffers: params.chatRunBuffers,
           chatDeltaSentAt: params.chatDeltaSentAt,
+          chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
           chatAbortedRuns: params.chatRunState.abortedRuns,
           removeChatRun: params.removeChatRun,
           agentRunSeq: params.agentRunSeq,
@@ -135,7 +142,32 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunState.abortedRuns.delete(runId);
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
+      params.chatDeltaLastBroadcastLen.delete(runId);
     }
+
+    // Prune expired control-plane rate-limit buckets to prevent unbounded
+    // growth when many unique clients connect over time.
+    pruneStaleControlPlaneBuckets(now);
+
+    // Sweep stale buffers for runs that were never explicitly aborted.
+    // Only reap orphaned buffers after the abort controller is gone; active
+    // runs can legitimately sit idle while tools/models work.
+    for (const [runId, lastSentAt] of params.chatDeltaSentAt) {
+      if (params.chatRunState.abortedRuns.has(runId)) {
+        continue; // already handled above
+      }
+      if (params.chatAbortControllers.has(runId)) {
+        continue;
+      }
+      if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
+        continue;
+      }
+      params.chatRunBuffers.delete(runId);
+      params.chatDeltaSentAt.delete(runId);
+      params.chatDeltaLastBroadcastLen.delete(runId);
+    }
+    // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
+    sweepStaleRunContexts();
   }, 60_000);
 
   // Periodic session archive cleanup (runs regardless of media config).

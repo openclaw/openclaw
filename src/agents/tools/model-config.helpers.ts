@@ -1,15 +1,22 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
+  resolveAgentModelTimeoutMsValue,
 } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  externalCliDiscoveryForProviderAuth,
+  ensureAuthProfileStore,
+  hasAnyAuthProfileStoreSource,
+  listProfilesForProvider,
+} from "../auth-profiles.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveEnvApiKey } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 
-export type ToolModelConfig = { primary?: string; fallbacks?: string[] };
+export type ToolModelConfig = { primary?: string; fallbacks?: string[]; timeoutMs?: number };
 
 export function hasToolModelConfig(model: ToolModelConfig | undefined): boolean {
   return Boolean(
@@ -29,16 +36,26 @@ export function resolveDefaultModelRef(cfg?: OpenClawConfig): { provider: string
   return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
 }
 
-export function hasAuthForProvider(params: { provider: string; agentDir?: string }): boolean {
+export function hasAuthForProvider(params: {
+  provider: string;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+}): boolean {
   if (resolveEnvApiKey(params.provider)?.apiKey) {
     return true;
+  }
+  if (params.authStore) {
+    return listProfilesForProvider(params.authStore, params.provider).length > 0;
   }
   const agentDir = params.agentDir?.trim();
   if (!agentDir) {
     return false;
   }
+  if (!hasAnyAuthProfileStoreSource(agentDir)) {
+    return false;
+  }
   const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
+    externalCli: externalCliDiscoveryForProviderAuth({ provider: params.provider }),
   });
   return listProfilesForProvider(store, params.provider).length > 0;
 }
@@ -46,16 +63,20 @@ export function hasAuthForProvider(params: { provider: string; agentDir?: string
 export function coerceToolModelConfig(model?: AgentModelConfig): ToolModelConfig {
   const primary = resolveAgentModelPrimaryValue(model);
   const fallbacks = resolveAgentModelFallbackValues(model);
+  const timeoutMs = resolveAgentModelTimeoutMsValue(model);
   return {
     ...(primary?.trim() ? { primary: primary.trim() } : {}),
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   };
 }
 
 export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   candidates: Array<string | null | undefined>;
+  isProviderConfigured?: (provider: string) => boolean;
 }): ToolModelConfig | null {
   if (hasToolModelConfig(params.explicit)) {
     return params.explicit;
@@ -68,7 +89,14 @@ export function buildToolModelConfigFromCandidates(params: {
       continue;
     }
     const provider = trimmed.slice(0, trimmed.indexOf("/")).trim();
-    if (!provider || !hasAuthForProvider({ provider, agentDir: params.agentDir })) {
+    const providerConfigured =
+      params.isProviderConfigured?.(provider) ??
+      hasAuthForProvider({
+        provider,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      });
+    if (!provider || !providerConfigured) {
       continue;
     }
     if (!deduped.includes(trimmed)) {
@@ -83,5 +111,6 @@ export function buildToolModelConfigFromCandidates(params: {
   return {
     primary: deduped[0],
     ...(deduped.length > 1 ? { fallbacks: deduped.slice(1) } : {}),
+    ...(params.explicit.timeoutMs !== undefined ? { timeoutMs: params.explicit.timeoutMs } : {}),
   };
 }

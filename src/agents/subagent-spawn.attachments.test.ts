@@ -1,101 +1,38 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
-import { decodeStrictBase64, spawnSubagentDirect } from "./subagent-spawn.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createSubagentSpawnTestConfig,
+  loadSubagentSpawnModuleForTest,
+  setupAcceptedSubagentGatewayMock,
+} from "./subagent-spawn.test-helpers.js";
 
 const callGatewayMock = vi.fn();
-
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
+const updateSessionStoreMock = vi.fn();
 
 let configOverride: Record<string, unknown> = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
-  tools: {
-    sessions_spawn: {
-      attachments: {
-        enabled: true,
-        maxFiles: 50,
-        maxFileBytes: 1 * 1024 * 1024,
-        maxTotalBytes: 5 * 1024 * 1024,
-      },
-    },
-  },
-  agents: {
-    defaults: {
-      workspace: os.tmpdir(),
-    },
-  },
+  ...createSubagentSpawnTestConfig(),
 };
 let workspaceDirOverride = "";
+let subagentSpawnModule: Awaited<ReturnType<typeof loadSubagentSpawnModuleForTest>>;
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => configOverride,
-  };
-});
-
-vi.mock("./subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry.js")>();
-  return {
-    ...actual,
-    countActiveRunsForSession: () => 0,
-    registerSubagentRun: () => {},
-  };
-});
-
-vi.mock("./subagent-announce.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-announce.js")>();
-  return {
-    ...actual,
-    buildSubagentSystemPrompt: () => "system-prompt",
-  };
-});
-
-vi.mock("./agent-scope.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./agent-scope.js")>();
-  return {
-    ...actual,
-    resolveAgentWorkspaceDir: () => workspaceDirOverride,
-  };
-});
-
-vi.mock("./subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: () => 0,
-}));
-
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({ hasHooks: () => false }),
-}));
-
-function setupGatewayMock() {
-  callGatewayMock.mockImplementation(async (opts: { method?: string; params?: unknown }) => {
-    if (opts.method === "sessions.patch") {
-      return { ok: true };
-    }
-    if (opts.method === "sessions.delete") {
-      return { ok: true };
-    }
-    if (opts.method === "agent") {
-      return { runId: "run-1" };
-    }
-    return {};
+beforeAll(async () => {
+  subagentSpawnModule = await loadSubagentSpawnModuleForTest({
+    callGatewayMock,
+    getRuntimeConfig: () => configOverride,
+    updateSessionStoreMock,
+    workspaceDir: workspaceDirOverride || os.tmpdir(),
   });
-}
+});
 
 // --- decodeStrictBase64 ---
 
 describe("decodeStrictBase64", () => {
   const maxBytes = 1024;
 
-  it("valid base64 returns buffer with correct bytes", () => {
+  it("valid base64 returns buffer with correct bytes", async () => {
+    const { decodeStrictBase64 } = subagentSpawnModule;
     const input = "hello world";
     const encoded = Buffer.from(input).toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
@@ -103,35 +40,42 @@ describe("decodeStrictBase64", () => {
     expect(result?.toString("utf8")).toBe(input);
   });
 
-  it("empty string returns null", () => {
+  it("empty string returns null", async () => {
+    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("", maxBytes)).toBeNull();
   });
 
-  it("bad padding (length % 4 !== 0) returns null", () => {
+  it("bad padding (length % 4 !== 0) returns null", async () => {
+    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("abc", maxBytes)).toBeNull();
   });
 
-  it("non-base64 chars returns null", () => {
+  it("non-base64 chars returns null", async () => {
+    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("!@#$", maxBytes)).toBeNull();
   });
 
-  it("whitespace-only returns null (empty after strip)", () => {
+  it("whitespace-only returns null (empty after strip)", async () => {
+    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("   ", maxBytes)).toBeNull();
   });
 
-  it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", () => {
+  it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", async () => {
+    const { decodeStrictBase64 } = subagentSpawnModule;
     // maxEncodedBytes = ceil(1024/3)*4 = 1368; *2 = 2736
     const oversized = "A".repeat(2737);
     expect(decodeStrictBase64(oversized, maxBytes)).toBeNull();
   });
 
-  it("decoded byteLength exceeds maxDecodedBytes returns null", () => {
+  it("decoded byteLength exceeds maxDecodedBytes returns null", async () => {
+    const { decodeStrictBase64 } = subagentSpawnModule;
     const bigBuf = Buffer.alloc(1025, 0x42);
     const encoded = bigBuf.toString("base64");
     expect(decodeStrictBase64(encoded, maxBytes)).toBeNull();
   });
 
-  it("valid base64 at exact boundary returns Buffer", () => {
+  it("valid base64 at exact boundary returns Buffer", async () => {
+    const { decodeStrictBase64 } = subagentSpawnModule;
     const exactBuf = Buffer.alloc(1024, 0x41);
     const encoded = exactBuf.toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
@@ -143,13 +87,23 @@ describe("decodeStrictBase64", () => {
 // --- filename validation via spawnSubagentDirect ---
 
 describe("spawnSubagentDirect filename validation", () => {
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockClear();
-    setupGatewayMock();
+  beforeEach(async () => {
     workspaceDirOverride = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-attachments-${process.pid}-${Date.now()}-`),
     );
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride);
+    subagentSpawnModule.resetSubagentRegistryForTests();
+    callGatewayMock.mockClear();
+    updateSessionStoreMock.mockReset();
+    const store: Record<string, Record<string, unknown>> = {};
+    updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
+      if (typeof mutator !== "function") {
+        throw new Error("missing session store mutator");
+      }
+      await mutator(store);
+      return store;
+    });
+    setupAcceptedSubagentGatewayMock(callGatewayMock);
   });
 
   afterEach(() => {
@@ -161,7 +115,7 @@ describe("spawnSubagentDirect filename validation", () => {
 
   const ctx = {
     agentSessionKey: "agent:main:main",
-    agentChannel: "telegram" as const,
+    agentChannel: "forum" as const,
     agentAccountId: "123",
     agentTo: "456",
   };
@@ -169,6 +123,7 @@ describe("spawnSubagentDirect filename validation", () => {
   const validContent = Buffer.from("hello").toString("base64");
 
   async function spawnWithName(name: string) {
+    const { spawnSubagentDirect } = subagentSpawnModule;
     return spawnSubagentDirect(
       {
         task: "test",
@@ -203,6 +158,7 @@ describe("spawnSubagentDirect filename validation", () => {
   });
 
   it("duplicate name returns attachments_duplicate_name", async () => {
+    const { spawnSubagentDirect } = subagentSpawnModule;
     const result = await spawnSubagentDirect(
       {
         task: "test",
@@ -225,18 +181,27 @@ describe("spawnSubagentDirect filename validation", () => {
 
   it("removes materialized attachments when lineage patching fails", async () => {
     const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    const store: Record<string, Record<string, unknown>> = {};
+    updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
+      if (typeof mutator !== "function") {
+        throw new Error("missing session store mutator");
+      }
+      await mutator(store);
+      if (Object.values(store).some((entry) => typeof entry.spawnedBy === "string")) {
+        throw new Error("lineage patch failed");
+      }
+      return store;
+    });
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       calls.push(request);
-      if (request.method === "sessions.patch" && typeof request.params?.spawnedBy === "string") {
-        throw new Error("lineage patch failed");
-      }
       if (request.method === "sessions.delete") {
         return { ok: true };
       }
       return {};
     });
 
+    const { spawnSubagentDirect } = subagentSpawnModule;
     const result = await spawnSubagentDirect(
       {
         task: "test",
@@ -245,10 +210,8 @@ describe("spawnSubagentDirect filename validation", () => {
       ctx,
     );
 
-    expect(result).toMatchObject({
-      status: "error",
-      error: "lineage patch failed",
-    });
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("lineage patch failed");
     const attachmentsRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
     const retainedDirs = fs.existsSync(attachmentsRoot)
       ? fs.readdirSync(attachmentsRoot).filter((entry) => !entry.startsWith("."))

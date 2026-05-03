@@ -1,11 +1,3 @@
-export function isStatusCommand(body: string) {
-  const trimmed = body.trim().toLowerCase();
-  if (!trimmed) {
-    return false;
-  }
-  return trimmed === "/status" || trimmed === "status" || trimmed.startsWith("/status ");
-}
-
 export function stripMentionsForCommand(
   text: string,
   mentionRegexes: RegExp[],

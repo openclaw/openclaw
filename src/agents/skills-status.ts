@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -16,7 +16,9 @@ import {
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
+import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
+import { resolveSkillSource } from "./skills/source.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
 
@@ -41,7 +43,11 @@ export type SkillStatusEntry = {
   always: boolean;
   disabled: boolean;
   blockedByAllowlist: boolean;
+  blockedByAgentFilter: boolean;
   eligible: boolean;
+  modelVisible: boolean;
+  userInvocable: boolean;
+  commandVisible: boolean;
   requirements: Requirements;
   missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
@@ -51,6 +57,8 @@ export type SkillStatusEntry = {
 export type SkillStatusReport = {
   workspaceDir: string;
   managedSkillsDir: string;
+  agentId?: string;
+  agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
 };
 
@@ -166,18 +174,44 @@ function normalizeInstallOptions(
   return [toOption(preferred.spec, preferred.index)];
 }
 
+function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
+  if (entry.exposure) {
+    return (
+      entry.exposure.includeInAvailableSkillsPrompt ||
+      !("includeInAvailableSkillsPrompt" in entry.exposure)
+    );
+  }
+  if (entry.invocation) {
+    return !entry.invocation.disableModelInvocation;
+  }
+  return !entry.skill.disableModelInvocation;
+}
+
+function isSkillUserInvocable(entry: SkillEntry): boolean {
+  if (entry.exposure) {
+    return entry.exposure.userInvocable || !("userInvocable" in entry.exposure);
+  }
+  if (entry.invocation) {
+    return entry.invocation.userInvocable || !("userInvocable" in entry.invocation);
+  }
+  return true;
+}
+
 function buildSkillStatus(
   entry: SkillEntry,
   config?: OpenClawConfig,
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
   bundledNames?: Set<string>,
+  agentSkillFilter?: string[],
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
+  const blockedByAgentFilter =
+    agentSkillFilter !== undefined && !agentSkillFilter.includes(entry.skill.name);
   const always = entry.metadata?.always === true;
   const isEnvSatisfied = (envName: string) =>
     Boolean(
@@ -186,10 +220,10 @@ function buildSkillStatus(
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
+  const skillSource = resolveSkillSource(entry.skill);
   const bundled =
-    bundledNames && bundledNames.size > 0
-      ? bundledNames.has(entry.skill.name)
-      : entry.skill.source === "openclaw-bundled";
+    skillSource === "openclaw-bundled" ||
+    (skillSource === "unknown" && bundledNames?.has(entry.skill.name) === true);
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({
@@ -201,11 +235,13 @@ function buildSkillStatus(
       isConfigSatisfied,
     });
   const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
+  const availableToAgent = eligible && !blockedByAgentFilter;
+  const userInvocable = isSkillUserInvocable(entry);
 
   return {
     name: entry.skill.name,
     description: entry.skill.description,
-    source: entry.skill.source,
+    source: skillSource,
     bundled,
     filePath: entry.skill.filePath,
     baseDir: entry.skill.baseDir,
@@ -216,7 +252,11 @@ function buildSkillStatus(
     always,
     disabled,
     blockedByAllowlist,
+    blockedByAgentFilter,
     eligible,
+    modelVisible: availableToAgent && isSkillVisibleInAvailableSkillsPrompt(entry),
+    userInvocable,
+    commandVisible: availableToAgent && userInvocable,
     requirements: required,
     missing,
     configChecks,
@@ -231,10 +271,14 @@ export function buildWorkspaceSkillStatus(
     managedSkillsDir?: string;
     entries?: SkillEntry[];
     eligibility?: SkillEligibilityContext;
+    agentId?: string;
   },
 ): SkillStatusReport {
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const bundledContext = resolveBundledSkillsContext();
+  const agentSkillFilter = opts?.agentId
+    ? resolveEffectiveAgentSkillFilter(opts.config, opts.agentId)
+    : undefined;
   const skillEntries =
     opts?.entries ??
     loadWorkspaceSkillEntries(workspaceDir, {
@@ -246,8 +290,17 @@ export function buildWorkspaceSkillStatus(
   return {
     workspaceDir,
     managedSkillsDir,
+    agentId: opts?.agentId,
+    agentSkillFilter,
     skills: skillEntries.map((entry) =>
-      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext.names),
+      buildSkillStatus(
+        entry,
+        opts?.config,
+        prefs,
+        opts?.eligibility,
+        bundledContext.names,
+        agentSkillFilter,
+      ),
     ),
   };
 }

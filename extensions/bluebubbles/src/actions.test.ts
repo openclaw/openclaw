@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { bluebubblesMessageActions } from "./actions.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
-import { resolveBlueBubblesMessageId } from "./monitor.js";
+import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { sendBlueBubblesReaction } from "./reactions.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 
 vi.mock("./accounts.js", async () => {
@@ -36,7 +36,7 @@ vi.mock("./attachments.js", () => ({
   sendBlueBubblesAttachment: vi.fn().mockResolvedValue({ messageId: "att-msg-123" }),
 }));
 
-vi.mock("./monitor.js", () => ({
+vi.mock("./monitor-reply-cache.js", () => ({
   resolveBlueBubblesMessageId: vi.fn((id: string) => id),
 }));
 
@@ -45,11 +45,29 @@ vi.mock("./probe.js", () => ({
   getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
 }));
 
+const { bluebubblesMessageActions } = await importFreshModule<typeof import("./actions.js")>(
+  import.meta.url,
+  "./actions.js?actions-test",
+);
+
+function requireDefined<T>(value: T | undefined, name: string): T {
+  if (value === undefined) {
+    throw new Error(`${name} is not registered`);
+  }
+  return value;
+}
+
 describe("bluebubblesMessageActions", () => {
-  const listActions = bluebubblesMessageActions.listActions!;
-  const supportsAction = bluebubblesMessageActions.supportsAction!;
-  const extractToolSend = bluebubblesMessageActions.extractToolSend!;
-  const handleAction = bluebubblesMessageActions.handleAction!;
+  const describeMessageTool = requireDefined(
+    bluebubblesMessageActions.describeMessageTool,
+    "describeMessageTool",
+  );
+  const supportsAction = requireDefined(bluebubblesMessageActions.supportsAction, "supportsAction");
+  const extractToolSend = requireDefined(
+    bluebubblesMessageActions.extractToolSend,
+    "extractToolSend",
+  );
+  const handleAction = requireDefined(bluebubblesMessageActions.handleAction, "handleAction");
   const callHandleAction = (ctx: Omit<Parameters<typeof handleAction>[0], "channel">) =>
     handleAction({ channel: "bluebubbles", ...ctx });
   const blueBubblesConfig = (): OpenClawConfig => ({
@@ -74,12 +92,12 @@ describe("bluebubblesMessageActions", () => {
     vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
   });
 
-  describe("listActions", () => {
+  describe("describeMessageTool", () => {
     it("returns empty array when account is not enabled", () => {
       const cfg: OpenClawConfig = {
         channels: { bluebubbles: { enabled: false } },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toEqual([]);
     });
 
@@ -87,7 +105,7 @@ describe("bluebubblesMessageActions", () => {
       const cfg: OpenClawConfig = {
         channels: { bluebubbles: { enabled: true } },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toEqual([]);
     });
 
@@ -101,7 +119,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toContain("react");
     });
 
@@ -116,11 +134,33 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).not.toContain("react");
       // Other actions should still be present
       expect(actions).toContain("edit");
       expect(actions).toContain("unsend");
+    });
+
+    it("honors account-scoped action gates during discovery", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+            actions: { reactions: false },
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:5678",
+                password: "work-password",
+                actions: { reactions: true },
+              },
+            },
+          },
+        },
+      };
+
+      expect(describeMessageTool({ cfg, accountId: "default" })?.actions).not.toContain("react");
+      expect(describeMessageTool({ cfg, accountId: "work" })?.actions).toContain("react");
     });
 
     it("hides private-api actions when private API is disabled", () => {
@@ -134,8 +174,9 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
-      expect(actions).toContain("sendAttachment");
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
+      expect(actions).toContain("upload-file");
+      expect(actions).not.toContain("sendAttachment");
       expect(actions).not.toContain("react");
       expect(actions).not.toContain("reply");
       expect(actions).not.toContain("sendWithEffect");
@@ -165,6 +206,7 @@ describe("bluebubblesMessageActions", () => {
       expect(supportsAction({ action: "removeParticipant" })).toBe(true);
       expect(supportsAction({ action: "leaveGroup" })).toBe(true);
       expect(supportsAction({ action: "sendAttachment" })).toBe(true);
+      expect(supportsAction({ action: "upload-file" })).toBe(true);
     });
 
     it("returns false for unsupported actions", () => {
@@ -204,6 +246,36 @@ describe("bluebubblesMessageActions", () => {
   });
 
   describe("handleAction", () => {
+    it("maps upload-file to the attachment runtime using canonical naming", async () => {
+      const result = await callHandleAction({
+        action: "upload-file",
+        params: {
+          to: "+15551234567",
+          filename: "photo.png",
+          buffer: Buffer.from("img").toString("base64"),
+          message: "caption",
+          contentType: "image/png",
+        },
+        cfg: blueBubblesConfig(),
+        accountId: null,
+      });
+
+      expect(sendBlueBubblesAttachment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "+15551234567",
+          filename: "photo.png",
+          caption: "caption",
+          contentType: "image/png",
+        }),
+      );
+      expect(result).toMatchObject({
+        details: {
+          ok: true,
+          messageId: "att-msg-123",
+        },
+      });
+    });
+
     it("throws for unsupported actions", async () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -458,7 +530,15 @@ describe("bluebubblesMessageActions", () => {
         accountId: null,
       });
 
-      expect(resolveBlueBubblesMessageId).toHaveBeenCalledWith("1", { requireKnownShortId: true });
+      expect(resolveBlueBubblesMessageId).toHaveBeenCalledWith(
+        "1",
+        expect.objectContaining({
+          requireKnownShortId: true,
+          chatContext: expect.objectContaining({
+            chatGuid: "iMessage;-;+15551234567",
+          }),
+        }),
+      );
       expect(sendBlueBubblesReaction).toHaveBeenCalledWith(
         expect.objectContaining({
           messageGuid: "resolved-uuid",

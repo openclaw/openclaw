@@ -60,7 +60,7 @@ function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean 
 }
 
 export function sanitizeEnvVars(
-  envVars: Record<string, string>,
+  envVars: Record<string, string | undefined>,
   options: EnvSanitizationOptions = {},
 ): EnvVarSanitizationResult {
   const allowed: Record<string, string> = {};
@@ -72,7 +72,7 @@ export function sanitizeEnvVars(
 
   for (const [rawKey, value] of Object.entries(envVars)) {
     const key = rawKey.trim();
-    if (!key) {
+    if (!key || value === undefined) {
       continue;
     }
 
@@ -99,12 +99,4 @@ export function sanitizeEnvVars(
   }
 
   return { allowed, blocked, warnings };
-}
-
-export function getBlockedPatterns(): string[] {
-  return BLOCKED_ENV_VAR_PATTERNS.map((pattern) => pattern.source);
-}
-
-export function getAllowedPatterns(): string[] {
-  return ALLOWED_ENV_VAR_PATTERNS.map((pattern) => pattern.source);
 }

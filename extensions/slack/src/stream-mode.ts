@@ -1,20 +1,21 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   mapStreamingModeToSlackLegacyDraftStreamMode,
   resolveSlackNativeStreaming,
   resolveSlackStreamingMode,
   type SlackLegacyDraftStreamMode,
   type StreamingMode,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "./streaming-compat.js";
 
-export type SlackStreamMode = SlackLegacyDraftStreamMode;
-export type SlackStreamingMode = StreamingMode;
+type SlackStreamMode = SlackLegacyDraftStreamMode;
+type SlackStreamingMode = StreamingMode;
 const DEFAULT_STREAM_MODE: SlackStreamMode = "replace";
 
 export function resolveSlackStreamMode(raw: unknown): SlackStreamMode {
   if (typeof raw !== "string") {
     return DEFAULT_STREAM_MODE;
   }
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
   if (normalized === "replace" || normalized === "status_final" || normalized === "append") {
     return normalized;
   }

@@ -1,26 +1,35 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendWebhookMessageDiscord } from "./send.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ channels: { discord: {} } })));
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
+  );
   return {
     ...actual,
-    loadConfig: () => loadConfigMock(),
+    requireRuntimeConfig: (cfg: unknown) => cfg ?? loadConfigMock(),
   };
 });
 
-vi.mock("../../../src/infra/channel-activity.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/infra/channel-activity.js")>();
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
+  >("openclaw/plugin-sdk/channel-activity-runtime");
   return {
     ...actual,
     recordChannelActivity: (...args: unknown[]) => recordChannelActivityMock(...args),
   };
 });
 
+let sendWebhookMessageDiscord: typeof import("./send.webhook.js").sendWebhookMessageDiscord;
+
 describe("sendWebhookMessageDiscord activity", () => {
+  beforeAll(async () => {
+    ({ sendWebhookMessageDiscord } = await import("./send.webhook.js"));
+  });
+
   beforeEach(() => {
     recordChannelActivityMock.mockClear();
     loadConfigMock.mockClear();
@@ -65,5 +74,32 @@ describe("sendWebhookMessageDiscord activity", () => {
       direction: "outbound",
     });
     expect(loadConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("rewrites configured mention aliases for webhook sends", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "resolved-token",
+          mentionAliases: {
+            opslead: "123456789012345678",
+          },
+        },
+      },
+    };
+    await sendWebhookMessageDiscord("hello @OpsLead", {
+      cfg,
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+      accountId: "runtime",
+      threadId: "thread-1",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: expect.stringContaining('"content":"hello <@123456789012345678>"'),
+      }),
+    );
   });
 });

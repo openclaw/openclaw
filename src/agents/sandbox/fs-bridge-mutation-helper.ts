@@ -6,6 +6,13 @@ import type {
 } from "./fs-bridge-path-safety.js";
 import type { SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
 
+export const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
+  "/usr/bin/python3",
+  "/usr/local/bin/python3",
+  "/opt/homebrew/bin/python3",
+  "/bin/python3",
+] as const;
+
 export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "import errno",
   "import os",
@@ -82,7 +89,17 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            continue",
   "    raise RuntimeError('failed to allocate sandbox temp directory')",
   "",
+  "def existing_regular_file_mode(parent_fd, basename):",
+  "    try:",
+  "        target_stat = os.lstat(basename, dir_fd=parent_fd)",
+  "    except FileNotFoundError:",
+  "        return None",
+  "    if stat.S_ISREG(target_stat.st_mode):",
+  "        return stat.S_IMODE(target_stat.st_mode)",
+  "    return None",
+  "",
   "def write_atomic(parent_fd, basename, stdin_buffer):",
+  "    target_mode = existing_regular_file_mode(parent_fd, basename)",
   "    temp_fd = None",
   "    temp_name = None",
   "    try:",
@@ -92,6 +109,11 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            if not chunk:",
   "                break",
   "            os.write(temp_fd, chunk)",
+  "        if target_mode is not None:",
+  "            try:",
+  "                os.fchmod(temp_fd, target_mode)",
+  "            except AttributeError:",
+  "                pass",
   "        os.fsync(temp_fd)",
   "        os.close(temp_fd)",
   "        temp_fd = None",
@@ -106,6 +128,22 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "                os.unlink(temp_name, dir_fd=parent_fd)",
   "            except FileNotFoundError:",
   "                pass",
+  "",
+  "def read_file(parent_fd, basename):",
+  "    file_fd = os.open(basename, READ_FLAGS, dir_fd=parent_fd)",
+  "    try:",
+  "        file_stat = os.fstat(file_fd)",
+  "        if not stat.S_ISREG(file_stat.st_mode):",
+  "            raise OSError(errno.EPERM, 'only regular files are allowed', basename)",
+  "        if file_stat.st_nlink > 1:",
+  "            raise OSError(errno.EPERM, 'hardlinked file is not allowed', basename)",
+  "        while True:",
+  "            chunk = os.read(file_fd, 65536)",
+  "            if not chunk:",
+  "                break",
+  "            os.write(1, chunk)",
+  "    finally:",
+  "        os.close(file_fd)",
   "",
   "def remove_tree(parent_fd, basename):",
   "    entry_stat = os.lstat(basename, dir_fd=parent_fd)",
@@ -160,6 +198,11 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "    temp_fd = None",
   "    temp_name = None",
   "    try:",
+  "        src_file_stat = os.fstat(src_fd)",
+  "        if not stat.S_ISREG(src_file_stat.st_mode):",
+  "            raise OSError(errno.EPERM, 'only regular files are allowed', src_basename)",
+  "        if src_file_stat.st_nlink > 1:",
+  "            raise OSError(errno.EPERM, 'hardlinked file is not allowed', src_basename)",
   "        temp_name, temp_fd = create_temp_file(dst_parent_fd, dst_basename)",
   "        while True:",
   "            chunk = os.read(src_fd, 65536)",
@@ -194,6 +237,16 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "    try:",
   "        parent_fd = walk_dir(root_fd, sys.argv[3], sys.argv[5] == '1')",
   "        write_atomic(parent_fd, sys.argv[4], sys.stdin.buffer)",
+  "    finally:",
+  "        if parent_fd is not None:",
+  "            os.close(parent_fd)",
+  "        os.close(root_fd)",
+  "elif operation == 'read':",
+  "    root_fd = open_dir(sys.argv[2])",
+  "    parent_fd = None",
+  "    try:",
+  "        parent_fd = walk_dir(root_fd, sys.argv[3], False)",
+  "        read_file(parent_fd, sys.argv[4])",
   "    finally:",
   "        if parent_fd is not None:",
   "            os.close(parent_fd)",
@@ -250,6 +303,8 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "    raise RuntimeError('unknown sandbox mutation operation: ' + operation)",
 ].join("\n");
 
+const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${SANDBOX_PINNED_MUTATION_PYTHON.replaceAll("'", `'\\''`)}'`;
+
 function buildPinnedMutationPlan(params: {
   args: string[];
   checks: PathSafetyCheck[];
@@ -260,9 +315,18 @@ function buildPinnedMutationPlan(params: {
     // Feed the helper source over fd 3 so stdin stays available for write payload bytes.
     script: [
       "set -eu",
-      "python3 /dev/fd/3 \"$@\" 3<<'PY'",
-      SANDBOX_PINNED_MUTATION_PYTHON,
-      "PY",
+      "python_cmd=''",
+      ...SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES.map(
+        (candidate) =>
+          `if [ -z "$python_cmd" ] && [ -x '${candidate}' ]; then python_cmd='${candidate}'; fi`,
+      ),
+      'if [ -z "$python_cmd" ]; then python_cmd=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true); fi',
+      'if [ -z "$python_cmd" ]; then',
+      "  echo >&2 'sandbox pinned mutation helper requires python3 or python'",
+      "  exit 127",
+      "fi",
+      `python_script=${SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL}`,
+      'exec "$python_cmd" -c "$python_script" "$@"',
     ].join("\n"),
     args: params.args,
   };

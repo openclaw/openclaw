@@ -1,56 +1,50 @@
 import {
+  createAllowFromSection,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
-  type OpenClawConfig,
   patchChannelConfigForAccount,
-  setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import {
   parseTelegramAllowFromId,
-  promptTelegramAllowFromForAccount,
-  resolveTelegramAllowFromEntries,
   TELEGRAM_TOKEN_HELP_LINES,
   TELEGRAM_USER_ID_HELP_LINES,
-  telegramSetupAdapter,
 } from "./setup-core.js";
+import {
+  buildTelegramDmAccessWarningLines,
+  ensureTelegramDefaultGroupMentionGate,
+  shouldShowTelegramDmAccessWarning,
+  telegramSetupDmPolicy,
+} from "./setup-surface.helpers.js";
 
 const channel = "telegram" as const;
 
-const dmPolicy: ChannelSetupDmPolicy = {
-  label: "Telegram",
-  channel,
-  policyKey: "channels.telegram.dmPolicy",
-  allowFromKey: "channels.telegram.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.telegram?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) =>
-    setChannelDmPolicyWithAllowFrom({
-      cfg,
-      channel,
-      dmPolicy: policy,
-    }),
-  promptAllowFrom: promptTelegramAllowFromForAccount,
-};
-
 export const telegramSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Telegram",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token",
     configuredHint: "recommended · configured",
     unconfiguredHint: "recommended · newcomer-friendly",
     configuredScore: 1,
     unconfiguredScore: 10,
-    resolveConfigured: ({ cfg }) =>
-      listTelegramAccountIds(cfg).some((accountId) => {
-        const account = inspectTelegramAccount({ cfg, accountId });
+    resolveConfigured: ({ cfg, accountId }) =>
+      (accountId ? [accountId] : listTelegramAccountIds(cfg)).some((resolvedAccountId) => {
+        const account = inspectTelegramAccount({ cfg, accountId: resolvedAccountId });
         return account.configured;
       }),
-  },
+  }),
+  prepare: async ({ cfg, accountId, credentialValues }) => ({
+    cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),
+    credentialValues,
+  }),
   credentials: [
     {
       inputKey: "token",
@@ -71,29 +65,28 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         return {
           accountConfigured: Boolean(resolved.token) || hasConfiguredValue,
           hasConfiguredValue,
-          resolvedValue: resolved.token?.trim() || undefined,
+          resolvedValue: normalizeOptionalString(resolved.token),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined
+              ? normalizeOptionalString(process.env.TELEGRAM_BOT_TOKEN)
               : undefined,
         };
       },
     },
   ],
-  allowFrom: {
+  allowFrom: createAllowFromSection({
     helpTitle: "Telegram user id",
     helpLines: TELEGRAM_USER_ID_HELP_LINES,
-    credentialInputKey: "token",
-    message: "Telegram allowFrom (numeric sender id; @username resolves to id)",
-    placeholder: "@username",
+    message: "Telegram allowFrom (numeric sender id)",
+    placeholder: "123456789",
     invalidWithoutCredentialNote:
-      "Telegram token missing; use numeric sender ids (usernames require a bot token).",
+      "Telegram allowFrom requires numeric sender ids. DM your bot first, then copy from.id from logs or getUpdates.",
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    resolveEntries: async ({ credentialValues, entries }) =>
-      resolveTelegramAllowFromEntries({
-        credentialValue: credentialValues.token,
-        entries,
+    resolveEntries: async ({ entries }) =>
+      entries.map((entry) => {
+        const id = parseTelegramAllowFromId(entry);
+        return { input: entry, resolved: Boolean(id), id };
       }),
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchChannelConfigForAccount({
@@ -102,9 +95,16 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         accountId,
         patch: { dmPolicy: "allowlist", allowFrom },
       }),
+  }),
+  finalize: async ({ cfg, accountId, prompter }) => {
+    if (!shouldShowTelegramDmAccessWarning(cfg, accountId)) {
+      return;
+    }
+    await prompter.note(
+      buildTelegramDmAccessWarningLines(accountId).join("\n"),
+      "Telegram DM access warning",
+    );
   },
-  dmPolicy,
+  dmPolicy: telegramSetupDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
-
-export { parseTelegramAllowFromId, telegramSetupAdapter };

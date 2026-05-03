@@ -1,50 +1,36 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.js";
+import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { shortenText } from "./text-format.js";
 
 const resolveChannelLabel = (channel: ChannelId) =>
-  getChannelPlugin(channel)?.meta.label ?? channel;
+  getLoadedChannelPlugin(channel)?.meta.label ?? channel;
 
 function extractMessageId(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
   const direct = (payload as { messageId?: unknown }).messageId;
-  if (typeof direct === "string" && direct.trim()) {
-    return direct.trim();
+  const directId = normalizeOptionalString(direct);
+  if (directId) {
+    return directId;
   }
   const result = (payload as { result?: unknown }).result;
   if (result && typeof result === "object") {
     const nested = (result as { messageId?: unknown }).messageId;
-    if (typeof nested === "string" && nested.trim()) {
-      return nested.trim();
+    const nestedId = normalizeOptionalString(nested);
+    if (nestedId) {
+      return nestedId;
     }
   }
   return null;
-}
-
-export type MessageCliJsonEnvelope = {
-  action: ChannelMessageActionName;
-  channel: ChannelId;
-  dryRun: boolean;
-  handledBy: "plugin" | "core" | "dry-run";
-  payload: unknown;
-};
-
-export function buildMessageCliJson(result: MessageActionRunResult): MessageCliJsonEnvelope {
-  return {
-    action: result.action,
-    channel: result.channel,
-    dryRun: result.dryRun,
-    handledBy: result.handledBy,
-    payload: result.payload,
-  };
 }
 
 type FormatOpts = {
@@ -356,10 +342,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
       return lines;
     }
     if (Array.isArray(removed)) {
-      const list = removed
-        .map((x) => String(x).trim())
-        .filter(Boolean)
-        .join(", ");
+      const list = normalizeStringEntries(removed).join(", ");
       lines.push(ok(`✅ Reactions removed${list ? `: ${list}` : ""}`));
       return lines;
     }

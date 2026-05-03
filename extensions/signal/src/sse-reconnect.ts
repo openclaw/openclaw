@@ -1,7 +1,11 @@
-import type { BackoffPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  computeBackoff,
+  logVerbose,
+  shouldLogVerbose,
+  sleepWithAbort,
+  type BackoffPolicy,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import { type SignalSseEvent, streamSignalEvents } from "./client.js";
 
 const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
@@ -17,6 +21,7 @@ type RunSignalSseLoopParams = {
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   onEvent: (event: SignalSseEvent) => void;
+  timeoutMs?: number;
   policy?: Partial<BackoffPolicy>;
 };
 
@@ -26,6 +31,7 @@ export async function runSignalSseLoop({
   abortSignal,
   runtime,
   onEvent,
+  timeoutMs,
   policy,
 }: RunSignalSseLoopParams) {
   const reconnectPolicy = {
@@ -41,12 +47,16 @@ export async function runSignalSseLoop({
     logVerbose(message);
   };
 
-  while (!abortSignal?.aborted) {
+  for (;;) {
+    if (abortSignal?.aborted) {
+      break;
+    }
     try {
       await streamSignalEvents({
         baseUrl,
         account,
         abortSignal,
+        timeoutMs,
         onEvent: (event) => {
           reconnectAttempts = 0;
           onEvent(event);

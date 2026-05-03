@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createDiagnosticsOtelService } from "./src/service.js";
 
 export default definePluginEntry({

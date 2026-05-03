@@ -1,10 +1,12 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { withTempHome } from "../../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config.js";
+import { resolveStorePath } from "./paths.js";
 import {
+  resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargets,
   resolveAllAgentSessionStoreTargetsSync,
   resolveSessionStoreTargets,
@@ -76,32 +78,30 @@ const discoveryResolvers = [
 ] as const;
 
 describe("resolveSessionStoreTargets", () => {
-  it("resolves all configured agent stores", () => {
-    const cfg: OpenClawConfig = {
-      session: {
-        store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
-      },
-      agents: {
-        list: [{ id: "main", default: true }, { id: "work" }],
-      },
-    };
+  it("resolves all configured agent stores", async () => {
+    await withTempHome(async () => {
+      const cfg: OpenClawConfig = {
+        session: {
+          store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+        },
+        agents: {
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
+      };
 
-    const targets = resolveSessionStoreTargets(cfg, { allAgents: true });
-
-    expect(targets).toEqual([
-      {
-        agentId: "main",
-        storePath: path.resolve(
-          path.join(process.env.HOME ?? "", ".openclaw/agents/main/sessions/sessions.json"),
-        ),
-      },
-      {
-        agentId: "work",
-        storePath: path.resolve(
-          path.join(process.env.HOME ?? "", ".openclaw/agents/work/sessions/sessions.json"),
-        ),
-      },
-    ]);
+      const env = { ...process.env };
+      const targets = resolveSessionStoreTargets(cfg, { allAgents: true }, { env });
+      expect(targets).toEqual([
+        {
+          agentId: "main",
+          storePath: resolveStorePath(cfg.session?.store, { agentId: "main", env }),
+        },
+        {
+          agentId: "work",
+          storePath: resolveStorePath(cfg.session?.store, { agentId: "work", env }),
+        },
+      ]);
+    });
   });
 
   it("dedupes shared store paths for --all-agents", () => {
@@ -136,6 +136,38 @@ describe("resolveSessionStoreTargets", () => {
     expect(() =>
       resolveSessionStoreTargets({}, { store: "/tmp/sessions.json", allAgents: true }),
     ).toThrow(/cannot be combined/i);
+  });
+});
+
+describe("resolveAgentSessionStoreTargetsSync", () => {
+  it("resolves one requested agent store from the direct path", async () => {
+    await withTempHome(async (home) => {
+      const customRoot = path.join(home, "custom-state");
+      const storePaths = await createAgentSessionStores(customRoot, ["main", "codex"]);
+      const cfg = createCustomRootCfg(customRoot, "main");
+
+      expect(resolveAgentSessionStoreTargetsSync(cfg, "codex", { env: process.env })).toEqual([
+        {
+          agentId: "codex",
+          storePath: storePaths.codex,
+        },
+      ]);
+    });
+  });
+
+  it("finds discovered directories whose names normalize to the requested agent", async () => {
+    await withTempHome(async (home) => {
+      const customRoot = path.join(home, "custom-state");
+      const storePaths = await createAgentSessionStores(customRoot, ["main", "Retired Agent"]);
+      const cfg = createCustomRootCfg(customRoot, "main");
+
+      expect(
+        resolveAgentSessionStoreTargetsSync(cfg, "retired-agent", { env: process.env }),
+      ).toContainEqual({
+        agentId: "retired-agent",
+        storePath: storePaths["Retired Agent"],
+      });
+    });
   });
 });
 

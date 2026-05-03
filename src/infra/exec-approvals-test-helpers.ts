@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { CommandResolution, ExecutableResolution } from "./exec-command-resolution.js";
 
 export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
   if (process.platform !== "win32") {
@@ -13,7 +14,57 @@ export function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
 }
 
-export type ShellParserParityFixtureCase = {
+export function makeMockExecutableResolution(params: {
+  rawExecutable: string;
+  executableName: string;
+  resolvedPath?: string;
+  resolvedRealPath?: string;
+}): ExecutableResolution {
+  return {
+    rawExecutable: params.rawExecutable,
+    resolvedPath: params.resolvedPath,
+    resolvedRealPath: params.resolvedRealPath,
+    executableName: params.executableName,
+  };
+}
+
+export function makeMockCommandResolution(params: {
+  execution: ExecutableResolution;
+  policy?: ExecutableResolution;
+  effectiveArgv?: string[];
+  wrapperChain?: string[];
+  policyBlocked?: boolean;
+  blockedWrapper?: string;
+}): CommandResolution {
+  const policy = params.policy ?? params.execution;
+  const resolution: CommandResolution = {
+    execution: params.execution,
+    policy,
+    effectiveArgv: params.effectiveArgv,
+    wrapperChain: params.wrapperChain,
+    policyBlocked: params.policyBlocked,
+    blockedWrapper: params.blockedWrapper,
+  };
+  return Object.defineProperties(resolution, {
+    rawExecutable: {
+      get: () => params.execution.rawExecutable,
+    },
+    resolvedPath: {
+      get: () => params.execution.resolvedPath,
+    },
+    resolvedRealPath: {
+      get: () => params.execution.resolvedRealPath,
+    },
+    executableName: {
+      get: () => params.execution.executableName,
+    },
+    policyResolution: {
+      get: () => (policy === params.execution ? undefined : policy),
+    },
+  });
+}
+
+type ShellParserParityFixtureCase = {
   id: string;
   command: string;
   ok: boolean;
@@ -24,7 +75,7 @@ type ShellParserParityFixture = {
   cases: ShellParserParityFixtureCase[];
 };
 
-export type WrapperResolutionParityFixtureCase = {
+type WrapperResolutionParityFixtureCase = {
   id: string;
   argv: string[];
   expectedRawExecutable: string | null;

@@ -1,12 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { feishuPlugin } from "../../extensions/feishu/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import type { ChannelConfiguredBindingProvider, ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildConfiguredAcpSessionKey } from "./persistent-bindings.types.js";
 const managerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn(),
@@ -39,7 +36,14 @@ type PersistentBindingsModule = Pick<
     "ensureConfiguredAcpBindingSession" | "resetAcpSessionInPlace"
   >;
 let persistentBindings: PersistentBindingsModule;
-let persistentBindingsImportScope = 0;
+let lifecycleBindingsModule: Pick<
+  typeof import("./persistent-bindings.lifecycle.js"),
+  "ensureConfiguredAcpBindingSession" | "resetAcpSessionInPlace"
+>;
+let persistentBindingsResolveModule: Pick<
+  typeof import("./persistent-bindings.resolve.js"),
+  "resolveConfiguredAcpBindingRecord" | "resolveConfiguredAcpBindingSpecBySessionKey"
+>;
 
 type ConfiguredBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 type BindingRecordInput = Parameters<
@@ -58,6 +62,232 @@ const baseCfg = {
 
 const defaultDiscordConversationId = "1478836151241412759";
 const defaultDiscordAccountId = "default";
+
+const discordBindings: ChannelConfiguredBindingProvider = {
+  compileConfiguredBinding: ({ conversationId }) => {
+    const normalized = conversationId.trim();
+    return normalized ? { conversationId: normalized } : null;
+  },
+  matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+    if (compiledBinding.conversationId === conversationId) {
+      return { conversationId, matchPriority: 2 };
+    }
+    if (
+      parentConversationId &&
+      parentConversationId !== conversationId &&
+      compiledBinding.conversationId === parentConversationId
+    ) {
+      return { conversationId: parentConversationId, matchPriority: 1 };
+    }
+    return null;
+  },
+};
+
+function parseTelegramTopicConversationForTest(params: {
+  conversationId: string;
+  parentConversationId?: string;
+}): {
+  canonicalConversationId: string;
+  chatId: string;
+  topicId?: string;
+} | null {
+  const conversationId = params.conversationId.trim();
+  const parentConversationId = params.parentConversationId?.trim() || undefined;
+  if (!conversationId) {
+    return null;
+  }
+  const canonicalTopicMatch = /^(-[^:]+):topic:([^:]+)$/.exec(conversationId);
+  if (canonicalTopicMatch) {
+    const [, chatId, topicId] = canonicalTopicMatch;
+    return {
+      canonicalConversationId: `${chatId}:topic:${topicId}`,
+      chatId,
+      topicId,
+    };
+  }
+  if (parentConversationId) {
+    return {
+      canonicalConversationId: `${parentConversationId}:topic:${conversationId}`,
+      chatId: parentConversationId,
+      topicId: conversationId,
+    };
+  }
+  return {
+    canonicalConversationId: conversationId,
+    chatId: conversationId,
+  };
+}
+
+const telegramBindings: ChannelConfiguredBindingProvider = {
+  compileConfiguredBinding: ({ conversationId }) => {
+    const parsed = parseTelegramTopicConversationForTest({ conversationId });
+    if (!parsed || !parsed.chatId.startsWith("-")) {
+      return null;
+    }
+    return {
+      conversationId: parsed.canonicalConversationId,
+      parentConversationId: parsed.chatId,
+    };
+  },
+  matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+    const incoming = parseTelegramTopicConversationForTest({
+      conversationId,
+      parentConversationId,
+    });
+    if (!incoming || !incoming.chatId.startsWith("-")) {
+      return null;
+    }
+    if (compiledBinding.conversationId !== incoming.canonicalConversationId) {
+      return null;
+    }
+    return {
+      conversationId: incoming.canonicalConversationId,
+      parentConversationId: incoming.chatId,
+      matchPriority: 2,
+    };
+  },
+};
+
+function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
+  const trimmed = conversationId.trim();
+  if (!trimmed || trimmed.includes(":")) {
+    return false;
+  }
+  if (trimmed.startsWith("oc_") || trimmed.startsWith("on_")) {
+    return false;
+  }
+  return true;
+}
+
+function parseFeishuConversationIdForTest(params: {
+  conversationId: string;
+  parentConversationId?: string;
+}): {
+  canonicalConversationId: string;
+  chatId: string;
+  topicId?: string;
+  senderOpenId?: string;
+  scope: "group" | "group_sender" | "group_topic" | "group_topic_sender";
+} | null {
+  const conversationId = params.conversationId.trim();
+  const parentConversationId = params.parentConversationId?.trim() || undefined;
+  if (!conversationId) {
+    return null;
+  }
+
+  const topicSenderMatch = /^(.+):topic:([^:]+):sender:([^:]+)$/.exec(conversationId);
+  if (topicSenderMatch) {
+    const [, chatId, topicId, senderOpenId] = topicSenderMatch;
+    return {
+      canonicalConversationId: `${chatId}:topic:${topicId}:sender:${senderOpenId}`,
+      chatId,
+      topicId,
+      senderOpenId,
+      scope: "group_topic_sender",
+    };
+  }
+
+  const topicMatch = /^(.+):topic:([^:]+)$/.exec(conversationId);
+  if (topicMatch) {
+    const [, chatId, topicId] = topicMatch;
+    return {
+      canonicalConversationId: `${chatId}:topic:${topicId}`,
+      chatId,
+      topicId,
+      scope: "group_topic",
+    };
+  }
+
+  const senderMatch = /^(.+):sender:([^:]+)$/.exec(conversationId);
+  if (senderMatch) {
+    const [, chatId, senderOpenId] = senderMatch;
+    return {
+      canonicalConversationId: `${chatId}:sender:${senderOpenId}`,
+      chatId,
+      senderOpenId,
+      scope: "group_sender",
+    };
+  }
+
+  if (parentConversationId) {
+    return {
+      canonicalConversationId: `${parentConversationId}:topic:${conversationId}`,
+      chatId: parentConversationId,
+      topicId: conversationId,
+      scope: "group_topic",
+    };
+  }
+
+  return {
+    canonicalConversationId: conversationId,
+    chatId: conversationId,
+    scope: "group",
+  };
+}
+
+const feishuBindings: ChannelConfiguredBindingProvider = {
+  compileConfiguredBinding: ({ conversationId }) => {
+    const parsed = parseFeishuConversationIdForTest({ conversationId });
+    if (
+      !parsed ||
+      (parsed.scope !== "group_topic" &&
+        parsed.scope !== "group_topic_sender" &&
+        !isSupportedFeishuDirectConversationId(parsed.canonicalConversationId))
+    ) {
+      return null;
+    }
+    return {
+      conversationId: parsed.canonicalConversationId,
+      parentConversationId:
+        parsed.scope === "group_topic" || parsed.scope === "group_topic_sender"
+          ? parsed.chatId
+          : undefined,
+    };
+  },
+  matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+    const incoming = parseFeishuConversationIdForTest({
+      conversationId,
+      parentConversationId,
+    });
+    if (
+      !incoming ||
+      (incoming.scope !== "group_topic" &&
+        incoming.scope !== "group_topic_sender" &&
+        !isSupportedFeishuDirectConversationId(incoming.canonicalConversationId))
+    ) {
+      return null;
+    }
+    const matchesCanonicalConversation =
+      compiledBinding.conversationId === incoming.canonicalConversationId;
+    const matchesParentTopicForSenderScopedConversation =
+      incoming.scope === "group_topic_sender" &&
+      compiledBinding.parentConversationId === incoming.chatId &&
+      compiledBinding.conversationId === `${incoming.chatId}:topic:${incoming.topicId}`;
+    if (!matchesCanonicalConversation && !matchesParentTopicForSenderScopedConversation) {
+      return null;
+    }
+    return {
+      conversationId: matchesParentTopicForSenderScopedConversation
+        ? compiledBinding.conversationId
+        : incoming.canonicalConversationId,
+      parentConversationId:
+        incoming.scope === "group_topic" || incoming.scope === "group_topic_sender"
+          ? incoming.chatId
+          : undefined,
+      matchPriority: matchesCanonicalConversation ? 2 : 1,
+    };
+  },
+};
+
+function createConfiguredBindingTestPlugin(
+  id: ChannelPlugin["id"],
+  bindings: ChannelConfiguredBindingProvider,
+): Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config" | "bindings"> {
+  return {
+    ...createChannelTestPluginBase({ id }),
+    bindings,
+  };
+}
 
 function createCfgWithBindings(
   bindings: ConfiguredBinding[],
@@ -180,34 +410,41 @@ function mockReadySession(params: {
   return sessionKey;
 }
 
-beforeEach(async () => {
-  vi.resetModules();
-  persistentBindingsImportScope += 1;
-  const [resolveModule, lifecycleModule] = await Promise.all([
-    importFreshModule<typeof import("./persistent-bindings.resolve.js")>(
-      import.meta.url,
-      `./persistent-bindings.resolve.js?scope=${persistentBindingsImportScope}`,
-    ),
-    importFreshModule<typeof import("./persistent-bindings.lifecycle.js")>(
-      import.meta.url,
-      `./persistent-bindings.lifecycle.js?scope=${persistentBindingsImportScope}`,
-    ),
-  ]);
+beforeAll(async () => {
+  persistentBindingsResolveModule = await import("./persistent-bindings.resolve.js");
+  lifecycleBindingsModule = await import("./persistent-bindings.lifecycle.js");
   persistentBindings = {
-    resolveConfiguredAcpBindingRecord: resolveModule.resolveConfiguredAcpBindingRecord,
+    resolveConfiguredAcpBindingRecord:
+      persistentBindingsResolveModule.resolveConfiguredAcpBindingRecord,
     resolveConfiguredAcpBindingSpecBySessionKey:
-      resolveModule.resolveConfiguredAcpBindingSpecBySessionKey,
-    ensureConfiguredAcpBindingSession: lifecycleModule.ensureConfiguredAcpBindingSession,
-    resetAcpSessionInPlace: lifecycleModule.resetAcpSessionInPlace,
+      persistentBindingsResolveModule.resolveConfiguredAcpBindingSpecBySessionKey,
+    ensureConfiguredAcpBindingSession: lifecycleBindingsModule.ensureConfiguredAcpBindingSession,
+    resetAcpSessionInPlace: lifecycleBindingsModule.resetAcpSessionInPlace,
   };
+});
+
+beforeEach(() => {
   setActivePluginRegistry(
     createTestRegistry([
-      { pluginId: "discord", plugin: discordPlugin, source: "test" },
-      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-      { pluginId: "feishu", plugin: feishuPlugin, source: "test" },
+      {
+        pluginId: "discord",
+        plugin: createConfiguredBindingTestPlugin("discord", discordBindings),
+        source: "test",
+      },
+      {
+        pluginId: "telegram",
+        plugin: createConfiguredBindingTestPlugin("telegram", telegramBindings),
+        source: "test",
+      },
+      {
+        pluginId: "feishu",
+        plugin: createConfiguredBindingTestPlugin("feishu", feishuBindings),
+        source: "test",
+      },
     ]),
   );
   managerMocks.resolveSession.mockReset();
+  managerMocks.resolveSession.mockReturnValue({ kind: "none" });
   managerMocks.closeSession.mockReset().mockResolvedValue({
     runtimeClosed: true,
     metaCleared: true,
@@ -690,7 +927,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a matching ready session even when the stored ACP session is in error state", async () => {
+  it("reinitializes a matching session when the stored ACP session is in error state", async () => {
     const spec = createDiscordPersistentSpec({
       cwd: "/home/bob/clawd",
     });
@@ -706,8 +943,8 @@ describe("ensureConfiguredAcpBindingSession", () => {
     });
 
     expect(ensured).toEqual({ ok: true, sessionKey });
-    expect(managerMocks.closeSession).not.toHaveBeenCalled();
-    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
   });
 
   it("initializes ACP session with runtime agent override when provided", async () => {
@@ -732,7 +969,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
 });
 
 describe("resetAcpSessionInPlace", () => {
-  it("reinitializes from configured binding when ACP metadata is missing", async () => {
+  it("treats configured bindings without ACP metadata as already reset", async () => {
     const cfg = createCfgWithBindings([
       createDiscordBinding({
         agentId: "claude",
@@ -760,6 +997,102 @@ describe("resetAcpSessionInPlace", () => {
     });
 
     expect(result).toEqual({ ok: true });
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+  });
+
+  it("clears existing configured ACP sessions and lets the next turn recreate them", async () => {
+    const cfg = createCfgWithBindings([
+      createDiscordBinding({
+        agentId: "claude",
+        conversationId: "1478844424791396446",
+        acp: {
+          mode: "persistent",
+          backend: "acpx",
+        },
+      }),
+    ]);
+    const sessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1478844424791396446",
+      agentId: "claude",
+      mode: "persistent",
+      backend: "acpx",
+    });
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      acp: {
+        agent: "claude",
+        mode: "persistent",
+        backend: "acpx",
+        runtimeOptions: { cwd: "/home/bob/clawd" },
+      },
+    });
+
+    const result = await persistentBindings.resetAcpSessionInPlace({
+      cfg,
+      sessionKey,
+      reason: "reset",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(managerMocks.closeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        clearMeta: true,
+      }),
+    );
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+    expect(managerMocks.updateSessionRuntimeOptions).not.toHaveBeenCalled();
+  });
+
+  it("recreates the bound session on the next ensure after an in-place reset", async () => {
+    const cfg = createCfgWithBindings([
+      createDiscordBinding({
+        agentId: "claude",
+        conversationId: "9373ab192b2317f4",
+        acp: {
+          backend: "acpx",
+        },
+      }),
+    ]);
+    const sessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "9373ab192b2317f4",
+      agentId: "claude",
+      mode: "persistent",
+      backend: "acpx",
+    });
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      acp: {
+        agent: "claude",
+        mode: "persistent",
+        backend: "acpx",
+      },
+    });
+
+    const resetResult = await persistentBindings.resetAcpSessionInPlace({
+      cfg,
+      sessionKey,
+      reason: "reset",
+    });
+
+    expect(resetResult).toEqual({ ok: true });
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+
+    const spec = persistentBindingsResolveModule.resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg,
+      sessionKey,
+    });
+    expect(spec).toBeTruthy();
+    managerMocks.resolveSession.mockReturnValueOnce({ kind: "none" });
+
+    const ensured = await persistentBindings.ensureConfiguredAcpBindingSession({
+      cfg,
+      spec: spec!,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
     expect(managerMocks.initializeSession).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey,
@@ -770,41 +1103,27 @@ describe("resetAcpSessionInPlace", () => {
     );
   });
 
-  it("does not clear ACP metadata before reinitialize succeeds", async () => {
-    const sessionKey = "agent:claude:acp:binding:discord:default:9373ab192b2317f4";
-    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
-      acp: {
-        agent: "claude",
-        mode: "persistent",
-        backend: "acpx",
-        runtimeOptions: { cwd: "/home/bob/clawd" },
-      },
-    });
-    managerMocks.initializeSession.mockRejectedValueOnce(new Error("backend unavailable"));
-
-    const result = await persistentBindings.resetAcpSessionInPlace({
-      cfg: baseCfg,
-      sessionKey,
-      reason: "reset",
-    });
-
-    expect(result).toEqual({ ok: false, error: "backend unavailable" });
-    expect(managerMocks.closeSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        clearMeta: false,
-      }),
-    );
-  });
-
-  it("preserves harness agent ids during in-place reset even when not in agents.list", async () => {
+  it("clears configured harness agent sessions during in-place reset", async () => {
     const cfg = {
       ...baseCfg,
+      bindings: [
+        createDiscordBinding({
+          agentId: "coding",
+          conversationId: "1478844424791396446",
+        }),
+      ],
       agents: {
         list: [{ id: "main" }, { id: "coding" }],
       },
     } satisfies OpenClawConfig;
-    const sessionKey = "agent:coding:acp:binding:discord:default:9373ab192b2317f4";
+    const sessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1478844424791396446",
+      agentId: "coding",
+      mode: "persistent",
+      backend: "acpx",
+    });
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
       acp: {
         agent: "codex",
@@ -820,15 +1139,10 @@ describe("resetAcpSessionInPlace", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(managerMocks.initializeSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        agent: "codex",
-      }),
-    );
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
   });
 
-  it("preserves configured ACP agent overrides during in-place reset when metadata omits the agent", async () => {
+  it("clears configured ACP agent overrides even when metadata omits the agent", async () => {
     const cfg = createCfgWithBindings(
       [
         createDiscordBinding({
@@ -879,12 +1193,6 @@ describe("resetAcpSessionInPlace", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(managerMocks.initializeSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        agent: "codex",
-        backendId: "acpx",
-      }),
-    );
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
   });
 });

@@ -4,9 +4,12 @@
  */
 
 import crypto from "node:crypto";
+import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { SessionEntry } from "../api.js";
-import type { VoiceCallConfig } from "./config.js";
+import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
+import { resolveVoiceResponseModel } from "./response-model.js";
 
 export type VoiceResponseParams = {
   /** Voice call config */
@@ -17,6 +20,8 @@ export type VoiceResponseParams = {
   agentRuntime: CoreAgentDeps;
   /** Call ID for session tracking */
   callId: string;
+  /** Persisted call session key */
+  sessionKey?: string;
   /** Caller's phone number */
   from: string;
   /** Conversation transcript */
@@ -30,6 +35,153 @@ export type VoiceResponseResult = {
   error?: string;
 };
 
+type VoiceResponsePayload = {
+  text?: string;
+  isError?: boolean;
+  isReasoning?: boolean;
+};
+
+const VOICE_SPOKEN_OUTPUT_CONTRACT = [
+  "Output format requirements:",
+  '- Return only valid JSON in this exact shape: {"spoken":"..."}',
+  "- Do not include markdown, code fences, planning text, or extra keys.",
+  '- Put exactly what should be spoken to the caller into "spoken".',
+  '- If there is nothing to say, return {"spoken":""}.',
+].join("\n");
+
+function normalizeSpokenText(value: string): string | null {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function tryParseSpokenJson(text: string): string | null {
+  const candidates: string[] = [];
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  candidates.push(trimmed);
+
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced?.[1]) {
+    candidates.push(fenced[1]);
+  }
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as { spoken?: unknown };
+      if (typeof parsed?.spoken !== "string") {
+        continue;
+      }
+      return normalizeSpokenText(parsed.spoken) ?? "";
+    } catch {
+      // Continue trying other candidates.
+    }
+  }
+
+  const inlineSpokenMatch = trimmed.match(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
+  if (!inlineSpokenMatch) {
+    return null;
+  }
+
+  try {
+    const decoded = JSON.parse(`"${inlineSpokenMatch[1] ?? ""}"`) as string;
+    return normalizeSpokenText(decoded) ?? "";
+  } catch {
+    return null;
+  }
+}
+
+function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
+  const lower = normalizeLowercaseStringOrEmpty(paragraph);
+  if (!lower) {
+    return false;
+  }
+
+  if (lower.startsWith("thinking process")) {
+    return true;
+  }
+  if (lower.startsWith("reasoning:") || lower.startsWith("analysis:")) {
+    return true;
+  }
+  if (
+    lower.startsWith("the user ") &&
+    (lower.includes("i should") || lower.includes("i need to") || lower.includes("i will"))
+  ) {
+    return true;
+  }
+  if (
+    lower.includes("this is a natural continuation of the conversation") ||
+    lower.includes("keep the conversation flowing")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function sanitizePlainSpokenText(text: string): string | null {
+  const withoutCodeFences = text.replace(/```[\s\S]*?```/g, " ").trim();
+  if (!withoutCodeFences) {
+    return null;
+  }
+
+  const paragraphs = withoutCodeFences
+    .split(/\n\s*\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  while (paragraphs.length > 1 && isLikelyMetaReasoningParagraph(paragraphs[0])) {
+    paragraphs.shift();
+  }
+
+  return normalizeSpokenText(paragraphs.join(" "));
+}
+
+function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string | null {
+  const spokenSegments: string[] = [];
+
+  for (const payload of payloads) {
+    if (payload.isError || payload.isReasoning) {
+      continue;
+    }
+
+    const rawText = payload.text?.trim() ?? "";
+    if (!rawText) {
+      continue;
+    }
+
+    const structured = tryParseSpokenJson(rawText);
+    if (structured !== null) {
+      if (structured.length > 0) {
+        spokenSegments.push(structured);
+      }
+      continue;
+    }
+
+    const plain = sanitizePlainSpokenText(rawText);
+    if (plain) {
+      spokenSegments.push(plain);
+    }
+  }
+
+  return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
+}
+
+function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
+  const trimmed = sessionKey.trim();
+  if (trimmed.toLowerCase().startsWith("agent:")) {
+    return trimmed;
+  }
+  return `agent:${agentId}:${trimmed}`;
+}
+
 /**
  * Generate a voice response using the embedded Pi agent with full tool support.
  * Uses the same agent infrastructure as messaging for consistent behavior.
@@ -37,17 +189,29 @@ export type VoiceResponseResult = {
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
 ): Promise<VoiceResponseResult> {
-  const { voiceConfig, callId, from, transcript, userMessage, coreConfig, agentRuntime } = params;
+  const {
+    voiceConfig,
+    callId,
+    sessionKey,
+    from,
+    transcript,
+    userMessage,
+    coreConfig,
+    agentRuntime,
+  } = params;
 
   if (!coreConfig) {
     return { text: null, error: "Core config unavailable for voice response" };
   }
   const cfg = coreConfig;
 
-  // Build voice-specific session key based on phone number
-  const normalizedPhone = from.replace(/\D/g, "");
-  const sessionKey = `voice:${normalizedPhone}`;
-  const agentId = "main";
+  const resolvedSessionKey = resolveVoiceCallSessionKey({
+    config: voiceConfig,
+    callId,
+    phone: from,
+    explicitSessionKey: sessionKey,
+  });
+  const agentId = voiceConfig.agentId ?? "main";
 
   // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
@@ -60,29 +224,38 @@ export async function generateVoiceResponse(
   // Load or create session entry
   const sessionStore = agentRuntime.session.loadSessionStore(storePath);
   const now = Date.now();
-  let sessionEntry = sessionStore[sessionKey] as SessionEntry | undefined;
+  const existingSessionEntry = sessionStore[resolvedSessionKey] as SessionEntry | undefined;
 
-  if (!sessionEntry) {
-    sessionEntry = {
-      sessionId: crypto.randomUUID(),
-      updatedAt: now,
-    };
-    sessionStore[sessionKey] = sessionEntry;
-    await agentRuntime.session.saveSessionStore(storePath, sessionStore);
+  // Resolve model from config
+  const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
+
+  let sessionEntry = existingSessionEntry;
+  if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
+    sessionEntry = await agentRuntime.session.updateSessionStore(storePath, (store) => {
+      let entry = store[resolvedSessionKey] as SessionEntry | undefined;
+      if (!entry?.sessionId) {
+        entry = {
+          ...entry,
+          sessionId: crypto.randomUUID(),
+          updatedAt: now,
+        };
+        store[resolvedSessionKey] = entry;
+      }
+      if (voiceConfig.responseModel) {
+        applyModelOverrideToSessionEntry({
+          entry,
+          selection: { provider, model },
+          selectionSource: "auto",
+        });
+      }
+      return entry;
+    });
   }
-
   const sessionId = sessionEntry.sessionId;
+
   const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
     agentId,
   });
-
-  // Resolve model from config
-  const modelRef =
-    voiceConfig.responseModel || `${agentRuntime.defaults.provider}/${agentRuntime.defaults.model}`;
-  const slashIndex = modelRef.indexOf("/");
-  const provider =
-    slashIndex === -1 ? agentRuntime.defaults.provider : modelRef.slice(0, slashIndex);
-  const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
 
   // Resolve thinking level
   const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
@@ -103,6 +276,7 @@ export async function generateVoiceResponse(
       .join("\n");
     extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
   }
+  extraSystemPrompt = `${extraSystemPrompt}\n\n${VOICE_SPOKEN_OUTPUT_CONTRACT}`;
 
   // Resolve timeout
   const timeoutMs = voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
@@ -111,7 +285,9 @@ export async function generateVoiceResponse(
   try {
     const result = await agentRuntime.runEmbeddedPiAgent({
       sessionId,
-      sessionKey,
+      sessionKey: resolvedSessionKey,
+      sandboxSessionKey: resolveVoiceSandboxSessionKey(agentId, resolvedSessionKey),
+      agentId,
       messageProvider: "voice",
       sessionFile,
       workspaceDir,
@@ -128,13 +304,7 @@ export async function generateVoiceResponse(
       agentDir,
     });
 
-    // Extract text from payloads
-    const texts = (result.payloads ?? [])
-      .filter((p) => p.text && !p.isError)
-      .map((p) => p.text?.trim())
-      .filter(Boolean);
-
-    const text = texts.join(" ") || null;
+    const text = extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]);
 
     if (!text && result.meta?.aborted) {
       return { text: null, error: "Response generation was aborted" };

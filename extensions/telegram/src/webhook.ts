@@ -1,26 +1,57 @@
-import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
-import { InputFile, webhookCallback } from "grammy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/infra-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
-import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/infra-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import type { IncomingMessage } from "node:http";
+import net from "node:net";
+import * as grammy from "grammy";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { BackoffPolicy, RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  computeBackoff,
+  defaultRuntime,
+  formatDurationPrecise,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/runtime-env";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   logWebhookError,
   logWebhookProcessed,
   logWebhookReceived,
+  normalizeOptionalString,
   startDiagnosticHeartbeat,
   stopDiagnosticHeartbeat,
 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  applyBasicWebhookRequestGuards,
+  createFixedWindowRateLimiter,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-ingress";
+import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
+import {
+  isRecoverableTelegramNetworkError,
+  isTelegramRateLimitError,
+  isTelegramServerError,
+} from "./network-errors.js";
+import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
-const TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS = 10_000;
+const TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY: BackoffPolicy = {
+  initialMs: 5_000,
+  maxMs: 60_000,
+  factor: 2,
+  jitter: 0.2,
+};
+const InputFileCtor: typeof grammy.InputFile =
+  typeof grammy.InputFile === "function"
+    ? grammy.InputFile
+    : (class InputFileFallback {
+        constructor(public readonly path: string) {}
+      } as unknown as typeof grammy.InputFile);
 
 async function listenHttpServer(params: {
   server: ReturnType<typeof createServer>;
@@ -89,12 +120,133 @@ function hasValidTelegramWebhookSecret(
   secretHeader: string | undefined,
   expectedSecret: string,
 ): boolean {
-  if (typeof secretHeader !== "string") {
+  return safeEqualSecret(secretHeader, expectedSecret);
+}
+
+function parseIpLiteral(value: string | undefined): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    if (end !== -1) {
+      const candidate = trimmed.slice(1, end);
+      return net.isIP(candidate) === 0 ? undefined : candidate;
+    }
+  }
+  if (net.isIP(trimmed) !== 0) {
+    return trimmed;
+  }
+  const lastColon = trimmed.lastIndexOf(":");
+  if (lastColon > -1 && trimmed.includes(".") && trimmed.indexOf(":") === lastColon) {
+    const candidate = trimmed.slice(0, lastColon);
+    return net.isIP(candidate) === 4 ? candidate : undefined;
+  }
+  return undefined;
+}
+
+function isTrustedProxyAddress(
+  ip: string | undefined,
+  trustedProxies?: readonly string[],
+): boolean {
+  const candidate = parseIpLiteral(ip);
+  if (!candidate || !trustedProxies?.length) {
     return false;
   }
-  const actual = Buffer.from(secretHeader, "utf-8");
-  const expected = Buffer.from(expectedSecret, "utf-8");
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
+  const blockList = new net.BlockList();
+  for (const proxy of trustedProxies) {
+    const trimmed = normalizeOptionalString(proxy) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed.includes("/")) {
+      const [address, prefix] = trimmed.split("/", 2);
+      const parsedPrefix = Number.parseInt(prefix ?? "", 10);
+      const family = net.isIP(address);
+      if (
+        family === 4 &&
+        Number.isInteger(parsedPrefix) &&
+        parsedPrefix >= 0 &&
+        parsedPrefix <= 32
+      ) {
+        blockList.addSubnet(address, parsedPrefix, "ipv4");
+      }
+      if (
+        family === 6 &&
+        Number.isInteger(parsedPrefix) &&
+        parsedPrefix >= 0 &&
+        parsedPrefix <= 128
+      ) {
+        blockList.addSubnet(address, parsedPrefix, "ipv6");
+      }
+      continue;
+    }
+    if (net.isIP(trimmed) === 4) {
+      blockList.addAddress(trimmed, "ipv4");
+      continue;
+    }
+    if (net.isIP(trimmed) === 6) {
+      blockList.addAddress(trimmed, "ipv6");
+    }
+  }
+  return blockList.check(candidate, net.isIP(candidate) === 6 ? "ipv6" : "ipv4");
+}
+
+function resolveForwardedClientIp(
+  forwardedFor: string | undefined,
+  trustedProxies?: readonly string[],
+): string | undefined {
+  if (!trustedProxies?.length) {
+    return undefined;
+  }
+  const forwardedChain = forwardedFor
+    ?.split(",")
+    .map((entry) => parseIpLiteral(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  if (!forwardedChain?.length) {
+    return undefined;
+  }
+  for (let index = forwardedChain.length - 1; index >= 0; index -= 1) {
+    const hop = forwardedChain[index];
+    if (!isTrustedProxyAddress(hop, trustedProxies)) {
+      return hop;
+    }
+  }
+  return undefined;
+}
+
+function resolveTelegramWebhookClientIp(req: IncomingMessage, config?: OpenClawConfig): string {
+  const remoteAddress = parseIpLiteral(req.socket.remoteAddress);
+  const trustedProxies = config?.gateway?.trustedProxies;
+  if (!remoteAddress) {
+    return "unknown";
+  }
+  if (!isTrustedProxyAddress(remoteAddress, trustedProxies)) {
+    return remoteAddress;
+  }
+  const forwardedFor = Array.isArray(req.headers["x-forwarded-for"])
+    ? req.headers["x-forwarded-for"][0]
+    : req.headers["x-forwarded-for"];
+  const forwardedClientIp = resolveForwardedClientIp(forwardedFor, trustedProxies);
+  if (forwardedClientIp) {
+    return forwardedClientIp;
+  }
+  if (config?.gateway?.allowRealIpFallback === true) {
+    const realIp = Array.isArray(req.headers["x-real-ip"])
+      ? req.headers["x-real-ip"][0]
+      : req.headers["x-real-ip"];
+    return parseIpLiteral(realIp) ?? "unknown";
+  }
+  return "unknown";
+}
+
+function resolveTelegramWebhookRateLimitKey(
+  req: IncomingMessage,
+  path: string,
+  config?: OpenClawConfig,
+): string {
+  return `${path}:${resolveTelegramWebhookClientIp(req, config)}`;
 }
 
 export async function startTelegramWebhook(opts: {
@@ -111,12 +263,14 @@ export async function startTelegramWebhook(opts: {
   healthPath?: string;
   publicUrl?: string;
   webhookCertPath?: string;
+  webhookRegistrationRetryPolicy?: BackoffPolicy;
+  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
   const port = opts.port ?? 8787;
   const host = opts.host ?? "127.0.0.1";
-  const secret = typeof opts.secret === "string" ? opts.secret.trim() : "";
+  const secret = normalizeOptionalString(opts.secret) ?? "";
   if (!secret) {
     throw new Error(
       "Telegram webhook mode requires a non-empty secret token. " +
@@ -124,6 +278,10 @@ export async function startTelegramWebhook(opts: {
     );
   }
   const runtime = opts.runtime ?? defaultRuntime;
+  const status = createTelegramWebhookStatusPublisher(opts.setStatus);
+  status.noteWebhookStart();
+  const webhookRegistrationRetryPolicy =
+    opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const bot = createTelegramBot({
     token: opts.token,
@@ -137,12 +295,11 @@ export async function startTelegramWebhook(opts: {
     runtime,
     abortSignal: opts.abortSignal,
   });
-  const handler = webhookCallback(bot, "callback", {
-    secretToken: secret,
-    onTimeout: "return",
-    timeoutMilliseconds: TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS,
+  const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
+    windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+    maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+    maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
   });
-
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat(opts.config);
   }
@@ -164,6 +321,18 @@ export async function startTelegramWebhook(opts: {
     if (req.url !== path || req.method !== "POST") {
       res.writeHead(404);
       res.end();
+      return;
+    }
+    // Apply the per-source limit before auth so invalid secret guesses consume budget
+    // in the same window as any later request from that source.
+    if (
+      !applyBasicWebhookRequestGuards({
+        req,
+        res,
+        rateLimiter: telegramWebhookRateLimiter,
+        rateLimitKey: resolveTelegramWebhookRateLimitKey(req, path, opts.config),
+      })
+    ) {
       return;
     }
     const startTime = Date.now();
@@ -200,38 +369,30 @@ export async function startTelegramWebhook(opts: {
         return;
       }
 
-      let replied = false;
-      const reply = async (json: string) => {
-        if (replied) {
-          return;
-        }
-        replied = true;
-        if (res.headersSent || res.writableEnded) {
-          return;
-        }
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-        res.end(json);
-      };
-      const unauthorized = async () => {
-        if (replied) {
-          return;
-        }
-        replied = true;
-        respondText(401, "unauthorized");
-      };
+      respondText(200);
+      status.noteWebhookUpdateReceived();
 
-      await handler(body.value, reply, secretHeader, unauthorized);
-      if (!replied) {
-        respondText(200);
-      }
+      void (async () => {
+        await bot.handleUpdate(body.value as Parameters<typeof bot.handleUpdate>[0]);
 
-      if (diagnosticsEnabled) {
-        logWebhookProcessed({
-          channel: "telegram",
-          updateType: "telegram-post",
-          durationMs: Date.now() - startTime,
-        });
-      }
+        if (diagnosticsEnabled) {
+          logWebhookProcessed({
+            channel: "telegram",
+            updateType: "telegram-post",
+            durationMs: Date.now() - startTime,
+          });
+        }
+      })().catch((err) => {
+        const errMsg = formatErrorMessage(err);
+        if (diagnosticsEnabled) {
+          logWebhookError({
+            channel: "telegram",
+            updateType: "telegram-post",
+            error: errMsg,
+          });
+        }
+        runtime.log?.(`webhook update processing failed after ack: ${errMsg}`);
+      });
     })().catch((err) => {
       const errMsg = formatErrorMessage(err);
       if (diagnosticsEnabled) {
@@ -241,7 +402,7 @@ export async function startTelegramWebhook(opts: {
           error: errMsg,
         });
       }
-      runtime.log?.(`webhook handler failed: ${errMsg}`);
+      runtime.log?.(`webhook request failed: ${errMsg}`);
       respondText(500);
     });
   });
@@ -262,30 +423,8 @@ export async function startTelegramWebhook(opts: {
     port,
   });
 
-  try {
-    await withTelegramApiErrorLogging({
-      operation: "setWebhook",
-      runtime,
-      fn: () =>
-        bot.api.setWebhook(publicUrl, {
-          secret_token: secret,
-          allowed_updates: resolveTelegramAllowedUpdates(),
-          certificate: opts.webhookCertPath ? new InputFile(opts.webhookCertPath) : undefined,
-        }),
-    });
-  } catch (err) {
-    server.close();
-    void bot.stop();
-    if (diagnosticsEnabled) {
-      stopDiagnosticHeartbeat();
-    }
-    throw err;
-  }
-
-  runtime.log?.(`webhook local listener on http://${host}:${boundPort}${path}`);
-  runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
-
   let shutDown = false;
+  let webhookAdvertised = false;
   const shutdown = () => {
     if (shutDown) {
       return;
@@ -300,12 +439,101 @@ export async function startTelegramWebhook(opts: {
     });
     server.close();
     void bot.stop();
+    status.noteWebhookStop();
     if (diagnosticsEnabled) {
       stopDiagnosticHeartbeat();
     }
   };
-  if (opts.abortSignal) {
+  if (opts.abortSignal?.aborted) {
+    shutdown();
+  } else if (opts.abortSignal) {
     opts.abortSignal.addEventListener("abort", shutdown, { once: true });
+  }
+
+  const advertiseWebhook = async (): Promise<void> => {
+    if (shutDown || opts.abortSignal?.aborted) {
+      return;
+    }
+    try {
+      await withTelegramApiErrorLogging({
+        operation: "setWebhook",
+        runtime,
+        fn: () =>
+          bot.api.setWebhook(publicUrl, {
+            secret_token: secret,
+            allowed_updates: resolveTelegramAllowedUpdates(),
+            certificate: opts.webhookCertPath ? new InputFileCtor(opts.webhookCertPath) : undefined,
+          }),
+      });
+    } catch (err) {
+      status.noteWebhookRegistrationFailure(formatErrorMessage(err));
+      throw err;
+    }
+    if (shutDown) {
+      return;
+    }
+    webhookAdvertised = true;
+    status.noteWebhookAdvertised();
+    runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
+  };
+  const shouldRetryWebhookRegistration = (err: unknown): boolean =>
+    isRecoverableTelegramNetworkError(err, { context: "webhook" }) ||
+    isTelegramServerError(err) ||
+    isTelegramRateLimitError(err);
+  const retryWebhookRegistration = async (firstAttempt: number): Promise<void> => {
+    let attempt = firstAttempt;
+    while (true) {
+      if (shutDown || opts.abortSignal?.aborted || webhookAdvertised) {
+        return;
+      }
+      const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
+      runtime.log?.(
+        `telegram setWebhook retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
+      );
+      try {
+        await sleepWithAbort(delayMs, opts.abortSignal);
+      } catch {
+        return;
+      }
+      if (shutDown || opts.abortSignal?.aborted || webhookAdvertised) {
+        return;
+      }
+      try {
+        await advertiseWebhook();
+        return;
+      } catch (err) {
+        if (!shouldRetryWebhookRegistration(err)) {
+          runtime.error?.(
+            `telegram setWebhook retry stopped after non-recoverable error: ${formatErrorMessage(err)}`,
+          );
+          return;
+        }
+      }
+      attempt += 1;
+    }
+  };
+  const closeAfterStartupFailure = () => {
+    shutDown = true;
+    server.close();
+    void bot.stop();
+    status.noteWebhookStop();
+    if (diagnosticsEnabled) {
+      stopDiagnosticHeartbeat();
+    }
+  };
+
+  runtime.log?.(`webhook local listener on http://${host}:${boundPort}${path}`);
+
+  if (!shutDown) {
+    try {
+      await advertiseWebhook();
+    } catch (err) {
+      if (!shouldRetryWebhookRegistration(err)) {
+        closeAfterStartupFailure();
+        throw err;
+      }
+      void retryWebhookRegistration(1);
+    }
   }
 
   return { server, bot, stop: shutdown };

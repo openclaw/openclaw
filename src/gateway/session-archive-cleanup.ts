@@ -5,7 +5,7 @@ import {
   isOrphanedSessionTmpFileName,
   parseSessionArchiveTimestamp,
 } from "../config/sessions/artifacts.js";
-import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance.js";
+import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import { resolveAllAgentSessionStoreTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cleanupArchivedSessionTranscripts } from "./session-utils.fs.js";
@@ -59,7 +59,7 @@ export async function sweepSessionArchiveFiles(params: {
     return { removed: 0, directories: 0 };
   }
 
-  const config = resolveMaintenanceConfig();
+  const config = resolveMaintenanceConfigFromInput();
   let totalRemoved = 0;
 
   // Clean up old .deleted and .reset archives using existing retention config.

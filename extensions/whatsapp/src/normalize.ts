@@ -1,5 +1,7 @@
 export {
   looksLikeWhatsAppTargetId,
-  normalizeWhatsAppAllowFromEntries,
   normalizeWhatsAppMessagingTarget,
-} from "openclaw/plugin-sdk/channel-runtime";
+  isWhatsAppGroupJid,
+  isWhatsAppNewsletterJid,
+  normalizeWhatsAppTarget,
+} from "./normalize-target.js";

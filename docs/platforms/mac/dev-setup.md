@@ -2,19 +2,19 @@
 summary: "Setup guide for developers working on the OpenClaw macOS app"
 read_when:
   - Setting up the macOS development environment
-title: "macOS Dev Setup"
+title: "macOS dev setup"
 ---
 
-# macOS Developer Setup
+# macOS developer setup
 
-This guide covers the necessary steps to build and run the OpenClaw macOS application from source.
+Build and run the OpenClaw macOS application from source.
 
 ## Prerequisites
 
 Before building the app, ensure you have the following installed:
 
 1. **Xcode 26.2+**: Required for Swift development.
-2. **Node.js 24 & pnpm**: Recommended for the gateway, CLI, and packaging scripts. Node 22 LTS, currently `22.16+`, remains supported for compatibility.
+2. **Node.js 24 & pnpm**: Recommended for the gateway, CLI, and packaging scripts. Node 22 LTS, currently `22.14+`, remains supported for compatibility.
 
 ## 1. Install Dependencies
 
@@ -55,9 +55,12 @@ Alternatively, install it manually:
 npm install -g openclaw@<version>
 ```
 
+`pnpm add -g openclaw@<version>` and `bun add -g openclaw@<version>` also work.
+For the Gateway runtime, Node remains the recommended path.
+
 ## Troubleshooting
 
-### Build Fails: Toolchain or SDK Mismatch
+### Build fails: toolchain or SDK mismatch
 
 The macOS app build expects the latest macOS SDK and Swift 6.2 toolchain.
 
@@ -75,7 +78,7 @@ xcrun swift --version
 
 If versions don’t match, update macOS/Xcode and re-run the build.
 
-### App Crashes on Permission Grant
+### App crashes on permission grant
 
 If the app crashes when you try to allow **Speech Recognition** or **Microphone** access, it may be due to a corrupted TCC cache or signature mismatch.
 
@@ -97,8 +100,13 @@ If the gateway status stays on "Starting...", check if a zombie process is holdi
 openclaw gateway status
 openclaw gateway stop
 
-# If you’re not using a LaunchAgent (dev mode / manual runs), find the listener:
+# If you're not using a LaunchAgent (dev mode / manual runs), find the listener:
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
 If a manual run is holding the port, stop that process (Ctrl+C). As a last resort, kill the PID you found above.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Install overview](/install)

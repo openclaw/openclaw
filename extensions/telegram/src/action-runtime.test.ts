@@ -1,11 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { captureEnv } from "../../../test/helpers/extensions/env.js";
-import {
-  handleTelegramAction,
-  readTelegramButtons,
-  telegramActionRuntime,
-} from "./action-runtime.js";
+import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
@@ -33,6 +29,11 @@ const editForumTopicTelegram = vi.fn(async () => ({
   chatId: "123",
   messageThreadId: 42,
   name: "Renamed",
+}));
+const pinMessageTelegram = vi.fn(async () => ({
+  ok: true,
+  messageId: "789",
+  chatId: "123",
 }));
 const createForumTopicTelegram = vi.fn(async () => ({
   topicId: 99,
@@ -76,7 +77,16 @@ describe("handleTelegramAction", () => {
         action: "sendMessage",
         to: params.to,
         content: "Choose",
-        buttons: params.buttons,
+        presentation: {
+          blocks: params.buttons.map((row) => ({
+            type: "buttons",
+            buttons: row.map((button) => ({
+              label: button.text,
+              value: button.callback_data,
+              style: button.style,
+            })),
+          })),
+        },
       },
       telegramConfig({ capabilities: { inlineButtons: params.inlineButtons } }),
     );
@@ -102,6 +112,7 @@ describe("handleTelegramAction", () => {
       deleteMessageTelegram,
       editMessageTelegram,
       editForumTopicTelegram,
+      pinMessageTelegram,
       createForumTopicTelegram,
     });
     reactMessageTelegram.mockClear();
@@ -111,6 +122,7 @@ describe("handleTelegramAction", () => {
     deleteMessageTelegram.mockClear();
     editMessageTelegram.mockClear();
     editForumTopicTelegram.mockClear();
+    pinMessageTelegram.mockClear();
     createForumTopicTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
@@ -236,6 +248,31 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("accepts shared sticker action aliases", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { sticker: true } } },
+    } as OpenClawConfig;
+    await handleTelegramAction(
+      {
+        action: "sticker",
+        target: "123",
+        stickerId: ["sticker"],
+        replyTo: 9,
+        threadId: 11,
+      },
+      cfg,
+    );
+    expect(sendStickerTelegram).toHaveBeenCalledWith(
+      "123",
+      "sticker",
+      expect.objectContaining({
+        token: "tok",
+        replyToMessageId: 9,
+        messageThreadId: 11,
+      }),
+    );
+  });
+
   it("removes reactions when remove flag set", async () => {
     const cfg = reactionConfig("extensive");
     await handleTelegramAction(
@@ -320,6 +357,26 @@ describe("handleTelegramAction", () => {
     });
   });
 
+  it("accepts shared send action aliases", async () => {
+    await handleTelegramAction(
+      {
+        action: "send",
+        to: "@testchannel",
+        message: "Hello from alias",
+        media: "https://example.com/image.jpg",
+      },
+      telegramConfig(),
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "Hello from alias",
+      expect.objectContaining({
+        token: "tok",
+        mediaUrl: "https://example.com/image.jpg",
+      }),
+    );
+  });
+
   it("sends a poll", async () => {
     const result = await handleTelegramAction(
       {
@@ -355,6 +412,41 @@ describe("handleTelegramAction", () => {
       chatId: "123",
       pollId: "poll-1",
     });
+  });
+
+  it("accepts shared poll action aliases", async () => {
+    await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        pollQuestion: "Ready?",
+        pollOption: ["Yes", "No"],
+        pollMulti: "true",
+        pollPublic: "true",
+        pollDurationSeconds: 60,
+        replyTo: 55,
+        threadId: 77,
+        silent: "true",
+      },
+      telegramConfig(),
+    );
+    expect(sendPollTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      {
+        question: "Ready?",
+        options: ["Yes", "No"],
+        maxSelections: 2,
+        durationSeconds: 60,
+        durationHours: undefined,
+      },
+      expect.objectContaining({
+        token: "tok",
+        isAnonymous: false,
+        replyToMessageId: 55,
+        messageThreadId: 77,
+        silent: true,
+      }),
+    );
   });
 
   it("parses string booleans for poll flags", async () => {
@@ -552,6 +644,107 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/content required/i);
   });
 
+  it("renders presentation text when message content is omitted", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        presentation: {
+          title: "Status",
+          blocks: [
+            { type: "text", text: "Build completed" },
+            { type: "context", text: "main branch" },
+          ],
+        },
+      },
+      telegramConfig(),
+    );
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "123456",
+      "Status\n\nBuild completed\n\nmain branch",
+      expect.objectContaining({ token: "tok" }),
+    );
+  });
+
+  it("uses presentation fallback text for button-only sends", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve" }],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "123456",
+      "- Approve",
+      expect.objectContaining({
+        buttons: [[{ text: "Approve", callback_data: "approve" }]],
+      }),
+    );
+  });
+
+  it("pins action sends when delivery pin is requested", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "Pin this",
+        delivery: { pin: { enabled: true } },
+      },
+      telegramConfig(),
+    );
+
+    expect(pinMessageTelegram).toHaveBeenCalledWith(
+      "123456",
+      "789",
+      expect.objectContaining({ accountId: undefined, verbose: false }),
+    );
+  });
+
+  it("passes delivery pin notify requests for action sends", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "Pin this loudly",
+        delivery: { pin: { enabled: true, notify: true } },
+      },
+      telegramConfig(),
+    );
+
+    expect(pinMessageTelegram).toHaveBeenCalledWith(
+      "123456",
+      "789",
+      expect.objectContaining({ notify: true }),
+    );
+  });
+
+  it("fails required action-send pins when pinning fails", async () => {
+    pinMessageTelegram.mockRejectedValueOnce(new Error("pin failed"));
+
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "123456",
+          content: "Pin this",
+          delivery: { pin: { enabled: true, required: true } },
+        },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow(/pin failed/);
+  });
+
   it("respects sendMessage gating", async () => {
     const cfg = {
       channels: {
@@ -608,6 +801,38 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("surfaces non-fatal delete warnings", async () => {
+    deleteMessageTelegram.mockResolvedValueOnce({
+      ok: false,
+      warning: "Message 456 was not deleted: 400: Bad Request: message can't be deleted",
+    } as unknown as Awaited<ReturnType<typeof deleteMessageTelegram>>);
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+
+    const result = await handleTelegramAction(
+      {
+        action: "deleteMessage",
+        chatId: "123",
+        messageId: 456,
+      },
+      cfg,
+    );
+
+    const textPayload = result.content.find((item) => item.type === "text");
+    expect(textPayload?.type).toBe("text");
+    const parsed = JSON.parse((textPayload as { type: "text"; text: string }).text) as {
+      ok: boolean;
+      deleted?: boolean;
+      warning?: string;
+    };
+    expect(parsed).toMatchObject({
+      ok: false,
+      deleted: false,
+      warning: "Message 456 was not deleted: 400: Bad Request: message can't be deleted",
+    });
+  });
+
   it("respects deleteMessage gating", async () => {
     const cfg = {
       channels: {
@@ -650,11 +875,33 @@ describe("handleTelegramAction", () => {
         action: "sendMessage",
         to: "@testchannel",
         content: "Choose",
-        buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Ok", value: "cmd:ok" }] }],
+        },
       },
       cfg,
     );
     expect(sendMessageTelegram).toHaveBeenCalled();
+  });
+
+  it("uses interactive button labels as fallback text when message text is omitted", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "- Retry",
+      expect.objectContaining({
+        buttons: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      }),
+    );
   });
 
   it.each([
@@ -677,7 +924,9 @@ describe("handleTelegramAction", () => {
           action: "sendMessage",
           to,
           content: "Choose",
-          buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Ok", value: "cmd:ok" }] }],
+          },
         },
         telegramConfig({ capabilities: { inlineButtons } }),
       ),
@@ -746,46 +995,6 @@ describe("handleTelegramAction", () => {
         ],
       }),
     );
-  });
-});
-
-describe("readTelegramButtons", () => {
-  it("returns trimmed button rows for valid input", () => {
-    const result = readTelegramButtons({
-      buttons: [[{ text: "  Option A ", callback_data: " cmd:a " }]],
-    });
-    expect(result).toEqual([[{ text: "Option A", callback_data: "cmd:a" }]]);
-  });
-
-  it("normalizes optional style", () => {
-    const result = readTelegramButtons({
-      buttons: [
-        [
-          {
-            text: "Option A",
-            callback_data: "cmd:a",
-            style: " PRIMARY ",
-          },
-        ],
-      ],
-    });
-    expect(result).toEqual([
-      [
-        {
-          text: "Option A",
-          callback_data: "cmd:a",
-          style: "primary",
-        },
-      ],
-    ]);
-  });
-
-  it("rejects unsupported button style", () => {
-    expect(() =>
-      readTelegramButtons({
-        buttons: [[{ text: "Option A", callback_data: "cmd:a", style: "secondary" }]],
-      }),
-    ).toThrow(/style must be one of danger, success, primary/i);
   });
 });
 

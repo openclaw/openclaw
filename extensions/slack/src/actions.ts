@@ -1,16 +1,18 @@
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackAccount } from "./accounts.js";
-import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackWebClient } from "./client.js";
+import { createSlackWebClient, getSlackWriteClient } from "./client.js";
+import { buildSlackEditTextPayload } from "./edit-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
 export type SlackActionClientOpts = {
+  cfg?: OpenClawConfig;
   accountId?: string;
   token?: string;
   client?: WebClient;
@@ -41,10 +43,21 @@ export type SlackPin = {
   file?: { id?: string; name?: string };
 };
 
-function resolveToken(explicit?: string, accountId?: string) {
-  const cfg = loadConfig();
-  const account = resolveSlackAccount({ cfg, accountId });
-  const token = resolveSlackBotToken(explicit ?? account.botToken ?? undefined);
+function resolveToken(explicit?: string, accountId?: string, cfg?: OpenClawConfig): string {
+  if (explicit?.trim()) {
+    const token = resolveSlackBotToken(explicit);
+    if (token) {
+      return token;
+    }
+  }
+  if (!cfg) {
+    throw new Error(
+      "Slack actions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const resolvedCfg = requireRuntimeConfig(cfg, "Slack actions");
+  const account = resolveSlackAccount({ cfg: resolvedCfg, accountId });
+  const token = resolveSlackBotToken(account.botToken ?? undefined);
   if (!token) {
     logVerbose(
       `slack actions: missing bot token for account=${account.accountId} explicit=${Boolean(
@@ -64,9 +77,23 @@ function normalizeEmoji(raw: string) {
   return trimmed.replace(/^:+|:+$/g, "");
 }
 
-async function getClient(opts: SlackActionClientOpts = {}) {
-  const token = resolveToken(opts.token, opts.accountId);
-  return opts.client ?? createSlackWebClient(token);
+function hasSlackPlatformError(err: unknown, code: string): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const data = (err as { data?: unknown }).data;
+  if (!data || typeof data !== "object") {
+    return false;
+  }
+  return (data as { error?: unknown }).error === code;
+}
+
+async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
+  if (opts.client) {
+    return opts.client;
+  }
+  const token = resolveToken(opts.token, opts.accountId, opts.cfg);
+  return mode === "write" ? getSlackWriteClient(token) : createSlackWebClient(token);
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -83,12 +110,19 @@ export async function reactSlackMessage(
   emoji: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts);
-  await client.reactions.add({
-    channel: channelId,
-    timestamp: messageId,
-    name: normalizeEmoji(emoji),
-  });
+  const client = await getClient(opts, "write");
+  try {
+    await client.reactions.add({
+      channel: channelId,
+      timestamp: messageId,
+      name: normalizeEmoji(emoji),
+    });
+  } catch (err) {
+    if (hasSlackPlatformError(err, "already_reacted")) {
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function removeSlackReaction(
@@ -97,12 +131,19 @@ export async function removeSlackReaction(
   emoji: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts);
-  await client.reactions.remove({
-    channel: channelId,
-    timestamp: messageId,
-    name: normalizeEmoji(emoji),
-  });
+  const client = await getClient(opts, "write");
+  try {
+    await client.reactions.remove({
+      channel: channelId,
+      timestamp: messageId,
+      name: normalizeEmoji(emoji),
+    });
+  } catch (err) {
+    if (hasSlackPlatformError(err, "no_reaction")) {
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function removeOwnSlackReactions(
@@ -110,7 +151,7 @@ export async function removeOwnSlackReactions(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ): Promise<string[]> {
-  const client = await getClient(opts);
+  const client = await getClient(opts, "write");
   const userId = await resolveBotUserId(client);
   const reactions = await listSlackReactions(channelId, messageId, { client });
   const toRemove = new Set<string>();
@@ -129,10 +170,9 @@ export async function removeOwnSlackReactions(
   }
   await Promise.all(
     Array.from(toRemove, (name) =>
-      client.reactions.remove({
-        channel: channelId,
-        timestamp: messageId,
-        name,
+      removeSlackReaction(channelId, messageId, name, {
+        ...opts,
+        client,
       }),
     ),
   );
@@ -157,20 +197,33 @@ export async function listSlackReactions(
 export async function sendSlackMessage(
   to: string,
   content: string,
-  opts: SlackActionClientOpts & {
+  opts: Omit<SlackActionClientOpts, "cfg"> & {
+    cfg: OpenClawConfig;
     mediaUrl?: string;
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    };
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     threadTs?: string;
+    uploadFileName?: string;
+    uploadTitle?: string;
     blocks?: (Block | KnownBlock)[];
-  } = {},
+  },
 ) {
   return await sendMessageSlack(to, content, {
     accountId: opts.accountId,
+    cfg: opts.cfg,
     token: opts.token,
     mediaUrl: opts.mediaUrl,
+    mediaAccess: opts.mediaAccess,
     mediaLocalRoots: opts.mediaLocalRoots,
+    mediaReadFile: opts.mediaReadFile,
     client: opts.client,
     threadTs: opts.threadTs,
+    ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
+    ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
     blocks: opts.blocks,
   });
 }
@@ -181,13 +234,12 @@ export async function editSlackMessage(
   content: string,
   opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
 ) {
-  const client = await getClient(opts);
+  const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
-  const trimmedContent = content.trim();
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
+    text: buildSlackEditTextPayload(content, blocks),
     ...(blocks ? { blocks } : {}),
   });
 }
@@ -197,7 +249,7 @@ export async function deleteSlackMessage(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts);
+  const client = await getClient(opts, "write");
   await client.chat.delete({
     channel: channelId,
     ts: messageId,
@@ -211,37 +263,55 @@ export async function readSlackMessages(
     before?: string;
     after?: string;
     threadId?: string;
+    messageId?: string;
   } = {},
 ): Promise<{ messages: SlackMessageSummary[]; hasMore: boolean }> {
   const client = await getClient(opts);
+  const exactMessageId = opts.messageId?.trim();
+  const readLimit = exactMessageId ? 1 : opts.limit;
+  const exactBounds = exactMessageId
+    ? {
+        inclusive: true,
+        latest: exactMessageId,
+        oldest: undefined,
+      }
+    : {
+        latest: opts.before,
+        oldest: opts.after,
+      };
 
   // Use conversations.replies for thread messages, conversations.history for channel messages.
   if (opts.threadId) {
     const result = await client.conversations.replies({
       channel: channelId,
       ts: opts.threadId,
-      limit: opts.limit,
-      latest: opts.before,
-      oldest: opts.after,
+      limit: readLimit,
+      ...exactBounds,
+    });
+    const messages = ((result.messages ?? []) as SlackMessageSummary[]).filter((message) => {
+      if (exactMessageId) {
+        return message.ts === exactMessageId;
+      }
+      // conversations.replies includes the parent message; drop it for replies-only reads.
+      return message.ts !== opts.threadId;
     });
     return {
-      // conversations.replies includes the parent message; drop it for replies-only reads.
-      messages: (result.messages ?? []).filter(
-        (message) => (message as SlackMessageSummary)?.ts !== opts.threadId,
-      ) as SlackMessageSummary[],
-      hasMore: Boolean(result.has_more),
+      messages,
+      hasMore: exactMessageId ? false : Boolean(result.has_more),
     };
   }
 
   const result = await client.conversations.history({
     channel: channelId,
-    limit: opts.limit,
-    latest: opts.before,
-    oldest: opts.after,
+    limit: readLimit,
+    ...exactBounds,
   });
+  const messages = ((result.messages ?? []) as SlackMessageSummary[]).filter(
+    (message) => !exactMessageId || message.ts === exactMessageId,
+  );
   return {
-    messages: (result.messages ?? []) as SlackMessageSummary[],
-    hasMore: Boolean(result.has_more),
+    messages,
+    hasMore: exactMessageId ? false : Boolean(result.has_more),
   };
 }
 
@@ -260,7 +330,7 @@ export async function pinSlackMessage(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts);
+  const client = await getClient(opts, "write");
   await client.pins.add({ channel: channelId, timestamp: messageId });
 }
 
@@ -269,7 +339,7 @@ export async function unpinSlackMessage(
   messageId: string,
   opts: SlackActionClientOpts = {},
 ) {
-  const client = await getClient(opts);
+  const client = await getClient(opts, "write");
   await client.pins.remove({ channel: channelId, timestamp: messageId });
 }
 
@@ -414,7 +484,7 @@ export async function downloadSlackFile(
   fileId: string,
   opts: SlackActionClientOpts & { maxBytes: number; channelId?: string; threadId?: string },
 ): Promise<SlackMediaResult | null> {
-  const token = resolveToken(opts.token, opts.accountId);
+  const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const client = await getClient(opts);
 
   // Fetch fresh file metadata (includes a current url_private_download).

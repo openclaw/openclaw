@@ -82,6 +82,17 @@ describe("buildSystemPromptReport", () => {
     expect(report.bootstrapTotalMaxChars).toBe(22_222);
   });
 
+  it("reports zero in-band tool list chars when tool info stays structured", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const report = makeReport({
+      file,
+      injectedPath: "AGENTS.md",
+      injectedContent: "trimmed",
+    });
+
+    expect(report.tools.listChars).toBe(0);
+  });
+
   it("reports injectedChars=0 when injected file does not match by path or basename", () => {
     const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
     const report = makeReport({
@@ -111,5 +122,26 @@ describe("buildSystemPromptReport", () => {
     });
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+  });
+
+  it("does not count injected files as project context when the rendered prompt omits them", () => {
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/AGENTS.md",
+      content: "raw bootstrap context",
+    });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "custom override",
+      bootstrapFiles: [file],
+      injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "rendered context" }],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.systemPrompt.chars).toBe("custom override".length);
+    expect(report.systemPrompt.projectContextChars).toBe(0);
+    expect(report.systemPrompt.nonProjectContextChars).toBe("custom override".length);
   });
 });

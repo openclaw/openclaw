@@ -1,18 +1,35 @@
-import { describe, expect, it, vi } from "vitest";
-import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import {
+  createNonExitingRuntimeEnv,
+  createPluginSetupWizardConfigure,
+  createPluginSetupWizardStatus,
+  createTestWizardPrompter,
+  runSetupWizardConfigure,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { FeishuProbeResult } from "./types.js";
+
+const { probeFeishuMock } = vi.hoisted(() => ({
+  probeFeishuMock: vi.fn<() => Promise<FeishuProbeResult>>(async () => ({
+    ok: false,
+    error: "mocked",
+  })),
+}));
 
 vi.mock("./probe.js", () => ({
-  probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
+  probeFeishu: probeFeishuMock,
+}));
+
+vi.mock("./app-registration.js", () => ({
+  initAppRegistration: vi.fn(async () => {
+    throw new Error("mocked: scan-to-create not available");
+  }),
+  beginAppRegistration: vi.fn(),
+  pollAppRegistration: vi.fn(),
+  printQrCode: vi.fn(async () => {}),
+  getAppOwnerOpenId: vi.fn(async () => undefined),
 }));
 
 import { feishuPlugin } from "./channel.js";
-
-const baseConfigureContext = {
-  runtime: {} as never,
-  accountOverrides: {},
-  shouldPromptAccountIds: false,
-  forceAllowFrom: false,
-};
 
 const baseStatusContext = {
   accountOverrides: {},
@@ -43,7 +60,7 @@ async function withEnvVars(values: Record<string, string | undefined>, run: () =
 }
 
 async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: string }) {
-  return await feishuConfigureAdapter.getStatus({
+  return await feishuGetStatus({
     cfg: {
       channels: {
         feishu: {
@@ -56,30 +73,31 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
   });
 }
 
-const feishuConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
-  plugin: feishuPlugin,
-  wizard: feishuPlugin.setupWizard!,
-});
+const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
+const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
 
 describe("feishu setup wizard", () => {
+  beforeEach(() => {
+    probeFeishuMock.mockReset();
+    probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
+  });
+
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
       .fn()
       .mockResolvedValueOnce("cli_from_prompt")
-      .mockResolvedValueOnce("secret_from_prompt")
-      .mockResolvedValueOnce("oc_group_1");
-
-    const prompter = {
-      note: vi.fn(async () => undefined),
+      .mockResolvedValueOnce("secret_from_prompt");
+    const prompter = createTestWizardPrompter({
       text,
       confirm: vi.fn(async () => true),
       select: vi.fn(
-        async ({ initialValue }: { initialValue?: string }) => initialValue ?? "allowlist",
-      ),
-    } as never;
+        async ({ initialValue }: { initialValue?: string }) => initialValue ?? "bot",
+      ) as never,
+    });
 
     await expect(
-      feishuConfigureAdapter.configure({
+      runSetupWizardConfigure({
+        configure: feishuConfigure,
         cfg: {
           channels: {
             feishu: {
@@ -89,15 +107,73 @@ describe("feishu setup wizard", () => {
           },
         } as never,
         prompter,
-        ...baseConfigureContext,
+        runtime: createNonExitingRuntimeEnv(),
       }),
     ).resolves.toBeTruthy();
   });
 });
 
 describe("feishu setup wizard status", () => {
+  beforeEach(() => {
+    probeFeishuMock.mockReset();
+    probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
+  });
+
+  it("treats SecretRef appSecret as configured when appId is present", async () => {
+    const status = await feishuGetStatus({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "cli_a123456",
+            appSecret: {
+              source: "env",
+              provider: "default",
+              id: "FEISHU_APP_SECRET",
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+  });
+
+  it("probes the resolved default account in multi-account config", async () => {
+    probeFeishuMock.mockResolvedValueOnce({ ok: true, botName: "Feishu Main" });
+
+    const status = await feishuGetStatus({
+      cfg: {
+        channels: {
+          feishu: {
+            enabled: true,
+            defaultAccount: "main-bot",
+            accounts: {
+              "main-bot": {
+                appId: "cli_main",
+                appSecret: "main-app-secret", // pragma: allowlist secret
+                connectionMode: "websocket",
+              },
+            },
+          },
+        },
+      } as never,
+      ...baseStatusContext,
+    });
+
+    expect(status.configured).toBe(true);
+    expect(status.statusLines).toEqual(["Feishu: connected as Feishu Main"]);
+    expect(probeFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "main-bot",
+        appId: "cli_main",
+        appSecret: "main-app-secret", // pragma: allowlist secret
+      }),
+    );
+  });
+
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {
-    const status = await feishuConfigureAdapter.getStatus({
+    const status = await feishuGetStatus({
       cfg: {
         channels: {
           feishu: {

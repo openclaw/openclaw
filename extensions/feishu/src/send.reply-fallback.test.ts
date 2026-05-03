@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuSendTargetMock = vi.hoisted(() => vi.fn());
 const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "preserve"));
@@ -9,6 +9,7 @@ vi.mock("./send-target.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  setFeishuRuntime: vi.fn(),
   getFeishuRuntime: () => ({
     channel: {
       text: {
@@ -19,7 +20,8 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
+let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   const replyMock = vi.fn();
@@ -35,6 +37,10 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(result.messageId).toBe(expectedMessageId);
   }
 
+  beforeAll(async () => {
+    ({ sendCardFeishu, sendMessageFeishu } = await import("./send.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     resolveFeishuSendTargetMock.mockReturnValue({
@@ -49,6 +55,34 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       receiveId: "ou_target",
       receiveIdType: "open_id",
     });
+  });
+
+  it("preserves Feishu diagnostics when direct sends reject before response checks", async () => {
+    const apiError = Object.assign(new Error("Request failed with status code 400"), {
+      response: {
+        status: 400,
+        data: {
+          code: 9499,
+          msg: "Bad Request",
+          error: {
+            log_id: "202604291247104BEF4C42D2420A9AD569",
+            troubleshooter:
+              "https://open.feishu.cn/search?log_id=202604291247104BEF4C42D2420A9AD569",
+          },
+        },
+      },
+    });
+    createMock.mockRejectedValue(apiError);
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as never,
+        to: "user:ou_target",
+        text: "hello",
+      }),
+    ).rejects.toThrow(
+      /Feishu send failed: .*"http_status":400.*"feishu_code":9499.*"feishu_msg":"Bad Request".*"feishu_log_id":"202604291247104BEF4C42D2420A9AD569".*"feishu_troubleshooter":"https:\/\/open\.feishu\.cn\/search\?log_id=202604291247104BEF4C42D2420A9AD569"/,
+    );
   });
 
   it("falls back to create for withdrawn post replies", async () => {

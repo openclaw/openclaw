@@ -1,24 +1,56 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { makeSecurityAccount, registerPluginHttpRouteMock } from "./channel.test-mocks.js";
+import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedSynologyChatAccount } from "./types.js";
+
+const securityAccountDefaults: ResolvedSynologyChatAccount = {
+  accountId: "default",
+  enabled: true,
+  token: "t",
+  incomingUrl: "https://nas/incoming",
+  nasHost: "h",
+  webhookPath: "/w",
+  webhookPathSource: "default" as const,
+  dangerouslyAllowNameMatching: false,
+  dangerouslyAllowInheritedWebhookPath: false,
+  dmPolicy: "allowlist" as const,
+  allowedUserIds: [],
+  rateLimitPerMinute: 30,
+  botName: "Bot",
+  allowInsecureSsl: false,
+};
+
+function makeSecurityAccount(
+  overrides: Partial<ResolvedSynologyChatAccount> = {},
+): ResolvedSynologyChatAccount {
+  return { ...securityAccountDefaults, ...overrides };
+}
+
+const clientModule = await import("./client.js");
+const gatewayRuntimeModule = await import("./gateway-runtime.js");
+const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const registerSynologyWebhookRouteMock = vi
+  .spyOn(gatewayRuntimeModule, "registerSynologyWebhookRoute")
+  .mockImplementation(() => vi.fn());
 
 vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
 }));
 
-const { createSynologyChatPlugin } = await import("./channel.js");
+const { createSynologyChatPlugin, synologyChatPlugin } = await import("./channel.js");
+const getSynologyChatSetupStatus = createPluginSetupWizardStatus(synologyChatPlugin);
 
 describe("createSynologyChatPlugin", () => {
-  it("returns a plugin object with all required sections", () => {
-    const plugin = createSynologyChatPlugin();
-    expect(plugin.id).toBe("synology-chat");
-    expect(plugin.meta).toBeDefined();
-    expect(plugin.capabilities).toBeDefined();
-    expect(plugin.config).toBeDefined();
-    expect(plugin.setup).toBeDefined();
-    expect(plugin.setupWizard).toBeDefined();
-    expect(plugin.security).toBeDefined();
-    expect(plugin.outbound).toBeDefined();
-    expect(plugin.gateway).toBeDefined();
+  beforeEach(() => {
+    vi.stubEnv("SYNOLOGY_CHAT_TOKEN", "");
+    vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", "");
+    mockSendMessage.mockClear();
+    registerSynologyWebhookRouteMock.mockClear();
+    mockSendMessage.mockResolvedValue(true);
+    registerSynologyWebhookRouteMock.mockImplementation(() => vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   describe("meta", () => {
@@ -40,22 +72,96 @@ describe("createSynologyChatPlugin", () => {
   });
 
   describe("config", () => {
-    it("listAccountIds delegates to accounts module", () => {
+    it("listAccountIds includes default and named accounts when configured", () => {
       const plugin = createSynologyChatPlugin();
-      const result = plugin.config.listAccountIds({});
-      expect(Array.isArray(result)).toBe(true);
+      const result = plugin.config.listAccountIds({
+        channels: {
+          "synology-chat": {
+            token: "base-token",
+            accounts: {
+              office: { token: "office-token" },
+            },
+          },
+        },
+      });
+      expect(result).toEqual(["default", "office"]);
     });
 
-    it("resolveAccount returns account config", () => {
-      const cfg = { channels: { "synology-chat": { token: "t1" } } };
+    it("resolveAccount merges account overrides with base config defaults", () => {
+      const cfg = {
+        channels: {
+          "synology-chat": {
+            token: "base-token",
+            incomingUrl: "https://nas/base",
+            nasHost: "nas-base",
+            allowedUserIds: ["base-user"],
+            rateLimitPerMinute: 45,
+            botName: "Base Bot",
+            accounts: {
+              office: {
+                token: "office-token",
+                allowInsecureSsl: true,
+              },
+            },
+          },
+        },
+      };
       const plugin = createSynologyChatPlugin();
-      const account = plugin.config.resolveAccount(cfg, "default");
-      expect(account.accountId).toBe("default");
+      const account = plugin.config.resolveAccount(cfg, "office");
+      expect(account).toMatchObject({
+        accountId: "office",
+        token: "office-token",
+        incomingUrl: "https://nas/base",
+        nasHost: "nas-base",
+        allowedUserIds: ["base-user"],
+        rateLimitPerMinute: 45,
+        botName: "Base Bot",
+        allowInsecureSsl: true,
+      });
     });
 
     it("defaultAccountId returns 'default'", () => {
       const plugin = createSynologyChatPlugin();
-      expect(plugin.config.defaultAccountId({})).toBe("default");
+      expect(plugin.config.defaultAccountId?.({})).toBe("default");
+    });
+
+    it("setup status honors the selected named account", async () => {
+      const status = await getSynologyChatSetupStatus({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              accounts: {
+                ops: {
+                  token: "ops-token",
+                  incomingUrl: "https://nas/ops",
+                },
+                work: {
+                  token: "work-token",
+                },
+              },
+            },
+          },
+        },
+        accountOverrides: {
+          "synology-chat": "work",
+        },
+      });
+
+      expect(status.configured).toBe(false);
+      expect(status.statusLines).toEqual([
+        "Synology Chat: needs token + incoming webhook",
+        "Accounts: 2",
+      ]);
+    });
+
+    it("formats allowFrom entries through the shared adapter", () => {
+      const plugin = createSynologyChatPlugin();
+      expect(
+        plugin.config.formatAllowFrom?.({
+          cfg: {},
+          allowFrom: ["  USER1  ", 42],
+        }),
+      ).toEqual(["user1", "42"]);
     });
   });
 
@@ -69,6 +175,9 @@ describe("createSynologyChatPlugin", () => {
         incomingUrl: "u",
         nasHost: "h",
         webhookPath: "/w",
+        webhookPathSource: "default" as const,
+        dangerouslyAllowNameMatching: false,
+        dangerouslyAllowInheritedWebhookPath: false,
         dmPolicy: "allowlist" as const,
         allowedUserIds: ["user1"],
         rateLimitPerMinute: 30,
@@ -76,56 +185,158 @@ describe("createSynologyChatPlugin", () => {
         allowInsecureSsl: true,
       };
       const result = plugin.security.resolveDmPolicy({ cfg: {}, account });
+      if (!result) {
+        throw new Error("resolveDmPolicy returned null");
+      }
       expect(result.policy).toBe("allowlist");
       expect(result.allowFrom).toEqual(["user1"]);
-      expect(typeof result.normalizeEntry).toBe("function");
-      expect(result.normalizeEntry("  USER1  ")).toBe("user1");
+      expect(result.normalizeEntry?.("  USER1  ")).toBe("user1");
     });
   });
 
   describe("pairing", () => {
-    it("has notifyApproval and normalizeAllowEntry", () => {
+    it("normalizes entries and notifies approved users", async () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.pairing.idLabel).toBe("synologyChatUserId");
-      expect(typeof plugin.pairing.normalizeAllowEntry).toBe("function");
-      expect(plugin.pairing.normalizeAllowEntry("  USER1  ")).toBe("user1");
-      expect(typeof plugin.pairing.notifyApproval).toBe("function");
+      const normalize = plugin.pairing.normalizeAllowEntry;
+      const notifyApproval = plugin.pairing.notifyApproval;
+      if (!normalize || !notifyApproval) {
+        throw new Error("synology-chat pairing helpers unavailable");
+      }
+      expect(normalize("  USER1  ")).toBe("user1");
+
+      await notifyApproval({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              allowInsecureSsl: true,
+            },
+          },
+        },
+        id: "USER1",
+      });
+
+      expect(mockSendMessage).toHaveBeenCalledWith(
+        "https://nas/incoming",
+        "OpenClaw: your access has been approved.",
+        "USER1",
+        true,
+      );
     });
   });
 
   describe("security.collectWarnings", () => {
+    function makeSharedWebhookConfig(alertsOverrides: Record<string, unknown> = {}) {
+      return {
+        channels: {
+          "synology-chat": {
+            token: "base-token",
+            webhookPath: "/webhook/shared",
+            accounts: {
+              alerts: {
+                token: "alerts-token",
+                incomingUrl: "https://nas/alerts",
+                dmPolicy: "allowlist",
+                allowedUserIds: ["123"],
+                ...alertsOverrides,
+              },
+            },
+          },
+        },
+      };
+    }
+
     it("warns when token is missing", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount({ token: "" });
-      const warnings = plugin.security.collectWarnings({ account });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
       expect(warnings.some((w: string) => w.includes("token"))).toBe(true);
     });
 
     it("warns when allowInsecureSsl is true", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount({ allowInsecureSsl: true });
-      const warnings = plugin.security.collectWarnings({ account });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
       expect(warnings.some((w: string) => w.includes("SSL"))).toBe(true);
+    });
+
+    it("warns when dangerous name matching is enabled", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = makeSecurityAccount({ dangerouslyAllowNameMatching: true });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
+      expect(warnings.some((w: string) => w.includes("dangerouslyAllowNameMatching"))).toBe(true);
+    });
+
+    it("warns when inherited shared webhookPath is dangerously re-enabled", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = makeSecurityAccount({
+        accountId: "alerts",
+        webhookPathSource: "inherited-base",
+        dangerouslyAllowInheritedWebhookPath: true,
+      });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
+      expect(
+        warnings.some((w: string) => w.includes("dangerouslyAllowInheritedWebhookPath=true")),
+      ).toBe(true);
     });
 
     it("warns when dmPolicy is open", () => {
       const plugin = createSynologyChatPlugin();
-      const account = makeSecurityAccount({ dmPolicy: "open" });
-      const warnings = plugin.security.collectWarnings({ account });
+      const account = makeSecurityAccount({ dmPolicy: "open", allowedUserIds: ["*"] });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
       expect(warnings.some((w: string) => w.includes("open"))).toBe(true);
+    });
+
+    it("warns when dmPolicy is open and allowedUserIds is empty", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = makeSecurityAccount({ dmPolicy: "open", allowedUserIds: [] });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
+      expect(warnings.some((w: string) => w.includes("empty allowedUserIds"))).toBe(true);
     });
 
     it("warns when dmPolicy is allowlist and allowedUserIds is empty", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount();
-      const warnings = plugin.security.collectWarnings({ account });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
       expect(warnings.some((w: string) => w.includes("empty allowedUserIds"))).toBe(true);
+    });
+
+    it("warns when named multi-account routes inherit a shared webhookPath", () => {
+      const plugin = createSynologyChatPlugin();
+      const cfg = makeSharedWebhookConfig();
+      const account = plugin.config.resolveAccount(cfg, "alerts");
+      const warnings = plugin.security.collectWarnings({ cfg, account });
+      expect(warnings.some((w: string) => w.includes("must set an explicit webhookPath"))).toBe(
+        true,
+      );
+    });
+
+    it("warns when enabled accounts share the same exact webhookPath", () => {
+      const plugin = createSynologyChatPlugin();
+      const base = makeSharedWebhookConfig({ webhookPath: "/webhook/shared" }).channels[
+        "synology-chat"
+      ];
+      const cfg = {
+        channels: {
+          "synology-chat": {
+            ...base,
+            incomingUrl: "https://nas/default",
+            dmPolicy: "allowlist",
+            allowedUserIds: ["123"],
+          },
+        },
+      };
+      const account = plugin.config.resolveAccount(cfg, "alerts");
+      const warnings = plugin.security.collectWarnings({ cfg, account });
+      expect(warnings.some((w: string) => w.includes("conflicts on webhookPath"))).toBe(true);
     });
 
     it("returns no warnings for fully configured account", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount({ allowedUserIds: ["user1"] });
-      const warnings = plugin.security.collectWarnings({ account });
+      const warnings = plugin.security.collectWarnings({ cfg: {}, account });
       expect(warnings).toHaveLength(0);
     });
   });
@@ -134,6 +345,8 @@ describe("createSynologyChatPlugin", () => {
     it("normalizeTarget strips prefix and trims", () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.messaging.normalizeTarget("synology-chat:123")).toBe("123");
+      expect(plugin.messaging.normalizeTarget("synology_chat:123")).toBe("123");
+      expect(plugin.messaging.normalizeTarget("synology:123")).toBe("123");
       expect(plugin.messaging.normalizeTarget("  456  ")).toBe("456");
       expect(plugin.messaging.normalizeTarget("")).toBeUndefined();
     });
@@ -142,6 +355,8 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.messaging.targetResolver.looksLikeId("12345")).toBe(true);
       expect(plugin.messaging.targetResolver.looksLikeId("synology-chat:99")).toBe(true);
+      expect(plugin.messaging.targetResolver.looksLikeId("synology_chat:99")).toBe(true);
+      expect(plugin.messaging.targetResolver.looksLikeId("synology:99")).toBe(true);
       expect(plugin.messaging.targetResolver.looksLikeId("notanumber")).toBe(false);
       expect(plugin.messaging.targetResolver.looksLikeId("")).toBe(false);
     });
@@ -150,9 +365,10 @@ describe("createSynologyChatPlugin", () => {
   describe("directory", () => {
     it("returns empty stubs", async () => {
       const plugin = createSynologyChatPlugin();
-      expect(await plugin.directory.self()).toBeNull();
-      expect(await plugin.directory.listPeers()).toEqual([]);
-      expect(await plugin.directory.listGroups()).toEqual([]);
+      const params = { cfg: {}, runtime: {} as never };
+      expect(await plugin.directory.self?.(params)).toBeNull();
+      expect(await plugin.directory.listPeers?.(params)).toEqual([]);
+      expect(await plugin.directory.listGroups?.(params)).toEqual([]);
     });
   });
 
@@ -160,9 +376,9 @@ describe("createSynologyChatPlugin", () => {
     it("returns formatting hints", () => {
       const plugin = createSynologyChatPlugin();
       const hints = plugin.agentPrompt.messageToolHints();
-      expect(Array.isArray(hints)).toBe(true);
-      expect(hints.length).toBeGreaterThan(5);
-      expect(hints.some((h: string) => h.includes("<URL|display text>"))).toBe(true);
+      expect(hints).toContain("### Synology Chat Formatting");
+      expect(hints).toContain("**Links**: Use `<URL|display text>` to create clickable links.");
+      expect(hints).toContain("- No buttons, cards, or interactive elements");
     });
   });
 
@@ -198,9 +414,11 @@ describe("createSynologyChatPlugin", () => {
         text: "hello",
         to: "user1",
       });
-      expect(result.channel).toBe("synology-chat");
-      expect(result.messageId).toBeDefined();
-      expect(result.chatId).toBe("user1");
+      expect(result).toMatchObject({
+        channel: "synology-chat",
+        chatId: "user1",
+      });
+      expect(result.messageId).toMatch(/^sc-\d+$/);
     });
 
     it("sendMedia throws when missing incomingUrl", async () => {
@@ -237,16 +455,56 @@ describe("createSynologyChatPlugin", () => {
       };
     }
 
+    function makeNamedStartAccountCtx(
+      accountOverrides: Record<string, unknown>,
+      abortController = new AbortController(),
+    ) {
+      return {
+        abortController,
+        ctx: {
+          cfg: {
+            channels: {
+              "synology-chat": {
+                enabled: true,
+                token: "default-token",
+                incomingUrl: "https://nas/default",
+                webhookPath: "/webhook/synology-shared",
+                dmPolicy: "allowlist",
+                allowedUserIds: ["123"],
+                accounts: {
+                  alerts: {
+                    enabled: true,
+                    token: "alerts-token",
+                    incomingUrl: "https://nas/alerts",
+                    ...accountOverrides,
+                  },
+                },
+              },
+            },
+          },
+          accountId: "alerts",
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          abortSignal: abortController.signal,
+        },
+      };
+    }
+
     async function expectPendingStartAccountPromise(
       result: Promise<unknown>,
       abortController: AbortController,
     ) {
       expect(result).toBeInstanceOf(Promise);
-      const resolved = await Promise.race([
-        result,
-        new Promise((r) => setTimeout(() => r("pending"), 50)),
-      ]);
-      expect(resolved).toBe("pending");
+      let settled = false;
+      void result.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
       abortController.abort();
       await result;
     }
@@ -267,7 +525,7 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("startAccount refuses allowlist accounts with empty allowedUserIds", async () => {
-      const registerMock = registerPluginHttpRouteMock;
+      const registerMock = registerSynologyWebhookRouteMock;
       registerMock.mockClear();
       const plugin = createSynologyChatPlugin();
       const { ctx, abortController } = makeStartAccountCtx({
@@ -284,10 +542,63 @@ describe("createSynologyChatPlugin", () => {
       expect(registerMock).not.toHaveBeenCalled();
     });
 
-    it("deregisters stale route before re-registering same account/path", async () => {
+    it("startAccount refuses open accounts with empty allowedUserIds", async () => {
+      const registerMock = registerSynologyWebhookRouteMock;
+      registerMock.mockClear();
+      const plugin = createSynologyChatPlugin();
+      const { ctx, abortController } = makeStartAccountCtx({
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        dmPolicy: "open",
+        allowedUserIds: [],
+      });
+
+      const result = plugin.gateway.startAccount(ctx);
+      await expectPendingStartAccountPromise(result, abortController);
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("dmPolicy=open but empty allowedUserIds"),
+      );
+      expect(registerMock).not.toHaveBeenCalled();
+    });
+
+    it("startAccount refuses named accounts without explicit webhookPath in multi-account setups", async () => {
+      const registerMock = registerSynologyWebhookRouteMock;
+      const plugin = createSynologyChatPlugin();
+      const { ctx, abortController } = makeNamedStartAccountCtx({
+        dmPolicy: "allowlist",
+        allowedUserIds: ["123"],
+      });
+
+      const result = plugin.gateway.startAccount(ctx);
+      await expectPendingStartAccountPromise(result, abortController);
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("must set an explicit webhookPath"),
+      );
+      expect(registerMock).not.toHaveBeenCalled();
+    });
+
+    it("startAccount refuses duplicate exact webhook paths across accounts", async () => {
+      const registerMock = registerSynologyWebhookRouteMock;
+      const plugin = createSynologyChatPlugin();
+      const { ctx, abortController } = makeNamedStartAccountCtx({
+        webhookPath: "/webhook/synology-shared",
+        dmPolicy: "open",
+        allowedUserIds: ["*"],
+      });
+
+      const result = plugin.gateway.startAccount(ctx);
+      await expectPendingStartAccountPromise(result, abortController);
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("conflicts on webhookPath"),
+      );
+      expect(registerMock).not.toHaveBeenCalled();
+    });
+
+    it("re-registers same account/path through the route registrar", async () => {
       const unregisterFirst = vi.fn();
       const unregisterSecond = vi.fn();
-      const registerMock = registerPluginHttpRouteMock;
+      const registerMock = registerSynologyWebhookRouteMock;
       registerMock.mockReturnValueOnce(unregisterFirst).mockReturnValueOnce(unregisterSecond);
 
       const plugin = createSynologyChatPlugin();
@@ -311,19 +622,13 @@ describe("createSynologyChatPlugin", () => {
         abortSignal: abortCtrl.signal,
       });
 
-      // Start first account (returns a pending promise)
       const firstPromise = plugin.gateway.startAccount(makeCtx(abortFirst));
-      // Start second account on same path — should deregister the first route
       const secondPromise = plugin.gateway.startAccount(makeCtx(abortSecond));
 
-      // Give microtasks time to settle
-      await new Promise((r) => setTimeout(r, 10));
-
       expect(registerMock).toHaveBeenCalledTimes(2);
-      expect(unregisterFirst).toHaveBeenCalledTimes(1);
+      expect(unregisterFirst).not.toHaveBeenCalled();
       expect(unregisterSecond).not.toHaveBeenCalled();
 
-      // Clean up: abort both to resolve promises and prevent test leak
       abortFirst.abort();
       abortSecond.abort();
       await Promise.allSettled([firstPromise, secondPromise]);

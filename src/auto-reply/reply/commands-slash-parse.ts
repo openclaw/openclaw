@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
 export type SlashCommandParseResult =
   | { kind: "no-match" }
   | { kind: "empty" }
@@ -8,10 +10,10 @@ export type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
 
-export function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
+function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
   const trimmed = raw.trim();
-  const slashLower = slash.toLowerCase();
-  if (!trimmed.toLowerCase().startsWith(slashLower)) {
+  const slashLower = normalizeLowercaseStringOrEmpty(slash);
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
     return { kind: "no-match" };
   }
   const rest = trimmed.slice(slash.length).trim();
@@ -22,7 +24,7 @@ export function parseSlashCommandActionArgs(raw: string, slash: string): SlashCo
   if (!match) {
     return { kind: "invalid" };
   }
-  const action = match[1]?.toLowerCase() ?? "";
+  const action = normalizeLowercaseStringOrEmpty(match[1]);
   const args = (match[2] ?? "").trim();
   return { kind: "parsed", action, args };
 }

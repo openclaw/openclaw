@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CallManagerContext } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
@@ -9,10 +11,15 @@ import {
   continueCall as continueCallWithContext,
   endCall as endCallWithContext,
   initiateCall as initiateCallWithContext,
+  sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
 } from "./manager/outbound.js";
-import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./manager/store.js";
+import {
+  getCallHistoryFromStore,
+  loadActiveCallsFromStore,
+  persistCallRecord,
+} from "./manager/store.js";
 import { startMaxDurationTimer } from "./manager/timers.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import {
@@ -23,6 +30,12 @@ import {
   type OutboundCallOptions,
 } from "./types.js";
 import { resolveUserPath } from "./utils.js";
+
+function markRestoredCallSkipped(call: CallRecord, endReason: "completed" | "timeout"): void {
+  call.endedAt = Date.now();
+  call.endReason = endReason;
+  call.state = endReason;
+}
 
 function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
   const rawOverride = storePath?.trim() || config.store?.trim();
@@ -64,6 +77,7 @@ export class CallManager {
     }
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
+  private initialMessageInFlight = new Set<CallId>();
 
   constructor(config: VoiceCallConfig, storePath?: string) {
     this.config = config;
@@ -114,8 +128,9 @@ export class CallManager {
         startMaxDurationTimer({
           ctx: this.getContext(),
           callId,
+          timeoutMs: maxDurationMs - elapsed,
           onTimeout: async (id) => {
-            await endCallWithContext(this.getContext(), id);
+            await endCallWithContext(this.getContext(), id, { reason: "timeout" });
           },
         });
         console.log(`[voice-call] Restarted max-duration timer for restored call ${callId}`);
@@ -157,6 +172,20 @@ export class CallManager {
         console.log(
           `[voice-call] Skipping restored call ${callId} (older than maxDurationSeconds)`,
         );
+        markRestoredCallSkipped(call, "timeout");
+        persistCallRecord(this.storePath, call);
+        await provider
+          .hangupCall({
+            callId,
+            providerCallId: call.providerCallId,
+            reason: "timeout",
+          })
+          .catch((err) => {
+            console.warn(
+              `[voice-call] Failed to hang up expired restored call ${callId}:`,
+              err instanceof Error ? err.message : String(err),
+            );
+          });
         continue;
       }
 
@@ -170,6 +199,8 @@ export class CallManager {
               console.log(
                 `[voice-call] Skipping restored call ${callId} (provider status: ${result.status})`,
               );
+              markRestoredCallSkipped(call, "completed");
+              persistCallRecord(this.storePath, call);
             } else if (result.isUnknown) {
               console.log(
                 `[voice-call] Keeping restored call ${callId} (provider status unknown, relying on timer)`,
@@ -220,6 +251,13 @@ export class CallManager {
   }
 
   /**
+   * Send DTMF digits to an active call.
+   */
+  async sendDtmf(callId: CallId, digits: string): Promise<{ success: boolean; error?: string }> {
+    return sendDtmfWithContext(this.getContext(), callId, digits);
+  }
+
+  /**
    * Speak the initial message for a call (called when media stream connects).
    */
   async speakInitialMessage(providerCallId: string): Promise<void> {
@@ -256,6 +294,7 @@ export class CallManager {
       activeTurnCalls: this.activeTurnCalls,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
+      initialMessageInFlight: this.initialMessageInFlight,
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
@@ -269,11 +308,42 @@ export class CallManager {
     processManagerEvent(this.getContext(), event);
   }
 
+  private shouldDeferConversationInitialMessageUntilStreamConnect(): boolean {
+    if (!this.provider || this.provider.name !== "twilio" || !this.config.streaming.enabled) {
+      return false;
+    }
+
+    const streamAwareProvider = this.provider as VoiceCallProvider & {
+      isConversationStreamConnectEnabled?: () => boolean;
+    };
+    if (typeof streamAwareProvider.isConversationStreamConnectEnabled !== "function") {
+      return false;
+    }
+
+    return streamAwareProvider.isConversationStreamConnectEnabled();
+  }
+
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
-    const initialMessage =
-      typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
+    const initialMessage = normalizeOptionalString(call.metadata?.initialMessage) ?? "";
 
     if (!initialMessage) {
+      return;
+    }
+
+    // Notify mode should speak as soon as the provider reports "answered".
+    // Conversation mode should defer only when the Twilio stream-connect path
+    // is actually available; otherwise speak immediately on answered.
+    const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
+    if (mode === "conversation") {
+      if (this.config.realtime.enabled) {
+        return;
+      }
+      const shouldWaitForStreamConnect =
+        this.shouldDeferConversationInitialMessageUntilStreamConnect();
+      if (shouldWaitForStreamConnect) {
+        return;
+      }
+    } else if (mode !== "notify") {
       return;
     }
 
@@ -281,7 +351,11 @@ export class CallManager {
       return;
     }
 
-    void this.speakInitialMessage(call.providerCallId);
+    void this.speakInitialMessage(call.providerCallId).catch((err) => {
+      console.warn(
+        `[voice-call] Failed to speak initial message for call ${call.callId}: ${formatErrorMessage(err)}`,
+      );
+    });
   }
 
   /**

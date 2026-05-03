@@ -1,5 +1,6 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
@@ -39,9 +40,12 @@ function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig 
 }
 
 async function waitForStartedAccount(started: string[], accountId: string) {
-  for (let i = 0; i < 10 && !started.includes(accountId); i += 1) {
-    await Promise.resolve();
-  }
+  await vi.waitFor(
+    () => {
+      expect(started).toContain(accountId);
+    },
+    { timeout: 10_000 },
+  );
 }
 
 afterEach(() => {
@@ -73,9 +77,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     try {
-      await Promise.resolve();
-      await Promise.resolve();
-
+      await waitForStartedAccount(started, "alpha");
       expect(started).toEqual(["alpha"]);
       expect(maxInFlight).toBe(1);
     } finally {
@@ -134,7 +136,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     const abortController = new AbortController();
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createNonExitingRuntimeEnv();
     const monitorPromise = monitorFeishuProvider({
       config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
       runtime,
@@ -176,7 +178,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     try {
-      await Promise.resolve();
+      await waitForStartedAccount(started, "alpha");
       expect(started).toEqual(["alpha"]);
 
       abortController.abort();

@@ -1,16 +1,25 @@
-import { parseDiscordTarget } from "../../../extensions/discord/api.js";
-import { parseTelegramTarget } from "../../../extensions/telegram/api.js";
-import type { ChatType } from "../chat-type.js";
+import { resolveChannelRouteTargetWithParser } from "../../plugin-sdk/channel-route.js";
 import { normalizeChatChannelId } from "../registry.js";
-import { getChannelPlugin, normalizeChannelId } from "./registry.js";
-
-export type ParsedChannelExplicitTarget = {
-  to: string;
-  threadId?: string | number;
-  chatType?: ChatType;
-};
+import { getChannelPlugin, normalizeChannelId } from "./index.js";
+import type {
+  ChannelRouteParsedTarget,
+  ParsedChannelExplicitTarget,
+} from "./target-parsing-loaded.js";
+export {
+  comparableChannelTargetsMatch,
+  comparableChannelTargetsShareRoute,
+  parseExplicitTargetForLoadedChannel,
+  resolveComparableTargetForLoadedChannel,
+  resolveRouteTargetForLoadedChannel,
+} from "./target-parsing-loaded.js";
+export type {
+  ComparableChannelTarget,
+  ChannelRouteParsedTarget,
+  ParsedChannelExplicitTarget,
+} from "./target-parsing-loaded.js";
 
 function parseWithPlugin(
+  getPlugin: (channel: string) => ReturnType<typeof getChannelPlugin>,
   rawChannel: string,
   rawTarget: string,
 ): ParsedChannelExplicitTarget | null {
@@ -18,30 +27,32 @@ function parseWithPlugin(
   if (!channel) {
     return null;
   }
-  if (channel === "telegram") {
-    const target = parseTelegramTarget(rawTarget);
-    return {
-      to: target.chatId,
-      ...(target.messageThreadId != null ? { threadId: target.messageThreadId } : {}),
-      ...(target.chatType === "unknown" ? {} : { chatType: target.chatType }),
-    };
-  }
-  if (channel === "discord") {
-    const target = parseDiscordTarget(rawTarget, { defaultKind: "channel" });
-    if (!target) {
-      return null;
-    }
-    return {
-      to: target.id,
-      chatType: target.kind === "user" ? "direct" : "channel",
-    };
-  }
-  return getChannelPlugin(channel)?.messaging?.parseExplicitTarget?.({ raw: rawTarget }) ?? null;
+  return getPlugin(channel)?.messaging?.parseExplicitTarget?.({ raw: rawTarget }) ?? null;
 }
 
 export function parseExplicitTargetForChannel(
   channel: string,
   rawTarget: string,
 ): ParsedChannelExplicitTarget | null {
-  return parseWithPlugin(channel, rawTarget);
+  return parseWithPlugin(getChannelPlugin, channel, rawTarget);
+}
+
+export function resolveRouteTargetForChannel(params: {
+  channel: string;
+  rawTarget?: string | null;
+  fallbackThreadId?: string | number | null;
+}): ChannelRouteParsedTarget | null {
+  return resolveChannelRouteTargetWithParser({
+    ...params,
+    parseExplicitTarget: parseExplicitTargetForChannel,
+  });
+}
+
+/** @deprecated Use `resolveRouteTargetForChannel`. */
+export function resolveComparableTargetForChannel(params: {
+  channel: string;
+  rawTarget?: string | null;
+  fallbackThreadId?: string | number | null;
+}): ChannelRouteParsedTarget | null {
+  return resolveRouteTargetForChannel(params);
 }

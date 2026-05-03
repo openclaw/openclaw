@@ -1,13 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/config.js";
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  normalizePluginsConfig,
-  resolveEffectiveEnableState,
+  normalizePluginsConfigWithResolver,
+  resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
-} from "../../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+} from "../../plugins/config-policy.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 
 const log = createSubsystemLogger("skills");
@@ -20,15 +22,20 @@ export function resolvePluginSkillDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const registry = loadPluginManifestRegistry({
+  const metadataSnapshot = loadPluginMetadataSnapshot({
     workspaceDir,
-    config: params.config,
+    config: params.config ?? {},
+    env: process.env,
   });
+  const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return [];
   }
-  const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
-  const acpEnabled = params.config?.acp?.enabled !== false;
+  const normalizedPlugins = normalizePluginsConfigWithResolver(
+    params.config?.plugins,
+    metadataSnapshot.normalizePluginId,
+  );
+  const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config: params.config });
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
@@ -38,17 +45,18 @@ export function resolvePluginSkillDirs(params: {
     if (!record.skills || record.skills.length === 0) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.config,
+      enabledByDefault: record.enabledByDefault,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
-    // ACP router skills should not be attached when ACP is explicitly disabled.
-    if (!acpEnabled && record.id === "acpx") {
+    // ACP router skills should not be attached unless ACP can actually spawn.
+    if (!acpRuntimeAvailable && record.id === "acpx") {
       continue;
     }
     const memoryDecision = resolveMemorySlotDecision({
@@ -60,7 +68,7 @@ export function resolvePluginSkillDirs(params: {
     if (!memoryDecision.enabled) {
       continue;
     }
-    if (memoryDecision.selected && record.kind === "memory") {
+    if (memoryDecision.selected && hasKind(record.kind, "memory")) {
       selectedMemoryPluginId = record.id;
     }
     for (const raw of record.skills) {

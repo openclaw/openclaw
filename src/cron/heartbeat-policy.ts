@@ -1,6 +1,7 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 
-export type HeartbeatDeliveryPayload = {
+type HeartbeatDeliveryPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -14,7 +15,7 @@ export function shouldSkipHeartbeatOnlyDelivery(
     return true;
   }
   const hasAnyMedia = payloads.some(
-    (payload) => (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl),
+    (payload) => resolveSendableOutboundReplyParts(payload).hasMedia,
   );
   if (hasAnyMedia) {
     return false;
