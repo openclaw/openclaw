@@ -318,6 +318,11 @@ function resolveTopLevelLegacyArchiveVerification(
   if (readTopLevelArtifactKind(artifact) !== "legacy-zip") {
     return null;
   }
+  // Current summary-shaped legacy zip resolver responses expose `sha256`,
+  // but that digest identifies the ClawHub artifact record, not necessarily
+  // the downloadable archive bytes. Only trust the older resolver field that
+  // explicitly describes archive integrity here; otherwise fall back to the
+  // version metadata `sha256hash`/`files[]` path.
   const artifactSha256 = artifact
     ? normalizeOptionalString((artifact as Record<string, unknown>).artifactSha256)
     : null;

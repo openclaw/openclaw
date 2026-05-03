@@ -463,7 +463,7 @@ describe("installPluginFromClawHub", () => {
     );
   });
 
-  it("supplements legacy zip artifact resolver responses with version verification metadata", async () => {
+  it("does not trust summary legacy zip sha256 as archive integrity", async () => {
     fetchClawHubPackageArtifactMock.mockResolvedValueOnce({
       package: {
         name: "demo",
