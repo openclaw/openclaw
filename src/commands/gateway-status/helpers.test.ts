@@ -292,18 +292,28 @@ describe("resolveAuthForTarget - authMode guards and explicit URL overrides", ()
   });
 
   it("fails-fast for localLoopback when authMode is token and no token is present", async () => {
-    const auth = await resolveAuthForTarget(
-      { gateway: { auth: { mode: "token" } } },
+    // Clear ambient gateway-auth env vars so a token leaked from the test runner
+    // (or another suite) cannot satisfy the resolver and mask the fail-fast path.
+    await withEnvAsync(
       {
-        id: "localLoopback",
-        kind: "localLoopback",
-        url: "ws://127.0.0.1:18789",
-        active: true,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
       },
-      {},
-    );
+      async () => {
+        const auth = await resolveAuthForTarget(
+          { gateway: { auth: { mode: "token" } } },
+          {
+            id: "localLoopback",
+            kind: "localLoopback",
+            url: "ws://127.0.0.1:18789",
+            active: true,
+          },
+          {},
+        );
 
-    expect(auth.failureReason).toBeTruthy();
+        expect(auth.failureReason).toBeTruthy();
+      },
+    );
   });
 });
 
