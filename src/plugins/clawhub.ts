@@ -299,10 +299,13 @@ function resolveTopLevelNpmPackArtifact(
 function resolveTopLevelLegacyArchiveVerification(
   artifact: ClawHubResolvedArtifact | null | undefined,
 ): ClawHubArchiveVerification | null {
-  if (artifact?.artifactKind !== "legacy-zip" || typeof artifact.artifactSha256 !== "string") {
+  const wire = artifact as ClawHubResolvedArtifactWire | null | undefined;
+  const artifactKind = wire?.artifactKind ?? wire?.kind;
+  const artifactSha256 = wire?.artifactSha256 ?? wire?.sha256;
+  if (artifactKind !== "legacy-zip" || typeof artifactSha256 !== "string") {
     return null;
   }
-  const integrity = normalizeClawHubSha256Integrity(artifact.artifactSha256);
+  const integrity = normalizeClawHubSha256Integrity(artifactSha256);
   return integrity ? { kind: "archive-integrity", integrity } : null;
 }
 

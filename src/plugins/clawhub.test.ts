@@ -56,6 +56,7 @@ const { CLAWHUB_INSTALL_ERROR_CODE, formatClawHubSpecifier, installPluginFromCla
   await import("./clawhub.js");
 
 const DEMO_ARCHIVE_INTEGRITY = "sha256-qerEjGEpvES2+Tyan0j2xwDRkbcnmh4ZFfKN9vWbsa8=";
+const DEMO_ARCHIVE_SHA256 = "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af";
 const DEMO_CLAWPACK_SHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const DEMO_CLAWPACK_INTEGRITY = `sha256-${Buffer.from(DEMO_CLAWPACK_SHA256, "hex").toString(
   "base64",
@@ -510,6 +511,50 @@ describe("installPluginFromClawHub", () => {
     expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
       expect.objectContaining({
         artifact: "clawpack",
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+  });
+
+  it("accepts the live ClawHub legacy zip resolver shape with kind/sha256 field names", async () => {
+    fetchClawHubPackageVersionMock.mockClear();
+    fetchClawHubPackageArtifactMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+      },
+      version: "2026.3.22",
+      artifact: {
+        kind: "legacy-zip",
+        sha256: DEMO_ARCHIVE_SHA256,
+      } as unknown as ClawHubResolvedArtifact,
+    });
+    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
+      archivePath: "/tmp/clawhub-demo/archive.zip",
+      integrity: DEMO_ARCHIVE_INTEGRITY,
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      pluginId: "demo",
+      clawhub: {
+        artifactKind: "legacy-zip",
+        artifactFormat: "zip",
+        integrity: DEMO_ARCHIVE_INTEGRITY,
+      },
+    });
+    expect(fetchClawHubPackageVersionMock).not.toHaveBeenCalled();
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifact: "archive",
         name: "demo",
         version: "2026.3.22",
       }),
