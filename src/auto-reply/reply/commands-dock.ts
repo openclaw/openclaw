@@ -91,8 +91,15 @@ function resolveLinkedDockTarget(params: {
     if (!Array.isArray(ids)) {
       continue;
     }
-    const normalizedIds = ids.map((id) => normalizeLowercaseStringOrEmpty(id)).filter(Boolean);
-    if (!normalizedIds.some((id) => params.sourceCandidates.has(id))) {
+    let matchesSource = false;
+    for (const id of ids) {
+      const normalized = normalizeLowercaseStringOrEmpty(id);
+      if (normalized && params.sourceCandidates.has(normalized)) {
+        matchesSource = true;
+        break;
+      }
+    }
+    if (!matchesSource) {
       continue;
     }
     for (const id of ids) {

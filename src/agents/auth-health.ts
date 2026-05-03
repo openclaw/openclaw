@@ -202,9 +202,16 @@ export function buildAuthHealthSummary(params: {
 }): AuthHealthSummary {
   const now = Date.now();
   const warnAfterMs = params.warnAfterMs ?? DEFAULT_OAUTH_WARN_MS;
-  const providerFilter = params.providers
-    ? new Set(params.providers.map((p) => normalizeProviderId(p)).filter(Boolean))
-    : null;
+  let providerFilter: Set<string> | null = null;
+  if (params.providers) {
+    providerFilter = new Set<string>();
+    for (const provider of params.providers) {
+      const normalized = normalizeProviderId(provider);
+      if (normalized) {
+        providerFilter.add(normalized);
+      }
+    }
+  }
 
   const profiles = Object.entries(params.store.profiles)
     .filter(([_, cred]) =>
