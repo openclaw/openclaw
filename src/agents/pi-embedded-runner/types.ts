@@ -4,6 +4,9 @@ import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-contex
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
+// Keep these trace types local to embedded runner metadata. They intentionally
+// mirror the redacted completion-truth shape without exporting the internal
+// completion-truth contract through runner meta/public trace surfaces.
 export type CompletionTruthTrace = {
   /** Internal producer of this completion truth envelope. */
   source: string;

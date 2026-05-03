@@ -2534,6 +2534,9 @@ export async function runEmbeddedPiAgent(
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
+          // Completion truth is emitted by the internal PI attempt path only.
+          // Keep the wider shape local instead of expanding the plugin harness
+          // result contract with private runner observability metadata.
           const attemptCompletionTruth = attempt as typeof attempt &
             EmbeddedRunAttemptCompletionTruth;
           attempt.setTerminalLifecycleMeta?.({

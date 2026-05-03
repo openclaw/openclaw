@@ -39,7 +39,7 @@ export function createSessionsYieldTool(opts?: {
         toolCallId: _toolCallId,
       });
       try {
-        Promise.resolve(opts.onCompletionTruth?.(completionOutput)).catch(() => {
+        void Promise.resolve(opts.onCompletionTruth?.(completionOutput)).catch(() => {
           // Completion truth is observability metadata. It must never block the
           // control-plane yield callback that cleanly aborts the active run.
         });
