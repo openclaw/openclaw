@@ -31,6 +31,29 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   `--provider blacksmith-testbox`.
 - Prefer local targeted tests for tight edit loops. Broad gates belong remote.
 
+## macOS And Windows Targets
+
+Use these only when the task needs an existing non-Linux host. OpenClaw broad
+validation still defaults to `blacksmith-testbox`.
+
+Crabbox supports static SSH targets:
+
+```sh
+../crabbox/bin/crabbox run --provider ssh --target macos --static-host mac-studio.local -- xcodebuild test
+../crabbox/bin/crabbox run --provider ssh --target windows --windows-mode normal --static-host win-dev.local -- pwsh -NoProfile -Command "dotnet test"
+../crabbox/bin/crabbox run --provider ssh --target windows --windows-mode wsl2 --static-host win-dev.local -- pnpm test
+```
+
+- `target=macos` and `target=windows --windows-mode wsl2` use the POSIX SSH,
+  bash, Git, rsync, and tar contract.
+- Native Windows uses OpenSSH, PowerShell, Git, and tar; sync is manifest tar
+  archive transfer into `static.workRoot`.
+- `crabbox actions hydrate/register` are Linux-only today; use plain
+  `crabbox run` loops for static macOS and Windows hosts.
+- Live proof needs a reachable, operator-managed SSH host. Without one, verify
+  with `../crabbox/bin/crabbox run --help`, config/flag tests, and the Crabbox
+  Go test suite.
+
 ## Default Blacksmith Backend
 
 Use this for `pnpm check`, `pnpm check:changed`, `pnpm test`,
