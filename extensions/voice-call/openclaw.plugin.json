@@ -1,7 +1,12 @@
 {
   "id": "voice-call",
+  "commandAliases": [{ "name": "voicecall" }],
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onCommands": ["voicecall"]
+  },
+  "contracts": {
+    "tools": ["voice_call"]
   },
   "channelEnvVars": {
     "voice-call": [
@@ -38,6 +43,11 @@
     },
     "inboundGreeting": {
       "label": "Inbound Greeting",
+      "advanced": true
+    },
+    "numbers": {
+      "label": "Per-number Routing",
+      "help": "Inbound overrides keyed by dialed E.164 number.",
       "advanced": true
     },
     "telnyx.apiKey": {
@@ -133,6 +143,32 @@
       "label": "Realtime Instructions",
       "advanced": true
     },
+    "realtime.toolPolicy": {
+      "label": "Realtime Tool Policy",
+      "help": "Controls the shared openclaw_agent_consult tool.",
+      "advanced": true
+    },
+    "realtime.fastContext.enabled": {
+      "label": "Enable Fast Realtime Context",
+      "help": "Searches memory/session context before the full consult agent.",
+      "advanced": true
+    },
+    "realtime.fastContext.timeoutMs": {
+      "label": "Fast Context Timeout",
+      "advanced": true
+    },
+    "realtime.fastContext.maxResults": {
+      "label": "Fast Context Result Limit",
+      "advanced": true
+    },
+    "realtime.fastContext.sources": {
+      "label": "Fast Context Sources",
+      "advanced": true
+    },
+    "realtime.fastContext.fallbackToConsult": {
+      "label": "Fallback To Full Consult",
+      "advanced": true
+    },
     "realtime.providers": {
       "label": "Realtime Provider Config",
       "advanced": true
@@ -157,6 +193,10 @@
     "store": {
       "label": "Call Log Store Path",
       "advanced": true
+    },
+    "sessionScope": {
+      "label": "Session Scope",
+      "help": "Use per-phone to preserve caller memory across calls, or per-call to isolate every call into a fresh voice session."
     },
     "responseModel": {
       "label": "Response Model",
@@ -243,6 +283,38 @@
       },
       "inboundGreeting": {
         "type": "string"
+      },
+      "numbers": {
+        "type": "object",
+        "propertyNames": {
+          "pattern": "^\\+[1-9]\\d{1,14}$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inboundGreeting": {
+              "type": "string"
+            },
+            "tts": {
+              "$ref": "#/properties/tts"
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "responseModel": {
+              "type": "string"
+            },
+            "responseSystemPrompt": {
+              "type": "string"
+            },
+            "responseTimeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
       },
       "outbound": {
         "type": "object",
@@ -448,6 +520,34 @@
                 }
               },
               "required": ["type", "name", "description", "parameters"]
+            }
+          },
+          "fastContext": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "timeoutMs": {
+                "type": "number",
+                "minimum": 1
+              },
+              "maxResults": {
+                "type": "number",
+                "minimum": 1
+              },
+              "sources": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": ["memory", "sessions"]
+                }
+              },
+              "fallbackToConsult": {
+                "type": "boolean"
+              }
             }
           },
           "providers": {
@@ -708,6 +808,10 @@
       "store": {
         "type": "string"
       },
+      "sessionScope": {
+        "type": "string",
+        "enum": ["per-phone", "per-call"]
+      },
       "responseModel": {
         "type": "string"
       },
@@ -725,6 +829,8 @@
     "secretInputs": {
       "paths": [
         { "path": "twilio.authToken", "expected": "string" },
+        { "path": "realtime.providers.*.apiKey", "expected": "string" },
+        { "path": "streaming.providers.*.apiKey", "expected": "string" },
         { "path": "tts.providers.*.apiKey", "expected": "string" }
       ]
     }

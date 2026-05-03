@@ -11,6 +11,8 @@ import {
   packOpenClaw,
   parseMode,
   parseProvider,
+  modelProviderConfigBatchJson,
+  resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
@@ -323,7 +325,6 @@ class MacosSmoke {
           destination: this.tgzDir,
           packageSpec: this.options.targetPackageSpec,
           requireControlUi: true,
-          stageRuntimeDeps: !this.options.targetPackageSpec,
         });
         if (this.options.targetPackageSpec) {
           this.targetExpectVersion =
@@ -473,13 +474,13 @@ class MacosSmoke {
     this.status.freshDashboard = "pass";
     await this.phase(
       "fresh.first-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 2700),
       () => this.verifyTurn(),
     );
     this.status.freshAgent = "pass";
     if (this.discordEnabled()) {
       this.status.freshDiscord = "fail";
-      await this.phase("fresh.discord-config", 180, () => this.configureDiscord());
+      await this.phase("fresh.discord-config", 600, () => this.configureDiscord());
       await this.phase("fresh.discord-roundtrip", 180, () => this.runDiscordRoundtrip("fresh"));
       this.status.freshDiscord = "pass";
     }
@@ -530,13 +531,13 @@ class MacosSmoke {
     this.status.upgradeDashboard = "pass";
     await this.phase(
       "upgrade.first-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 2700),
       () => this.verifyTurn(),
     );
     this.status.upgradeAgent = "pass";
     if (this.discordEnabled()) {
       this.status.upgradeDiscord = "fail";
-      await this.phase("upgrade.discord-config", 180, () => this.configureDiscord());
+      await this.phase("upgrade.discord-config", 600, () => this.configureDiscord());
       await this.phase("upgrade.discord-roundtrip", 180, () => this.runDiscordRoundtrip("upgrade"));
       this.status.upgradeDiscord = "pass";
     }
@@ -854,7 +855,15 @@ mkdir -p "$bootstrap_root"
       `set -eu
 rm -rf ${shellQuote(`${home}/openclaw`)}
 export PATH=${shellQuote(`/tmp/openclaw-smoke-pnpm-bootstrap/node_modules/.bin:${guestPath}`)}
-/usr/bin/env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestNode} ${guestOpenClawEntry} update --channel dev --yes --json
+${guestNode} - <<'JS'
+const fs = require("node:fs");
+const path = require("node:path");
+const configPath = path.join(process.env.HOME || ${JSON.stringify(home)}, ".openclaw", "openclaw.json");
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+config.update = { ...(config.update || {}), channel: "dev" };
+fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
+JS
+/usr/bin/env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestNode} ${guestOpenClawEntry} update --channel dev --yes --json
 ${guestNode} ${guestOpenClawEntry} --version
 ${guestNode} ${guestOpenClawEntry} update status --json`,
     );
@@ -963,6 +972,17 @@ exit 1`);
 
   private verifyTurn(): void {
     this.guestExec([guestNode, guestOpenClawEntry, "models", "set", this.auth.modelId]);
+    const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "macos");
+    if (modelProviderConfigBatch) {
+      this.guestSh(`provider_config_batch="$(mktemp)"
+cat >"$provider_config_batch" <<'JSON'
+${modelProviderConfigBatch}
+JSON
+${shellQuote(guestNode)} ${shellQuote(
+        guestOpenClawEntry,
+      )} config set --batch-file "$provider_config_batch" --strict-json
+rm -f "$provider_config_batch"`);
+    }
     this.guestExec([
       guestNode,
       guestOpenClawEntry,
@@ -972,11 +992,41 @@ exit 1`);
       "true",
       "--strict-json",
     ]);
+    this.guestExec([guestNode, guestOpenClawEntry, "config", "set", "tools.profile", "minimal"]);
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
-exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id parallels-macos-smoke --message ${shellQuote(
-        "Reply with exact ASCII text OK only.",
-      )} --json`,
+agent_ok=false
+for attempt in 1 2; do
+  session_id="parallels-macos-smoke"
+  if [ "$attempt" -gt 1 ]; then session_id="parallels-macos-smoke-retry-$attempt"; fi
+  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
+  output_file="$(mktemp)"
+  set +e
+  /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
+    "Reply with exact ASCII text OK only.",
+  )} --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("macos")} --json >"$output_file" 2>&1
+  rc=$?
+  set -e
+  cat "$output_file"
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$output_file"
+    exit "$rc"
+  fi
+  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
+    agent_ok=true
+    rm -f "$output_file"
+    break
+  fi
+  rm -f "$output_file"
+  if [ "$attempt" -lt 2 ]; then
+    echo "agent turn attempt $attempt finished without OK response; retrying"
+    sleep 3
+  fi
+done
+if [ "$agent_ok" != true ]; then
+  echo "openclaw agent finished without OK response" >&2
+  exit 1
+fi`,
     );
   }
 

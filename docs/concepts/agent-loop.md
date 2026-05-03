@@ -32,6 +32,7 @@ wired end-to-end.
    - resolves model + auth profile and builds the pi session
    - subscribes to pi events and streams assistant/tool deltas
    - enforces timeout -> aborts run if exceeded
+   - for Codex app-server turns, aborts an accepted turn that stops producing app-server progress before a terminal event
    - returns payloads + usage metadata
 4. `subscribeEmbeddedPiSession` bridges pi-agent-core events to OpenClaw `agent` stream:
    - tool events => `stream: "tool"`
@@ -49,7 +50,8 @@ wired end-to-end.
   See [Command Queue](/concepts/queue).
 - Transcript writes are also protected by a session write lock on the session file. The lock is
   process-aware and file-based, so it catches writers that bypass the in-process queue or come from
-  another process.
+  another process. Session transcript writers wait up to `session.writeLock.acquireTimeoutMs`
+  before reporting the session as busy; the default is `60000` ms.
 - Session write locks are non-reentrant by default. If a helper intentionally nests acquisition of
   the same lock while preserving one logical writer, it must opt in explicitly with
   `allowReentrant: true`.
@@ -163,7 +165,7 @@ surfaces, while Codex native hooks remain a separate lower-level Codex mechanism
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
 - Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
 - Cron runtime: isolated agent-turn `timeoutSeconds` is owned by cron. The scheduler starts that timer when execution begins, aborts the underlying run at the configured deadline, then runs bounded cleanup before recording the timeout so a stale child session cannot keep the lane stuck.
-- Stuck-session recovery: with diagnostics enabled, `diagnostics.stuckSessionWarnMs` detects long `processing` sessions. Active embedded runs, active reply operations, and active session-lane tasks remain warning-only by default; if diagnostics show no active work for the session, the watchdog releases the affected session lane so queued startup work can drain.
+- Session liveness diagnostics: with diagnostics enabled, `diagnostics.stuckSessionWarnMs` classifies long `processing` sessions that have no observed reply, tool, status, block, or ACP progress. Active embedded runs, model calls, and tool calls report as `session.long_running`; active work with no recent progress reports as `session.stalled`; `session.stuck` is reserved for stale session bookkeeping with no active work, and only that path releases the affected session lane so queued startup work can drain. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
 - Model idle timeout: OpenClaw aborts a model request when no response chunks arrive before the idle window. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers; otherwise OpenClaw uses `agents.defaults.timeoutSeconds` when configured, capped at 120s by default. Cron-triggered runs with no explicit model or agent timeout disable the idle watchdog and rely on the cron outer timeout.
 - Provider HTTP request timeout: `models.providers.<id>.timeoutSeconds` applies to that provider's model HTTP fetches, including connect, headers, body, SDK request timeout, total guarded-fetch abort handling, and model stream idle watchdog. Use this for slow local/self-hosted providers such as Ollama before raising the whole agent runtime timeout.
 

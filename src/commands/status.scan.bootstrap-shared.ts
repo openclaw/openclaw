@@ -5,7 +5,7 @@ import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared
 import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { buildTailscaleHttpsUrl, resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
 
-export function buildColdStartUpdateResult(): UpdateCheckResult {
+function buildColdStartUpdateResult(): UpdateCheckResult {
   return {
     root: null,
     installKind: "unknown",
@@ -13,7 +13,7 @@ export function buildColdStartUpdateResult(): UpdateCheckResult {
   };
 }
 
-export function buildColdStartAgentLocalStatuses() {
+function buildColdStartAgentLocalStatuses() {
   return {
     defaultId: "main",
     agents: [],
@@ -43,7 +43,7 @@ export function buildColdStartStatusSummary() {
   };
 }
 
-export function shouldSkipStatusScanNetworkChecks(params: {
+function shouldSkipStatusScanNetworkChecks(params: {
   coldStart: boolean;
   hasConfiguredChannels: boolean;
   all?: boolean;
@@ -67,18 +67,10 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
     timeoutMs: number;
     fetchGit: boolean;
     includeRegistry: boolean;
+    updateConfigChannel?: string | null;
   }) => Promise<UpdateCheckResult>;
   getAgentLocalStatuses: (cfg: OpenClawConfig) => Promise<TAgentStatus>;
 };
-
-type StatusScanBootstrapParams<TAgentStatus, TSummary> =
-  StatusScanCoreBootstrapParams<TAgentStatus> & {
-    sourceConfig: OpenClawConfig;
-    getStatusSummary: (params: {
-      config: OpenClawConfig;
-      sourceConfig: OpenClawConfig;
-    }) => Promise<TSummary>;
-  };
 
 export async function createStatusScanCoreBootstrap<TAgentStatus>(
   params: StatusScanCoreBootstrapParams<TAgentStatus>,
@@ -104,6 +96,7 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
         timeoutMs: updateTimeoutMs,
         fetchGit: true,
         includeRegistry: true,
+        updateConfigChannel: params.cfg.update?.channel ?? null,
       });
   const agentStatusPromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartAgentLocalStatuses() as TAgentStatus)
@@ -129,29 +122,5 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
         tailscaleDns: await tailscaleDnsPromise,
         controlUiBasePath: params.cfg.gateway?.controlUi?.basePath,
       }),
-  };
-}
-
-export async function createStatusScanBootstrap<TAgentStatus, TSummary>(
-  params: StatusScanBootstrapParams<TAgentStatus, TSummary>,
-) {
-  const core = await createStatusScanCoreBootstrap<TAgentStatus>({
-    coldStart: params.coldStart,
-    cfg: params.cfg,
-    hasConfiguredChannels: params.hasConfiguredChannels,
-    opts: params.opts,
-    getTailnetHostname: params.getTailnetHostname,
-    getUpdateCheckResult: params.getUpdateCheckResult,
-    getAgentLocalStatuses: params.getAgentLocalStatuses,
-  });
-  const summaryPromise = core.skipColdStartNetworkChecks
-    ? Promise.resolve(buildColdStartStatusSummary() as TSummary)
-    : params.getStatusSummary({
-        config: params.cfg,
-        sourceConfig: params.sourceConfig,
-      });
-  return {
-    ...core,
-    summaryPromise,
   };
 }

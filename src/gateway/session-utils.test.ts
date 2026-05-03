@@ -16,6 +16,7 @@ import {
   getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStore,
+  listSessionsFromStoreAsync,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   parseGroupKey,
@@ -219,6 +220,21 @@ describe("gateway session utils", () => {
       store: {},
       key: "main",
       modelCatalog: catalog,
+    });
+
+    expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+    expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+  });
+
+  test("session defaults and rows expose bundled startup-lazy provider thinking without catalog", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai-codex/gpt-5.5" });
+
+    const defaults = getSessionDefaults(cfg);
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
     });
 
     expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
@@ -1110,6 +1126,121 @@ describe("resolveSessionModelRef", () => {
 });
 
 describe("listSessionsFromStore selected model display", () => {
+  test("async list yields during bulk transcript title and last-message hydration", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-yield-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const store: Record<string, SessionEntry> = {};
+      const now = Date.now();
+      for (let i = 0; i < 11; i += 1) {
+        const sessionId = `sess-yield-${i}`;
+        store[`agent:main:${sessionId}`] = {
+          sessionId,
+          updatedAt: now - i,
+        } as SessionEntry;
+        fs.writeFileSync(
+          path.join(tmpDir, `${sessionId}.jsonl`),
+          [
+            JSON.stringify({ type: "session", version: 1, id: sessionId }),
+            JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
+            JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
+          ].join("\n"),
+          "utf-8",
+        );
+      }
+
+      const params = {
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath,
+        store,
+        opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 11 },
+      };
+      const expected = listSessionsFromStore(params);
+      const listedPromise = listSessionsFromStoreAsync(params);
+      let settled = false;
+      void listedPromise.then(() => {
+        settled = true;
+      });
+
+      await Promise.resolve();
+
+      expect(settled).toBe(false);
+      const listed = await listedPromise;
+      expect(listed.path).toBe(expected.path);
+      expect(listed.count).toBe(expected.count);
+      expect(listed.defaults).toEqual(expected.defaults);
+      expect(listed.sessions).toEqual(expected.sessions);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("caps transcript title and last-message hydration for bulk list responses", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-cap-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const store: Record<string, SessionEntry> = {};
+      const now = Date.now();
+      for (let i = 0; i < 105; i += 1) {
+        const sessionId = `sess-${i}`;
+        store[`agent:main:${sessionId}`] = {
+          sessionId,
+          updatedAt: now - i,
+        } as SessionEntry;
+        fs.writeFileSync(
+          path.join(tmpDir, `${sessionId}.jsonl`),
+          [
+            JSON.stringify({ type: "session", version: 1, id: sessionId }),
+            JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
+            JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
+          ].join("\n"),
+          "utf-8",
+        );
+      }
+
+      const result = listSessionsFromStore({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath,
+        store,
+        opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 105 },
+      });
+
+      expect(result.sessions).toHaveLength(105);
+      expect(result.sessions[0]?.derivedTitle).toBe("title 0");
+      expect(result.sessions[0]?.lastMessagePreview).toBe("last 0");
+      expect(result.sessions[99]?.derivedTitle).toBe("title 99");
+      expect(result.sessions[99]?.lastMessagePreview).toBe("last 99");
+      expect(result.sessions[100]?.derivedTitle).toBeUndefined();
+      expect(result.sessions[100]?.lastMessagePreview).toBeUndefined();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("uses bounded top-N selection for small limited lists", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:old": { sessionId: "old", updatedAt: now - 10_000 } as SessionEntry,
+      "agent:main:newest": { sessionId: "newest", updatedAt: now } as SessionEntry,
+      "agent:main:middle-a": { sessionId: "middle-a", updatedAt: now - 5_000 } as SessionEntry,
+      "agent:main:middle-b": { sessionId: "middle-b", updatedAt: now - 5_000 } as SessionEntry,
+      "agent:main:newer": { sessionId: "newer", updatedAt: now - 1_000 } as SessionEntry,
+    };
+    const result = listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { limit: 4 },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:newest",
+      "agent:main:newer",
+      "agent:main:middle-a",
+      "agent:main:middle-b",
+    ]);
+  });
+
   test("shows the selected override model even when a fallback runtime model exists", () => {
     const cfg = createModelDefaultsConfig({
       primary: "anthropic/claude-opus-4-6",

@@ -12,6 +12,7 @@ import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "./manifest-registry.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
   createPluginRegistryIdNormalizer,
@@ -27,22 +28,10 @@ export {
   type PluginRegistryIdNormalizerOptions,
 } from "./plugin-registry-id-normalizer.js";
 
-export type PluginLookUpTable = {
-  index: PluginRegistrySnapshot;
-  manifestRegistry: PluginManifestRegistry;
-  plugins: readonly PluginManifestRecord[];
-  normalizePluginId: (pluginId: string) => string;
-  owners: {
-    channels: ReadonlyMap<string, readonly string[]>;
-    channelConfigs: ReadonlyMap<string, readonly string[]>;
-    providers: ReadonlyMap<string, readonly string[]>;
-    modelCatalogProviders: ReadonlyMap<string, readonly string[]>;
-    cliBackends: ReadonlyMap<string, readonly string[]>;
-    setupProviders: ReadonlyMap<string, readonly string[]>;
-    commandAliases: ReadonlyMap<string, readonly string[]>;
-    contracts: ReadonlyMap<string, readonly string[]>;
-  };
-};
+export type PluginLookUpTable = Pick<
+  PluginMetadataSnapshot,
+  "index" | "manifestRegistry" | "plugins" | "normalizePluginId" | "owners"
+>;
 
 export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;

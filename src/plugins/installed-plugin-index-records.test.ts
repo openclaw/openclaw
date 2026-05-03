@@ -164,6 +164,79 @@ describe("plugin index install records store", () => {
     });
   });
 
+  it("preserves git install resolution fields in persisted records", async () => {
+    const stateDir = makeStateDir();
+    const candidate = createPluginCandidate(stateDir, "git-demo");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        "git-demo": {
+          source: "git",
+          spec: "git:file:///tmp/git-demo@abc123",
+          installPath: path.join(stateDir, "plugins", "git-demo"),
+          gitUrl: "file:///tmp/git-demo",
+          gitRef: "abc123",
+          gitCommit: "abc123",
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
+      "git-demo": {
+        source: "git",
+        spec: "git:file:///tmp/git-demo@abc123",
+        gitUrl: "file:///tmp/git-demo",
+        gitRef: "abc123",
+        gitCommit: "abc123",
+      },
+    });
+  });
+
+  it("preserves ClawHub ClawPack install metadata in persisted records", async () => {
+    const stateDir = makeStateDir();
+    const candidate = createPluginCandidate(stateDir, "clawpack-demo");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        "clawpack-demo": {
+          source: "clawhub",
+          spec: "clawhub:clawpack-demo",
+          installPath: path.join(stateDir, "plugins", "clawpack-demo"),
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "clawpack-demo",
+          clawhubFamily: "code-plugin",
+          clawhubChannel: "official",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+          npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
+          clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256:
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          clawpackSize: 4096,
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
+      "clawpack-demo": {
+        source: "clawhub",
+        spec: "clawhub:clawpack-demo",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+        npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
+        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        clawpackSpecVersion: 1,
+        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        clawpackSize: 4096,
+      },
+    });
+  });
+
   it("returns an empty record map when no plugin index exists", () => {
     const stateDir = makeStateDir();
 

@@ -31,10 +31,16 @@ vi.mock("../plugins/install.js", () => ({
   installPluginFromNpmSpec,
 }));
 
+const installPluginFromClawHub = vi.hoisted(() => vi.fn());
+vi.mock("../plugins/clawhub.js", () => ({
+  installPluginFromClawHub,
+}));
+
 const enablePluginInConfig = vi.hoisted(() =>
-  vi.fn<(cfg: OpenClawConfig, pluginId: string) => PluginEnableResult>((cfg) => ({
+  vi.fn<(cfg: OpenClawConfig, pluginId: string) => PluginEnableResult>((cfg, pluginId) => ({
     config: cfg,
     enabled: true,
+    pluginId,
   })),
 );
 vi.mock("../plugins/enable.js", () => ({
@@ -71,6 +77,87 @@ describe("ensureOnboardingPluginInstalled", () => {
     vi.clearAllMocks();
     withTimeout.mockImplementation(async <T>(promise: Promise<T>) => await promise);
     refreshPluginRegistryAfterConfigMutation.mockResolvedValue(undefined);
+  });
+
+  it("installs and records ClawHub provider plugins with source facts", async () => {
+    installPluginFromClawHub.mockImplementation(async (params) => {
+      params.logger?.info?.("Downloading demo-plugin from ClawHub…");
+      return {
+        ok: true,
+        pluginId: "demo-plugin",
+        targetDir: "/tmp/demo-plugin",
+        version: "2026.5.2",
+        packageName: "demo-plugin",
+        clawhub: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "demo-plugin",
+          clawhubFamily: "code-plugin",
+          clawhubChannel: "official",
+          version: "2026.5.2",
+          integrity: "sha256-clawpack",
+          resolvedAt: "2026-05-02T00:00:00.000Z",
+          clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256:
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          clawpackSize: 4096,
+        },
+      };
+    });
+    const stop = vi.fn();
+    const update = vi.fn();
+
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: {},
+      entry: {
+        pluginId: "demo-plugin",
+        label: "Demo Provider",
+        install: {
+          clawhubSpec: "clawhub:demo-plugin@2026.5.2",
+          npmSpec: "@openclaw/demo-plugin@2026.5.2",
+          defaultChoice: "clawhub",
+        },
+      },
+      prompter: {
+        select: vi.fn(async () => "clawhub"),
+        progress: vi.fn(() => ({ update, stop })),
+      } as never,
+      runtime: {} as never,
+    });
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo-plugin@2026.5.2",
+        expectedPluginId: "demo-plugin",
+        mode: "install",
+        timeoutMs: 300_000,
+      }),
+    );
+    expect(update).toHaveBeenCalledWith("Downloading");
+    expect(stop).toHaveBeenCalledWith("Installed Demo Provider plugin");
+    expect(recordPluginInstall).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        pluginId: "demo-plugin",
+        source: "clawhub",
+        spec: "clawhub:demo-plugin@2026.5.2",
+        installPath: "/tmp/demo-plugin",
+        version: "2026.5.2",
+        integrity: "sha256-clawpack",
+        clawhubPackage: "demo-plugin",
+        clawpackSize: 4096,
+      }),
+    );
+    expect(result.installed).toBe(true);
+    expect(result.status).toBe("installed");
+    expect(result.cfg.plugins?.installs).toEqual({
+      "demo-plugin": expect.objectContaining({
+        pluginId: "demo-plugin",
+        source: "clawhub",
+        spec: "clawhub:demo-plugin@2026.5.2",
+      }),
+    });
   });
 
   it("passes npm specs and optional expected integrity to npm installs with progress", async () => {
@@ -195,8 +282,12 @@ describe("ensureOnboardingPluginInstalled", () => {
   it("offers registry npm specs without requiring an exact version or integrity pin", async () => {
     let captured:
       | {
-          options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
-          initialValue: "npm" | "local" | "skip";
+          options: Array<{
+            value: "clawhub" | "npm" | "local" | "skip";
+            label: string;
+            hint?: string;
+          }>;
+          initialValue: "clawhub" | "npm" | "local" | "skip";
         }
       | undefined;
 
@@ -226,6 +317,47 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
+  it("offers ClawHub as the default remote source when package metadata provides it", async () => {
+    let captured:
+      | {
+          options: Array<{
+            value: "clawhub" | "npm" | "local" | "skip";
+            label: string;
+            hint?: string;
+          }>;
+          initialValue: "clawhub" | "npm" | "local" | "skip";
+        }
+      | undefined;
+
+    await ensureOnboardingPluginInstalled({
+      cfg: {},
+      entry: {
+        pluginId: "demo-plugin",
+        label: "Demo Plugin",
+        install: {
+          clawhubSpec: "clawhub:demo-plugin@2026.5.2",
+          npmSpec: "@openclaw/demo-plugin@2026.5.2",
+        },
+      },
+      prompter: {
+        select: vi.fn(async (input) => {
+          captured = input;
+          return "skip";
+        }),
+      } as never,
+      runtime: {} as never,
+    });
+
+    expect(captured?.options).toEqual([
+      { value: "clawhub", label: "Download from ClawHub (clawhub:demo-plugin@2026.5.2)" },
+      { value: "npm", label: "Download from npm (@openclaw/demo-plugin@2026.5.2)" },
+      { value: "skip", label: "Skip for now" },
+    ]);
+    expect(captured?.initialValue).toBe("clawhub");
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+  });
+
   it("does not offer local installs when the workspace only has a spoofed .git marker", async () => {
     await withTempDir({ prefix: "openclaw-onboarding-install-spoofed-git-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
@@ -238,8 +370,12 @@ describe("ensureOnboardingPluginInstalled", () => {
       let captured:
         | {
             message: string;
-            options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
-            initialValue: "npm" | "local" | "skip";
+            options: Array<{
+              value: "clawhub" | "npm" | "local" | "skip";
+              label: string;
+              hint?: string;
+            }>;
+            initialValue: "clawhub" | "npm" | "local" | "skip";
           }
         | undefined;
 
@@ -290,8 +426,12 @@ describe("ensureOnboardingPluginInstalled", () => {
       let captured:
         | {
             message: string;
-            options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
-            initialValue: "npm" | "local" | "skip";
+            options: Array<{
+              value: "clawhub" | "npm" | "local" | "skip";
+              label: string;
+              hint?: string;
+            }>;
+            initialValue: "clawhub" | "npm" | "local" | "skip";
           }
         | undefined;
 
@@ -342,6 +482,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       enablePluginInConfig.mockReturnValueOnce({
         config: {},
         enabled: false,
+        pluginId: "demo",
         reason: "blocked by allowlist",
       });
       const note = vi.fn(async () => {});
@@ -393,8 +534,12 @@ describe("ensureOnboardingPluginInstalled", () => {
       let captured:
         | {
             message: string;
-            options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
-            initialValue: "npm" | "local" | "skip";
+            options: Array<{
+              value: "clawhub" | "npm" | "local" | "skip";
+              label: string;
+              hint?: string;
+            }>;
+            initialValue: "clawhub" | "npm" | "local" | "skip";
           }
         | undefined;
 
@@ -484,65 +629,66 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("hides the npm download option for bundled plugins so the menu matches non-npm channels", async () => {
-    await withTempDir(
-      { prefix: "openclaw-onboarding-install-bundled-prompt-" },
-      async (temp) => {
-        const bundledDir = path.join(temp, "dist", "extensions", "tlon");
-        await fs.mkdir(bundledDir, { recursive: true });
-        const realBundledDir = await fs.realpath(bundledDir);
-        // Both code paths that surface a bundled plugin to the install
-        // pipeline must agree on the local path: the catalog-driven
-        // resolver (used when an npm spec is present) and the pluginId
-        // fallback. We stub both so the prompt sees a stable bundled path.
-        resolveBundledInstallPlanForCatalogEntry.mockReturnValue({
-          bundledSource: { localPath: realBundledDir },
-        });
-        findBundledPluginSourceInMap.mockReturnValue({ localPath: realBundledDir });
+    await withTempDir({ prefix: "openclaw-onboarding-install-bundled-prompt-" }, async (temp) => {
+      const bundledDir = path.join(temp, "dist", "extensions", "tlon");
+      await fs.mkdir(bundledDir, { recursive: true });
+      const realBundledDir = await fs.realpath(bundledDir);
+      // Both code paths that surface a bundled plugin to the install
+      // pipeline must agree on the local path: the catalog-driven
+      // resolver (used when an npm spec is present) and the pluginId
+      // fallback. We stub both so the prompt sees a stable bundled path.
+      resolveBundledInstallPlanForCatalogEntry.mockReturnValue({
+        bundledSource: { localPath: realBundledDir },
+      });
+      findBundledPluginSourceInMap.mockReturnValue({ localPath: realBundledDir });
 
-        let captured:
-          | {
-              message: string;
-              options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
-              initialValue: "npm" | "local" | "skip";
-            }
-          | undefined;
+      let captured:
+        | {
+            message: string;
+            options: Array<{
+              value: "clawhub" | "npm" | "local" | "skip";
+              label: string;
+              hint?: string;
+            }>;
+            initialValue: "clawhub" | "npm" | "local" | "skip";
+          }
+        | undefined;
 
-        await ensureOnboardingPluginInstalled({
-          cfg: {},
-          entry: {
-            pluginId: "tlon",
-            label: "Tlon",
-            install: {
-              npmSpec: "@openclaw/tlon",
-              defaultChoice: "npm",
-            },
+      await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "tlon",
+          label: "Tlon",
+          install: {
+            npmSpec: "@openclaw/tlon",
+            defaultChoice: "npm",
           },
-          prompter: {
-            select: vi.fn(async (input) => {
-              captured = input;
-              return "skip";
-            }),
-          } as never,
-          runtime: {} as never,
-        });
+        },
+        prompter: {
+          select: vi.fn(async (input) => {
+            captured = input;
+            return "skip";
+          }),
+        } as never,
+        runtime: {} as never,
+      });
 
-        expect(captured).toBeDefined();
-        // "Download from npm (@openclaw/tlon)" must NOT appear: the bundled
-        // copy is what gets enabled, so the npm hint would only confuse
-        // users into thinking the plugin is missing.
-        expect(captured?.options).toEqual([
-          {
-            value: "local",
-            label: "Use local plugin path",
-            hint: realBundledDir,
-          },
-          { value: "skip", label: "Skip for now" },
-        ]);
-        expect(captured?.initialValue).toBe("local");
-        findBundledPluginSourceInMap.mockReset();
-        resolveBundledInstallPlanForCatalogEntry.mockReset();
-      },
-    );
+      expect(captured).toBeDefined();
+      // "Download from npm (@openclaw/tlon)" must NOT appear: the bundled
+      // copy is what gets enabled, so the npm hint would only confuse
+      // users into thinking the plugin is missing.
+      expect(captured?.options).toEqual([
+        {
+          value: "local",
+          label: "Use local plugin path",
+          hint: realBundledDir,
+        },
+        { value: "skip", label: "Skip for now" },
+      ]);
+      expect(captured?.initialValue).toBe("local");
+      findBundledPluginSourceInMap.mockReset();
+      resolveBundledInstallPlanForCatalogEntry.mockReset();
+    });
   });
 
   it("enables bundled plugins without adding their bundled directory as a local install", async () => {
@@ -564,6 +710,7 @@ describe("ensureOnboardingPluginInstalled", () => {
           },
         },
         enabled: true,
+        pluginId: "discord",
       });
 
       const result = await ensureOnboardingPluginInstalled({
@@ -701,7 +848,11 @@ describe("ensureOnboardingPluginInstalled", () => {
 
       let captured:
         | {
-            options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
+            options: Array<{
+              value: "clawhub" | "npm" | "local" | "skip";
+              label: string;
+              hint?: string;
+            }>;
           }
         | undefined;
       const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(repoDir);
@@ -749,7 +900,11 @@ describe("ensureOnboardingPluginInstalled", () => {
 
       let captured:
         | {
-            options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
+            options: Array<{
+              value: "clawhub" | "npm" | "local" | "skip";
+              label: string;
+              hint?: string;
+            }>;
           }
         | undefined;
 
@@ -807,7 +962,11 @@ describe("ensureOnboardingPluginInstalled", () => {
       try {
         let captured:
           | {
-              options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
+              options: Array<{
+                value: "clawhub" | "npm" | "local" | "skip";
+                label: string;
+                hint?: string;
+              }>;
             }
           | undefined;
 

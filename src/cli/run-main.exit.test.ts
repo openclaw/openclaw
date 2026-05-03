@@ -177,7 +177,7 @@ vi.mock("./progress.js", () => ({
 }));
 
 vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: loadConfigMock,
+  readBestEffortConfig: loadConfigMock,
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -362,7 +362,11 @@ describe("runCli exit behavior", () => {
     ["agents list", ["node", "openclaw", "agents", "list"]],
     ["models list", ["node", "openclaw", "models", "list"]],
     ["models status without live probe", ["node", "openclaw", "models", "status"]],
+    ["skills check", ["node", "openclaw", "skills", "check"]],
+    ["skills info", ["node", "openclaw", "skills", "info", "weather"]],
+    ["skills list", ["node", "openclaw", "skills", "list"]],
     ["tasks list", ["node", "openclaw", "tasks", "list"]],
+    ["legacy singular tool namespace", ["node", "openclaw", "tool", "image_generate"]],
     ["gateway tools namespace typo", ["node", "openclaw", "tools", "effective"]],
     ["migrate", ["node", "openclaw", "migrate"]],
   ])("skips managed proxy routing for %s", (_name, argv) => {
@@ -385,24 +389,33 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
-  it("keeps gateway tool RPC names out of plugin command discovery", async () => {
+  it("does not install the env proxy dispatcher for bypassed skills inspection commands", async () => {
+    hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "skills", "check"]);
+
+    expect(hasEnvHttpProxyAgentConfiguredMock).not.toHaveBeenCalled();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["auth", ["node", "openclaw", "auth", "--help"]],
+    ["tool", ["node", "openclaw", "tool", "image_generate"]],
+    ["tools", ["node", "openclaw", "tools", "effective"]],
+  ])("keeps reserved %s command roots out of plugin command discovery", async (_name, argv) => {
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     buildProgramMock.mockReturnValueOnce({
       commands: [],
       parseAsync,
     });
 
-    await runCli(["node", "openclaw", "tools", "effective"]);
+    await runCli(argv);
 
     expect(startProxyMock).not.toHaveBeenCalled();
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "tools", [
-      "node",
-      "openclaw",
-      "tools",
-      "effective",
-    ]);
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), argv[2], argv);
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
-    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "tools", "effective"]);
+    expect(parseAsync).toHaveBeenCalledWith(argv);
   });
 
   it("fails protected commands when managed proxy activation fails", async () => {

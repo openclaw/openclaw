@@ -1,14 +1,18 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.4.25",
+  "version": "2026.5.2",
   "description": "OpenClaw Codex harness and model provider plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "0.70.6",
-    "@openai/codex": "0.125.0",
+    "@mariozechner/pi-coding-agent": "0.71.1",
+    "@openai/codex": "0.128.0",
     "ajv": "^8.20.0",
     "ws": "^8.20.0",
-    "zod": "^4.3.6"
+    "zod": "^4.4.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -17,8 +21,20 @@
     "extensions": [
       "./index.ts"
     ],
-    "bundle": {
-      "stageRuntimeDependencies": true
+    "install": {
+      "npmSpec": "@openclaw/codex",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.1-beta.1"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.2"
+    },
+    "build": {
+      "openclawVersion": "2026.5.2"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   }
 }

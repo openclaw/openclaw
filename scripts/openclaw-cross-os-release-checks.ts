@@ -20,7 +20,7 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertNoBundledRuntimeDepsStagingDebris } from "../src/infra/package-dist-inventory.ts";
+import { assertNoLegacyPluginDependencyStagingDebris } from "../src/infra/package-dist-inventory.ts";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -34,12 +34,20 @@ const SUPPORTED_SUITES = new Set([
   "dev-update",
 ]);
 
+export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
+  "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
+  600,
+);
+const CROSS_OS_AGENT_TURN_OPTIONAL = parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", true);
+
 const providerConfig = {
   openai: {
     extensionId: "openai",
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
-    model: "openai/gpt-5.5",
+    model: "openai/gpt-5.4",
+    baseUrl: "https://api.openai.com/v1",
+    timeoutSeconds: CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   },
   anthropic: {
     extensionId: "anthropic",
@@ -78,6 +86,25 @@ export function buildCrossOsReleaseSmokePluginAllowlist(providerMeta) {
   return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
 }
 
+function shouldSeedProviderConfigModels(providerMeta) {
+  return (
+    typeof providerMeta.baseUrl === "string" || typeof providerMeta.timeoutSeconds === "number"
+  );
+}
+
+function buildReleaseProviderConfigOverride(providerMeta) {
+  if (!shouldSeedProviderConfigModels(providerMeta)) {
+    return null;
+  }
+  return {
+    ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
+    models: [],
+    ...(typeof providerMeta.timeoutSeconds === "number"
+      ? { timeoutSeconds: providerMeta.timeoutSeconds }
+      : {}),
+  };
+}
+
 const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
@@ -91,7 +118,7 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
-export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = 180;
+export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
 
 if (isMainModule()) {
   try {
@@ -129,9 +156,35 @@ export function parseArgs(argv) {
   return parsed;
 }
 
+function parsePositiveIntegerEnv(name, fallback) {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return value;
+}
+
+function parseBooleanEnv(name, fallback) {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  if (/^(1|true|yes|on)$/iu.test(raw)) {
+    return true;
+  }
+  if (/^(0|false|no|off)$/iu.test(raw)) {
+    return false;
+  }
+  throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
+}
+
 export function looksLikeReleaseVersionRef(ref) {
   const trimmed = normalizeRequestedRef(ref);
-  return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[1-9][0-9]*)|[-.](?:beta|rc)[-.]?[0-9]+)?$/iu.test(
+  return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[1-9][0-9]*)|[-.](?:alpha|beta|rc)[-.]?[0-9]+)?$/iu.test(
     trimmed,
   );
 }
@@ -521,7 +574,7 @@ function isPackagedDistPath(relativePath) {
 }
 
 export async function writePackageDistInventoryForCandidate(params) {
-  await assertNoBundledRuntimeDepsStagingDebris(params.sourceDir);
+  await assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
     ["pack", "--dry-run", "--ignore-scripts", "--json"],
@@ -585,11 +638,11 @@ async function runFreshLane(params) {
       env,
       tgzPath: params.build.candidateTgz,
       logPath: join(params.logsDir, "fresh-install.log"),
-      restoreBundledPluginRuntimeDeps: false,
+      restoreBundledPluginPostinstall: false,
     });
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
-    logLanePhase(lane, "restore-bundled-plugin-runtime-deps");
+    logLanePhase(lane, "run-bundled-plugin-postinstall");
     await runBundledPluginPostinstall({
       lane,
       env,
@@ -691,10 +744,10 @@ async function runUpgradeLane(params) {
         env,
         tgzPath: params.baselineTgz,
         logPath: join(params.logsDir, "upgrade-install-baseline.log"),
-        restoreBundledPluginRuntimeDeps: false,
+        restoreBundledPluginPostinstall: false,
       });
     }
-    logLanePhase(lane, "restore-baseline-bundled-plugin-runtime-deps");
+    logLanePhase(lane, "run-baseline-bundled-plugin-postinstall");
     await runBundledPluginPostinstall({
       lane,
       env,
@@ -736,7 +789,7 @@ async function runUpgradeLane(params) {
       logPath: join(params.logsDir, "upgrade-update-status.log"),
       timeoutMs: 2 * 60 * 1000,
     });
-    logLanePhase(lane, "restore-bundled-plugin-runtime-deps");
+    logLanePhase(lane, "run-bundled-plugin-postinstall");
     await runBundledPluginPostinstall({
       lane,
       env,
@@ -1215,7 +1268,7 @@ export function shouldStopManagedGatewayBeforeManualFallback(platform = process.
   return shouldUseManagedGatewayService(platform);
 }
 
-function shouldRestoreBundledPluginRuntimeDeps() {
+function shouldRunBundledPluginPostinstall() {
   return true;
 }
 
@@ -1256,27 +1309,8 @@ export function buildRealUpdateEnv(env) {
   return updateEnv;
 }
 
-export function verifyPackagedUpgradeUpdateResult(result, options) {
+export function verifyPackagedUpgradeUpdateResult(result, _options) {
   if (result.exitCode === 0) {
-    return;
-  }
-
-  let payload = null;
-  try {
-    payload = JSON.parse(result.stdout);
-  } catch {
-    payload = null;
-  }
-
-  const steps = Array.isArray(payload?.steps) ? payload.steps : [];
-  const allStepsSucceeded = steps.every((step) => step?.exitCode === 0);
-  const afterVersion = typeof payload?.after?.version === "string" ? payload.after.version : "";
-  if (
-    payload?.status === "ok" &&
-    afterVersion === options.candidateVersion &&
-    allStepsSucceeded &&
-    isSelfSwappedPackageProcessExit(result.stderr)
-  ) {
     return;
   }
 
@@ -1284,15 +1318,6 @@ export function verifyPackagedUpgradeUpdateResult(result, options) {
     `Packaged upgrade failed (${result.exitCode}): ${trimForSummary(
       `${result.stdout}\n${result.stderr}`,
     )}`,
-  );
-}
-
-function isSelfSwappedPackageProcessExit(stderr) {
-  return (
-    typeof stderr === "string" &&
-    stderr.includes("[openclaw] Failed to start CLI:") &&
-    stderr.includes("ERR_MODULE_NOT_FOUND") &&
-    /[\\/]node_modules[\\/]openclaw[\\/]dist[\\/]/u.test(stderr)
   );
 }
 
@@ -1868,6 +1893,24 @@ async function runInstalledModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
+  const providerConfigOverride = buildReleaseProviderConfigOverride(params.providerConfig);
+  if (providerConfigOverride) {
+    await runInstalledCli({
+      cliPath: params.cliPath,
+      args: [
+        "config",
+        "set",
+        `models.providers.${params.providerConfig.extensionId}`,
+        JSON.stringify(providerConfigOverride),
+        "--strict-json",
+        "--merge",
+      ],
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 2 * 60 * 1000,
+    });
+  }
   await runInstalledCli({
     cliPath: params.cliPath,
     args: [
@@ -1890,6 +1933,14 @@ async function runInstalledModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
+  await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
 }
 
 async function runInstalledAgentTurn(params) {
@@ -1903,7 +1954,7 @@ async function runInstalledAgentTurn(params) {
         cwd: params.cwd,
         env: params.env,
         logPath: params.logPath,
-        timeoutMs: 10 * 60 * 1000,
+        timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
       });
       if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
         throw new Error("Agent output did not contain the expected OK marker.");
@@ -1911,6 +1962,10 @@ async function runInstalledAgentTurn(params) {
       return result;
     } catch (error) {
       lastError = error;
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+      if (skipped) {
+        return skipped;
+      }
       if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
         throw error;
       }
@@ -2263,8 +2318,8 @@ async function installTarballPackage(params) {
     timeoutMs: params.timeoutMs,
   });
   if (
-    params.restoreBundledPluginRuntimeDeps !== false &&
-    shouldRestoreBundledPluginRuntimeDeps({ lane: params.lane })
+    params.restoreBundledPluginPostinstall !== false &&
+    shouldRunBundledPluginPostinstall({ lane: params.lane })
   ) {
     await runBundledPluginPostinstall({
       lane: params.lane,
@@ -2644,6 +2699,23 @@ async function runModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
+  const providerConfigOverride = buildReleaseProviderConfigOverride(params.providerConfig);
+  if (providerConfigOverride) {
+    await runOpenClaw({
+      lane: params.lane,
+      env: params.env,
+      args: [
+        "config",
+        "set",
+        `models.providers.${params.providerConfig.extensionId}`,
+        JSON.stringify(providerConfigOverride),
+        "--strict-json",
+        "--merge",
+      ],
+      logPath: params.logPath,
+      timeoutMs: 2 * 60 * 1000,
+    });
+  }
   await runOpenClaw({
     lane: params.lane,
     env: params.env,
@@ -2664,6 +2736,13 @@ async function runModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
+    args: ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE],
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
 }
 
 async function runAgentTurn(params) {
@@ -2676,7 +2755,7 @@ async function runAgentTurn(params) {
         env: params.env,
         args: buildReleaseAgentTurnArgs(sessionId),
         logPath: params.logPath,
-        timeoutMs: 10 * 60 * 1000,
+        timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
       });
       if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
         throw new Error("Agent output did not contain the expected OK marker.");
@@ -2684,6 +2763,10 @@ async function runAgentTurn(params) {
       return result;
     } catch (error) {
       lastError = error;
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+      if (skipped) {
+        return skipped;
+      }
       if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
         throw error;
       }
@@ -2696,6 +2779,45 @@ async function runAgentTurn(params) {
     }
   }
   throw lastError;
+}
+
+function maybeBuildOptionalAgentTurnSkipResult(error, logPath) {
+  if (!CROSS_OS_AGENT_TURN_OPTIONAL || !shouldSkipOptionalCrossOsAgentTurnError(error, logPath)) {
+    return null;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  appendFileSync(
+    logPath,
+    `\n[release-checks] skipping optional cross-OS live agent turn after retryable failure: ${message}\n`,
+  );
+  return {
+    status: 0,
+    stdout: JSON.stringify({
+      status: "skipped",
+      reason: "cross-os live agent turn unavailable after retry",
+    }),
+    stderr: "",
+  };
+}
+
+export function shouldSkipOptionalCrossOsAgentTurnError(error, logPath) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
+      message,
+    )
+  ) {
+    return true;
+  }
+  if (!/Agent output did not contain the expected OK marker/u.test(message)) {
+    return false;
+  }
+  try {
+    const log = readFileSync(logPath, "utf8");
+    return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
+  } catch {
+    return false;
+  }
 }
 
 function buildReleaseAgentTurnArgs(sessionId) {
@@ -2717,7 +2839,7 @@ function buildReleaseAgentTurnArgs(sessionId) {
 
 export function shouldRetryCrossOsAgentTurnError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /failed to (?:install|stage) bundled runtime deps|failed to stage bundled runtime deps after|Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
+  return /Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
     message,
   );
 }

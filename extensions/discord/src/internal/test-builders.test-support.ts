@@ -1,6 +1,6 @@
 import { ComponentType, InteractionType } from "discord-api-types/v10";
 import { vi, type Mock } from "vitest";
-import { Client } from "./client.js";
+import { Client, type ClientOptions } from "./client.js";
 import type { BaseCommand } from "./commands.js";
 import type { RawInteraction } from "./interactions.js";
 import type { QueuedRequest, RequestClient, RequestData } from "./rest.js";
@@ -12,14 +12,14 @@ type RawInteractionOverrides = Omit<Partial<RawInteraction>, "data" | "type"> &
     data?: Record<string, unknown>;
   };
 
-export type FakeRestCall = {
+type FakeRestCall = {
   method: RestMethod;
   path: string;
   data?: RequestData;
   query?: QueuedRequest["query"];
 };
 
-export type FakeRestClient = RequestClient & {
+type FakeRestClient = RequestClient & {
   calls: FakeRestCall[];
   enqueueResponse: (value: unknown) => void;
 };
@@ -58,19 +58,23 @@ export function createAbortableFetchMock() {
   };
 }
 
-export function createInternalTestClient(commands: BaseCommand[] = []): Client {
+export function createInternalTestClient(
+  commands: BaseCommand[] = [],
+  options?: Partial<ClientOptions>,
+): Client {
   return new Client(
     {
       baseUrl: "http://localhost",
       clientId: "app1",
       publicKey: "public",
       token: "token",
+      ...options,
     },
     { commands },
   );
 }
 
-export function createRestMock(overrides: RestMock = {}): RestMock & RequestClient {
+function createRestMock(overrides: RestMock = {}): RestMock & RequestClient {
   return {
     get: vi.fn(async () => undefined),
     post: vi.fn(async () => undefined),

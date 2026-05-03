@@ -8,10 +8,12 @@ import type {
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
 } from "../../plugins/cli-backend.types.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import {
@@ -107,6 +109,11 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  if (params.disableTools === true && backendResolved.nativeToolMode === "always-on") {
+    throw new Error(
+      `CLI backend ${backendResolved.id} cannot run with tools disabled because it exposes native tools`,
+    );
+  }
   const agentDir = resolveOpenClawAgentDir();
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   const effectiveAuthProfileId =
@@ -115,7 +122,10 @@ export async function prepareCliRunContext(
   if (effectiveAuthProfileId) {
     const authStore = loadAuthProfileStoreForRuntime(agentDir, {
       readOnly: true,
-      allowKeychainPrompt: false,
+      externalCli: externalCliDiscoveryForProviderAuth({
+        provider: params.provider,
+        profileId: effectiveAuthProfileId,
+      }),
     });
     authCredential = authStore.profiles[effectiveAuthProfileId];
   }
@@ -165,10 +175,9 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  let mcpLoopbackRuntime = backendResolved.bundleMcp
-    ? prepareDeps.getActiveMcpLoopbackRuntime()
-    : undefined;
-  if (backendResolved.bundleMcp && !mcpLoopbackRuntime) {
+  const bundleMcpEnabled = backendResolved.bundleMcp && params.disableTools !== true;
+  let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
       await prepareDeps.ensureMcpLoopbackServer();
     } catch (error) {
@@ -177,7 +186,7 @@ export async function prepareCliRunContext(
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
   const preparedBackend = await prepareCliBundleMcpConfig({
-    enabled: backendResolved.bundleMcp,
+    enabled: bundleMcpEnabled,
     mode: backendResolved.bundleMcpMode,
     backend: backendResolved.config,
     workspaceDir,
@@ -266,8 +275,8 @@ export async function prepareCliRunContext(
     );
   }
   let openClawHistoryMessages: unknown[] | undefined;
-  const loadOpenClawHistoryMessages = () => {
-    openClawHistoryMessages ??= loadCliSessionHistoryMessages({
+  const loadOpenClawHistoryMessages = async () => {
+    openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
@@ -332,7 +341,7 @@ export async function prepareCliRunContext(
     const hookResult = await resolvePromptBuildHookResult({
       config: params.config ?? getRuntimeConfig(),
       prompt: params.prompt,
-      messages: loadOpenClawHistoryMessages(),
+      messages: await loadOpenClawHistoryMessages(),
       hookCtx: {
         runId: params.runId,
         agentId: sessionAgentId,
@@ -341,9 +350,8 @@ export async function prepareCliRunContext(
         workspaceDir,
         modelProviderId: params.provider,
         modelId,
-        messageProvider: params.messageProvider,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider,
+        ...buildAgentHookContextChannelFields(params),
       },
       hookRunner,
     });
@@ -374,7 +382,7 @@ export async function prepareCliRunContext(
   const openClawHistoryPrompt = reusableCliSession.sessionId
     ? undefined
     : buildCliSessionHistoryPrompt({
-        messages: loadCliSessionReseedMessages({
+        messages: await loadCliSessionReseedMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,

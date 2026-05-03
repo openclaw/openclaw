@@ -341,6 +341,7 @@ Look for:
     - `.clobbered.*` exists → an external direct edit or startup read was restored.
     - `.rejected.*` exists → an OpenClaw-owned config write failed schema or clobber checks before commit.
     - `Config write rejected:` → the write tried to drop required shape, shrink the file sharply, or persist invalid config.
+    - `Rejected validation details:` → the recovery log or main-agent notice includes the schema path that caused the restore, such as `agents.defaults.execution` or `gateway.auth.password.source`.
     - `missing-meta-vs-last-good`, `gateway-mode-missing-vs-last-good`, or `size-drop-vs-last-good:*` → startup treated the current file as clobbered because it lost fields or size compared with the last-known-good backup.
     - `Config last-known-good promotion skipped` → the candidate contained redacted secret placeholders such as `***`.
 
@@ -516,7 +517,7 @@ Look for:
     - `browser.executablePath not found` → configured path is invalid.
     - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme such as `file:` or `ftp:`.
     - `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
-    - `Playwright is not available in this gateway build; '<feature>' is unsupported.` → the current gateway install lacks the bundled browser plugin's `playwright-core` runtime dependency; run `openclaw doctor --fix`, then restart the gateway. ARIA snapshots and basic page screenshots can still work, but navigation, AI snapshots, CSS-selector element screenshots, and PDF export stay unavailable.
+    - `Playwright is not available in this gateway build; '<feature>' is unsupported.` → the current gateway install lacks the core browser runtime dependency; reinstall or update OpenClaw, then restart the gateway. ARIA snapshots and basic page screenshots can still work, but navigation, AI snapshots, CSS-selector element screenshots, and PDF export stay unavailable.
 
   </Accordion>
   <Accordion title="Chrome MCP / existing-session signatures">

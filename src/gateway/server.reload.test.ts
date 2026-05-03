@@ -46,11 +46,20 @@ const hoisted = vi.hoisted(() => {
   const totalPendingReplies = { value: 0 };
   const totalQueueSize = { value: 0 };
   const activeTaskCount = { value: 0 };
+  const activeTaskBlockers: Array<{
+    taskId: string;
+    status: "queued" | "running";
+    runtime: "subagent" | "acp" | "cli" | "cron";
+    runId?: string;
+    label?: string;
+    title?: string;
+  }> = [];
 
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
   const resetModelCatalogCache = vi.fn();
   const disposeAllSessionMcpRuntimes = vi.fn(async () => {});
+  const resolveOpenClawPackageRootSync = vi.fn((_params: unknown) => "/package");
 
   const providerManager = {
     getRuntimeSnapshot: vi.fn(() => ({
@@ -149,10 +158,12 @@ const hoisted = vi.hoisted(() => {
     totalPendingReplies,
     totalQueueSize,
     activeTaskCount,
+    activeTaskBlockers,
     startGmailWatcher,
     stopGmailWatcher,
     resetModelCatalogCache,
     disposeAllSessionMcpRuntimes,
+    resolveOpenClawPackageRootSync,
     providerManager,
     createChannelManager,
     startGatewayConfigReloader,
@@ -202,6 +213,14 @@ vi.mock("../agents/pi-bundle-mcp-tools.js", async () => {
   };
 });
 
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRootSync: hoisted.resolveOpenClawPackageRootSync,
+  };
+});
+
 vi.mock("../agents/pi-embedded-runner/runs.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/pi-embedded-runner/runs.js")>(
     "../agents/pi-embedded-runner/runs.js",
@@ -248,6 +267,7 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
   );
   return {
     ...actual,
+    getInspectableActiveTaskRestartBlockers: () => hoisted.activeTaskBlockers,
     getInspectableTaskRegistrySummary: () => ({
       active: hoisted.activeTaskCount.value,
       queued: 0,
@@ -302,10 +322,13 @@ describe("gateway hot reload", () => {
     hoisted.totalPendingReplies.value = 0;
     hoisted.totalQueueSize.value = 0;
     hoisted.activeTaskCount.value = 0;
+    hoisted.activeTaskBlockers.length = 0;
     embeddedRunMock.activeIds.clear();
     hoisted.resetModelCatalogCache.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+    hoisted.resolveOpenClawPackageRootSync.mockClear();
+    hoisted.resolveOpenClawPackageRootSync.mockReturnValue("/package");
     hoisted.resetReloadCallbacks();
   });
 
@@ -847,7 +870,6 @@ describe("gateway hot reload", () => {
       expect(hoisted.resetModelCatalogCache).toHaveBeenCalledTimes(1);
     });
   });
-
   it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
     await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
@@ -871,6 +893,40 @@ describe("gateway hot reload", () => {
         {
           mcp: {
             servers: {},
+          },
+        },
+      );
+
+      expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reloads plugin runtime surfaces and disposes MCP runtimes on plugin config hot reloads", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+
+      await onHotReload?.(
+        {
+          changedPaths: ["plugins.entries.discord.enabled"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["plugins.entries.discord.enabled"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: true,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: true,
+          noopPaths: [],
+        },
+        {
+          plugins: {
+            entries: {
+              discord: { enabled: false },
+            },
           },
         },
       );

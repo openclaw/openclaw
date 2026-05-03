@@ -5,35 +5,37 @@ read_when:
   - You need to understand why a CI job did or did not run
   - You are debugging a failing GitHub Actions check
   - You are coordinating a release validation run or rerun
+  - You are changing ClawSweeper dispatch or GitHub activity forwarding
 ---
 
 OpenClaw CI runs on every push to `main` and every pull request. The `preflight` job classifies the diff and turns expensive lanes off when only unrelated areas changed. Manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out the full graph for release candidates and broad validation. Android lanes stay opt-in through `include_android`. Release-only plugin coverage lives in the separate [`Plugin Prerelease`](#plugin-prerelease) workflow and only runs from [`Full Release Validation`](#full-release-validation) or an explicit manual dispatch.
 
 ## Pipeline overview
 
-| Job                              | Purpose                                                                                      | When it runs                       |
-| -------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `preflight`                      | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest      | Always on non-draft pushes and PRs |
-| `security-scm-fast`              | Private key detection and workflow audit via `zizmor`                                        | Always on non-draft pushes and PRs |
-| `security-dependency-audit`      | Dependency-free production lockfile audit against npm advisories                             | Always on non-draft pushes and PRs |
-| `security-fast`                  | Required aggregate for the fast security jobs                                                | Always on non-draft pushes and PRs |
-| `check-dependencies`             | Production Knip dependency-only pass plus the unused-file allowlist guard                    | Node-relevant changes              |
-| `build-artifacts`                | Build `dist/`, Control UI, built-artifact checks, and reusable downstream artifacts          | Node-relevant changes              |
-| `checks-fast-core`               | Fast Linux correctness lanes such as bundled/plugin-contract/protocol checks                 | Node-relevant changes              |
-| `checks-fast-contracts-channels` | Sharded channel contract checks with a stable aggregate check result                         | Node-relevant changes              |
-| `checks-node-core-test`          | Core Node test shards, excluding channel, bundled, contract, and extension lanes             | Node-relevant changes              |
-| `check`                          | Sharded main local gate equivalent: prod types, lint, guards, test types, and strict smoke   | Node-relevant changes              |
-| `check-additional`               | Architecture, boundary, extension-surface guards, package-boundary, and gateway-watch shards | Node-relevant changes              |
-| `build-smoke`                    | Built-CLI smoke tests and startup-memory smoke                                               | Node-relevant changes              |
-| `checks`                         | Verifier for built-artifact channel tests                                                    | Node-relevant changes              |
-| `checks-node-compat-node22`      | Node 22 compatibility build and smoke lane                                                   | Manual CI dispatch for releases    |
-| `check-docs`                     | Docs formatting, lint, and broken-link checks                                                | Docs changed                       |
-| `skills-python`                  | Ruff + pytest for Python-backed skills                                                       | Python-skill-relevant changes      |
-| `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions         | Windows-relevant changes           |
-| `macos-node`                     | macOS TypeScript test lane using the shared built artifacts                                  | macOS-relevant changes             |
-| `macos-swift`                    | Swift lint, build, and tests for the macOS app                                               | macOS-relevant changes             |
-| `android`                        | Android unit tests for both flavors plus one debug APK build                                 | Android-relevant changes           |
-| `test-performance-agent`         | Daily Codex slow-test optimization after trusted activity                                    | Main CI success or manual dispatch |
+| Job                              | Purpose                                                                                                             | When it runs                       |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `preflight`                      | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest                             | Always on non-draft pushes and PRs |
+| `security-scm-fast`              | Private key detection and workflow audit via `zizmor`                                                               | Always on non-draft pushes and PRs |
+| `security-dependency-audit`      | Dependency-free production lockfile audit against npm advisories                                                    | Always on non-draft pushes and PRs |
+| `security-fast`                  | Required aggregate for the fast security jobs                                                                       | Always on non-draft pushes and PRs |
+| `check-dependencies`             | Production Knip dependency-only pass plus the unused-file allowlist guard                                           | Node-relevant changes              |
+| `build-artifacts`                | Build `dist/`, Control UI, built-artifact checks, and reusable downstream artifacts                                 | Node-relevant changes              |
+| `checks-fast-core`               | Fast Linux correctness lanes such as bundled/plugin-contract/protocol checks                                        | Node-relevant changes              |
+| `checks-fast-contracts-channels` | Sharded channel contract checks with a stable aggregate check result                                                | Node-relevant changes              |
+| `checks-node-core-test`          | Core Node test shards, excluding channel, bundled, contract, and extension lanes                                    | Node-relevant changes              |
+| `check`                          | Sharded main local gate equivalent: prod types, lint, guards, test types, and strict smoke                          | Node-relevant changes              |
+| `check-additional`               | Architecture, boundary, prompt snapshot drift, extension-surface guards, package-boundary, and gateway-watch shards | Node-relevant changes              |
+| `build-smoke`                    | Built-CLI smoke tests and startup-memory smoke                                                                      | Node-relevant changes              |
+| `checks`                         | Verifier for built-artifact channel tests                                                                           | Node-relevant changes              |
+| `checks-node-compat-node22`      | Node 22 compatibility build and smoke lane                                                                          | Manual CI dispatch for releases    |
+| `check-docs`                     | Docs formatting, lint, and broken-link checks                                                                       | Docs changed                       |
+| `skills-python`                  | Ruff + pytest for Python-backed skills                                                                              | Python-skill-relevant changes      |
+| `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions                                | Windows-relevant changes           |
+| `macos-node`                     | macOS TypeScript test lane using the shared built artifacts                                                         | macOS-relevant changes             |
+| `macos-swift`                    | Swift lint, build, and tests for the macOS app                                                                      | macOS-relevant changes             |
+| `android`                        | Android unit tests for both flavors plus one debug APK build                                                        | Android-relevant changes           |
+| `test-performance-agent`         | Daily Codex slow-test optimization after trusted activity                                                           | Main CI success or manual dispatch |
+| `openclaw-performance`           | Daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.4 live lanes           | Scheduled and manual dispatch      |
 
 ## Fail-fast order
 
@@ -52,11 +54,28 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 - **CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits** use a fast Node-only manifest path: `preflight`, security, and a single `checks-fast-core` task. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the change is limited to the routing or helper surfaces the fast task exercises directly.
 - **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes.
 
-The slowest Node test families are split or balanced so each job stays small without over-reserving runners: channel contracts run as three weighted shards, small core unit lanes are paired, auto-reply runs as four balanced workers (with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards), and agentic gateway/plugin configs are spread across the existing source-only agentic Node jobs instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard shard runs its small independent guards concurrently inside one job. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
+The slowest Node test families are split or balanced so each job stays small without over-reserving runners: channel contracts run as three weighted shards, small core unit lanes are paired, auto-reply runs as four balanced workers (with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards), and agentic gateway/plugin configs are spread across the existing source-only agentic Node jobs instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard shard runs its small independent guards concurrently inside one job, including `pnpm prompt:snapshots:check` so Codex runtime happy-path prompt drift is pinned to the PR that caused it. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 
 The `check-dependencies` shard runs `pnpm deadcode:dependencies` (a production Knip dependency-only pass pinned to the latest Knip version, with pnpm's minimum release age disabled for the `dlx` install) and `pnpm deadcode:unused-files`, which compares Knip's production unused-file findings against `scripts/deadcode-unused-files.allowlist.mjs`. The unused-file guard fails when a PR adds a new unreviewed unused file or leaves a stale allowlist entry, while preserving intentional dynamic plugin, generated, build, live-test, and package bridge surfaces that Knip cannot resolve statically.
+
+## ClawSweeper activity forwarding
+
+`.github/workflows/clawsweeper-dispatch.yml` is the target-side bridge from OpenClaw repository activity into ClawSweeper. It does not check out or execute untrusted pull request code. The workflow creates a GitHub App token from `CLAWSWEEPER_APP_PRIVATE_KEY`, then dispatches compact `repository_dispatch` payloads to `openclaw/clawsweeper`.
+
+The workflow has four lanes:
+
+- `clawsweeper_item` for exact issue and pull request review requests;
+- `clawsweeper_comment` for explicit ClawSweeper commands in issue comments;
+- `clawsweeper_commit_review` for commit-level review requests on `main` pushes;
+- `github_activity` for general GitHub activity that the ClawSweeper agent may inspect.
+
+The `github_activity` lane forwards normalized metadata only: event type, action, actor, repository, item number, URL, title, state, and short excerpts for comments or reviews when present. It intentionally avoids forwarding the full webhook body. The receiving workflow in `openclaw/clawsweeper` is `.github/workflows/github-activity.yml`, which posts the normalized event to the OpenClaw Gateway hook for the ClawSweeper agent.
+
+General activity is observation, not delivery-by-default. The ClawSweeper agent receives the Discord target in its prompt and should post to `#clawsweeper` only when the event is surprising, actionable, risky, or operationally useful. Routine opens, edits, bot churn, duplicate webhook noise, and normal review traffic should result in `NO_REPLY`.
+
+Treat GitHub titles, comments, bodies, review text, branch names, and commit messages as untrusted data throughout this path. They are input for summarization and triage, not instructions for the workflow or agent runtime.
 
 ## Manual dispatches
 
@@ -106,13 +125,68 @@ node scripts/ci-run-timings.mjs --latest-main # ignore issue/comment noise and c
 node scripts/ci-run-timings.mjs --recent 10   # compare recent successful main CI runs
 pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json
 pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json
+pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.json --output .artifacts/kova/summary.md
 ```
+
+## OpenClaw Performance
+
+`OpenClaw Performance` is the product/runtime performance workflow. It runs daily on `main` and can be dispatched manually:
+
+```bash
+gh workflow run openclaw-performance.yml --ref main -f profile=diagnostic -f repeat=3
+gh workflow run openclaw-performance.yml --ref main -f profile=smoke -f repeat=1 -f deep_profile=true -f live_gpt54=true
+```
+
+The workflow installs OCM from a pinned release and Kova from the pinned `kova_ref` input, then runs three lanes:
+
+- `mock-provider`: Kova diagnostic scenarios against a local-build runtime with deterministic fake OpenAI-compatible auth.
+- `mock-deep-profile`: CPU/heap/trace profiling for startup, gateway, and agent-turn hotspots.
+- `live-gpt54`: a real OpenAI `openai/gpt-5.4` agent turn, skipped when `OPENAI_API_KEY` is unavailable.
+
+The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; repeated mock-OpenAI `channel-chat-baseline` hello loops; and CLI startup commands against the booted gateway. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
+
+Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured, the workflow also commits `report.json`, `report.md`, bundles, `index.md`, and source-probe artifacts into `openclaw/clawgrit-reports` under `openclaw-performance/<ref>/<run-id>-<attempt>/<lane>/`. The current branch pointer is written as `openclaw-performance/<ref>/latest-<lane>.json`.
 
 ## Full Release Validation
 
-`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target, dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, Docker release-path suites, live/E2E, OpenWebUI, QA Lab parity, Matrix, and Telegram lanes. It can also run the post-publish `NPM Telegram Beta E2E` workflow when a published package spec is provided.
+`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target, dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, Docker release-path suites, live/E2E, OpenWebUI, QA Lab parity, Matrix, and Telegram lanes. With `rerun_group=all` and `release_profile=full`, it also runs `NPM Telegram Beta E2E` against the `release-package-under-test` artifact from release checks. After publishing, pass `npm_telegram_package_spec` to rerun the same Telegram package lane against the published npm package.
 
-`release_profile` controls live/provider breadth passed into release checks:
+See [Full release validation](/reference/full-release-validation) for the
+stage matrix, exact workflow job names, profile differences, artifacts, and
+focused rerun handles.
+
+`OpenClaw Release Publish` is the manual mutating release workflow. Dispatch it
+from `release/YYYY.M.D` or `main` after the release tag exists and after the
+OpenClaw npm preflight has succeeded. It verifies `pnpm plugins:sync:check`,
+dispatches `Plugin NPM Release` for all publishable plugin packages, dispatches
+`Plugin ClawHub Release` for the same release SHA, and only then dispatches
+`OpenClaw NPM Release` with the saved `preflight_run_id`.
+
+```bash
+gh workflow run openclaw-release-publish.yml \
+  --ref release/YYYY.M.D \
+  -f tag=vYYYY.M.D-beta.N \
+  -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f npm_dist_tag=beta
+```
+
+For pinned commit proof on a fast-moving branch, use the helper instead of
+`gh workflow run ... --ref main -f ref=<sha>`:
+
+```bash
+pnpm ci:full-release --sha <full-sha>
+```
+
+GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
+helper pushes a temporary `release-ci/<sha>-...` branch at the target SHA,
+dispatches `Full Release Validation` from that pinned ref, verifies every child
+workflow `headSha` matches the target, and deletes the temporary branch when the
+run completes. The umbrella verifier also fails if any child workflow ran at a
+different SHA.
+
+`release_profile` controls live/provider breadth passed into release checks. The
+manual release workflows default to `stable`; use `full` only when you
+intentionally want the broad advisory provider/media matrix.
 
 - `minimum` keeps the fastest OpenAI/core release-critical lanes.
 - `stable` adds the stable provider/backend set.
@@ -120,9 +194,15 @@ pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifac
 
 The umbrella records the dispatched child run ids, and the final `Verify full validation` job re-checks current child run conclusions and appends slowest-job tables for each child run. If a child workflow is rerun and turns green, rerun only the parent verifier job to refresh the umbrella result and timing summary.
 
-For recovery, both `Full Release Validation` and `OpenClaw Release Checks` accept `rerun_group`. Use `all` for a release candidate, `ci` for only the normal full CI child, `release-checks` for every release child, or a narrower group: `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, or `npm-telegram` on the umbrella. This keeps a failed release box rerun bounded after a focused fix.
+For recovery, both `Full Release Validation` and `OpenClaw Release Checks` accept `rerun_group`. Use `all` for a release candidate, `ci` for only the normal full CI child, `plugin-prerelease` for only the plugin prerelease child, `release-checks` for every release child, or a narrower group: `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, or `npm-telegram` on the umbrella. This keeps a failed release box rerun bounded after a focused fix.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to both the live/E2E release-path Docker workflow and the package acceptance shard. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs.
+
+Duplicate `Full Release Validation` runs for `ref=main` and `rerun_group=all`
+supersede the older umbrella. The parent monitor cancels any child workflow it
+has already dispatched when the parent is cancelled, so newer main validation
+does not sit behind a stale two-hour release-check run. Release branch/tag
+validation and focused rerun groups keep `cancel-in-progress: false`.
 
 ## Live and E2E shards
 
@@ -144,7 +224,7 @@ That keeps the same file coverage while making slow live provider failures easie
 
 The native live media shards run in `ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, built by the `Live Media Runner Image` workflow. That image preinstalls `ffmpeg` and `ffprobe`; media jobs only verify the binaries before setup. Keep Docker-backed live suites on normal Blacksmith runners — container jobs are the wrong place to launch nested Docker tests.
 
-Docker-backed live model/backend shards use a separate shared `ghcr.io/openclaw/openclaw-live-test:<sha>` image per selected commit. The live release workflow builds and pushes that image once, then the Docker live model, gateway, CLI backend, ACP bind, and Codex harness shards run with `OPENCLAW_SKIP_DOCKER_BUILD=1`. If those shards rebuild the full source Docker target independently, the release run is misconfigured and will waste wall clock on duplicate image builds.
+Docker-backed live model/backend shards use a separate shared `ghcr.io/openclaw/openclaw-live-test:<sha>` image per selected commit. The live release workflow builds and pushes that image once, then the Docker live model, provider-sharded gateway, CLI backend, ACP bind, and Codex harness shards run with `OPENCLAW_SKIP_DOCKER_BUILD=1`. Gateway Docker shards carry explicit script-level `timeout` caps below the workflow job timeout so a stuck container or cleanup path fails fast instead of consuming the whole release-check budget. If those shards rebuild the full source Docker target independently, the release run is misconfigured and will waste wall clock on duplicate image builds.
 
 ## Package Acceptance
 
@@ -159,7 +239,7 @@ Use `Package Acceptance` when the question is "does this installable OpenClaw pa
 
 ### Candidate sources
 
-- `source=npm` accepts only `openclaw@beta`, `openclaw@latest`, or an exact OpenClaw release version such as `openclaw@2026.4.27-beta.2`. Use this for published beta/stable acceptance.
+- `source=npm` accepts only `openclaw@beta`, `openclaw@latest`, or an exact OpenClaw release version such as `openclaw@2026.4.27-beta.2`. Use this for published prerelease/stable acceptance.
 - `source=ref` packs a trusted `package_ref` branch, tag, or full commit SHA. The resolver fetches OpenClaw branches/tags, verifies the selected commit is reachable from repository branch history or a release tag, installs deps in a detached worktree, and packs it with `scripts/package-openclaw-for-docker.mjs`.
 - `source=url` downloads an HTTPS `.tgz`; `package_sha256` is required.
 - `source=artifact` downloads one `.tgz` from `artifact_run_id` and `artifact_name`; `package_sha256` is optional but should be supplied for externally shared artifacts.
@@ -169,14 +249,18 @@ Keep `workflow_ref` and `package_ref` separate. `workflow_ref` is the trusted wo
 ### Suite profiles
 
 - `smoke` — `npm-onboard-channel-agent`, `gateway-network`, `config-reload`
-- `package` — `npm-onboard-channel-agent`, `doctor-switch`, `update-channel-switch`, `bundled-channel-deps-compat`, `plugins-offline`, `plugin-update`
+- `package` — `npm-onboard-channel-agent`, `doctor-switch`, `update-channel-switch`, `upgrade-survivor`, `published-upgrade-survivor`, `plugins-offline`, `plugin-update`
 - `product` — `package` plus `mcp-channels`, `cron-mcp-cleanup`, `openai-web-search-minimal`, `openwebui`
 - `full` — full Docker release-path chunks with OpenWebUI
 - `custom` — exact `docker_lanes`; required when `suite_profile=custom`
 
 The `package` profile uses offline plugin coverage so published-package validation is not gated on live ClawHub availability. The optional Telegram lane reuses the `package-under-test` artifact in `NPM Telegram Beta E2E`, with the published npm spec path kept for standalone dispatches.
 
-Release checks call Package Acceptance with `source=ref`, `package_ref=<release-ref>`, `workflow_ref=<release workflow ref>`, `suite_profile=custom`, `docker_lanes='bundled-channel-deps-compat plugins-offline'`, and `telegram_mode=mock-openai`. Release-path Docker chunks cover the overlapping package/update/plugin lanes; Package Acceptance keeps the artifact-native bundled-channel compat, offline plugin, and Telegram proof against the same resolved package tarball. Cross-OS release checks still cover OS-specific onboarding, installer, and platform behavior; package/update product validation should start with Package Acceptance. The Windows packaged and installer fresh lanes also verify that an installed package can import a browser-control override from a raw absolute Windows path. The OpenAI cross-OS agent-turn smoke defaults to `OPENCLAW_CROSS_OS_OPENAI_MODEL` when set, otherwise `openai/gpt-5.4-mini`, so the install and gateway proof stays fast and deterministic.
+For the dedicated update and plugin testing policy, including local commands,
+Docker lanes, Package Acceptance inputs, release defaults, and failure triage,
+see [Testing updates and plugins](/help/testing-updates-plugins).
+
+Release checks call Package Acceptance with `source=artifact`, the prepared release package artifact, `suite_profile=custom`, `docker_lanes='doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update'`, `published_upgrade_survivor_baselines=all-since-2026.4.23`, `published_upgrade_survivor_scenarios=reported-issues`, and `telegram_mode=mock-openai`. This keeps package migration, update, stale-plugin-dependency cleanup, configured-plugin install repair, offline plugin, plugin-update, and Telegram proof on the same resolved package tarball. Set `package_acceptance_package_spec` on Full Release Validation or OpenClaw Release Checks to run that same matrix against a shipped npm package instead of the SHA-built artifact. Cross-OS release checks still cover OS-specific onboarding, installer, and platform behavior; package/update product validation should start with Package Acceptance. The `published-upgrade-survivor` Docker lane validates one published package baseline per run. In Package Acceptance, the resolved `package-under-test` tarball is always the candidate and `published_upgrade_survivor_baseline` selects the fallback published baseline, defaulting to `openclaw@latest`; failed-lane rerun commands preserve that baseline. Set `published_upgrade_survivor_baselines=all-since-2026.4.23` to expand Full Release CI across every stable npm release from `2026.4.23` through `latest`; `release-history` remains available for manual wider sampling with the older pre-date anchor. Set `published_upgrade_survivor_scenarios=reported-issues` to expand the same baselines across issue-shaped fixtures for Feishu config, preserved bootstrap/persona files, configured OpenClaw plugin installs, tilde log paths, and stale legacy plugin dependency roots. The separate `Update Migration` workflow uses the `update-migration` Docker lane with `all-since-2026.4.23` and `plugin-deps-cleanup` when the question is exhaustive published update cleanup, not normal Full Release CI breadth. Local aggregate runs can pass exact package specs with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, keep a single lane with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC` such as `openclaw@2026.4.15`, or set `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` for the scenario matrix. The published lane configures the baseline with a baked `openclaw config set` command recipe, records recipe steps in `summary.json`, and probes `/healthz`, `/readyz`, plus RPC status after Gateway start. The Windows packaged and installer fresh lanes also verify that an installed package can import a browser-control override from a raw absolute Windows path. The OpenAI cross-OS agent-turn smoke defaults to `OPENCLAW_CROSS_OS_OPENAI_MODEL` when set, otherwise `openai/gpt-5.4`, so the install and gateway proof stays on a GPT-5 test model while avoiding GPT-4.x defaults.
 
 ### Legacy compatibility windows
 
@@ -278,9 +362,9 @@ The reusable live/E2E workflow asks `scripts/test-docker-all.mjs --plan-json` wh
 Release Docker coverage runs smaller chunked jobs with `OPENCLAW_SKIP_DOCKER_BUILD=1` so each chunk pulls only the image kind it needs and executes multiple lanes through the same weighted scheduler:
 
 - `OPENCLAW_DOCKER_ALL_PROFILE=release-path`
-- `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-anthropic | package-update-core | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h | bundled-channels`
+- `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-anthropic | package-update-core | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h`
 
-Current release Docker chunks are `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, `bundled-channels-core`, `bundled-channels-update-a`, `bundled-channels-update-discord`, `bundled-channels-update-b`, and `bundled-channels-contracts`. The aggregate `bundled-channels` chunk remains available for manual one-shot reruns, and `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes. The `bundled-channels` chunk runs split `bundled-channel-*` and `bundled-channel-update-*` lanes rather than the serial all-in-one `bundled-channel-deps` lane.
+Current release Docker chunks are `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, and `plugins-runtime-install-a` through `plugins-runtime-install-h`. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
 
 OpenWebUI is folded into `plugins-runtime-services` when full release-path coverage requests it, and keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches. Bundled-channel update lanes retry once for transient npm network failures.
 
@@ -295,14 +379,13 @@ The scheduled live/E2E workflow runs the full release-path Docker suite daily.
 
 ## Plugin Prerelease
 
-`Plugin Prerelease` is more expensive product/package coverage, so it is a separate workflow dispatched by `Full Release Validation` or by an explicit operator. Normal pull requests, `main` pushes, and standalone manual CI dispatches keep that suite off. It balances bundled plugin tests across eight extension workers; those extension shard jobs run up to two plugin config groups at a time with one Vitest worker per group and a larger Node heap so import-heavy plugin batches do not create extra CI jobs.
+`Plugin Prerelease` is more expensive product/package coverage, so it is a separate workflow dispatched by `Full Release Validation` or by an explicit operator. Normal pull requests, `main` pushes, and standalone manual CI dispatches keep that suite off. It balances bundled plugin tests across eight extension workers; those extension shard jobs run up to two plugin config groups at a time with one Vitest worker per group and a larger Node heap so import-heavy plugin batches do not create extra CI jobs. The release-only Docker prerelease path batches targeted Docker lanes in small groups to avoid reserving dozens of runners for one-to-three-minute jobs.
 
 ## QA Lab
 
-QA Lab has dedicated CI lanes outside the main smart-scoped workflow.
+QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic parity is nested under the broad QA and release harnesses, not a standalone PR workflow. Use `Full Release Validation` with `rerun_group=qa-parity` when parity should ride with a broad validation run.
 
-- The `Parity gate` workflow runs on matching PR changes and manual dispatch; it builds the private QA runtime and compares the mock GPT-5.5 and Opus 4.6 agentic packs.
-- The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out the mock parity gate, live Matrix lane, and live Telegram and Discord lanes as parallel jobs. Live jobs use the `qa-live-shared` environment, and Telegram/Discord use Convex leases.
+- The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out the mock parity lane, live Matrix lane, and live Telegram and Discord lanes as parallel jobs. Live jobs use the `qa-live-shared` environment, and Telegram/Discord use Convex leases.
 
 Release checks run Matrix and Telegram live transport lanes with the deterministic mock provider and mock-qualified models (`mock-openai/gpt-5.5` and `mock-openai/gpt-5.5-alt`) so the channel contract is isolated from live model latency and normal provider-plugin startup. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
 
@@ -310,7 +393,7 @@ Matrix uses `--profile fast` for scheduled and release gates, adding `--fail-fas
 
 `OpenClaw Release Checks` also runs the release-critical QA Lab lanes before release approval; its QA parity gate runs the candidate and baseline packs as parallel lane jobs, then downloads both artifacts into a small report job for the final parity comparison.
 
-Do not put the PR landing path behind `Parity gate` unless the change actually touches QA runtime, model-pack parity, or a surface the parity workflow owns. For normal channel, config, docs, or unit-test fixes, treat it as an optional signal and follow the scoped CI/check evidence instead.
+For normal PRs, follow scoped CI/check evidence instead of treating parity as a required status.
 
 ## CodeQL
 
@@ -320,13 +403,13 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 
 ### Security categories
 
-| Category                                          | Surface                                                                                                                                |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `/codeql-security-high/core-auth-secrets`         | Auth, secrets, sandbox, cron, and gateway baseline                                                                                     |
-| `/codeql-security-high/channel-runtime-boundary`  | Core channel implementation contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, audit touchpoints                 |
-| `/codeql-security-high/network-ssrf-boundary`     | Core SSRF, IP parsing, network guard, web-fetch, and Plugin SDK SSRF policy surfaces                                                   |
-| `/codeql-security-high/mcp-process-tool-boundary` | MCP servers, process execution helpers, outbound delivery, and agent tool-execution gates                                              |
-| `/codeql-security-high/plugin-trust-boundary`     | Plugin install, loader, manifest, registry, runtime-dependency staging, source-loading, and Plugin SDK package contract trust surfaces |
+| Category                                          | Surface                                                                                                                             |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `/codeql-security-high/core-auth-secrets`         | Auth, secrets, sandbox, cron, and gateway baseline                                                                                  |
+| `/codeql-security-high/channel-runtime-boundary`  | Core channel implementation contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, audit touchpoints              |
+| `/codeql-security-high/network-ssrf-boundary`     | Core SSRF, IP parsing, network guard, web-fetch, and Plugin SDK SSRF policy surfaces                                                |
+| `/codeql-security-high/mcp-process-tool-boundary` | MCP servers, process execution helpers, outbound delivery, and agent tool-execution gates                                           |
+| `/codeql-security-high/plugin-trust-boundary`     | Plugin install, loader, manifest, registry, package-manager install, source-loading, and Plugin SDK package contract trust surfaces |
 
 ### Platform-specific security shards
 
@@ -406,6 +489,17 @@ Run Testbox from the repo root and prefer a fresh warmed box for broad proof. Be
 The sanity check fails fast when required root files such as `pnpm-lock.yaml` disappeared or when `git status --short` shows at least 200 tracked deletions. That usually means the remote sync state is not a trustworthy copy of the PR; stop that box and warm a fresh one instead of debugging the product test failure. For intentional large-deletion PRs, set `OPENCLAW_TESTBOX_ALLOW_MASS_DELETIONS=1` for that sanity run.
 
 `pnpm testbox:run` also terminates a local Blacksmith CLI invocation that stays in the sync phase for more than five minutes without post-sync output. Set `OPENCLAW_TESTBOX_SYNC_TIMEOUT_MS=0` to disable that guard, or use a larger millisecond value for unusually large local diffs.
+
+Crabbox is the repo-owned second remote-box path for Linux proof when Blacksmith is unavailable or when owned cloud capacity is preferable. Warm a box, hydrate it through the project workflow, then run commands through the Crabbox CLI:
+
+```bash
+pnpm crabbox:warmup -- --idle-timeout 90m
+pnpm crabbox:hydrate -- --id <cbx_id>
+pnpm crabbox:run -- --id <cbx_id> --shell "OPENCLAW_TESTBOX=1 pnpm check:changed"
+pnpm crabbox:stop -- <cbx_id>
+```
+
+`.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. It excludes local `.git` so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and it excludes local runtime/build artifacts that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff that later `crabbox run --id <cbx_id>` commands source.
 
 ## Related
 

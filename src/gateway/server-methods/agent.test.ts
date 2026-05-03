@@ -1008,6 +1008,36 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("rejects public transcriptMessage overrides", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "runtime-only announce bookkeeping",
+        transcriptMessage: "",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
+        idempotencyKey: "test-transcript-message",
+      } as AgentParams,
+      { reqId: "transcript-message", flushDispatch: false },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
   it("keeps model-run gateway prompts undecorated and forwards raw-run flags", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
@@ -1110,6 +1140,38 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
+  it("rejects strict delivery with a missing target before dispatching the agent", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "strict missing delivery target",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        replyChannel: "telegram",
+        bestEffortDeliver: false,
+        idempotencyKey: "test-strict-delivery-missing-target",
+      },
+      {
+        reqId: "strict-delivery-missing-target",
+        respond,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("requires target"),
+      }),
+    );
+  });
+
   it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
@@ -1178,6 +1240,21 @@ describe("gateway agent handler", () => {
         message: expect.stringContaining("invalid agent params"),
       }),
     );
+  });
+
+  it("forwards one-shot bundle MCP cleanup from agent RPC into the runner", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "cleanup probe",
+      sessionKey: "agent:main:subagent:cleanup-probe",
+      idempotencyKey: "test-idem-agent-cleanup-bundle-mcp",
+      cleanupBundleMcpOnRunEnd: true,
+    });
+
+    const call = await waitForAgentCommandCall();
+    expect(call.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
   it.each(

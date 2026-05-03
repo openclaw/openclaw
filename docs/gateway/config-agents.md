@@ -67,6 +67,20 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 }
 ```
 
+### `agents.defaults.skipOptionalBootstrapFiles`
+
+Skips creation of selected optional workspace files while still writing required bootstrap files. Valid values: `SOUL.md`, `USER.md`, `HEARTBEAT.md`, and `IDENTITY.md`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      skipOptionalBootstrapFiles: ["SOUL.md", "USER.md"],
+    },
+  },
+}
+```
+
 ### `agents.defaults.contextInjection`
 
 Controls when workspace bootstrap files are injected into the system prompt. Default: `"always"`.
@@ -560,6 +574,7 @@ Periodic heartbeat runs.
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
         qualityGuard: { enabled: true, maxRetries: 1 },
+        midTurnPrecheck: { enabled: false }, // optional Pi tool-loop pressure check
         postCompactionSections: ["Session Startup", "Red Lines"], // [] disables reinjection
         model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
         truncateAfterCompaction: true, // rotate to a smaller successor JSONL after compaction
@@ -585,6 +600,7 @@ Periodic heartbeat runs.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
 - `qualityGuard`: retry-on-malformed-output checks for safeguard summaries. Enabled by default in safeguard mode; set `enabled: false` to skip the audit.
+- `midTurnPrecheck`: optional Pi tool-loop pressure check. When `enabled: true`, OpenClaw checks context pressure after tool results are appended and before the next model call. If the context no longer fits, it aborts the current attempt before submitting the prompt and reuses the existing precheck recovery path to truncate tool results or compact and retry. Works with both `default` and `safeguard` compaction modes. Default: disabled.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Defaults to `["Session Startup", "Red Lines"]`; set `[]` to disable reinjection. When unset or explicitly set to that default pair, older `Every Session`/`Safety` headings are also accepted as a legacy fallback.
 - `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
 - `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when the active JSONL grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
@@ -906,12 +922,14 @@ noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived 
 
 Browser sandboxing and `sandbox.docker.binds` are Docker-only.
 
-Build images:
+Build images (from a source checkout):
 
 ```bash
 scripts/sandbox-setup.sh           # main sandbox image
 scripts/sandbox-browser-setup.sh   # optional browser image
 ```
+
+For npm installs without a source checkout, see [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for inline `docker build` commands.
 
 ### `agents.list` (per-agent overrides)
 
@@ -1156,7 +1174,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     },
     resetTriggers: ["/new", "/reset"],
     store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
-    parentForkMaxTokens: 100000, // skip parent-thread fork above this token count (0 disables)
     maintenance: {
       mode: "warn", // warn | enforce
       pruneAfter: "30d",
@@ -1193,9 +1210,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing. Dock commands such as `/dock_discord` use the same map to switch the active session's reply route to another linked channel peer; see [Channel docking](/concepts/channel-docking).
 - **`reset`**: primary reset policy. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
 - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Legacy `dm` accepted as alias for `direct`.
-- **`parentForkMaxTokens`**: max parent-session `totalTokens` allowed when creating a forked thread session (default `100000`).
-  - If parent `totalTokens` is above this value, OpenClaw starts a fresh thread session instead of inheriting parent transcript history.
-  - Set `0` to disable this guard and always allow parent forking.
 - **`mainKey`**: legacy field. Runtime always uses `"main"` for the main direct-chat bucket.
 - **`agentToAgent.maxPingPongTurns`**: maximum reply-back turns between agents during agent-to-agent exchanges (integer, range: `0`–`5`). `0` disables ping-pong chaining.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
@@ -1211,6 +1225,8 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `enabled`: master default switch (providers can override; Discord uses `channels.discord.threadBindings.enabled`)
   - `idleHours`: default inactivity auto-unfocus in hours (`0` disables; providers can override)
   - `maxAgeHours`: default hard max age in hours (`0` disables; providers can override)
+  - `spawnSessions`: default gate for creating thread-bound work sessions from `sessions_spawn` and ACP thread spawns. Defaults to `true` when thread bindings are enabled; providers/accounts can override.
+  - `defaultSpawnContext`: default native subagent context for thread-bound spawns (`"fork"` or `"isolated"`). Defaults to `"fork"`.
 
 </Accordion>
 
