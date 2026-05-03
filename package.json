@@ -1700,10 +1700,12 @@
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tokenjuice": "0.7.0",
+    "tree-sitter-bash": "^0.25.1",
     "tslog": "^4.10.2",
     "typebox": "1.1.37",
     "undici": "8.1.0",
     "web-push": "^3.6.7",
+    "web-tree-sitter": "^0.26.8",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^4.4.1"
@@ -1784,7 +1786,8 @@
       "sharp"
     ],
     "ignoredBuiltDependencies": [
-      "koffi"
+      "koffi",
+      "tree-sitter-bash"
     ],
     "packageExtensions": {
       "@mariozechner/pi-coding-agent": {
