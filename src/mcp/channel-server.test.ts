@@ -489,7 +489,7 @@ describe("openclaw channel mcp server", () => {
   });
 });
 
-describe("mcp serve stdout isolation", () => {
+describe("channel mcp server tools capability", () => {
   test("tools/list returns proper response with tools capability declared", async () => {
     const serverHarness = await createOpenClawChannelMcpServer({
       claudeChannelMode: "off",
