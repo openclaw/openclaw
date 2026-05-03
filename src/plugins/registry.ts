@@ -68,6 +68,10 @@ import {
 } from "./host-hook-runtime.js";
 import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
 import {
+  schedulePluginSessionTurn,
+  unschedulePluginSessionTurnsByTag,
+} from "./host-hook-workflow.js";
+import {
   isPluginJsonValue,
   normalizePluginHostHookId,
   type PluginAgentEventSubscriptionRegistration,
@@ -123,6 +127,7 @@ import type {
   PluginToolMetadataRegistryRegistration,
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
@@ -1982,6 +1987,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const handle = registerPluginSessionSchedulerJob({
       pluginId: record.id,
       pluginName: record.name,
+      ownerRegistry: registry,
       job: { ...job, id: jobId, sessionKey, kind },
     });
     if (!handle) {
@@ -2379,6 +2385,47 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   namespace: params.namespace,
                 }),
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
+              scheduleSessionTurn: async (schedule) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return undefined;
+                }
+                await Promise.resolve();
+                const shouldCommit = () => {
+                  const currentRecord = registry.plugins.find((plugin) => plugin.id === record.id);
+                  if (currentRecord) {
+                    const activeRegistry = getActivePluginRegistry();
+                    return activeRegistry === registry && currentRecord.status === "loaded";
+                  }
+                  return false;
+                };
+                return schedulePluginSessionTurn({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  origin: record.origin,
+                  schedule,
+                  shouldCommit,
+                  ownerRegistry: registry,
+                });
+              },
+              unscheduleSessionTurnsByTag: async (request) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { removed: 0, failed: 0 };
+                }
+                await Promise.resolve();
+                const currentRecord = registry.plugins.find((plugin) => plugin.id === record.id);
+                const activeRegistry = getActivePluginRegistry();
+                const pluginLoaded = currentRecord
+                  ? activeRegistry === registry && currentRecord.status === "loaded"
+                  : false;
+                if (!pluginLoaded) {
+                  return { removed: 0, failed: 0 };
+                }
+                return unschedulePluginSessionTurnsByTag({
+                  pluginId: record.id,
+                  origin: record.origin,
+                  request,
+                });
+              },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
                   throwRegistrationError("only memory plugins can register a memory capability");

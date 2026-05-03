@@ -21,6 +21,7 @@ type SchedulerJobRecord = {
   pluginName?: string;
   job: PluginSessionSchedulerJobRegistration;
   generation: number;
+  ownerRegistry?: PluginRegistry;
 };
 
 type PluginHostRuntimeState = {
@@ -283,6 +284,7 @@ export function registerPluginSessionSchedulerJob(params: {
   pluginId: string;
   pluginName?: string;
   job: PluginSessionSchedulerJobRegistration;
+  ownerRegistry?: PluginRegistry;
 }): PluginSessionSchedulerJobHandle | undefined {
   const id = normalizeOptionalString(params.job.id);
   const sessionKey = normalizeOptionalString(params.job.sessionKey);
@@ -298,12 +300,13 @@ export function registerPluginSessionSchedulerJob(params: {
     pluginName: params.pluginName,
     job: { ...params.job, id, sessionKey, kind },
     generation,
+    ...(params.ownerRegistry ? { ownerRegistry: params.ownerRegistry } : {}),
   });
   state.schedulerJobsByPlugin.set(params.pluginId, jobs);
   return { id, pluginId: params.pluginId, sessionKey, kind };
 }
 
-function deletePluginSessionSchedulerJob(params: {
+export function deletePluginSessionSchedulerJob(params: {
   pluginId: string;
   jobId: string;
   sessionKey?: string;
@@ -371,9 +374,13 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
     generation?: number;
   }[];
   preserveJobIds?: ReadonlySet<string>;
+  preserveOwnerRegistry?: PluginRegistry | null;
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
   const state = getPluginHostRuntimeState();
   const failures: Array<{ pluginId: string; hookId: string; error: unknown }> = [];
+  const registryRecordKeys = new Set<string>();
+  const schedulerJobKey = (pluginId: string, jobId: string, sessionKey: string) =>
+    `${pluginId}\0${jobId}\0${sessionKey}`;
   if (params.records) {
     for (const record of params.records) {
       if (params.pluginId && record.pluginId !== params.pluginId) {
@@ -387,6 +394,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       if (params.sessionKey && sessionKey !== params.sessionKey) {
         continue;
       }
+      registryRecordKeys.add(schedulerJobKey(record.pluginId, jobId, sessionKey));
       const liveGeneration = getPluginSessionSchedulerJobGeneration({
         pluginId: record.pluginId,
         jobId,
@@ -406,10 +414,12 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         continue;
       }
       const preserveJob = params.preserveJobIds?.has(jobId) ?? false;
-      if (
-        preserveJob &&
-        (record.generation === undefined || liveGeneration === record.generation)
-      ) {
+      if (preserveJob) {
+        // preserveJobIds means "do not run cleanup at all" — even across
+        // generation mismatches. The generation-matched deletion below would
+        // otherwise still call the OLD cleanup callback, which can remove
+        // external scheduled jobs (e.g. cron.remove) and break the live
+        // newer-generation registration that took over this jobId.
         continue;
       }
       // A newer generation may already own this id. The old cleanup callback can
@@ -436,7 +446,6 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         expectedGeneration: record.generation,
       });
     }
-    return failures;
   }
   const pluginIds = params.pluginId ? [params.pluginId] : [...state.schedulerJobsByPlugin.keys()];
   for (const pluginId of pluginIds) {
@@ -446,6 +455,14 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
     }
     for (const [jobId, record] of jobs.entries()) {
       if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
+        continue;
+      }
+      if (
+        registryRecordKeys.has(schedulerJobKey(pluginId, jobId, record.job.sessionKey)) ||
+        params.preserveJobIds?.has(jobId) ||
+        (params.preserveOwnerRegistry !== undefined &&
+          record.ownerRegistry === params.preserveOwnerRegistry)
+      ) {
         continue;
       }
       try {
