@@ -476,7 +476,6 @@ describe("installPluginFromClawHub", () => {
       artifact: {
         kind: "npm-pack",
         sha256: DEMO_CLAWPACK_SHA256,
-        format: "tgz",
         npmIntegrity: "sha512-clawpack",
         npmShasum: "1".repeat(40),
       } as unknown as ClawHubResolvedArtifact,

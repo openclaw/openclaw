@@ -265,35 +265,34 @@ function normalizeArtifactResolverFiles(
   return files as NonNullable<ClawHubPackageVersion["version"]>["files"];
 }
 
+type ClawHubResolvedArtifactWire = {
+  artifactKind?: string | null;
+  kind?: string | null;
+  artifactSha256?: string | null;
+  sha256?: string | null;
+  npmIntegrity?: string | null;
+  npmShasum?: string | null;
+  downloadUrl?: string | null;
+};
+
 function resolveTopLevelNpmPackArtifact(
   artifact: ClawHubResolvedArtifact | null | undefined,
 ): ClawHubPackageArtifactSummary | null {
-  const raw = artifact as
-    | {
-        artifactKind?: string | null;
-        kind?: string | null;
-        artifactSha256?: string | null;
-        sha256?: string | null;
-        npmIntegrity?: string | null;
-        npmShasum?: string | null;
-        downloadUrl?: string | null;
-      }
-    | null
-    | undefined;
-  const artifactKind = raw?.artifactKind ?? raw?.kind;
+  const wire = artifact as ClawHubResolvedArtifactWire | null | undefined;
+  const artifactKind = wire?.artifactKind ?? wire?.kind;
   if (artifactKind !== "npm-pack") {
     return null;
   }
-  if (typeof raw?.npmIntegrity !== "string") {
+  if (typeof wire?.npmIntegrity !== "string") {
     return null;
   }
   return {
     kind: "npm-pack",
     format: "tgz",
-    sha256: raw.artifactSha256 ?? raw.sha256 ?? null,
-    npmIntegrity: raw.npmIntegrity,
-    npmShasum: raw.npmShasum ?? null,
-    downloadUrl: raw.downloadUrl ?? null,
+    sha256: wire.artifactSha256 ?? wire.sha256 ?? null,
+    npmIntegrity: wire.npmIntegrity,
+    npmShasum: wire.npmShasum ?? null,
+    downloadUrl: wire.downloadUrl ?? null,
   };
 }
 
