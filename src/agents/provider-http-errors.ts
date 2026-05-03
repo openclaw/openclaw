@@ -95,16 +95,57 @@ export function formatProviderErrorPayload(payload: unknown): string | undefined
   return undefined;
 }
 
+/**
+ * Returns the JSON object encoded by the first `data:` line of an SSE payload,
+ * or undefined if the body does not start with one. Streaming endpoints
+ * (e.g. Google Generative AI's `:streamGenerateContent?alt=sse`) sometimes
+ * deliver error envelopes through SSE framing instead of bare JSON, so the
+ * raw body would otherwise fail `JSON.parse` and surface as opaque text.
+ */
+function tryParseSseDataObject(rawBody: string): unknown {
+  for (const line of rawBody.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) {
+      continue;
+    }
+    const payload = trimmed.slice("data:".length).trim();
+    if (!payload || payload === "[DONE]") {
+      continue;
+    }
+    try {
+      return JSON.parse(payload);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 export async function extractProviderErrorDetail(response: Response): Promise<string | undefined> {
-  const rawBody = trimToUndefined(await readResponseTextLimited(response));
-  if (!rawBody) {
-    return undefined;
-  }
+  let rawBody: string | undefined;
   try {
-    return formatProviderErrorPayload(JSON.parse(rawBody)) ?? truncateErrorDetail(rawBody);
+    rawBody = trimToUndefined(await readResponseTextLimited(response));
   } catch {
-    return truncateErrorDetail(rawBody);
+    rawBody = undefined;
   }
+  if (rawBody) {
+    try {
+      return formatProviderErrorPayload(JSON.parse(rawBody)) ?? truncateErrorDetail(rawBody);
+    } catch {
+      const sseParsed = tryParseSseDataObject(rawBody);
+      if (sseParsed !== undefined) {
+        const formatted = formatProviderErrorPayload(sseParsed);
+        if (formatted) {
+          return formatted;
+        }
+      }
+      return truncateErrorDetail(rawBody);
+    }
+  }
+  // When the response body is empty or unreadable (streaming endpoints can
+  // close mid-error, producing a 4xx/5xx with no body), fall back to the
+  // HTTP status text so callers do not see a bare "(400)" with no context.
+  return trimToUndefined(response.statusText);
 }
 
 export function extractProviderRequestId(response: Response): string | undefined {

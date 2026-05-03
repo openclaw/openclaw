@@ -54,4 +54,68 @@ describe("provider error utils", () => {
       "Legacy provider error (HTTP 400): Bad request [code=invalid_request] [request_id=req_legacy]",
     );
   });
+
+  it("falls back to HTTP status text when the response body is empty", async () => {
+    const response = new Response(null, {
+      status: 400,
+      statusText: "Bad Request",
+    });
+
+    expect(await extractProviderErrorDetail(response)).toBe("Bad Request");
+  });
+
+  it("falls back to HTTP status text when only whitespace is returned", async () => {
+    const response = new Response("   \n  ", {
+      status: 503,
+      statusText: "Service Unavailable",
+    });
+
+    expect(await extractProviderErrorDetail(response)).toBe("Service Unavailable");
+  });
+
+  it("returns undefined when the response body and status text are both empty", async () => {
+    const response = new Response(null, { status: 502, statusText: "" });
+
+    expect(await extractProviderErrorDetail(response)).toBeUndefined();
+  });
+
+  it("parses provider error envelopes wrapped in SSE `data:` framing", async () => {
+    const sseBody = `data: ${JSON.stringify({
+      error: { message: "Quota exceeded for streaming", code: "RESOURCE_EXHAUSTED" },
+    })}\n\n`;
+    const response = new Response(sseBody, {
+      status: 429,
+      headers: { "content-type": "text/event-stream", "x-request-id": "req_sse" },
+    });
+
+    await expect(assertOkOrThrowProviderError(response, "Provider stream error")).rejects.toThrow(
+      "Provider stream error (429): Quota exceeded for streaming [code=RESOURCE_EXHAUSTED] [request_id=req_sse]",
+    );
+  });
+
+  it("preserves the raw body when SSE framing wraps an unrecognized payload", async () => {
+    const response = new Response("data: not-json-and-not-recognized\n\n", {
+      status: 400,
+      statusText: "Bad Request",
+    });
+
+    expect(await extractProviderErrorDetail(response)).toBe("data: not-json-and-not-recognized");
+  });
+
+  it("falls back to status text when reading the response body throws", async () => {
+    // Simulate a response whose body reader fails mid-read (e.g. socket reset
+    // while extracting a 4xx error). `extractProviderErrorDetail` must not
+    // propagate the failure and should still surface a useful detail.
+    const failingStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("ECONNRESET while reading error body"));
+      },
+    });
+    const response = new Response(failingStream, {
+      status: 502,
+      statusText: "Bad Gateway",
+    });
+
+    expect(await extractProviderErrorDetail(response)).toBe("Bad Gateway");
+  });
 });
