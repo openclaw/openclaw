@@ -9,7 +9,7 @@ import {
   clearTimeout as clearNativeTimeout,
   setTimeout as scheduleNativeTimeout,
 } from "node:timers";
-import chokidar from "chokidar";
+import { watch as chokidarWatch } from "chokidar";
 import { type WebSocket, WebSocketServer } from "ws";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -34,7 +34,7 @@ export type CanvasHostOpts = {
   listenHost?: string;
   allowInTests?: boolean;
   liveReload?: boolean;
-  watchFactory?: typeof chokidar.watch;
+  watchFactory?: ChokidarWatch;
   webSocketServerClass?: typeof WebSocketServer;
 };
 
@@ -55,7 +55,7 @@ export type CanvasHostHandlerOpts = {
   basePath?: string;
   allowInTests?: boolean;
   liveReload?: boolean;
-  watchFactory?: typeof chokidar.watch;
+  watchFactory?: ChokidarWatch;
   webSocketServerClass?: typeof WebSocketServer;
 };
 
@@ -222,9 +222,8 @@ function resolveDefaultCanvasRoot(): string {
 }
 
 function resolveDefaultWatchFactory(): ChokidarWatch {
-  const importedWatch = (chokidar as { watch?: ChokidarWatch } | undefined)?.watch;
-  if (typeof importedWatch === "function") {
-    return importedWatch.bind(chokidar);
+  if (typeof chokidarWatch === "function") {
+    return chokidarWatch;
   }
 
   const require = createRequire(import.meta.url);
