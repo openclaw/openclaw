@@ -1,43 +1,54 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const loadPluginRegistrySnapshotMock = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryForInstalledIndexMock = vi.hoisted(() => vi.fn());
+const loadPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./plugin-registry.js", () => ({
+vi.mock("./plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-registry.js")>()),
   loadPluginRegistrySnapshot: loadPluginRegistrySnapshotMock,
+}));
+vi.mock("./manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex: loadPluginManifestRegistryForInstalledIndexMock,
+}));
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
 }));
 
 afterEach(() => {
   loadPluginRegistrySnapshotMock.mockReset();
+  loadPluginManifestRegistryForInstalledIndexMock.mockReset();
+  loadPluginMetadataSnapshotMock.mockReset();
 });
 
 describe("setup-registry runtime fallback", () => {
   it("uses bundled registry cliBackends when the setup-registry runtime is unavailable", async () => {
-    loadPluginRegistrySnapshotMock.mockReturnValue({
-      diagnostics: [],
+    loadPluginMetadataSnapshotMock.mockReturnValue({
+      index: {
+        diagnostics: [],
+        plugins: [
+          {
+            pluginId: "openai",
+            origin: "bundled",
+            enabled: true,
+          },
+          {
+            pluginId: "disabled",
+            origin: "bundled",
+            enabled: false,
+          },
+          {
+            pluginId: "local",
+            origin: "workspace",
+            enabled: true,
+          },
+        ],
+      },
       plugins: [
         {
-          pluginId: "openai",
+          id: "openai",
           origin: "bundled",
-          enabled: true,
-          contributions: {
-            cliBackends: ["Codex-CLI", "legacy-openai-cli"],
-          },
-        },
-        {
-          pluginId: "disabled",
-          origin: "bundled",
-          enabled: false,
-          contributions: {
-            cliBackends: ["disabled-cli"],
-          },
-        },
-        {
-          pluginId: "local",
-          origin: "workspace",
-          enabled: true,
-          contributions: {
-            cliBackends: ["local-cli"],
-          },
+          cliBackends: ["Codex-CLI", "legacy-openai-cli"],
         },
       ],
     });
@@ -53,23 +64,26 @@ describe("setup-registry runtime fallback", () => {
     });
     expect(resolvePluginSetupCliBackendRuntime({ backend: "local-cli" })).toBeUndefined();
     expect(resolvePluginSetupCliBackendRuntime({ backend: "disabled-cli" })).toBeUndefined();
-    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledTimes(1);
-    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledWith({ cache: true });
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(3);
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+    });
   });
 
   it("preserves fail-closed setup lookup when the runtime module explicitly declines to resolve", async () => {
-    loadPluginRegistrySnapshotMock.mockReturnValue({
-      diagnostics: [],
-      plugins: [
-        {
-          pluginId: "openai",
-          origin: "bundled",
-          enabled: true,
-          contributions: {
-            cliBackends: ["Codex-CLI", "legacy-openai-cli"],
+    loadPluginMetadataSnapshotMock.mockReturnValue({
+      index: {
+        diagnostics: [],
+        plugins: [
+          {
+            pluginId: "openai",
+            origin: "bundled",
+            enabled: true,
           },
-        },
-      ],
+        ],
+      },
+      plugins: [],
     });
 
     const { __testing, resolvePluginSetupCliBackendRuntime } =
@@ -80,6 +94,6 @@ describe("setup-registry runtime fallback", () => {
     });
 
     expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli" })).toBeUndefined();
-    expect(loadPluginRegistrySnapshotMock).not.toHaveBeenCalled();
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 });

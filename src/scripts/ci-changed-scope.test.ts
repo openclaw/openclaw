@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
-import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 
 const { detectChangedScope, detectInstallSmokeScope, detectNodeFastScope, listChangedPaths } =
   (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
@@ -247,6 +247,33 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    expect(detectChangedScope(["src/shared/runtime-import.ts"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["src/shared/runtime-import.test.ts"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["src/plugins/import-specifier.test.ts"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
     expect(detectChangedScope(["scripts/npm-runner.mjs"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -313,15 +340,6 @@ describe("detectChangedScope", () => {
       runChangedSmoke: true,
       runControlUiI18n: false,
     });
-    expect(detectChangedScope(["scripts/e2e/bundled-channel-runtime-deps-docker.sh"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-    });
     expect(detectChangedScope(["scripts/e2e/agents-delete-shared-workspace-docker.sh"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -350,15 +368,6 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
     });
     expect(detectChangedScope(["scripts/ci-changed-scope.mjs"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: true,
-      runControlUiI18n: false,
-    });
-    expect(detectChangedScope(["src/plugins/bundled-runtime-deps.ts"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,
@@ -500,7 +509,7 @@ describe("detectChangedScope", () => {
       detectNodeFastScope([
         bundledCapabilityMetadataPath,
         "src/plugins/contracts/registry.ts",
-        "test/helpers/plugins/tts-contract-suites.ts",
+        "src/plugins/contracts/tts-contract-suites.ts",
         "scripts/test-projects.test-support.mjs",
         "test/scripts/test-projects.test.ts",
       ]),

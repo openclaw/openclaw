@@ -1,19 +1,19 @@
-import { ChannelType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    loadConfig: () => loadConfigMock(),
+    getRuntimeConfig: () => loadConfigMock(),
   };
 });
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   getSessionBindingService,
   registerSessionBindingAdapter,
@@ -200,6 +200,7 @@ describe("Discord ACP bind here end-to-end flow", () => {
         client: createDmClient("dm-1"),
         botUserId: "bot-1",
       }),
+      allowFrom: ["*"],
     });
 
     expect(preflight).not.toBeNull();

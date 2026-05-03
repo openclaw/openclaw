@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -54,13 +55,18 @@ describe("runtime context prompt submission", () => {
         transcriptPrompt: "",
       }),
     ).toEqual({
-      prompt: "[OpenClaw runtime event]",
+      prompt: "Continue the OpenClaw runtime event.",
       runtimeContext: "internal event",
+      runtimeOnly: true,
+      runtimeSystemContext: expect.stringContaining("internal event"),
     });
   });
 
   it("queues runtime context as a hidden next-turn custom message", async () => {
-    const sendCustomMessage = vi.fn(async () => {});
+    const sentMessages: Array<{ content: string }> = [];
+    const sendCustomMessage = vi.fn(async (message: { content: string }) => {
+      sentMessages.push(message);
+    });
 
     await queueRuntimeContextForNextTurn({
       session: { sendCustomMessage },
@@ -70,10 +76,31 @@ describe("runtime context prompt submission", () => {
     expect(sendCustomMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         customType: "openclaw.runtime-context",
-        content: expect.stringContaining("secret runtime context"),
+        content: "secret runtime context",
         display: false,
       }),
       { deliverAs: "nextTurn" },
     );
+    expect(sentMessages[0]?.content).not.toContain(
+      "OpenClaw runtime context for the immediately preceding user message.",
+    );
+    expect(sentMessages[0]?.content).not.toContain("not user-authored");
+  });
+
+  it("labels next-turn runtime context only when used as prompt-local system context", () => {
+    const systemContext = buildRuntimeContextSystemContext("secret runtime context");
+
+    expect(systemContext).toContain(
+      "OpenClaw runtime context for the immediately preceding user message.",
+    );
+    expect(systemContext).toContain("not user-authored");
+    expect(systemContext).toContain("secret runtime context");
+  });
+
+  it("labels runtime-only events as system context", async () => {
+    const { buildRuntimeEventSystemContext } = await import("./runtime-context-prompt.js");
+
+    expect(buildRuntimeEventSystemContext("internal event")).toContain("OpenClaw runtime event.");
+    expect(buildRuntimeEventSystemContext("internal event")).toContain("not user-authored");
   });
 });

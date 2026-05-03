@@ -58,14 +58,14 @@ export interface QueueSnapshot {
 export type SlashCommandResult = string | SlashCommandFileResult | null;
 
 /** Slash command result that sends text first and then a local file. */
-export interface SlashCommandFileResult {
+interface SlashCommandFileResult {
   text: string;
   /** Local file path to send. */
   filePath: string;
 }
 
 /** Slash command definition. */
-export interface SlashCommand {
+interface SlashCommand {
   /** Command name without the leading slash. */
   name: string;
   /** Short description. */
@@ -74,6 +74,8 @@ export interface SlashCommand {
   usage?: string;
   /** When true, the command requires the sender to pass the allowFrom authorization check. */
   requireAuth?: boolean;
+  /** When true, the command is only available in c2c (private) chat. Group invocations are rejected automatically. */
+  c2cOnly?: boolean;
   /** Command handler. */
   handler: (ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>;
 }
@@ -106,10 +108,14 @@ export class SlashCommandRegistry {
 
   /** Register one command. */
   register(cmd: SlashCommand): void {
+    const key = lc(cmd.name);
+    // Always register in the pre-dispatch map so QQ message-flow slash
+    // commands can match and execute directly (with requireAuth gating).
+    this.commands.set(key, cmd);
+    // Auth-gated commands are additionally exposed to the framework command
+    // surface (api.registerCommand) for CLI / control-plane invocation.
     if (cmd.requireAuth) {
-      this.frameworkCommands.set(lc(cmd.name), cmd);
-    } else {
-      this.commands.set(lc(cmd.name), cmd);
+      this.frameworkCommands.set(key, cmd);
     }
   }
 
@@ -164,12 +170,19 @@ export class SlashCommandRegistry {
       return null;
     }
 
+    // Reject c2cOnly commands when invoked outside private chat.
+    if (cmd.c2cOnly && ctx.type !== "c2c") {
+      return `💡 请在私聊中使用此指令`;
+    }
+
     // Gate sensitive commands behind the allowFrom authorization check.
     if (cmd.requireAuth && !ctx.commandAuthorized) {
       log?.info?.(
         `[qqbot] Slash command /${cmd.name} rejected: sender ${ctx.senderId} is not authorized`,
       );
-      return `⛔ 权限不足：/${cmd.name} 需要管理员权限。`;
+      const isGroup = ctx.type === "group" || ctx.type === "guild";
+      const configHint = isGroup ? "groupAllowFrom" : "allowFrom";
+      return `⛔ 权限不足：请先在 channels.qqbot.${configHint} 中配置明确的发送者列表后再使用 /${cmd.name}。`;
     }
 
     // `/command ?` returns usage help.

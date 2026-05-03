@@ -11,6 +11,7 @@ import type {
   ConfigWriteNotification,
   OpenClawConfig,
 } from "../config/config.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   pinActivePluginChannelRegistry,
   resetPluginRuntimeStateForTest,
@@ -233,6 +234,25 @@ describe("buildGatewayReloadPlan", () => {
     expect(afterPinPlan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it("restarts loaded channel plugins when plugin entry state changes", () => {
+    const plan = buildGatewayReloadPlan(["plugins.entries.telegram.enabled"]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it("keeps installed channel plugin source changes restart-backed", () => {
+    const plan = buildGatewayReloadPlan(["plugins.installs.telegram.installPath"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.restartReasons).toEqual(["plugins.installs.telegram.installPath"]);
+  });
+
   it("restarts heartbeat when model-related config changes", () => {
     const plan = buildGatewayReloadPlan([
       "models.providers.openai.models",
@@ -243,6 +263,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.hotReasons).toEqual(
       expect.arrayContaining(["models.providers.openai.models", "agents.defaults.model"]),
     );
+  });
+
+  it("requires restart when model pricing bootstrap changes", () => {
+    const plan = buildGatewayReloadPlan(["models.pricing.enabled"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("models.pricing.enabled");
+    expect(plan.restartHeartbeat).toBe(false);
+    expect(plan.hotReasons).toEqual([]);
   });
 
   it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
@@ -273,7 +301,7 @@ describe("buildGatewayReloadPlan", () => {
     ]);
   });
 
-  it("keeps colliding whole-record plugin install changes as restart reasons", () => {
+  it("restarts for whole-record plugin install changes", () => {
     const plan = buildGatewayReloadPlan(
       ["plugins.installs.lossless.resolvedAt", "plugins.installs.lossless.resolvedAt"],
       {
@@ -283,11 +311,30 @@ describe("buildGatewayReloadPlan", () => {
     );
 
     expect(plan.restartGateway).toBe(true);
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(false);
     expect(plan.restartReasons).toEqual([
       "plugins.installs.lossless.resolvedAt",
       "plugins.installs.lossless.resolvedAt",
     ]);
     expect(plan.noopPaths).toEqual([]);
+  });
+
+  it("requires restart when plugin load paths change", () => {
+    const plan = buildGatewayReloadPlan(["plugins.load.paths.0"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(false);
+    expect(plan.restartReasons).toEqual(["plugins.load.paths.0"]);
+  });
+
+  it("hot-reloads plugin entry config changes", () => {
+    const plan = buildGatewayReloadPlan(["plugins.entries.lossless-claw.config.mode"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+    expect(plan.hotReasons).toContain("plugins.entries.lossless-claw.config.mode");
   });
 
   it("lists plugin install metadata and whole-record paths structurally", () => {
@@ -519,6 +566,9 @@ function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNotificati
       hooks: { enabled: true },
     },
     persistedHash,
+    revision: 1,
+    fingerprint: `runtime-${persistedHash}`,
+    sourceFingerprint: `source-${persistedHash}`,
     writtenAtMs: Date.now(),
   };
 }
@@ -530,6 +580,8 @@ function createReloaderHarness(
     initialInternalWriteHash?: string | null;
     recoverSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
+    initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
+    readPluginInstallRecords?: () => Promise<Record<string, PluginInstallRecord>>;
     onRecovered?: (params: {
       reason: string;
       snapshot: ConfigFileSnapshot;
@@ -562,6 +614,8 @@ function createReloaderHarness(
     readSnapshot,
     recoverSnapshot: options.recoverSnapshot,
     promoteSnapshot: options.promoteSnapshot,
+    initialPluginInstallRecords: options.initialPluginInstallRecords ?? {},
+    readPluginInstallRecords: options.readPluginInstallRecords ?? (async () => ({})),
     onRecovered: options.onRecovered,
     subscribeToWrites,
     onHotReload,
@@ -737,13 +791,13 @@ describe("startGatewayConfigReloader", () => {
       "valid-config",
     );
     expect(log.warn).toHaveBeenCalledWith(
-      "config reload restored last-known-good config after invalid-config",
+      "config reload restored last-known-good config after invalid-config; Rejected validation details: gateway.mode: Expected string.",
     );
 
     await reloader.stop();
   });
 
-  it("skips last-known-good recovery for plugin-local invalid reloads", async () => {
+  it("queues restart in degraded mode for plugin-local invalid reloads", async () => {
     const activeConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
       agents: { defaults: { model: "gpt-5.4" } },
@@ -776,7 +830,19 @@ describe("startGatewayConfigReloader", () => {
       .mockResolvedValueOnce(invalidSnapshot);
     const recoverSnapshot = vi.fn(async () => true);
     const promoteSnapshot = vi.fn(async () => true);
+    const previousConfig: OpenClawConfig = {
+      ...activeConfig,
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { compactionMode: "adaptive" },
+          },
+        },
+      },
+    };
     const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
       recoverSnapshot,
       promoteSnapshot,
     });
@@ -786,14 +852,36 @@ describe("startGatewayConfigReloader", () => {
 
     expect(recoverSnapshot).not.toHaveBeenCalled();
     expect(readSnapshot).toHaveBeenCalledTimes(1);
-    expect(onHotReload).not.toHaveBeenCalled();
     expect(onRestart).not.toHaveBeenCalled();
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(onHotReload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedPaths: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
+        restartGateway: false,
+        reloadPlugins: true,
+        hotReasons: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
+      }),
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          entries: expect.objectContaining({
+            "lossless-claw": expect.objectContaining({
+              enabled: true,
+              config: expect.objectContaining({
+                cacheAwareCompaction: true,
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
     expect(promoteSnapshot).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       "config reload recovery skipped after invalid-config: invalidity is scoped to plugin entries",
     );
     expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("config reload skipped (invalid config):"),
+      expect.stringContaining(
+        "config reload skipped plugin config validation issue at plugins.entries.lossless-claw.config.cacheAwareCompaction:",
+      ),
     );
 
     await reloader.stop();
@@ -930,6 +1018,57 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("honors in-process write intent to skip reload", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("internal-none"));
+    const promoteSnapshot = vi.fn(async () => true);
+    const harness = createReloaderHarness(readSnapshot, { promoteSnapshot });
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("internal-none"),
+      afterWrite: { mode: "none", reason: "caller handles follow-up" },
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.log.info).toHaveBeenCalledWith(
+      "config reload skipped by writer intent (caller handles follow-up)",
+    );
+    expect(promoteSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ hash: "internal-none" }),
+      "in-process-write",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("honors in-process write intent to force restart", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("internal-restart"));
+    const harness = createReloaderHarness(readSnapshot);
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("internal-restart"),
+      afterWrite: { mode: "restart", reason: "plugin runtime contract changed" },
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restartGateway: true,
+        restartReasons: expect.arrayContaining(["plugin runtime contract changed"]),
+      }),
+      expect.any(Object),
+    );
+
+    await harness.reloader.stop();
+  });
+
   it("plans in-process reloads from source config and ignores runtime materialized paths", async () => {
     const baseInstall = {
       source: "npm" as const,
@@ -1001,6 +1140,9 @@ describe("startGatewayConfigReloader", () => {
         },
       },
       persistedHash: "plugin-timestamps-1",
+      revision: 1,
+      fingerprint: "runtime-plugin-timestamps-1",
+      sourceFingerprint: "source-plugin-timestamps-1",
       writtenAtMs: Date.now(),
     });
     await vi.runOnlyPendingTimersAsync();
@@ -1055,12 +1197,198 @@ describe("startGatewayConfigReloader", () => {
       sourceConfig: nextSourceConfig,
       runtimeConfig: nextSourceConfig,
       persistedHash: "plugin-collision-1",
+      revision: 1,
+      fingerprint: "runtime-plugin-collision-1",
+      sourceFingerprint: "source-plugin-collision-1",
       writtenAtMs: Date.now(),
     });
     await vi.runOnlyPendingTimersAsync();
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedPaths: [
+          "plugins.installs.lossless.resolvedAt",
+          "plugins.installs.lossless.resolvedAt",
+        ],
+        restartGateway: true,
+        restartReasons: [
+          "plugins.installs.lossless.resolvedAt",
+          "plugins.installs.lossless.resolvedAt",
+        ],
+      }),
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          installs: expect.objectContaining({
+            "lossless.resolvedAt": expect.objectContaining({
+              source: "npm",
+            }),
+          }),
+        }),
+      }),
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("queues restart when an external plugin source write only changes the managed index", async () => {
+    const activeConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      plugins: {
+        allow: ["lossless-claw"],
+        entries: {
+          "lossless-claw": { enabled: true },
+        },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: activeConfig,
+        runtimeConfig: activeConfig,
+        config: activeConfig,
+        hash: "external-plugin-index-1",
+      }),
+    );
+    const readPluginInstallRecords = vi.fn().mockResolvedValueOnce({
+      "lossless-claw": {
+        source: "npm",
+        spec: "@martian-engineering/lossless-claw",
+        installPath: "/tmp/openclaw/plugins/lossless-claw",
+        installedAt: "2026-04-22T00:00:00.000Z",
+      },
+    } satisfies Record<string, PluginInstallRecord>);
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: activeConfig,
+      initialPluginInstallRecords: {},
+      readPluginInstallRecords,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedPaths: ["plugins.installs.lossless-claw"],
+        restartGateway: true,
+        restartReasons: ["plugins.installs.lossless-claw"],
+      }),
+      activeConfig,
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("keeps external plugin policy-only writes on the hot reload path", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      plugins: {
+        entries: {
+          telegram: { enabled: false },
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+        },
+      },
+    };
+    const installRecords = {
+      telegram: {
+        source: "npm",
+        spec: "@openclaw/telegram",
+        installPath: "/tmp/openclaw/plugins/telegram",
+      },
+    } satisfies Record<string, PluginInstallRecord>;
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "external-plugin-policy-1",
+      }),
+    );
+    const readPluginInstallRecords = vi.fn().mockResolvedValueOnce(installRecords);
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+      initialPluginInstallRecords: installRecords,
+      readPluginInstallRecords,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedPaths: ["plugins.entries.telegram.enabled"],
+        restartGateway: false,
+        reloadPlugins: true,
+        hotReasons: ["plugins.entries.telegram.enabled"],
+      }),
+      nextConfig,
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("queues restart when an external plugin source write also changes plugin config", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      plugins: {
+        allow: ["lossless-claw"],
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      plugins: {
+        allow: ["lossless-claw"],
+        entries: {
+          "lossless-claw": { enabled: true },
+        },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "external-plugin-source-and-config-1",
+      }),
+    );
+    const readPluginInstallRecords = vi.fn().mockResolvedValueOnce({
+      "lossless-claw": {
+        source: "npm",
+        spec: "@martian-engineering/lossless-claw",
+        installPath: "/tmp/openclaw/plugins/lossless-claw",
+        installedAt: "2026-04-22T00:00:00.000Z",
+      },
+    } satisfies Record<string, PluginInstallRecord>);
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+      initialPluginInstallRecords: {},
+      readPluginInstallRecords,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedPaths: ["plugins.entries", "plugins.installs.lossless-claw"],
+        restartGateway: true,
+        restartReasons: ["plugins.installs.lossless-claw"],
+      }),
+      nextConfig,
+    );
 
     await harness.reloader.stop();
   });

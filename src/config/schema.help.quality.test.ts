@@ -11,6 +11,7 @@ const ROOT_SECTIONS = [
   "logging",
   "cli",
   "update",
+  "commitments",
   "browser",
   "ui",
   "auth",
@@ -60,6 +61,8 @@ const TARGET_KEYS = [
   "memory.qmd.update.interval",
   "memory.qmd.update.debounceMs",
   "memory.qmd.update.onBoot",
+  "memory.qmd.update.startup",
+  "memory.qmd.update.startupDelayMs",
   "memory.qmd.update.waitForBootSync",
   "memory.qmd.update.embedInterval",
   "memory.qmd.update.commandTimeoutMs",
@@ -86,6 +89,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.baseUrl",
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.defaults.memorySearch.remote.headers",
+  "agents.defaults.memorySearch.remote.nonBatchConcurrency",
   "agents.defaults.memorySearch.remote.batch.enabled",
   "agents.defaults.memorySearch.remote.batch.wait",
   "agents.defaults.memorySearch.remote.batch.concurrency",
@@ -93,6 +97,9 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
   "agents.defaults.memorySearch.store.path",
+  "agents.defaults.memorySearch.inputType",
+  "agents.defaults.memorySearch.queryInputType",
+  "agents.defaults.memorySearch.documentInputType",
   "agents.defaults.memorySearch.outputDimensionality",
   "agents.defaults.memorySearch.store.vector.enabled",
   "agents.defaults.memorySearch.store.vector.extensionPath",
@@ -170,6 +177,8 @@ const TARGET_KEYS = [
   "session.threadBindings.enabled",
   "session.threadBindings.idleHours",
   "session.threadBindings.maxAgeHours",
+  "session.threadBindings.spawnSessions",
+  "session.threadBindings.defaultSpawnContext",
   "session.maintenance",
   "session.maintenance.mode",
   "session.maintenance.pruneAfter",
@@ -239,10 +248,12 @@ const TARGET_KEYS = [
   "hooks.internal.load.extraDirs",
   "messages",
   "messages.messagePrefix",
+  "messages.visibleReplies",
   "messages.responsePrefix",
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",
   "messages.groupChat.historyLimit",
+  "messages.groupChat.visibleReplies",
   "messages.queue",
   "messages.queue.mode",
   "messages.queue.byChannel",
@@ -304,6 +315,10 @@ const TARGET_KEYS = [
   "web.reconnect.factor",
   "web.reconnect.jitter",
   "web.reconnect.maxAttempts",
+  "web.whatsapp",
+  "web.whatsapp.keepAliveIntervalMs",
+  "web.whatsapp.connectTimeoutMs",
+  "web.whatsapp.defaultQueryTimeoutMs",
   "discovery",
   "discovery.wideArea.domain",
   "discovery.wideArea.enabled",
@@ -368,6 +383,9 @@ const TARGET_KEYS = [
   "models.providers.*.baseUrl",
   "models.providers.*.apiKey",
   "models.providers.*.api",
+  "models.providers.*.contextWindow",
+  "models.providers.*.contextTokens",
+  "models.providers.*.maxTokens",
   "models.providers.*.headers",
   "models.providers.*.models",
   "agents",
@@ -386,12 +404,16 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.qualityGuard",
   "agents.defaults.compaction.qualityGuard.enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries",
+  "agents.defaults.compaction.midTurnPrecheck",
+  "agents.defaults.compaction.midTurnPrecheck.enabled",
   "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
   "agents.defaults.compaction.truncateAfterCompaction",
+  "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
+  "agents.defaults.compaction.memoryFlush.model",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
   "agents.defaults.compaction.memoryFlush.prompt",
   "agents.defaults.compaction.memoryFlush.systemPrompt",
@@ -535,10 +557,13 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "diagnostics.otel.endpoint",
   "diagnostics.otel.flushIntervalMs",
   "diagnostics.otel.headers",
+  "diagnostics.otel.logsEndpoint",
   "diagnostics.otel.logs",
+  "diagnostics.otel.metricsEndpoint",
   "diagnostics.otel.metrics",
   "diagnostics.otel.sampleRate",
   "diagnostics.otel.serviceName",
+  "diagnostics.otel.tracesEndpoint",
   "diagnostics.otel.traces",
   "gateway.remote.password",
   "gateway.remote.token",
@@ -665,14 +690,20 @@ describe("config help copy quality", () => {
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
+  it("documents session write-lock acquire timeout defaults", () => {
+    const acquireTimeout = FIELD_HELP["session.writeLock.acquireTimeoutMs"];
+    expect(acquireTimeout.includes("60000")).toBe(true);
+    expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
+  });
+
   it("documents session maintenance duration/size examples and deprecations", () => {
     const pruneAfter = FIELD_HELP["session.maintenance.pruneAfter"];
     expect(pruneAfter.includes("30d")).toBe(true);
     expect(pruneAfter.includes("12h")).toBe(true);
 
     const rotate = FIELD_HELP["session.maintenance.rotateBytes"];
-    expect(rotate.includes("10mb")).toBe(true);
-    expect(rotate.includes("1gb")).toBe(true);
+    expect(/deprecated/i.test(rotate)).toBe(true);
+    expect(rotate.includes("doctor --fix")).toBe(true);
 
     const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
     expect(/deprecated/i.test(deprecated)).toBe(true);
@@ -801,6 +832,9 @@ describe("config help copy quality", () => {
     expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
     expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
 
+    const midTurnPrecheck = FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"];
+    expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
+
     const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
     expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
     expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
@@ -808,6 +842,10 @@ describe("config help copy quality", () => {
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+
+    const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
+    expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);
+    expect(/never splits raw transcript bytes/i.test(transcriptBytes)).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);

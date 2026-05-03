@@ -1,9 +1,11 @@
-import type { AgentEmbeddedHarnessConfig } from "../../config/types.agents-shared.js";
+import type { AgentRuntimePolicyConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveAgentRuntimePolicy } from "../agent-runtime-policy.js";
 import { listAgentEntries, resolveSessionAgentIds } from "../agent-scope.js";
+import { isCliRuntimeAlias } from "../model-runtime-aliases.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -11,9 +13,7 @@ import type {
 } from "../pi-embedded-runner/run/types.js";
 import {
   normalizeEmbeddedAgentRuntime,
-  resolveEmbeddedAgentHarnessFallback,
   resolveEmbeddedAgentRuntime,
-  type EmbeddedAgentHarnessFallback,
   type EmbeddedAgentRuntime,
 } from "../pi-embedded-runner/runtime.js";
 import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
@@ -26,7 +26,6 @@ const log = createSubsystemLogger("agents/harness");
 
 type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
-  fallback: EmbeddedAgentHarnessFallback;
 };
 
 type AgentHarnessSelectionCandidate = {
@@ -46,11 +45,10 @@ type AgentHarnessSelectionDecision = {
     | "pinned"
     | "forced_pi"
     | "forced_plugin"
-    | "forced_plugin_fallback_to_pi"
     // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
     // Auto mode found no supporting plugin harness, so PI handled the run.
-    | "auto_pi_fallback";
+    | "auto_pi";
   candidates: AgentHarnessSelectionCandidate[];
 };
 
@@ -90,8 +88,8 @@ function selectAgentHarnessDecision(params: {
 }): AgentHarnessSelectionDecision {
   const pinnedPolicy = resolvePinnedAgentHarnessPolicy(params.agentHarnessId);
   const policy = pinnedPolicy ?? resolveAgentHarnessPolicy(params);
-  // PI is intentionally not part of the plugin candidate list. It is the legacy
-  // fallback path, so `fallback: "none"` can prove that only plugin harnesses run.
+  // PI is intentionally not part of the plugin candidate list. Explicit plugin
+  // runtimes fail closed; only `auto` may route an unmatched turn to PI.
   const pluginHarnesses = listPluginAgentHarnesses();
   const piHarness = createPiAgentHarness();
   const runtime = policy.runtime;
@@ -113,20 +111,7 @@ function selectAgentHarnessDecision(params: {
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
-    if (policy.fallback === "none") {
-      throw new Error(
-        `Requested agent harness "${runtime}" is not registered and PI fallback is disabled.`,
-      );
-    }
-    log.warn("requested agent harness is not registered; falling back to embedded PI backend", {
-      requestedRuntime: runtime,
-    });
-    return buildSelectionDecision({
-      harness: piHarness,
-      policy,
-      selectedReason: "forced_plugin_fallback_to_pi",
-      candidates: listHarnessCandidates(pluginHarnesses),
-    });
+    throw new Error(`Requested agent harness "${runtime}" is not registered.`);
   }
 
   const candidates = pluginHarnesses.map((harness) => ({
@@ -157,20 +142,15 @@ function selectAgentHarnessDecision(params: {
       candidates: candidates.map(toSelectionCandidate),
     });
   }
-  if (policy.fallback === "none") {
-    throw new Error(
-      `No registered agent harness supports ${formatProviderModel(params)} and PI fallback is disabled.`,
-    );
-  }
   return buildSelectionDecision({
     harness: piHarness,
     policy,
-    selectedReason: "auto_pi_fallback",
+    selectedReason: "auto_pi",
     candidates: candidates.map(toSelectionCandidate),
   });
 }
 
-export async function runAgentHarnessAttemptWithFallback(
+export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const selection = selectAgentHarnessDecision({
@@ -258,7 +238,6 @@ function logAgentHarnessSelection(
     selectedHarnessId: selection.selectedHarnessId,
     selectedReason: selection.selectedReason,
     runtime: selection.policy.runtime,
-    fallback: selection.policy.fallback,
     candidates: selection.candidates,
   });
 }
@@ -273,7 +252,7 @@ function resolvePinnedAgentHarnessPolicy(
   if (runtime === "auto") {
     return undefined;
   }
-  return { runtime, fallback: "none" };
+  return { runtime };
 }
 
 export async function maybeCompactAgentHarnessSession(
@@ -314,55 +293,24 @@ export function resolveAgentHarnessPolicy(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const defaultsPolicy = params.config?.agents?.defaults?.embeddedHarness;
+  const defaultsPolicy = resolveAgentRuntimePolicy(params.config?.agents?.defaults);
   const runtime = env.OPENCLAW_AGENT_RUNTIME?.trim()
     ? resolveEmbeddedAgentRuntime(env)
-    : normalizeEmbeddedAgentRuntime(agentPolicy?.runtime ?? defaultsPolicy?.runtime);
+    : normalizeEmbeddedAgentRuntime(agentPolicy?.id ?? defaultsPolicy?.id);
+  if (isCliRuntimeAlias(runtime)) {
+    return {
+      runtime: "pi",
+    };
+  }
   return {
     runtime,
-    fallback: resolveAgentHarnessFallbackPolicy({
-      env,
-      runtime,
-      agentPolicy,
-      defaultsPolicy,
-    }),
   };
-}
-
-function resolveAgentHarnessFallbackPolicy(params: {
-  env: NodeJS.ProcessEnv;
-  runtime: EmbeddedAgentRuntime;
-  agentPolicy?: AgentEmbeddedHarnessConfig;
-  defaultsPolicy?: AgentEmbeddedHarnessConfig;
-}): EmbeddedAgentHarnessFallback {
-  const envFallback = resolveEmbeddedAgentHarnessFallback(params.env);
-  if (envFallback) {
-    return envFallback;
-  }
-
-  const envRuntime = params.env.OPENCLAW_AGENT_RUNTIME?.trim();
-  if (envRuntime && isPluginAgentRuntime(params.runtime)) {
-    return normalizeAgentHarnessFallback(undefined, params.runtime);
-  }
-
-  if (params.agentPolicy?.runtime) {
-    return normalizeAgentHarnessFallback(params.agentPolicy.fallback, params.runtime);
-  }
-
-  return normalizeAgentHarnessFallback(
-    params.agentPolicy?.fallback ?? params.defaultsPolicy?.fallback,
-    params.runtime,
-  );
-}
-
-function isPluginAgentRuntime(runtime: EmbeddedAgentRuntime): boolean {
-  return runtime !== "auto" && runtime !== "pi";
 }
 
 function resolveAgentEmbeddedHarnessConfig(
   config: OpenClawConfig | undefined,
   params: { agentId?: string; sessionKey?: string },
-): AgentEmbeddedHarnessConfig | undefined {
+): AgentRuntimePolicyConfig | undefined {
   if (!config) {
     return undefined;
   }
@@ -371,20 +319,7 @@ function resolveAgentEmbeddedHarnessConfig(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  return listAgentEntries(config).find((entry) => normalizeAgentId(entry.id) === sessionAgentId)
-    ?.embeddedHarness;
-}
-
-function normalizeAgentHarnessFallback(
-  value: AgentEmbeddedHarnessConfig["fallback"] | undefined,
-  runtime: EmbeddedAgentRuntime,
-): EmbeddedAgentHarnessFallback {
-  if (value) {
-    return value === "none" ? "none" : "pi";
-  }
-  return runtime === "auto" ? "pi" : "none";
-}
-
-function formatProviderModel(params: { provider: string; modelId?: string }): string {
-  return params.modelId ? `${params.provider}/${params.modelId}` : params.provider;
+  return resolveAgentRuntimePolicy(
+    listAgentEntries(config).find((entry) => normalizeAgentId(entry.id) === sessionAgentId),
+  );
 }

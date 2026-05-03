@@ -1,5 +1,12 @@
-const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
-const EMPTY_RUNTIME_EVENT_PROMPT = "[OpenClaw runtime event]";
+import {
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+  OPENCLAW_RUNTIME_EVENT_HEADER,
+} from "../../internal-runtime-context.js";
+export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
+
+const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 
 type RuntimeContextSession = {
   sendCustomMessage: (
@@ -11,6 +18,13 @@ type RuntimeContextSession = {
     },
     options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
   ) => Promise<void>;
+};
+
+type RuntimeContextPromptParts = {
+  prompt: string;
+  runtimeContext?: string;
+  runtimeOnly?: boolean;
+  runtimeSystemContext?: string;
 };
 
 function removeLastPromptOccurrence(text: string, prompt: string): string | null {
@@ -29,18 +43,50 @@ function removeLastPromptOccurrence(text: string, prompt: string): string | null
 export function resolveRuntimeContextPromptParts(params: {
   effectivePrompt: string;
   transcriptPrompt?: string;
-}): { prompt: string; runtimeContext?: string } {
+}): RuntimeContextPromptParts {
   const transcriptPrompt = params.transcriptPrompt;
   if (transcriptPrompt === undefined || transcriptPrompt === params.effectivePrompt) {
     return { prompt: params.effectivePrompt };
   }
 
-  const prompt = transcriptPrompt.trim() || EMPTY_RUNTIME_EVENT_PROMPT;
+  const prompt = transcriptPrompt.trim();
   const runtimeContext =
     removeLastPromptOccurrence(params.effectivePrompt, transcriptPrompt)?.trim() ||
     params.effectivePrompt.trim();
+  if (!prompt) {
+    return runtimeContext
+      ? {
+          prompt: OPENCLAW_RUNTIME_EVENT_USER_PROMPT,
+          runtimeContext,
+          runtimeOnly: true,
+          runtimeSystemContext: buildRuntimeEventSystemContext(runtimeContext),
+        }
+      : { prompt: "" };
+  }
 
   return runtimeContext ? { prompt, runtimeContext } : { prompt };
+}
+
+function buildRuntimeContextMessageContent(params: {
+  runtimeContext: string;
+  kind: "next-turn" | "runtime-event";
+}): string {
+  return [
+    params.kind === "runtime-event"
+      ? OPENCLAW_RUNTIME_EVENT_HEADER
+      : OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+    OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+    "",
+    params.runtimeContext,
+  ].join("\n");
+}
+
+export function buildRuntimeContextSystemContext(runtimeContext: string): string {
+  return buildRuntimeContextMessageContent({ runtimeContext, kind: "next-turn" });
+}
+
+export function buildRuntimeEventSystemContext(runtimeContext: string): string {
+  return buildRuntimeContextMessageContent({ runtimeContext, kind: "runtime-event" });
 }
 
 export async function queueRuntimeContextForNextTurn(params: {
@@ -54,12 +100,7 @@ export async function queueRuntimeContextForNextTurn(params: {
   await params.session.sendCustomMessage(
     {
       customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-      content: [
-        "OpenClaw runtime context for the immediately preceding user message.",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        runtimeContext,
-      ].join("\n"),
+      content: runtimeContext,
       display: false,
       details: { source: "openclaw-runtime-context" },
     },

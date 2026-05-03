@@ -334,6 +334,11 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         reactions: true,
         threads: true,
         media: true,
+        tts: {
+          voice: {
+            synthesisTarget: "voice-note",
+          },
+        },
       },
       reload: { configPrefixes: ["channels.matrix"] },
       configSchema: buildChannelConfigSchema(MatrixConfigSchema),
@@ -371,6 +376,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           }).map(projectMatrixConversationBinding),
       },
       messaging: {
+        targetPrefixes: ["matrix"],
         normalizeTarget: normalizeMatrixMessagingTarget,
         resolveInboundConversation: ({ to, conversationId, threadId }) =>
           resolveMatrixInboundConversation({ to, conversationId, threadId }),

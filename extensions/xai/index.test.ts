@@ -1,8 +1,10 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  registerProviderPlugin,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
-import { registerProviderPlugin } from "../../test/helpers/plugins/provider-registration.js";
 import plugin from "./index.js";
 import setupPlugin from "./setup-api.js";
 import {
@@ -174,7 +176,7 @@ describe("xai provider plugin", () => {
     expect(
       provider.resolveDynamicModel?.({
         provider: "xai",
-        modelId: "grok-4-1-fast-reasoning",
+        modelId: "grok-4.3",
         modelRegistry: { find: () => null } as never,
         providerConfig: {
           api: "openai-completions",
@@ -182,12 +184,13 @@ describe("xai provider plugin", () => {
         },
       } as never),
     ).toMatchObject({
-      id: "grok-4-1-fast-reasoning",
+      id: "grok-4.3",
       provider: "xai",
       api: "openai-completions",
       baseUrl: "https://api.x.ai/v1",
       reasoning: true,
-      contextWindow: 2_000_000,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
     });
   });
 
@@ -197,7 +200,7 @@ describe("xai provider plugin", () => {
     expect(
       provider.isModernModelRef?.({
         provider: "xai",
-        modelId: "grok-4-1-fast-reasoning",
+        modelId: "grok-4.3",
       } as never),
     ).toBe(true);
     expect(

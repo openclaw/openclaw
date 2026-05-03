@@ -8,7 +8,8 @@ import {
   withoutPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import type { PluginInstallUpdate } from "../plugins/installs.js";
-import { defaultRuntime } from "../runtime.js";
+import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import {
   applySlotSelectionForPlugin,
@@ -33,57 +34,113 @@ function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): O
   };
 }
 
-export async function persistPluginInstall(params: {
+function removeInstalledPluginFromDenylist(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
+  const deny = cfg.plugins?.deny;
+  if (!Array.isArray(deny) || !deny.includes(pluginId)) {
+    return cfg;
+  }
+  const nextDeny = deny.filter((id) => id !== pluginId);
+  const plugins = {
+    ...cfg.plugins,
+    ...(nextDeny.length > 0 ? { deny: nextDeny } : {}),
+  };
+  if (nextDeny.length === 0) {
+    delete plugins.deny;
+  }
+  return {
+    ...cfg,
+    plugins,
+  };
+}
+
+export type ConfigSnapshotForInstallPersist = {
   config: OpenClawConfig;
-  baseHash?: string;
+  baseHash: string | undefined;
+};
+
+export async function persistPluginInstall(params: {
+  snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
+  enable?: boolean;
   successMessage?: string;
   warningMessage?: string;
+  runtime?: RuntimeEnv;
 }): Promise<OpenClawConfig> {
-  let next = enablePluginInConfig(
-    addInstalledPluginToAllowlist(params.config, params.pluginId),
-    params.pluginId,
-  ).config;
-  const installRecords = await loadInstalledPluginIndexInstallRecords();
+  const runtime = params.runtime ?? defaultRuntime;
+  const installConfig =
+    params.enable === false
+      ? params.snapshot.config
+      : removeInstalledPluginFromDenylist(
+          addInstalledPluginToAllowlist(params.snapshot.config, params.pluginId),
+          params.pluginId,
+        );
+  let next =
+    params.enable === false
+      ? installConfig
+      : enablePluginInConfig(installConfig, params.pluginId, {
+          updateChannelConfig: false,
+        }).config;
+  const installRecords = await tracePluginLifecyclePhaseAsync(
+    "install records load",
+    () => loadInstalledPluginIndexInstallRecords(),
+    { command: "install" },
+  );
   const nextInstallRecords = recordPluginInstallInRecords(installRecords, {
     pluginId: params.pluginId,
     ...params.install,
   });
-  const slotResult = applySlotSelectionForPlugin(next, params.pluginId);
+  const slotResult =
+    params.enable === false
+      ? { config: next, warnings: [] }
+      : await tracePluginLifecyclePhaseAsync(
+          "slot selection",
+          async () => applySlotSelectionForPlugin(next, params.pluginId),
+          { command: "install", pluginId: params.pluginId },
+        );
   next = withoutPluginInstallRecords(slotResult.config);
-  await commitPluginInstallRecordsWithConfig({
-    previousInstallRecords: installRecords,
-    nextInstallRecords,
-    nextConfig: next,
-    ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
-  });
+  await tracePluginLifecyclePhaseAsync(
+    "config mutation",
+    () =>
+      commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: installRecords,
+        nextInstallRecords,
+        nextConfig: next,
+        baseHash: params.snapshot.baseHash,
+        writeOptions: {
+          afterWrite: { mode: "restart", reason: "plugin source changed" },
+        },
+      }),
+    { command: "install" },
+  );
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
     reason: "source-changed",
     installRecords: nextInstallRecords,
+    traceCommand: "install",
     logger: {
-      warn: (message) => defaultRuntime.log(theme.warn(message)),
+      warn: (message) => runtime.log(theme.warn(message)),
     },
   });
-  logSlotWarnings(slotResult.warnings);
+  logSlotWarnings(slotResult.warnings, runtime);
   if (params.warningMessage) {
-    defaultRuntime.log(theme.warn(params.warningMessage));
+    runtime.log(theme.warn(params.warningMessage));
   }
-  defaultRuntime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
-  defaultRuntime.log("Restart the gateway to load plugins.");
+  runtime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
+  runtime.log("Restart the gateway to load plugins.");
   return next;
 }
 
 export async function persistHookPackInstall(params: {
-  config: OpenClawConfig;
-  baseHash?: string;
+  snapshot: ConfigSnapshotForInstallPersist;
   hookPackId: string;
   hooks: string[];
   install: Omit<HookInstallUpdate, "hookId" | "hooks">;
   successMessage?: string;
+  runtime?: RuntimeEnv;
 }): Promise<OpenClawConfig> {
-  let next = enableInternalHookEntries(params.config, params.hooks);
+  const runtime = params.runtime ?? defaultRuntime;
+  let next = enableInternalHookEntries(params.snapshot.config, params.hooks);
   next = recordHookInstall(next, {
     hookId: params.hookPackId,
     hooks: params.hooks,
@@ -91,9 +148,9 @@ export async function persistHookPackInstall(params: {
   });
   await replaceConfigFile({
     nextConfig: next,
-    ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
+    baseHash: params.snapshot.baseHash,
   });
-  defaultRuntime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
-  logHookPackRestartHint();
+  runtime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
+  logHookPackRestartHint(runtime);
   return next;
 }

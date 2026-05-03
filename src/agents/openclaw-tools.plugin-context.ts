@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -16,6 +16,7 @@ export type OpenClawPluginToolOptions = {
   config?: OpenClawConfig;
   fsPolicy?: ToolFsPolicy;
   requesterSenderId?: string | null;
+  requesterAgentIdOverride?: string;
   senderIsOwner?: boolean;
   sessionId?: string;
   sandboxBrowserBridgeUrl?: string;
@@ -28,11 +29,13 @@ export function resolveOpenClawPluginToolInputs(params: {
   options?: OpenClawPluginToolOptions;
   resolvedConfig?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
+  getRuntimeConfig?: () => OpenClawConfig | undefined;
 }) {
-  const { options, resolvedConfig, runtimeConfig } = params;
-  const sessionAgentId = resolveSessionAgentId({
+  const { options, resolvedConfig, runtimeConfig, getRuntimeConfig } = params;
+  const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: options?.agentSessionKey,
     config: resolvedConfig,
+    agentId: options?.requesterAgentIdOverride,
   });
   const inferredWorkspaceDir =
     options?.workspaceDir || !resolvedConfig
@@ -50,6 +53,7 @@ export function resolveOpenClawPluginToolInputs(params: {
     context: {
       config: options?.config,
       runtimeConfig,
+      getRuntimeConfig,
       fsPolicy: options?.fsPolicy,
       workspaceDir,
       agentDir: options?.agentDir,

@@ -6,6 +6,7 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "./pi-embedded-runner/delivery-evidence.js";
 import { isIncompleteTerminalAssistantTurn } from "./pi-embedded-runner/run/incomplete-turn.js";
 import {
   consumePendingToolMediaReply,
@@ -45,8 +46,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
   const hadDeterministicSideEffect =
     ctx.state.hadDeterministicSideEffect === true ||
-    (ctx.state.messagingToolSentTexts?.length ?? 0) > 0 ||
-    (ctx.state.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
+    hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
     (ctx.state.successfulCronAdds ?? 0) > 0;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText,
@@ -111,6 +111,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   }
 
   const emitLifecycleTerminal = () => {
+    const terminalMeta = {
+      ...(ctx.state.terminalStopReason ? { stopReason: ctx.state.terminalStopReason } : {}),
+      ...(ctx.state.yielded === true ? { yielded: true } : {}),
+    };
     if (isError) {
       emitAgentEvent({
         runId: ctx.params.runId,
@@ -118,6 +122,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         data: {
           phase: "error",
           error: lifecycleErrorText ?? "LLM request failed.",
+          ...terminalMeta,
           ...(livenessState ? { livenessState } : {}),
           ...(replayInvalid ? { replayInvalid } : {}),
           endedAt: Date.now(),
@@ -128,6 +133,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         data: {
           phase: "error",
           error: lifecycleErrorText ?? "LLM request failed.",
+          ...terminalMeta,
           ...(livenessState ? { livenessState } : {}),
           ...(replayInvalid ? { replayInvalid } : {}),
         },
@@ -139,6 +145,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       stream: "lifecycle",
       data: {
         phase: "end",
+        ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
         endedAt: Date.now(),
@@ -148,6 +155,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       stream: "lifecycle",
       data: {
         phase: "end",
+        ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
       },

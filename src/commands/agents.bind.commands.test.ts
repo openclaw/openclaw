@@ -34,6 +34,7 @@ vi.mock("../config/bindings.js", () => ({
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
   listPluginContributionIds: pluginRegistryMocks.listPluginContributionIds,
 }));

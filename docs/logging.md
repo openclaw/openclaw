@@ -23,6 +23,11 @@ By default, the Gateway writes a rolling log file under:
 
 The date uses the gateway host's local timezone.
 
+Each file rotates when it reaches `logging.maxFileBytes` (default: 100 MB).
+OpenClaw keeps up to five numbered archives beside the active file, such as
+`openclaw-YYYY-MM-DD.1.log`, and keeps writing to a fresh active log instead of
+suppressing diagnostics.
+
 You can override this in `~/.openclaw/openclaw.json`:
 
 ```json
@@ -68,9 +73,10 @@ In JSON mode, the CLI emits `type`-tagged objects:
 - `notice`: truncation / rotation hints
 - `raw`: unparsed log line
 
-If the local loopback Gateway asks for pairing, `openclaw logs` falls back to
-the configured local log file automatically. Explicit `--url` targets do not
-use this fallback.
+If the implicit local loopback Gateway asks for pairing, closes during connect,
+or times out before `logs.tail` answers, `openclaw logs` falls back to the
+configured Gateway file log automatically. Explicit `--url` targets do not use
+this fallback.
 
 If the Gateway is unreachable, the CLI prints a short hint to run:
 
@@ -97,6 +103,18 @@ openclaw channels logs --channel whatsapp
 
 Each line in the log file is a JSON object. The CLI and Control UI parse these
 entries to render structured output (time, level, subsystem, message).
+
+File-log JSONL records also include machine-filterable top-level fields when
+available:
+
+- `hostname`: gateway host name.
+- `message`: flattened log message text for full-text search.
+- `agent_id`: active agent id when the log call carries agent context.
+- `session_id`: active session id/key when the log call carries session context.
+- `channel`: active channel when the log call carries channel context.
+
+OpenClaw preserves the original structured log arguments alongside these fields
+so existing parsers that read numbered tslog argument keys keep working.
 
 ### Console output
 
@@ -152,6 +170,33 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Trace correlation
+
+File logs are JSONL. When a log call carries a valid diagnostic trace context,
+OpenClaw writes the trace fields as top-level JSON keys (`traceId`, `spanId`,
+`parentSpanId`, `traceFlags`) so external log processors can correlate the line
+with OTEL spans and provider `traceparent` propagation.
+
+Gateway HTTP requests and Gateway WebSocket frames establish an internal request
+trace scope. Logs and diagnostic events emitted inside that async scope inherit
+the request trace when they do not pass an explicit trace context. Agent run and
+model-call traces become children of the active request trace, so local logs,
+diagnostic snapshots, OTEL spans, and trusted provider `traceparent` headers can
+be joined by `traceId` without logging raw request or model content.
+
+### Model call size and timing
+
+Model-call diagnostics record bounded request/response measurements without
+capturing raw prompt or response content:
+
+- `requestPayloadBytes`: UTF-8 byte size of the final model request payload
+- `responseStreamBytes`: UTF-8 byte size of streamed model response events
+- `timeToFirstByteMs`: elapsed time before the first streamed response event
+- `durationMs`: total model-call duration
+
+These fields are available to diagnostic snapshots, model-call plugin hooks, and
+OTEL model-call spans/metrics when diagnostics export is enabled.
+
 ### Console styles
 
 `logging.consoleStyle`:
@@ -162,12 +207,30 @@ file log levels.
 
 ### Redaction
 
-Tool summaries can redact sensitive tokens before they hit the console:
+OpenClaw can redact sensitive tokens before they hit console output, file logs,
+OTLP log records, persisted session transcript text, or Control UI tool
+event payloads (tool start args, partial/final result payloads, derived
+exec output, and patch summaries):
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
-- `logging.redactPatterns`: list of regex strings to override the default set
+- `logging.redactPatterns`: list of regex strings to override the default set. Custom patterns apply on top of the built-in defaults for Control UI tool payloads, so adding a pattern never weakens redaction of values already caught by the defaults.
 
-Redaction affects **console output only** and does not alter file logs.
+File logs and session transcripts stay JSONL, but matching secret values are
+masked before the line or message is written to disk. Redaction is best-effort:
+it applies to text-bearing message content and log strings, not every
+identifier or binary payload field.
+
+The built-in defaults cover common API credentials and payment-credential field
+names such as card number, CVC/CVV, shared payment token, and payment credential
+when they appear as JSON fields, URL parameters, CLI flags, or assignments.
+
+`logging.redactSensitive: "off"` only disables this general log/transcript
+policy. OpenClaw still redacts safety-boundary payloads that can be shown to UI
+clients, support bundles, diagnostics observers, approval prompts, or agent
+tools. Examples include Control UI tool-call events, `sessions_history` output,
+diagnostics support exports, provider error observations, exec approval command
+display, and Gateway WebSocket protocol logs. Custom `logging.redactPatterns`
+can still add project-specific patterns on those surfaces.
 
 ## Diagnostics and OpenTelemetry
 

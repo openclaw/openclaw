@@ -228,6 +228,24 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not treat an inconclusive gateway timeout as local embeddings not ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: false,
+        ready: false,
+        error: "gateway memory probe timed out: gateway timeout after 8000ms",
+      },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("does not warn when local provider has an explicit hf: modelPath", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
@@ -394,6 +412,37 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn for ollama when gateway probe is ready without CLI API key", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("warns for ollama when gateway probe reports embeddings are not ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: false, error: "connection refused" },
+    });
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('provider "ollama" is configured');
+    expect(message).toContain("embeddings are not ready");
+  });
+
   it("warns when lmstudio gateway probe reports embeddings are not ready", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "lmstudio",
@@ -410,7 +459,12 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("embeddings are not ready");
   });
 
-  it("warns when lmstudio gateway probe is unavailable", async () => {
+  it("does not warn when key-optional provider (lmstudio) probe was skipped (skipped: true)", async () => {
+    // When `openclaw doctor` runs without --deep, the probe is skipped and returns
+    // { checked: false, ready: false, skipped: true }. This must NOT produce a
+    // false-positive warning — it means readiness was never checked, not that
+    // embeddings are unavailable.
+    // Regression test for: https://github.com/openclaw/openclaw/issues/74608
     resolveMemorySearchConfig.mockReturnValue({
       provider: "lmstudio",
       local: {},
@@ -418,13 +472,48 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: false, ready: false },
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when key-optional provider (ollama) probe was skipped (skipped: true)", async () => {
+    // Same guard for ollama — the most commonly reported false-positive case.
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns for key-optional provider (lmstudio) when gateway probe timed out", async () => {
+    // A gateway timeout sets checked: false but skipped: false/absent. This is a
+    // real diagnostic signal — embeddings may be unavailable — so we should warn.
+    // Regression guard: https://github.com/openclaw/openclaw/issues/74608
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "lmstudio",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: false,
+        ready: false,
+        error: "gateway memory probe timed out: gateway timeout after 8000ms",
+        skipped: false,
+      },
     });
 
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain('provider "lmstudio" is configured');
-    expect(message).toContain("could not confirm embeddings are ready");
-    expect(message).toContain("openclaw memory status --deep");
   });
 
   it("notes when gateway probe reports embeddings ready and CLI API key is missing", async () => {

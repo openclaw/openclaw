@@ -21,6 +21,11 @@ If the file is missing, OpenClaw uses safe defaults. Common reasons to add a con
 
 See the [full reference](/gateway/configuration-reference) for every available field.
 
+Agents and automation should use `config.schema.lookup` for exact field-level
+docs before editing config. Use this page for task-oriented guidance and
+[Configuration reference](/gateway/configuration-reference) for the broader
+field map and defaults.
+
 <Tip>
 **New to configuration?** Start with `openclaw onboard` for interactive setup, or check out the [Configuration Examples](/gateway/configuration-examples) guide for complete copy-paste configs.
 </Tip>
@@ -174,10 +179,16 @@ cannot roll back unrelated user settings.
   </Accordion>
 
   <Accordion title="Set up group chat mention gating">
-    Group messages default to **require mention**. Configure patterns per agent:
+    Group messages default to **require mention**. Configure trigger patterns per agent, and keep visible room replies on the default message-tool path unless you intentionally want legacy automatic final replies:
 
     ```json5
     {
+      messages: {
+        visibleReplies: "automatic", // set "message_tool" to require message-tool sends everywhere
+        groupChat: {
+          visibleReplies: "message_tool", // default; use "automatic" for legacy room replies
+        },
+      },
       agents: {
         list: [
           {
@@ -198,7 +209,8 @@ cannot roll back unrelated user settings.
 
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
     - **Text patterns**: safe regex patterns in `mentionPatterns`
-    - See [full reference](/gateway/config-channels#group-chat-mention-gating) for per-channel overrides and self-chat mode.
+    - **Visible replies**: `messages.visibleReplies` can require message-tool sends globally; `messages.groupChat.visibleReplies` overrides that for groups/channels.
+    - See [full reference](/gateway/config-channels#group-chat-mention-gating) for visible reply modes, per-channel overrides, and self-chat mode.
 
   </Accordion>
 
@@ -259,6 +271,24 @@ cannot roll back unrelated user settings.
 
   </Accordion>
 
+  <Accordion title="Tune gateway WebSocket handshake timeout">
+    Give local clients more time to complete the pre-auth WebSocket handshake on
+    loaded or low-powered hosts:
+
+    ```json5
+    {
+      gateway: {
+        handshakeTimeoutMs: 30000,
+      },
+    }
+    ```
+
+    - Default is `15000` milliseconds.
+    - `OPENCLAW_HANDSHAKE_TIMEOUT_MS` still takes precedence for one-off service or shell overrides.
+    - Prefer fixing startup/event-loop stalls first; this knob is for hosts that are healthy but slow during warmup.
+
+  </Accordion>
+
   <Accordion title="Configure sessions and resets">
     Sessions control conversation continuity and isolation:
 
@@ -303,7 +333,7 @@ cannot roll back unrelated user settings.
     }
     ```
 
-    Build the image first: `scripts/sandbox-setup.sh`
+    Build the image first — from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
 
     See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
 
@@ -392,7 +422,7 @@ cannot roll back unrelated user settings.
     {
       cron: {
         enabled: true,
-        maxConcurrentRuns: 2,
+        maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
         sessionRetention: "24h",
         runLog: {
           maxBytes: "2mb",
@@ -492,6 +522,12 @@ cannot roll back unrelated user settings.
     - **Unsupported write-through**: root includes, include arrays, and includes
       with sibling overrides fail closed for OpenClaw-owned writes instead of
       flattening the config
+    - **Confinement**: `$include` paths must resolve under the directory holding
+      `openclaw.json`. To share a tree across machines or users, set
+      `OPENCLAW_INCLUDE_ROOTS` to a path-list (`:` on POSIX, `;` on Windows) of
+      additional directories that includes may reference. Symlinks are resolved
+      and re-checked, so a path that lexically lives in a config dir but whose
+      real target escapes every allowed root is still rejected.
     - **Error handling**: clear errors for missing files, parse errors, and circular includes
 
   </Accordion>
@@ -574,11 +610,19 @@ For tooling that writes config over the gateway API, prefer this flow:
   deletes, arrays replace)
 - `config.apply` only when you intend to replace the entire config
 - `update.run` for explicit self-update plus restart
+- `update.status` to inspect the latest update restart sentinel and verify the running version after a restart
+
+Agents should treat `config.schema.lookup` as the first stop for exact
+field-level docs and constraints. Use [Configuration reference](/gateway/configuration-reference)
+when they need the broader config map, defaults, or links to dedicated
+subsystem references.
 
 <Note>
 Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
 rate-limited to 3 requests per 60 seconds per `deviceId+clientIp`. Restart
 requests coalesce and then enforce a 30-second cooldown between restart cycles.
+`update.status` is read-only but admin-scoped because the restart sentinel can
+include update step summaries and command output tails.
 </Note>
 
 Example partial patch:

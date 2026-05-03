@@ -5,8 +5,8 @@ import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
-const buildPluginSnapshotReportMock = vi.hoisted(() => vi.fn());
+const replaceConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
+const buildPluginRegistrySnapshotReportMock = vi.hoisted(() => vi.fn());
 const buildPluginDiagnosticsReportMock = vi.hoisted(() => vi.fn());
 const buildPluginInspectReportMock = vi.hoisted(() => vi.fn());
 const buildAllPluginInspectReportsMock = vi.hoisted(() => vi.fn());
@@ -18,9 +18,7 @@ vi.mock("../../cli/npm-resolution.js", () => ({
 }));
 
 vi.mock("../../cli/plugins-command-helpers.js", () => ({
-  buildPreferredClawHubSpec: vi.fn(() => null),
   createPluginInstallLogger: vi.fn(() => ({})),
-  decidePreferredClawHubFallback: vi.fn(() => "fallback_to_npm"),
   resolveFileNpmSpecToLocalPath: vi.fn(() => null),
 }));
 
@@ -35,7 +33,7 @@ vi.mock("../../cli/plugins-registry-refresh.js", () => ({
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
-  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: replaceConfigFileMock,
 }));
 
 vi.mock("../../infra/archive.js", () => ({
@@ -61,15 +59,11 @@ vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
   ),
 }));
 
-vi.mock("../../plugins/manifest-registry.js", () => ({
-  clearPluginManifestRegistryCache: vi.fn(),
-}));
-
 vi.mock("../../plugins/status.js", () => ({
   buildAllPluginInspectReports: buildAllPluginInspectReportsMock,
   buildPluginDiagnosticsReport: buildPluginDiagnosticsReportMock,
   buildPluginInspectReport: buildPluginInspectReportMock,
-  buildPluginSnapshotReport: buildPluginSnapshotReportMock,
+  buildPluginRegistrySnapshotReport: buildPluginRegistrySnapshotReportMock,
   formatPluginCompatibilityNotice: formatPluginCompatibilityNoticeMock,
 }));
 
@@ -114,14 +108,16 @@ describe("handlePluginsCommand", () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       valid: true,
       path: "/tmp/openclaw.json",
+      sourceConfig: buildCfg(),
       resolved: buildCfg(),
+      hash: "config-1",
     });
     validateConfigObjectWithPluginsMock.mockReturnValue({
       ok: true,
       config: buildCfg(),
       issues: [],
     });
-    buildPluginSnapshotReportMock.mockReturnValue({
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/tmp/plugins-workspace",
       plugins: [
         {
@@ -210,13 +206,16 @@ describe("handlePluginsCommand", () => {
 
     const enableResult = await handlePluginsCommand(enableParams, true);
     expect(enableResult?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expect(writeConfigFileMock).toHaveBeenLastCalledWith(
+    expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        plugins: expect.objectContaining({
-          entries: expect.objectContaining({
-            superpowers: expect.objectContaining({ enabled: true }),
+        nextConfig: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              superpowers: expect.objectContaining({ enabled: true }),
+            }),
           }),
         }),
+        afterWrite: { mode: "auto" },
       }),
     );
     expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
@@ -237,13 +236,16 @@ describe("handlePluginsCommand", () => {
 
     const disableResult = await handlePluginsCommand(disableParams, true);
     expect(disableResult?.reply?.text).toContain('Plugin "superpowers" disabled');
-    expect(writeConfigFileMock).toHaveBeenLastCalledWith(
+    expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        plugins: expect.objectContaining({
-          entries: expect.objectContaining({
-            superpowers: expect.objectContaining({ enabled: false }),
+        nextConfig: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              superpowers: expect.objectContaining({ enabled: false }),
+            }),
           }),
         }),
+        afterWrite: { mode: "auto" },
       }),
     );
     expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
@@ -260,8 +262,8 @@ describe("handlePluginsCommand", () => {
     );
   });
 
-  it("resolves write targets by runtime-derived plugin name", async () => {
-    buildPluginDiagnosticsReportMock.mockReturnValue({
+  it("resolves write targets by indexed plugin name without loading diagnostics", async () => {
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/tmp/plugins-workspace",
       plugins: [
         {
@@ -280,8 +282,8 @@ describe("handlePluginsCommand", () => {
 
     const result = await handlePluginsCommand(params, true);
     expect(result?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalled();
-    expect(buildPluginSnapshotReportMock).not.toHaveBeenCalled();
+    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalled();
+    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
   });
 
   it("returns an explicit unauthorized reply for native /plugins list", async () => {

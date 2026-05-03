@@ -43,6 +43,7 @@ import {
   findCatalogTemplate,
   matchesExactOrPrefix,
 } from "./shared.js";
+import { resolveOpenAICodexThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
@@ -52,15 +53,15 @@ const OPENAI_CODEX_GPT_55_MODEL_ID = "gpt-5.5";
 const OPENAI_CODEX_GPT_55_PRO_MODEL_ID = "gpt-5.5-pro";
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
-const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_CODEX_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
+const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_CODEX_GPT_55_CODEX_CONTEXT_TOKENS = 400_000;
 const OPENAI_CODEX_GPT_55_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_55_PRO_NATIVE_CONTEXT_TOKENS = 1_000_000;
 const OPENAI_CODEX_GPT_55_PRO_DEFAULT_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS = 272_000;
-const OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS = 272_000;
+const OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS = 400_000;
 const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_55_PRO_COST = {
   input: 30,
@@ -97,23 +98,8 @@ const OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
   ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
 ] as const;
-const OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS = [
-  OPENAI_CODEX_GPT_54_MODEL_ID,
-  "gpt-5.1-codex-mini",
-  ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
-] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
-const OPENAI_CODEX_XHIGH_MODEL_IDS = [
-  OPENAI_CODEX_GPT_55_MODEL_ID,
-  OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MODEL_ID,
-  OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
-  OPENAI_CODEX_GPT_53_MODEL_ID,
-  "gpt-5.2-codex",
-  "gpt-5.1-codex",
-] as const;
 const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_55_MODEL_ID,
   OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
@@ -186,6 +172,7 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
 function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
   const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  const synthBaseUrl = ctx.providerConfig?.baseUrl ?? OPENAI_CODEX_BASE_URL;
 
   if (lower === OPENAI_CODEX_GPT_55_MODEL_ID) {
     const model = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId) as
@@ -202,7 +189,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
         name: trimmedModelId,
         api: "openai-codex-responses",
         provider: PROVIDER_ID,
-        baseUrl: OPENAI_CODEX_BASE_URL,
+        baseUrl: synthBaseUrl,
         reasoning: true,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -243,9 +230,10 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       cost: OPENAI_CODEX_GPT_54_PRO_COST,
     };
   } else if (lower === OPENAI_CODEX_GPT_54_MINI_MODEL_ID) {
-    templateIds = OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS;
+    templateIds = OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
     patch = {
-      contextWindow: OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS,
+      contextWindow: OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS,
+      contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_MINI_COST,
     };
@@ -277,7 +265,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
           : trimmedModelId,
       api: "openai-codex-responses",
       provider: PROVIDER_ID,
-      baseUrl: OPENAI_CODEX_BASE_URL,
+      baseUrl: synthBaseUrl,
       reasoning: true,
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -309,17 +297,33 @@ function withDefaultCodexContextMetadata(params: {
   };
 }
 
+function buildCodexCredentialExtra(identity: {
+  accountId?: string;
+  chatgptPlanType?: string;
+}): Record<string, unknown> | undefined {
+  const extra = {
+    ...(identity.accountId ? { accountId: identity.accountId } : {}),
+    ...(identity.chatgptPlanType ? { chatgptPlanType: identity.chatgptPlanType } : {}),
+  };
+  return Object.keys(extra).length > 0 ? extra : undefined;
+}
+
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
     const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
     const refreshed = await refreshOpenAICodexToken(cred.refresh);
+    const identity = resolveCodexAuthIdentity({
+      accessToken: refreshed.access,
+      email: cred.email,
+    });
     return {
       ...cred,
       ...refreshed,
       type: "oauth" as const,
       provider: PROVIDER_ID,
-      email: cred.email,
+      email: identity.email ?? cred.email,
       displayName: cred.displayName,
+      ...buildCodexCredentialExtra(identity),
     };
   } catch (error) {
     const message = formatErrorMessage(error);
@@ -364,6 +368,7 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
     expires: creds.expires,
     email: identity.email,
     profileName: identity.profileName,
+    credentialExtra: buildCodexCredentialExtra(identity),
   });
 }
 
@@ -374,16 +379,15 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
       onProgress: (message) => spin.update(message),
       onVerification: async ({ verificationUrl, userCode, expiresInMs }) => {
         const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
-        const codeLine = ctx.isRemote
-          ? "Code: [shown on the local device only]"
-          : `Code: ${userCode}`;
+        // The prompter note is the user-facing TTY surface, so remote/headless
+        // users need the code there; keep the persistent runtime log URL-only.
         await ctx.prompter.note(
           [
             ctx.isRemote
               ? "Open this URL in your LOCAL browser and enter the code below."
               : "Open this URL in your browser and enter the code below.",
             `URL: ${verificationUrl}`,
-            codeLine,
+            `Code: ${userCode}`,
             `Code expires in ${expiresInMinutes} minutes. Never share it.`,
           ].join("\n"),
           "OpenAI Codex device code",
@@ -414,6 +418,7 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
       expires: creds.expires,
       email: identity.email,
       profileName: identity.profileName,
+      credentialExtra: buildCodexCredentialExtra(identity),
     });
   } catch (error) {
     spin.stop("OpenAI device code failed");
@@ -494,28 +499,8 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveThinkingProfile: ({ modelId }) => ({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        ...(matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS)
-          ? [{ id: "xhigh" as const }]
-          : []),
-      ],
-    }),
+    resolveThinkingProfile: ({ modelId }) => resolveOpenAICodexThinkingProfile(modelId),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
-    suppressBuiltInModel: ({ provider, modelId }) =>
-      normalizeProviderId(provider) === PROVIDER_ID &&
-      normalizeLowercaseStringOrEmpty(modelId) === "gpt-5.3-codex-spark"
-        ? {
-            suppress: true,
-            errorMessage:
-              "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-          }
-        : undefined,
     preferRuntimeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
         return false;
@@ -526,6 +511,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
         OPENAI_CODEX_GPT_54_MODEL_ID,
         OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
+        OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
       ].includes(id);
     },
     ...buildOpenAIResponsesProviderHooks(),
@@ -561,11 +547,6 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         providerId: PROVIDER_ID,
         templateIds: OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS,
       });
-      const gpt54MiniTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS,
-      });
       return [
         buildOpenAISyntheticCatalogEntry(gpt55ProTemplate, {
           id: OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
@@ -591,11 +572,12 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
           cost: OPENAI_CODEX_GPT_54_PRO_COST,
         }),
-        buildOpenAISyntheticCatalogEntry(gpt54MiniTemplate, {
+        buildOpenAISyntheticCatalogEntry(gpt54Template, {
           id: OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
-          contextWindow: OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS,
+          contextWindow: OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS,
+          contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
           cost: OPENAI_CODEX_GPT_54_MINI_COST,
         }),
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);

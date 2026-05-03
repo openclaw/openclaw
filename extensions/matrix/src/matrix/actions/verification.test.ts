@@ -11,14 +11,14 @@ const loadConfigMock = vi.fn(() => ({
 vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => ({
     config: {
-      loadConfig: loadConfigMock,
+      current: loadConfigMock,
     },
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
   );
   return {
     ...actual,
@@ -38,10 +38,12 @@ let getMatrixVerificationStatus: typeof import("./verification.js").getMatrixVer
 let restoreMatrixRoomKeyBackup: typeof import("./verification.js").restoreMatrixRoomKeyBackup;
 let runMatrixSelfVerification: typeof import("./verification.js").runMatrixSelfVerification;
 let startMatrixVerification: typeof import("./verification.js").startMatrixVerification;
+let confirmMatrixVerificationSas: typeof import("./verification.js").confirmMatrixVerificationSas;
 
 describe("matrix verification actions", () => {
   beforeAll(async () => {
     ({
+      confirmMatrixVerificationSas,
       getMatrixEncryptionStatus,
       getMatrixRoomKeyBackupStatus,
       getMatrixVerificationStatus,
@@ -175,37 +177,43 @@ describe("matrix verification actions", () => {
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
 
-  it("resolves verification status without starting the Matrix client", async () => {
+  it("prepares local crypto before resolving authoritative verification status", async () => {
+    const prepareForOneOff = vi.fn(async () => undefined);
+    const start = vi.fn(async () => undefined);
+    const getOwnDeviceVerificationStatus = vi.fn().mockResolvedValue({
+      encryptionEnabled: true,
+      verified: true,
+      userId: "@bot:example.org",
+      deviceId: "DEVICE123",
+      localVerified: true,
+      crossSigningVerified: true,
+      signedByOwner: true,
+      recoveryKeyStored: true,
+      recoveryKeyCreatedAt: null,
+      recoveryKeyId: "SSSS",
+      backupVersion: "11",
+      backup: {
+        serverVersion: "11",
+        activeVersion: "11",
+        trusted: true,
+        matchesDecryptionKey: true,
+        decryptionKeyCached: true,
+        keyLoadAttempted: false,
+        keyLoadError: null,
+      },
+      serverDeviceKnown: true,
+    });
     withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
       return await run({
+        prepareForOneOff,
         crypto: {
           listVerifications: vi.fn(async () => []),
           getRecoveryKey: vi.fn(async () => ({
             encodedPrivateKey: "rec-key",
           })),
         },
-        getOwnDeviceVerificationStatus: vi.fn(async () => ({
-          encryptionEnabled: true,
-          verified: true,
-          userId: "@bot:example.org",
-          deviceId: "DEVICE123",
-          localVerified: true,
-          crossSigningVerified: true,
-          signedByOwner: true,
-          recoveryKeyStored: true,
-          recoveryKeyCreatedAt: null,
-          recoveryKeyId: "SSSS",
-          backupVersion: "11",
-          backup: {
-            serverVersion: "11",
-            activeVersion: "11",
-            trusted: true,
-            matchesDecryptionKey: true,
-            decryptionKeyCached: true,
-            keyLoadAttempted: false,
-            keyLoadError: null,
-          },
-        })),
+        getOwnDeviceVerificationStatus,
+        start,
       });
     });
 
@@ -217,7 +225,66 @@ describe("matrix verification actions", () => {
       recoveryKey: "rec-key",
     });
     expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
+    expect(withResolvedActionClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({ readiness: "none" }),
+      expect.any(Function),
+      "discard",
+    );
+    expect(prepareForOneOff).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(2);
     expect(withStartedActionClientMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before local Matrix prep when the current device is gone", async () => {
+    const prepareForOneOff = vi.fn(async () => undefined);
+    const getOwnDeviceVerificationStatus = vi.fn(async () => ({
+      encryptionEnabled: true,
+      verified: false,
+      userId: "@bot:example.org",
+      deviceId: "DEVICE123",
+      localVerified: false,
+      crossSigningVerified: false,
+      signedByOwner: false,
+      recoveryKeyStored: true,
+      recoveryKeyCreatedAt: null,
+      recoveryKeyId: "SSSS",
+      backupVersion: "11",
+      backup: {
+        serverVersion: "11",
+        activeVersion: "11",
+        trusted: true,
+        matchesDecryptionKey: true,
+        decryptionKeyCached: true,
+        keyLoadAttempted: false,
+        keyLoadError: null,
+      },
+      serverDeviceKnown: false,
+    }));
+    withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({
+        crypto: {
+          listVerifications: vi.fn(async () => []),
+        },
+        getOwnDeviceVerificationStatus,
+        prepareForOneOff,
+      });
+    });
+
+    const status = await getMatrixVerificationStatus();
+
+    expect(status).toMatchObject({
+      deviceId: "DEVICE123",
+      serverDeviceKnown: false,
+      pendingVerifications: 0,
+    });
+    expect(withResolvedActionClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({ readiness: "none" }),
+      expect.any(Function),
+      "discard",
+    );
+    expect(prepareForOneOff).not.toHaveBeenCalled();
+    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(1);
   });
 
   it("resolves encryption and backup status without starting the Matrix client", async () => {
@@ -407,12 +474,9 @@ describe("matrix verification actions", () => {
     expect(crypto.startVerification).toHaveBeenCalledWith("verification-1", "sas");
     expect(confirmSas).toHaveBeenCalledWith(sas.sas, sas);
     expect(crypto.confirmVerificationSas).toHaveBeenCalledWith("verification-1");
-    expect(bootstrapOwnDeviceVerification).toHaveBeenCalledWith({
-      allowAutomaticCrossSigningReset: false,
-      strict: false,
-    });
-    expect(getOwnCrossSigningPublicationStatus).not.toHaveBeenCalled();
-    expect(getOwnDeviceVerificationStatus).not.toHaveBeenCalled();
+    expect(bootstrapOwnDeviceVerification).not.toHaveBeenCalled();
+    expect(getOwnCrossSigningPublicationStatus).toHaveBeenCalledTimes(1);
+    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(1);
   });
 
   it("does not complete self-verification until the OpenClaw device has full Matrix identity trust", async () => {
@@ -442,10 +506,74 @@ describe("matrix verification actions", () => {
       requestVerification: vi.fn(async () => requested),
       startVerification: vi.fn(async () => sas),
     };
-    const getOwnDeviceIdentityVerificationStatus = vi
+    const getOwnDeviceVerificationStatus = vi
       .fn()
       .mockResolvedValueOnce(mockUnverifiedOwnerStatus())
       .mockResolvedValueOnce(mockVerifiedOwnerStatus());
+    const getOwnCrossSigningPublicationStatus = vi.fn(async () =>
+      mockCrossSigningPublicationStatus(),
+    );
+    const bootstrapOwnDeviceVerification = vi.fn(async () => ({
+      crossSigning: mockCrossSigningPublicationStatus(),
+      success: true,
+      verification: mockUnverifiedOwnerStatus(),
+    }));
+    const trustOwnIdentityAfterSelfVerification = vi.fn(async () => {});
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({
+        bootstrapOwnDeviceVerification,
+        crypto,
+        getOwnCrossSigningPublicationStatus,
+        getOwnDeviceVerificationStatus,
+        trustOwnIdentityAfterSelfVerification,
+      });
+    });
+
+    await expect(
+      runMatrixSelfVerification({ confirmSas: vi.fn(async () => true), timeoutMs: 500 }),
+    ).resolves.toMatchObject({
+      completed: true,
+      deviceOwnerVerified: true,
+      ownerVerification: {
+        verified: true,
+      },
+    });
+
+    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(2);
+    expect(getOwnCrossSigningPublicationStatus).toHaveBeenCalledTimes(2);
+    expect(trustOwnIdentityAfterSelfVerification).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let the SDK identity-only status read hang completed self-verification", async () => {
+    const requested = {
+      completed: false,
+      hasSas: false,
+      id: "verification-1",
+      phaseName: "requested",
+      transactionId: "tx-self",
+    };
+    const sas = {
+      ...requested,
+      hasSas: true,
+      phaseName: "started",
+      sas: {
+        decimal: [1, 2, 3],
+      },
+    };
+    const completed = {
+      ...sas,
+      completed: true,
+      phaseName: "done",
+    };
+    const crypto = {
+      confirmVerificationSas: vi.fn(async () => completed),
+      listVerifications: vi.fn(async () => [sas]),
+      requestVerification: vi.fn(async () => requested),
+      startVerification: vi.fn(async () => sas),
+    };
+    const getOwnDeviceIdentityVerificationStatus = vi.fn(
+      async () => await new Promise<never>(() => undefined),
+    );
     const getOwnDeviceVerificationStatus = vi.fn(async () => mockVerifiedOwnerStatus());
     const getOwnCrossSigningPublicationStatus = vi.fn(async () =>
       mockCrossSigningPublicationStatus(),
@@ -472,15 +600,10 @@ describe("matrix verification actions", () => {
     ).resolves.toMatchObject({
       completed: true,
       deviceOwnerVerified: true,
-      ownerVerification: {
-        verified: true,
-      },
     });
 
-    expect(getOwnDeviceIdentityVerificationStatus).toHaveBeenCalledTimes(2);
+    expect(getOwnDeviceIdentityVerificationStatus).not.toHaveBeenCalled();
     expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(1);
-    expect(getOwnCrossSigningPublicationStatus).toHaveBeenCalledTimes(2);
-    expect(trustOwnIdentityAfterSelfVerification).toHaveBeenCalledTimes(1);
   });
 
   it("does not complete self-verification until cross-signing keys are published", async () => {
@@ -510,7 +633,6 @@ describe("matrix verification actions", () => {
       requestVerification: vi.fn(async () => requested),
       startVerification: vi.fn(async () => sas),
     };
-    const getOwnDeviceIdentityVerificationStatus = vi.fn(async () => mockVerifiedOwnerStatus());
     const getOwnDeviceVerificationStatus = vi.fn(async () => mockVerifiedOwnerStatus());
     const getOwnCrossSigningPublicationStatus = vi
       .fn()
@@ -527,7 +649,6 @@ describe("matrix verification actions", () => {
         bootstrapOwnDeviceVerification,
         crypto,
         getOwnCrossSigningPublicationStatus,
-        getOwnDeviceIdentityVerificationStatus,
         getOwnDeviceVerificationStatus,
         trustOwnIdentityAfterSelfVerification,
       });
@@ -543,8 +664,7 @@ describe("matrix verification actions", () => {
       },
     });
 
-    expect(getOwnDeviceIdentityVerificationStatus).toHaveBeenCalledTimes(2);
-    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(1);
+    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(2);
     expect(getOwnCrossSigningPublicationStatus).toHaveBeenCalledTimes(2);
     expect(trustOwnIdentityAfterSelfVerification).not.toHaveBeenCalled();
   });
@@ -722,6 +842,7 @@ describe("matrix verification actions", () => {
       return await run({
         bootstrapOwnDeviceVerification,
         crypto,
+        getOwnCrossSigningPublicationStatus: vi.fn(async () => mockCrossSigningPublicationStatus()),
         getOwnDeviceVerificationStatus: vi.fn(async () => mockVerifiedOwnerStatus()),
       });
     });
@@ -775,7 +896,6 @@ describe("matrix verification actions", () => {
         getOwnCrossSigningPublicationStatus: vi.fn(async () =>
           mockCrossSigningPublicationStatus(false),
         ),
-        getOwnDeviceIdentityVerificationStatus: vi.fn(async () => mockUnverifiedOwnerStatus()),
         getOwnDeviceVerificationStatus: vi.fn(async () => mockUnverifiedOwnerStatus()),
       });
     });
@@ -787,10 +907,7 @@ describe("matrix verification actions", () => {
     );
 
     expect(crypto.cancelVerification).not.toHaveBeenCalled();
-    expect(bootstrapOwnDeviceVerification).toHaveBeenCalledWith({
-      allowAutomaticCrossSigningReset: false,
-      strict: false,
-    });
+    expect(bootstrapOwnDeviceVerification).not.toHaveBeenCalled();
   });
 
   it("cancels the pending self-verification request when acceptance times out", async () => {
@@ -885,5 +1002,75 @@ describe("matrix verification actions", () => {
       code: "m.user",
       reason: "OpenClaw self-verification did not complete",
     });
+  });
+
+  it("confirmMatrixVerificationSas calls trustOwnIdentityAfterSelfVerification on a self-verification", async () => {
+    const crypto = {
+      confirmVerificationSas: vi.fn(async () => ({
+        completed: true,
+        hasSas: true,
+        id: "verification-self",
+        isSelfVerification: true,
+        phaseName: "done",
+        transactionId: "tx-self",
+      })),
+    };
+    const trustOwnIdentityAfterSelfVerification = vi.fn(async () => {});
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto, trustOwnIdentityAfterSelfVerification });
+    });
+
+    const summary = await confirmMatrixVerificationSas("verification-self");
+
+    expect(crypto.confirmVerificationSas).toHaveBeenCalledWith("verification-self");
+    expect(trustOwnIdentityAfterSelfVerification).toHaveBeenCalledTimes(1);
+    expect(summary.isSelfVerification).toBe(true);
+  });
+
+  it("confirmMatrixVerificationSas does not call trustOwnIdentityAfterSelfVerification on a non-self verification", async () => {
+    const crypto = {
+      confirmVerificationSas: vi.fn(async () => ({
+        completed: true,
+        hasSas: true,
+        id: "verification-remote",
+        isSelfVerification: false,
+        phaseName: "done",
+        transactionId: "tx-remote",
+      })),
+    };
+    const trustOwnIdentityAfterSelfVerification = vi.fn(async () => {});
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto, trustOwnIdentityAfterSelfVerification });
+    });
+
+    const summary = await confirmMatrixVerificationSas("verification-remote");
+
+    expect(crypto.confirmVerificationSas).toHaveBeenCalledWith("verification-remote");
+    expect(trustOwnIdentityAfterSelfVerification).not.toHaveBeenCalled();
+    expect(summary.isSelfVerification).toBe(false);
+  });
+
+  it("confirmMatrixVerificationSas does not trust own identity when self-verification failed", async () => {
+    const crypto = {
+      confirmVerificationSas: vi.fn(async () => ({
+        completed: false,
+        error: "verifier rejected mid-protocol",
+        hasSas: true,
+        id: "verification-self",
+        isSelfVerification: true,
+        phaseName: "started",
+        transactionId: "tx-self",
+      })),
+    };
+    const trustOwnIdentityAfterSelfVerification = vi.fn(async () => {});
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto, trustOwnIdentityAfterSelfVerification });
+    });
+
+    const summary = await confirmMatrixVerificationSas("verification-self");
+
+    expect(crypto.confirmVerificationSas).toHaveBeenCalledWith("verification-self");
+    expect(trustOwnIdentityAfterSelfVerification).not.toHaveBeenCalled();
+    expect(summary.error).toMatch(/verifier rejected mid-protocol/);
   });
 });

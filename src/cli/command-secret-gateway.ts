@@ -4,7 +4,7 @@ import { callGateway } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
+import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type UnresolvedCommandSecretAssignment,
@@ -39,7 +39,7 @@ type CommandSecretResolutionModeInput =
   | CommandSecretResolutionMode
   | LegacyCommandSecretResolutionMode;
 
-export type CommandSecretTargetState =
+type CommandSecretTargetState =
   | "resolved_gateway"
   | "resolved_local"
   | "inactive_surface"

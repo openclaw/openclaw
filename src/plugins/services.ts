@@ -1,6 +1,9 @@
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  emitTrustedDiagnosticEvent,
+  onInternalDiagnosticEvent,
+} from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
@@ -21,15 +24,24 @@ function createServiceContext(params: {
   workspaceDir?: string;
   service?: PluginServiceRegistration;
 }): OpenClawPluginServiceContext {
+  const grantsInternalDiagnostics =
+    params.service?.origin === "bundled" &&
+    params.service.pluginId === params.service.service.id &&
+    (params.service.service.id === "diagnostics-otel" ||
+      params.service.service.id === "diagnostics-prometheus");
+
   return {
     config: params.config,
     workspaceDir: params.workspaceDir,
     stateDir: STATE_DIR,
     logger: createPluginLogger(),
-    ...(params.service?.origin === "bundled" &&
-    params.service.pluginId === "diagnostics-otel" &&
-    params.service.service.id === "diagnostics-otel"
-      ? { internalDiagnostics: { onEvent: onInternalDiagnosticEvent } }
+    ...(grantsInternalDiagnostics
+      ? {
+          internalDiagnostics: {
+            emit: emitTrustedDiagnosticEvent,
+            onEvent: onInternalDiagnosticEvent,
+          },
+        }
       : {}),
   };
 }
@@ -62,9 +74,8 @@ export async function startPluginServices(params: {
       });
     } catch (err) {
       const error = err as Error;
-      const stack = error?.stack?.trim();
       log.error(
-        `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}${stack ? `\n${stack}` : ""}`,
+        `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
       );
     }
   }

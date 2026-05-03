@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -19,18 +19,18 @@ const ACTION_IDS = {
   back: "mdlback",
 } as const;
 
-export type MattermostModelPickerEntry =
+type MattermostModelPickerEntry =
   | { kind: "summary" }
   | { kind: "providers" }
   | { kind: "models"; provider: string };
 
-export type MattermostModelPickerState =
+type MattermostModelPickerState =
   | { action: "providers"; ownerUserId: string }
   | { action: "back"; ownerUserId: string }
   | { action: "list"; ownerUserId: string; provider: string; page: number }
   | { action: "select"; ownerUserId: string; provider: string; page: number; model: string };
 
-export type MattermostModelPickerRenderedView = {
+type MattermostModelPickerRenderedView = {
   text: string;
   buttons: MattermostInteractiveButtonInput[][];
 };

@@ -1,5 +1,5 @@
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
@@ -268,6 +268,7 @@ describe("slackPlugin actions", () => {
       params: {
         channelId: "C123",
         threadId: "1712345678.123456",
+        messageId: "1712345678.654321",
       },
     });
 
@@ -276,9 +277,51 @@ describe("slackPlugin actions", () => {
         action: "readMessages",
         channelId: "C123",
         threadId: "1712345678.123456",
+        messageId: "1712345678.654321",
       }),
       {},
       undefined,
+    );
+  });
+
+  it("forwards media access through the bundled Slack action invoke path", async () => {
+    handleSlackActionMock.mockResolvedValueOnce({ ok: true });
+    const handleAction = requireSlackHandleAction();
+    const mediaLocalRoots = ["/tmp/workspace-agent"];
+    const mediaReadFile = vi.fn(async () => Buffer.from("file"));
+
+    await handleAction({
+      action: "upload-file",
+      channel: "slack",
+      accountId: "default",
+      cfg: {},
+      params: {
+        to: "channel:C123",
+        filePath: "/tmp/workspace-agent/renders/file.wav",
+        initialComment: "render",
+      },
+      mediaLocalRoots,
+      mediaReadFile,
+      toolContext: {
+        currentChannelId: "C123",
+        replyToMode: "all",
+      },
+    } as never);
+
+    expect(handleSlackActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "/tmp/workspace-agent/renders/file.wav",
+        initialComment: "render",
+      }),
+      {},
+      expect.objectContaining({
+        currentChannelId: "C123",
+        replyToMode: "all",
+        mediaLocalRoots,
+        mediaReadFile,
+      }),
     );
   });
 });
@@ -372,6 +415,8 @@ describe("slackPlugin security", () => {
 
     expect(result.policy).toBe("allowlist");
     expect(result.allowFrom).toEqual(["  slack:U123  "]);
+    expect(result.policyPath).toBe("channels.slack.dmPolicy");
+    expect(result.allowFromPath).toBe("channels.slack.");
     expect(result.normalizeEntry?.("  slack:U123  ")).toBe("U123");
     expect(result.normalizeEntry?.("  user:U999  ")).toBe("U999");
   });

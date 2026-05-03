@@ -11,6 +11,7 @@ import type { AgentSummary } from "./agents.config.js";
 import { buildAgentSummaries } from "./agents.config.js";
 import {
   buildProviderStatusIndex,
+  buildProviderSummaryMetadataIndex,
   listProvidersForAgent,
   summarizeBindings,
 } from "./agents.providers.js";
@@ -99,20 +100,20 @@ export async function agentsListCommand(
     }
   }
 
-  // `buildProviderStatusIndex` triggers on-demand plugin loads and is only
-  // used for human text output (`summary.providers` is rendered in the text
-  // formatter). JSON callers (dashboards, monitors, IDE plugins) poll the
-  // config-derived fields, so skip the plugin load unless they explicitly ask
-  // for binding/provider enrichment with --bindings. Combined with
-  // `loadPlugins: "text-only"` in the catalog entry, this keeps
-  // `agents list --json` on the config-only path. (#71739)
+  // Provider details are only used for human text output
+  // (`summary.providers` is rendered in the text formatter). JSON callers
+  // (dashboards, monitors, IDE plugins) poll the config-derived fields, so skip
+  // the provider detail pass unless they explicitly ask for binding/provider
+  // enrichment with --bindings. Combined with `loadPlugins: "text-only"` in the
+  // catalog entry, this keeps `agents list --json` on the config-only path.
   const includeProviderDetails = !opts.json || opts.bindings === true;
   const providerStatus = includeProviderDetails ? await buildProviderStatusIndex(cfg) : null;
+  const providerMetadata = includeProviderDetails ? buildProviderSummaryMetadataIndex(cfg) : null;
 
   for (const summary of summaries) {
     const bindings = bindingMap.get(summary.id) ?? [];
-    if (includeProviderDetails && providerStatus) {
-      const routes = summarizeBindings(cfg, bindings);
+    if (includeProviderDetails && providerStatus && providerMetadata) {
+      const routes = summarizeBindings(cfg, bindings, providerMetadata);
       if (routes.length > 0) {
         summary.routes = routes;
       } else if (summary.isDefault) {
@@ -124,6 +125,7 @@ export async function agentsListCommand(
         cfg,
         bindings,
         providerStatus,
+        providerMetadata,
       });
       if (providerLines.length > 0) {
         summary.providers = providerLines;

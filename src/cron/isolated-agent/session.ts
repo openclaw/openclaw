@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
@@ -105,12 +106,13 @@ export function resolveCronSession(params: {
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
+  store?: Record<string, SessionEntry>;
 }) {
   const sessionCfg = params.cfg.session;
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: params.agentId,
   });
-  const store = loadSessionStore(storePath);
+  const store = params.store ?? loadSessionStore(storePath);
   const entry = store[params.sessionKey];
 
   // Check if we can reuse an existing session
@@ -127,6 +129,11 @@ export function resolveCronSession(params: {
     });
     const freshness = evaluateSessionFreshness({
       updatedAt: entry.updatedAt,
+      ...resolveSessionLifecycleTimestamps({
+        entry,
+        agentId: params.agentId,
+        storePath,
+      }),
       now: params.nowMs,
       policy: resetPolicy,
     });
@@ -167,6 +174,15 @@ export function resolveCronSession(params: {
     // Always update these core fields
     sessionId,
     updatedAt: params.nowMs,
+    sessionStartedAt: isNewSession
+      ? params.nowMs
+      : (baseEntry?.sessionStartedAt ??
+        resolveSessionLifecycleTimestamps({
+          entry,
+          agentId: params.agentId,
+          storePath,
+        }).sessionStartedAt),
+    lastInteractionAt: isNewSession ? params.nowMs : baseEntry?.lastInteractionAt,
     systemSent,
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession, previousSessionId };

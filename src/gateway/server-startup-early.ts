@@ -1,6 +1,7 @@
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   primeRemoteSkillsCache,
@@ -8,9 +9,44 @@ import {
   setSkillsRemoteRegistry,
 } from "../infra/skills-remote.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { startTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
+import {
+  configureTaskRegistryMaintenance,
+  startTaskRegistryMaintenance,
+} from "../tasks/task-registry.maintenance.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
+
+export async function startGatewayPluginDiscovery(params: {
+  minimalTestGateway: boolean;
+  cfgAtStart: OpenClawConfig;
+  port: number;
+  gatewayTls: { enabled: boolean; fingerprintSha256?: string };
+  tailscaleMode: GatewayTailscaleMode;
+  logDiscovery: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+  };
+  pluginRegistry?: PluginRegistry;
+}): Promise<(() => Promise<void>) | null> {
+  if (params.minimalTestGateway) {
+    return null;
+  }
+  const machineDisplayName = await getMachineDisplayName();
+  const discovery = await startGatewayDiscovery({
+    machineDisplayName,
+    port: params.port,
+    gatewayTls: params.gatewayTls.enabled
+      ? { enabled: true, fingerprintSha256: params.gatewayTls.fingerprintSha256 }
+      : undefined,
+    wideAreaDiscoveryEnabled: params.cfgAtStart.discovery?.wideArea?.enabled === true,
+    wideAreaDiscoveryDomain: params.cfgAtStart.discovery?.wideArea?.domain,
+    tailscaleMode: params.tailscaleMode,
+    mdnsMode: params.cfgAtStart.discovery?.mdns?.mode,
+    gatewayDiscoveryServices: params.pluginRegistry?.gatewayDiscoveryServices,
+    logDiscovery: params.logDiscovery,
+  });
+  return discovery.bonjourStop;
+}
 
 export async function startGatewayEarlyRuntime(params: {
   minimalTestGateway: boolean;
@@ -53,30 +89,17 @@ export async function startGatewayEarlyRuntime(params: {
   skillsRefreshDelayMs: number;
   getSkillsRefreshTimer: () => ReturnType<typeof setTimeout> | null;
   setSkillsRefreshTimer: (timer: ReturnType<typeof setTimeout> | null) => void;
-  loadConfig: () => OpenClawConfig;
+  getRuntimeConfig: () => OpenClawConfig;
 }) {
-  let bonjourStop: (() => Promise<void>) | null = null;
-  if (!params.minimalTestGateway) {
-    const machineDisplayName = await getMachineDisplayName();
-    const discovery = await startGatewayDiscovery({
-      machineDisplayName,
-      port: params.port,
-      gatewayTls: params.gatewayTls.enabled
-        ? { enabled: true, fingerprintSha256: params.gatewayTls.fingerprintSha256 }
-        : undefined,
-      wideAreaDiscoveryEnabled: params.cfgAtStart.discovery?.wideArea?.enabled === true,
-      wideAreaDiscoveryDomain: params.cfgAtStart.discovery?.wideArea?.domain,
-      tailscaleMode: params.tailscaleMode,
-      mdnsMode: params.cfgAtStart.discovery?.mdns?.mode,
-      gatewayDiscoveryServices: params.pluginRegistry?.gatewayDiscoveryServices,
-      logDiscovery: params.logDiscovery,
-    });
-    bonjourStop = discovery.bonjourStop;
-  }
+  const bonjourStop = await startGatewayPluginDiscovery(params);
 
   if (!params.minimalTestGateway) {
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
+    configureTaskRegistryMaintenance({
+      cronStorePath: resolveCronStorePath(params.cfgAtStart.cron?.store),
+      cronRuntimeAuthoritative: true,
+    });
     startTaskRegistryMaintenance();
   }
 
@@ -92,7 +115,7 @@ export async function startGatewayEarlyRuntime(params: {
         }
         const nextTimer = setTimeout(() => {
           params.setSkillsRefreshTimer(null);
-          void refreshRemoteBinsForConnectedNodes(params.loadConfig());
+          void refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig());
         }, params.skillsRefreshDelayMs);
         params.setSkillsRefreshTimer(nextTimer);
       });

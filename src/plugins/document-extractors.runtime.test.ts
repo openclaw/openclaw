@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 vi.mock("./document-extractor-public-artifacts.js", () => ({
   loadBundledDocumentExtractorEntriesFromDir: vi.fn(
@@ -18,8 +19,8 @@ vi.mock("./document-extractor-public-artifacts.js", () => ({
   ),
 }));
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: vi.fn(() => ({
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: vi.fn(() => ({
     plugins: [
       {
         id: "document-extract",
@@ -43,10 +44,20 @@ vi.mock("./manifest-registry.js", () => ({
       },
     ],
   })),
+}));
+
+vi.mock("./manifest-registry.js", () => ({
   resolveManifestContractOwnerPluginId: vi.fn(() => undefined),
 }));
 
 describe("resolvePluginDocumentExtractors", () => {
+  it("reuses one manifest registry pass for compat and enabled bundled extractors", () => {
+    vi.mocked(loadPluginMetadataSnapshot).mockClear();
+
+    expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("respects global plugin disablement", () => {
     expect(
       resolvePluginDocumentExtractors({

@@ -10,6 +10,7 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/infra/warning-filter.ts!",
+  "src/infra/command-explainer/index.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
@@ -18,12 +19,55 @@ const rootEntries = [
 ] as const;
 
 const bundledPluginEntries = [
+  "*.ts!",
   "index.ts!",
   "setup-entry.ts!",
   "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
   "subagent-hooks-api.ts!",
   "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface}.ts!",
   "src/subagent-hooks-api.ts!",
+] as const;
+
+const bundledPluginIgnoredRuntimeDependencies = [
+  "@agentclientprotocol/claude-agent-acp",
+  "@azure/identity",
+  "@clawdbot/lobster",
+  "@discordjs/opus",
+  "@homebridge/ciao",
+  "@matrix-org/matrix-sdk-crypto-wasm",
+  "@mozilla/readability",
+  "@openai/codex",
+  "@pierre/theme",
+  "@tloncorp/tlon-skill",
+  "@zed-industries/codex-acp",
+  "jiti",
+  "linkedom",
+  "openclaw",
+  "pdfjs-dist",
+] as const;
+
+const rootBundledPluginRuntimeDependencies = [
+  "@anthropic-ai/sdk",
+  "@anthropic-ai/vertex-sdk",
+  "@aws-sdk/client-bedrock",
+  "@aws-sdk/client-bedrock-runtime",
+  "@aws-sdk/credential-provider-node",
+  "@aws/bedrock-token-generator",
+  "@google/genai",
+  "@grammyjs/runner",
+  "@grammyjs/transformer-throttler",
+  "@homebridge/ciao",
+  "@mozilla/readability",
+  "@slack/bolt",
+  "@slack/types",
+  "@slack/web-api",
+  "grammy",
+  "linkedom",
+  "minimatch",
+  "node-edge-tts",
+  "openshell",
+  "pdfjs-dist",
+  "tokenjuice",
 ] as const;
 
 const config = {
@@ -88,12 +132,17 @@ const config = {
     bundledPluginFile("msteams", "src/conversation-store-memory.ts"),
     bundledPluginFile("msteams", "src/polls-store-memory.ts"),
     bundledPluginFile("voice-call", "src/providers/index.ts"),
-    bundledPluginFile("voice-call", "src/providers/tts-openai.ts"),
   ],
   workspaces: {
     ".": {
       entry: rootEntries,
-      ignoreDependencies: ["@openclaw/*"],
+      ignoreDependencies: [
+        "@openclaw/*",
+        "playwright-core",
+        "sqlite-vec",
+        "tree-sitter-bash",
+        ...rootBundledPluginRuntimeDependencies,
+      ],
       project: [
         "src/**/*.ts!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -114,7 +163,7 @@ const config = {
       // `index.ts` contracts, so Knip needs these convention-based entry files.
       entry: bundledPluginEntries,
       project: ["index.ts!", "src/**/*.ts!"],
-      ignoreDependencies: ["openclaw"],
+      ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
   },
 } as const;

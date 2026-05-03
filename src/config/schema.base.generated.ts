@@ -147,9 +147,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
-            title: "Stuck Session Warning Threshold (ms)",
+            title: "Session Liveness Threshold (ms)",
             description:
-              "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+              "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
           },
           otel: {
             type: "object",
@@ -165,6 +165,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "OpenTelemetry Endpoint",
                 description:
                   "Collector endpoint URL used for OpenTelemetry export transport, including scheme and port. Use a reachable, trusted collector endpoint and monitor ingestion errors after rollout.",
+              },
+              tracesEndpoint: {
+                type: "string",
+                title: "OpenTelemetry Traces Endpoint",
+                description:
+                  "Signal-specific OTLP/HTTP trace endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for trace export only.",
+              },
+              metricsEndpoint: {
+                type: "string",
+                title: "OpenTelemetry Metrics Endpoint",
+                description:
+                  "Signal-specific OTLP/HTTP metrics endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for metrics export only.",
+              },
+              logsEndpoint: {
+                type: "string",
+                title: "OpenTelemetry Logs Endpoint",
+                description:
+                  "Signal-specific OTLP/HTTP logs endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for log export only.",
               },
               protocol: {
                 anyOf: [
@@ -448,7 +466,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             ],
             title: "Sensitive Data Redaction Mode",
             description:
-              'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
+              'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
           },
           redactPatterns: {
             type: "array",
@@ -457,7 +475,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             title: "Custom Redaction Patterns",
             description:
-              "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+              "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
           },
         },
         additionalProperties: false,
@@ -853,6 +871,45 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               type: "string",
             },
           },
+          tabCleanup: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+                title: "Browser Tab Cleanup Enabled",
+                description:
+                  "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+              },
+              idleMinutes: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Idle Minutes",
+                description:
+                  "Minutes of inactivity before a tracked primary-agent browser tab is eligible for closure. Set 0 to disable idle-time cleanup while keeping the per-session tab cap.",
+              },
+              maxTabsPerSession: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Max Tabs Per Session",
+                description:
+                  "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
+              },
+              sweepMinutes: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Sweep Minutes",
+                description:
+                  "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
+              },
+            },
+            additionalProperties: false,
+            title: "Browser Tab Cleanup",
+            description:
+              "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
+          },
         },
         additionalProperties: false,
         title: "Browser",
@@ -1222,6 +1279,65 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
       },
+      accessGroups: {
+        type: "object",
+        propertyNames: {
+          type: "string",
+          minLength: 1,
+        },
+        additionalProperties: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "discord.channelAudience",
+                },
+                guildId: {
+                  type: "string",
+                  minLength: 1,
+                },
+                channelId: {
+                  type: "string",
+                  minLength: 1,
+                },
+                membership: {
+                  type: "string",
+                  const: "canViewChannel",
+                },
+              },
+              required: ["type", "guildId", "channelId"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "message.senders",
+                },
+                members: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                    minLength: 1,
+                  },
+                  additionalProperties: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                  },
+                },
+              },
+              required: ["type", "members"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
       acp: {
         type: "object",
         properties: {
@@ -1536,11 +1652,51 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
                 },
+                contextWindow: {
+                  type: "number",
+                  exclusiveMinimum: 0,
+                  title: "Model Provider Context Window",
+                  description:
+                    "Default native context window applied to models under this provider when a model entry does not set contextWindow. Use model-level contextWindow for per-model overrides.",
+                },
+                contextTokens: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  title: "Model Provider Context Tokens",
+                  description:
+                    "Default effective runtime context cap applied to models under this provider when a model entry does not set contextTokens. Use this when runtime should budget below the native contextWindow.",
+                },
+                maxTokens: {
+                  type: "number",
+                  exclusiveMinimum: 0,
+                  title: "Model Provider Max Tokens",
+                  description:
+                    "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
+                },
+                timeoutSeconds: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  title: "Model Provider Request Timeout",
+                  description:
+                    "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling. Use this for slow local or self-hosted model servers instead of changing global agent timeouts.",
+                },
                 injectNumCtxForOpenAICompat: {
                   type: "boolean",
                   title: "Model Provider Inject num_ctx (OpenAI Compat)",
                   description:
                     "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
+                },
+                params: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {},
+                  title: "Model Provider Runtime Parameters",
+                  description:
+                    "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
                 },
                 headers: {
                   type: "object",
@@ -2890,6 +3046,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               type: "string",
                               const: "image",
                             },
+                            {
+                              type: "string",
+                              const: "video",
+                            },
+                            {
+                              type: "string",
+                              const: "audio",
+                            },
                           ],
                         },
                       },
@@ -2969,6 +3133,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "number",
                         exclusiveMinimum: 0,
                       },
+                      params: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {},
+                      },
                       headers: {
                         type: "object",
                         propertyNames: {
@@ -3012,6 +3183,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               minLength: 1,
                             },
                           },
+                          supportedReasoningEfforts: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                          },
+                          reasoningEffortMap: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                            additionalProperties: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                          },
                           maxTokensField: {
                             anyOf: [
                               {
@@ -3041,14 +3230,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                                 const: "zai",
-                              },
-                              {
-                                type: "string",
-                                const: "qwen",
-                              },
-                              {
-                                type: "string",
-                                const: "qwen-chat-template",
                               },
                             ],
                           },
@@ -3096,7 +3277,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   title: "Model Provider Model List",
                   description:
-                    "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
+                    "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
                 },
               },
               required: ["baseUrl", "models"],
@@ -3105,6 +3286,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "Model Providers",
             description:
               "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
+          },
+          pricing: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+                title: "Model Pricing Enabled",
+                description:
+                  "Enable the background model-pricing bootstrap. Set to false to skip OpenRouter and LiteLLM catalog fetches during Gateway startup; changing this value requires a Gateway restart.",
+              },
+            },
+            additionalProperties: false,
+            title: "Model Pricing",
+            description:
+              "Controls the optional background model-pricing bootstrap that fetches remote per-token cost catalogs.",
           },
         },
         additionalProperties: false,
@@ -3158,27 +3354,34 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: {},
               },
-              embeddedHarness: {
+              agentRuntime: {
                 type: "object",
                 properties: {
-                  runtime: {
+                  id: {
                     type: "string",
                     title: "Default Agent Runtime",
                     description:
-                      "Embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime uses built-in OpenClaw Pi.",
-                  },
-                  fallback: {
-                    type: "string",
-                    enum: ["pi", "none"],
-                    title: "Default Embedded Harness Fallback",
-                    description:
-                      "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
+                      "Agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id uses built-in OpenClaw Pi.",
                   },
                 },
                 additionalProperties: false,
                 title: "Default Agent Runtime Settings",
                 description:
-                  "Default embedded agent harness policy. Omitted runtime uses built-in OpenClaw Pi. Use runtime=auto for plugin harness selection, or a registered harness id such as codex.",
+                  "Default agent runtime policy. Omitted id uses built-in OpenClaw Pi. Use id=auto for plugin harness selection, a registered harness id such as codex, or a supported CLI backend alias such as claude-cli.",
+              },
+              embeddedHarness: {
+                type: "object",
+                properties: {
+                  runtime: {
+                    type: "string",
+                    title: "Default Legacy Embedded Harness Runtime",
+                    description: "Legacy input for agents.defaults.agentRuntime.id.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Default Legacy Embedded Harness Settings",
+                description:
+                  "Legacy input for agents.defaults.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
               },
               model: {
                 anyOf: [
@@ -3542,6 +3745,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               },
               skipBootstrap: {
                 type: "boolean",
+              },
+              skipOptionalBootstrapFiles: {
+                type: "array",
+                items: {
+                  type: "string",
+                  enum: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"],
+                },
+                title: "Skipped Optional Bootstrap Files",
+                description:
+                  "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.",
               },
               contextInjection: {
                 anyOf: [
@@ -3987,6 +4200,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     reliability: {
                       type: "object",
                       properties: {
+                        outputLimits: {
+                          type: "object",
+                          properties: {
+                            maxTurnRawChars: {
+                              type: "integer",
+                              minimum: 1024,
+                              maximum: 67108864,
+                            },
+                            maxTurnLines: {
+                              type: "integer",
+                              minimum: 100,
+                              maximum: 100000,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
                         watchdog: {
                           type: "object",
                           properties: {
@@ -4275,6 +4504,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
                       },
+                      nonBatchConcurrency: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Remote Non-Batch Embedding Concurrency",
+                        description:
+                          "Controls concurrent inline embedding requests during non-batch memory indexing. Use a low value for local or small self-hosted providers such as Ollama; batch embedding concurrency is configured separately under remote.batch.",
+                      },
                       batch: {
                         type: "object",
                         properties: {
@@ -4331,6 +4568,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Memory Search Model",
                     description:
                       "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
+                  },
+                  inputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Input Type",
+                    description:
+                      "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
+                  },
+                  queryInputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Query Input Type",
+                    description:
+                      "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+                  },
+                  documentInputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Document Input Type",
+                    description:
+                      "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
                   },
                   outputDimensionality: {
                     type: "integer",
@@ -4734,19 +4992,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: false,
               },
-              llm: {
-                type: "object",
-                properties: {
-                  idleTimeoutSeconds: {
-                    description:
-                      "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 120 seconds.",
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 9007199254740991,
-                  },
-                },
-                additionalProperties: false,
-              },
               compaction: {
                 type: "object",
                 properties: {
@@ -4862,6 +5107,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
                   },
+                  midTurnPrecheck: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                        title: "Compaction Mid-turn Precheck Enabled",
+                        description:
+                          "Enable structured mid-turn context pressure checks for Pi tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "Compaction Mid-turn Precheck",
+                    description:
+                      "Optional Pi tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
+                  },
                   postIndexSync: {
                     type: "string",
                     enum: ["off", "async", "await"],
@@ -4900,6 +5160,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         title: "Compaction Memory Flush Enabled",
                         description:
                           "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
+                      },
+                      model: {
+                        type: "string",
+                        title: "Compaction Memory Flush Model Override",
+                        description:
+                          "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
                       },
                       softThresholdTokens: {
                         type: "integer",
@@ -4944,9 +5210,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   truncateAfterCompaction: {
                     type: "boolean",
-                    title: "Truncate After Compaction",
+                    title: "Rotate Transcript After Compaction",
                     description:
-                      "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+                      "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
+                  },
+                  maxActiveTranscriptBytes: {
+                    anyOf: [
+                      {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      {
+                        type: "string",
+                      },
+                    ],
+                    title: "Compaction Active Transcript Size Threshold",
+                    description:
+                      'Triggers normal local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes.',
                   },
                   notifyUser: {
                     type: "boolean",
@@ -5052,6 +5333,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   {
                     type: "string",
                     const: "full",
+                  },
+                ],
+              },
+              reasoningDefault: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "on",
+                  },
+                  {
+                    type: "string",
+                    const: "stream",
                   },
                 ],
               },
@@ -5324,6 +5621,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   isolatedSession: {
                     type: "boolean",
                   },
+                  skipWhenBusy: {
+                    type: "boolean",
+                    title: "Heartbeat Skip When Busy",
+                    description:
+                      "When true, defer heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+                  },
                 },
                 additionalProperties: false,
               },
@@ -5552,6 +5855,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       cpus: {
                         type: "number",
                         exclusiveMinimum: 0,
+                      },
+                      gpus: {
+                        type: "string",
+                        minLength: 1,
+                        title: "Sandbox Docker GPUs",
+                        description:
+                          'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
                       },
                       ulimits: {
                         type: "object",
@@ -5971,27 +6281,34 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 systemPromptOverride: {
                   type: "string",
                 },
+                agentRuntime: {
+                  type: "object",
+                  properties: {
+                    id: {
+                      type: "string",
+                      title: "Agent Runtime",
+                      description:
+                        "Per-agent agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id inherits the default OpenClaw Pi behavior.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent Runtime",
+                  description:
+                    "Per-agent agent runtime policy override. Use id=codex to force Codex for one agent while defaults stay in auto mode.",
+                },
                 embeddedHarness: {
                   type: "object",
                   properties: {
                     runtime: {
                       type: "string",
-                      title: "Agent Runtime",
-                      description:
-                        "Per-agent embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime inherits the default OpenClaw Pi behavior.",
-                    },
-                    fallback: {
-                      type: "string",
-                      enum: ["pi", "none"],
-                      title: "Agent Embedded Harness Fallback",
-                      description:
-                        "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
+                      title: "Agent Legacy Embedded Harness Runtime",
+                      description: "Legacy input for agents.list.*.agentRuntime.id.",
                     },
                   },
                   additionalProperties: false,
-                  title: "Agent Embedded Harness",
+                  title: "Agent Legacy Embedded Harness",
                   description:
-                    "Per-agent embedded harness policy override. Use runtime=codex to force Codex for one agent while defaults stay in auto mode.",
+                    "Legacy input for agents.list.*.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
                 },
                 model: {
                   anyOf: [
@@ -6227,6 +6544,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             type: "string",
                           },
                         },
+                        nonBatchConcurrency: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
                         batch: {
                           type: "object",
                           properties: {
@@ -6262,6 +6584,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     model: {
                       type: "string",
+                    },
+                    inputType: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    queryInputType: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    documentInputType: {
+                      type: "string",
+                      minLength: 1,
                     },
                     outputDimensionality: {
                       type: "integer",
@@ -6518,6 +6852,352 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   additionalProperties: false,
                 },
+                tts: {
+                  type: "object",
+                  properties: {
+                    auto: {
+                      type: "string",
+                      enum: ["off", "always", "inbound", "tagged"],
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    mode: {
+                      type: "string",
+                      enum: ["final", "all"],
+                    },
+                    provider: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    persona: {
+                      type: "string",
+                    },
+                    personas: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          label: {
+                            type: "string",
+                          },
+                          description: {
+                            type: "string",
+                          },
+                          provider: {
+                            type: "string",
+                            minLength: 1,
+                          },
+                          fallbackPolicy: {
+                            anyOf: [
+                              {
+                                type: "string",
+                                const: "preserve-persona",
+                              },
+                              {
+                                type: "string",
+                                const: "provider-defaults",
+                              },
+                              {
+                                type: "string",
+                                const: "fail",
+                              },
+                            ],
+                          },
+                          prompt: {
+                            type: "object",
+                            properties: {
+                              profile: {
+                                type: "string",
+                              },
+                              scene: {
+                                type: "string",
+                              },
+                              sampleContext: {
+                                type: "string",
+                              },
+                              style: {
+                                type: "string",
+                              },
+                              accent: {
+                                type: "string",
+                              },
+                              pacing: {
+                                type: "string",
+                              },
+                              constraints: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          providers: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                apiKey: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                              },
+                              additionalProperties: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    type: "number",
+                                  },
+                                  {
+                                    type: "boolean",
+                                  },
+                                  {
+                                    type: "null",
+                                  },
+                                  {
+                                    type: "array",
+                                    items: {},
+                                  },
+                                  {
+                                    type: "object",
+                                    propertyNames: {
+                                      type: "string",
+                                    },
+                                    additionalProperties: {},
+                                  },
+                                ],
+                              },
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    summaryModel: {
+                      type: "string",
+                    },
+                    modelOverrides: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        allowText: {
+                          type: "boolean",
+                        },
+                        allowProvider: {
+                          type: "boolean",
+                        },
+                        allowVoice: {
+                          type: "boolean",
+                        },
+                        allowModelId: {
+                          type: "boolean",
+                        },
+                        allowVoiceSettings: {
+                          type: "boolean",
+                        },
+                        allowNormalization: {
+                          type: "boolean",
+                        },
+                        allowSeed: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    providers: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          apiKey: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "number",
+                            },
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "null",
+                            },
+                            {
+                              type: "array",
+                              items: {},
+                            },
+                            {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {},
+                            },
+                          ],
+                        },
+                      },
+                    },
+                    prefsPath: {
+                      type: "string",
+                    },
+                    maxTextLength: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 9007199254740991,
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      minimum: 1000,
+                      maximum: 120000,
+                    },
+                  },
+                  additionalProperties: false,
+                },
                 skillsLimits: {
                   type: "object",
                   properties: {
@@ -6668,6 +7348,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     isolatedSession: {
                       type: "boolean",
                     },
+                    skipWhenBusy: {
+                      type: "boolean",
+                      title: "Heartbeat Skip When Busy",
+                      description:
+                        "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+                    },
                   },
                   additionalProperties: false,
                 },
@@ -6705,6 +7391,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "integer",
                       exclusiveMinimum: 0,
                       maximum: 9007199254740991,
+                    },
+                    visibleReplies: {
+                      type: "string",
+                      enum: ["automatic", "message_tool"],
                     },
                   },
                   additionalProperties: false,
@@ -6914,6 +7604,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         cpus: {
                           type: "number",
                           exclusiveMinimum: 0,
+                        },
+                        gpus: {
+                          type: "string",
+                          minLength: 1,
+                          title: "Agent Sandbox Docker GPUs",
+                          description:
+                            "Per-agent Docker GPU passthrough override for sandbox containers.",
                         },
                         ulimits: {
                           type: "object",
@@ -8068,6 +8765,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         title: "Web Fetch Allow RFC 2544 Benchmark Range",
                         description:
                           "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
+                      },
+                      allowIpv6UniqueLocalRange: {
+                        type: "boolean",
+                        title: "Web Fetch Allow IPv6 Unique Local Range",
+                        description:
+                          "Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility such as sing-box, Clash, or Surge.",
                       },
                     },
                     additionalProperties: false,
@@ -9471,7 +10174,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "boolean",
                     title: "Async Media Completion Direct Send",
                     description:
-                      "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+                      "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
                   },
                 },
                 additionalProperties: false,
@@ -18265,7 +18968,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 title: "Audio Transcription Command",
                 description:
-                  'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{input}"]`. Prefer a pinned command so runtime environments behave consistently.',
+                  'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
               },
               timeoutSeconds: {
                 type: "integer",
@@ -18320,6 +19023,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
           },
+          visibleReplies: {
+            type: "string",
+            enum: ["automatic", "message_tool"],
+            title: "Visible Replies",
+            description:
+              'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
+          },
           responsePrefix: {
             type: "string",
             title: "Outbound Response Prefix",
@@ -18345,6 +19055,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Group History Limit",
                 description:
                   "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
+              },
+              visibleReplies: {
+                type: "string",
+                enum: ["automatic", "message_tool"],
+                title: "Group Visible Replies",
+                description:
+                  'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
               },
             },
             additionalProperties: false,
@@ -18388,7 +19105,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Queue Mode",
                 description:
-                  'Queue behavior mode: "steer", "followup", "collect", "steer-backlog", "steer+backlog", "queue", or "interrupt". Keep conservative modes unless you intentionally need aggressive interruption/backlog semantics.',
+                  'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
               },
               byChannel: {
                 type: "object",
@@ -18725,7 +19442,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Queue Debounce (ms)",
                 description:
-                  "Global queue debounce window in milliseconds before processing buffered inbound messages. Use higher values to coalesce rapid bursts, or lower values for reduced response latency.",
+                  "Global followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
               },
               debounceMsByChannel: {
                 type: "object",
@@ -18747,7 +19464,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Queue Capacity",
                 description:
-                  "Maximum number of queued inbound items retained before drop policy applies. Keep caps bounded in noisy channels so memory usage remains predictable.",
+                  "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
               },
               drop: {
                 anyOf: [
@@ -18766,13 +19483,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Queue Drop Strategy",
                 description:
-                  'Drop strategy when queue cap is exceeded: "old", "new", or "summarize". Use summarize when preserving intent matters, or old/new when deterministic dropping is preferred.',
+                  'Drop strategy when queue cap is exceeded. "summarize" drops oldest entries but preserves compact summaries; "old" drops oldest without summaries; "new" rejects the newest item. Use "summarize" for long-running chats where context matters.',
               },
             },
             additionalProperties: false,
             title: "Inbound Queue",
             description:
-              "Inbound message queue strategy used to buffer bursts before processing turns. Tune this for busy channels where sequential processing or batching behavior matters.",
+              "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is steer, with followup fallback when steering is unavailable.",
           },
           inbound: {
             type: "object",
@@ -18931,6 +19648,196 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               provider: {
                 type: "string",
                 minLength: 1,
+              },
+              persona: {
+                type: "string",
+                title: "TTS Persona",
+                description:
+                  "Default TTS persona id. Local TTS persona preferences can override this per host.",
+              },
+              personas: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    label: {
+                      type: "string",
+                    },
+                    description: {
+                      type: "string",
+                    },
+                    provider: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    fallbackPolicy: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "preserve-persona",
+                        },
+                        {
+                          type: "string",
+                          const: "provider-defaults",
+                        },
+                        {
+                          type: "string",
+                          const: "fail",
+                        },
+                      ],
+                    },
+                    prompt: {
+                      type: "object",
+                      properties: {
+                        profile: {
+                          type: "string",
+                        },
+                        scene: {
+                          type: "string",
+                        },
+                        sampleContext: {
+                          type: "string",
+                        },
+                        style: {
+                          type: "string",
+                        },
+                        accent: {
+                          type: "string",
+                        },
+                        pacing: {
+                          type: "string",
+                        },
+                        constraints: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                      title: "TTS Persona Prompt",
+                      description:
+                        "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
+                    },
+                    providers: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          apiKey: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "number",
+                            },
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "null",
+                            },
+                            {
+                              type: "array",
+                              items: {},
+                            },
+                            {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {},
+                            },
+                          ],
+                        },
+                      },
+                      title: "TTS Persona Provider Bindings",
+                      description:
+                        "Provider-specific TTS persona bindings keyed by speech provider id. These merge over messages.tts.providers for the active persona.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "TTS Persona",
+                  description:
+                    "One TTS persona. Use provider-specific bindings for exact voices/models and prompt templates.",
+                },
+                title: "TTS Personas",
+                description:
+                  "Named TTS personas that define stable spoken identity plus provider-specific speech bindings.",
               },
               summaryModel: {
                 type: "string",
@@ -19788,14 +20695,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
           },
-          parentForkMaxTokens: {
-            type: "integer",
-            minimum: 0,
-            maximum: 9007199254740991,
-            title: "Session Parent Fork Max Tokens",
-            description:
-              "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
-          },
           mainKey: {
             type: "string",
             title: "Session Main Key",
@@ -19904,6 +20803,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
           },
+          writeLock: {
+            type: "object",
+            properties: {
+              acquireTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Session Write Lock Acquire Timeout",
+                description:
+                  "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+              },
+            },
+            additionalProperties: false,
+            title: "Session Write Lock",
+            description:
+              "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+          },
           agentToAgent: {
             type: "object",
             properties: {
@@ -19943,6 +20859,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Thread Binding Max Age (hours)",
                 description:
                   "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
+              },
+              spawnSessions: {
+                type: "boolean",
+                title: "Thread-Bound Session Spawns",
+                description:
+                  "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+              },
+              defaultSpawnContext: {
+                type: "string",
+                enum: ["isolated", "fork"],
+                title: "Thread Spawn Context",
+                description:
+                  'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
               },
             },
             additionalProperties: false,
@@ -19998,9 +20927,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "number",
                   },
                 ],
-                title: "Session Rotate Size",
+                title: "Deprecated Session Rotate Size",
                 description:
-                  "Rotates the session store when file size exceeds a threshold such as `10mb` or `1gb`. Use this to bound single-file growth and keep backup/restore operations manageable.",
+                  'Deprecated and ignored. Do not use for `sessions.json` growth control; OpenClaw no longer creates automatic rotation backups, and "openclaw doctor --fix" removes this key.',
               },
               resetArchiveRetention: {
                 anyOf: [
@@ -20049,7 +20978,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             additionalProperties: false,
             title: "Session Maintenance",
             description:
-              "Automatic session-store maintenance controls for pruning age, entry caps, and file rotation behavior. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
+              "Automatic session-store maintenance controls for pruning age, entry caps, reset archive retention, and disk budget cleanup. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
           },
         },
         additionalProperties: false,
@@ -20078,7 +21007,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             maximum: 9007199254740991,
             title: "Cron Max Concurrent Runs",
             description:
-              "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+              "Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
           },
           retry: {
             type: "object",
@@ -20257,6 +21186,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 minimum: 0,
                 maximum: 9007199254740991,
               },
+              includeSkipped: {
+                type: "boolean",
+              },
               mode: {
                 type: "string",
                 enum: ["announce", "webhook"],
@@ -20291,6 +21223,29 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         title: "Cron",
         description:
           "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
+      },
+      commitments: {
+        type: "object",
+        properties: {
+          enabled: {
+            type: "boolean",
+            title: "Commitments Enabled",
+            description:
+              "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
+          },
+          maxPerDay: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Commitments per Day",
+            description:
+              "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
+          },
+        },
+        additionalProperties: false,
+        title: "Commitments",
+        description:
+          "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
       },
       hooks: {
         type: "object",
@@ -20787,6 +21742,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "string",
                           const: "clawhub",
                         },
+                        {
+                          type: "string",
+                          const: "git",
+                        },
                       ],
                     },
                     spec: {
@@ -20855,6 +21814,64 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           const: "private",
                         },
                       ],
+                    },
+                    artifactKind: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "legacy-zip",
+                        },
+                        {
+                          type: "string",
+                          const: "npm-pack",
+                        },
+                      ],
+                    },
+                    artifactFormat: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "zip",
+                        },
+                        {
+                          type: "string",
+                          const: "tgz",
+                        },
+                      ],
+                    },
+                    npmIntegrity: {
+                      type: "string",
+                    },
+                    npmShasum: {
+                      type: "string",
+                    },
+                    npmTarballName: {
+                      type: "string",
+                    },
+                    clawpackSha256: {
+                      type: "string",
+                    },
+                    clawpackSpecVersion: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    clawpackManifestSha256: {
+                      type: "string",
+                    },
+                    clawpackSize: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    gitUrl: {
+                      type: "string",
+                    },
+                    gitRef: {
+                      type: "string",
+                    },
+                    gitCommit: {
+                      type: "string",
                     },
                     hooks: {
                       type: "array",
@@ -20944,6 +21961,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "Web Channel Reconnect Policy",
             description:
               "Reconnect backoff policy for web channel reconnect attempts after transport failure. Keep bounded retries and jitter tuned to avoid thundering-herd reconnect behavior.",
+          },
+          whatsapp: {
+            type: "object",
+            properties: {
+              keepAliveIntervalMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Keepalive Interval (ms)",
+                description:
+                  "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
+              },
+              connectTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Connect Timeout (ms)",
+                description:
+                  "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
+              },
+              defaultQueryTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Query Timeout (ms)",
+                description:
+                  "Default Baileys query timeout in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows queries need longer.",
+              },
+            },
+            additionalProperties: false,
+            title: "WhatsApp Web Socket Timing",
+            description:
+              "WhatsApp Web socket timing controls passed directly to Baileys. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
           },
         },
         additionalProperties: false,
@@ -21263,6 +22313,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
               },
+              chatMessageMaxWidth: {
+                title: "Control UI Chat Message Max Width",
+                description:
+                  'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
+              },
               allowedOrigins: {
                 type: "array",
                 items: {
@@ -21505,6 +22560,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "string",
                     },
                   },
+                  allowLoopback: {
+                    type: "boolean",
+                  },
                 },
                 required: ["userHeader"],
                 additionalProperties: false,
@@ -21573,6 +22631,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               },
             },
             additionalProperties: false,
+          },
+          handshakeTimeoutMs: {
+            type: "integer",
+            minimum: 1,
+            maximum: 9007199254740991,
+            title: "Gateway Handshake Timeout",
+            description:
+              "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
           },
           channelHealthCheckMinutes: {
             type: "integer",
@@ -21855,7 +22921,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Restart Deferral Timeout (ms)",
                 description:
-                  "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+                  "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
               },
             },
             additionalProperties: false,
@@ -22444,15 +23510,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   onBoot: {
                     type: "boolean",
-                    title: "QMD Update on Startup",
+                    title: "QMD Update on Manager Start",
                     description:
-                      "Runs an initial QMD update once during gateway startup (default: true). Keep enabled so recall starts from a fresh baseline; disable only when startup speed is more important than immediate freshness.",
+                      "Runs an initial QMD update when the long-lived QMD manager opens (default: true). Set false to disable manager-start updates and legacy/opt-in startup refreshes.",
+                  },
+                  startup: {
+                    type: "string",
+                    enum: ["off", "idle", "immediate"],
+                    title: "QMD Gateway Startup Refresh",
+                    description:
+                      "Controls whether Gateway startup schedules a QMD refresh before memory is first used (`off`, `idle`, or `immediate`; default: off). Keep off for fastest startup and lazy memory initialization.",
+                  },
+                  startupDelayMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                    title: "QMD Gateway Startup Delay (ms)",
+                    description:
+                      'Sets the idle delay before an opt-in `memory.qmd.update.startup: "idle"` refresh runs (default: 120000). Increase to keep cold-start CPU available for channels and providers.',
                   },
                   waitForBootSync: {
                     type: "boolean",
-                    title: "QMD Wait for Boot Sync",
+                    title: "QMD Wait for Manager-Start Sync",
                     description:
-                      "Blocks startup completion until the initial boot-time QMD sync finishes (default: false). Enable when you need fully up-to-date recall before serving traffic, and keep off for faster boot.",
+                      "Blocks QMD manager opening until its initial manager-start update finishes (default: false). Startup refreshes remain opt-in through `memory.qmd.update.startup`.",
                   },
                   embedInterval: {
                     type: "string",
@@ -22659,6 +23740,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 url: {
                   type: "string",
                   format: "uri",
+                },
+                transport: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "sse",
+                    },
+                    {
+                      type: "string",
+                      const: "streamable-http",
+                    },
+                  ],
                 },
                 headers: {
                   type: "object",
@@ -23111,6 +24204,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           additionalProperties: false,
         },
       },
+      proxy: {
+        type: "object",
+        properties: {
+          enabled: {
+            type: "boolean",
+          },
+          proxyUrl: {
+            type: "string",
+            format: "uri",
+          },
+        },
+        additionalProperties: false,
+      },
     },
     required: ["commands"],
     additionalProperties: false,
@@ -23393,12 +24499,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "logging.redactSensitive": {
       label: "Sensitive Data Redaction Mode",
-      help: 'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
+      help: 'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
       tags: ["privacy", "observability"],
     },
     "logging.redactPatterns": {
       label: "Custom Redaction Patterns",
-      help: "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+      help: "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
       tags: ["privacy", "observability"],
     },
     "cli.banner": {
@@ -23441,6 +24547,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "How often beta-channel checks run in hours (default: 1).",
       tags: ["performance"],
     },
+    commitments: {
+      label: "Commitments",
+      help: "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
+      tags: ["advanced"],
+    },
+    "commitments.enabled": {
+      label: "Commitments Enabled",
+      help: "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
+      tags: ["advanced"],
+    },
+    "commitments.maxPerDay": {
+      label: "Commitments per Day",
+      help: "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
+      tags: ["performance"],
+    },
     "diagnostics.enabled": {
       label: "Diagnostics Enabled",
       help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
@@ -23452,8 +24573,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["observability"],
     },
     "diagnostics.stuckSessionWarnMs": {
-      label: "Stuck Session Warning Threshold (ms)",
-      help: "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+      label: "Session Liveness Threshold (ms)",
+      help: "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
       tags: ["observability", "storage"],
     },
     "diagnostics.otel.enabled": {
@@ -23464,6 +24585,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "diagnostics.otel.endpoint": {
       label: "OpenTelemetry Endpoint",
       help: "Collector endpoint URL used for OpenTelemetry export transport, including scheme and port. Use a reachable, trusted collector endpoint and monitor ingestion errors after rollout.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.tracesEndpoint": {
+      label: "OpenTelemetry Traces Endpoint",
+      help: "Signal-specific OTLP/HTTP trace endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for trace export only.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.metricsEndpoint": {
+      label: "OpenTelemetry Metrics Endpoint",
+      help: "Signal-specific OTLP/HTTP metrics endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for metrics export only.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.logsEndpoint": {
+      label: "OpenTelemetry Logs Endpoint",
+      help: "Signal-specific OTLP/HTTP logs endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for log export only.",
       tags: ["observability"],
     },
     "diagnostics.otel.protocol": {
@@ -23656,20 +24792,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
       tags: ["performance"],
     },
-    "agents.defaults.embeddedHarness": {
+    "agents.defaults.agentRuntime": {
       label: "Default Agent Runtime Settings",
-      help: "Default embedded agent harness policy. Omitted runtime uses built-in OpenClaw Pi. Use runtime=auto for plugin harness selection, or a registered harness id such as codex.",
+      help: "Default agent runtime policy. Omitted id uses built-in OpenClaw Pi. Use id=auto for plugin harness selection, a registered harness id such as codex, or a supported CLI backend alias such as claude-cli.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.agentRuntime.id": {
+      label: "Default Agent Runtime",
+      help: "Agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id uses built-in OpenClaw Pi.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.embeddedHarness": {
+      label: "Default Legacy Embedded Harness Settings",
+      help: "Legacy input for agents.defaults.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
       tags: ["advanced"],
     },
     "agents.defaults.embeddedHarness.runtime": {
-      label: "Default Agent Runtime",
-      help: "Embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime uses built-in OpenClaw Pi.",
+      label: "Default Legacy Embedded Harness Runtime",
+      help: "Legacy input for agents.defaults.agentRuntime.id.",
       tags: ["advanced"],
-    },
-    "agents.defaults.embeddedHarness.fallback": {
-      label: "Default Embedded Harness Fallback",
-      help: "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
-      tags: ["reliability"],
     },
     "agents.list": {
       label: "Agent List",
@@ -23711,20 +24852,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
       tags: ["performance"],
     },
+    "agents.list.*.agentRuntime": {
+      label: "Agent Runtime",
+      help: "Per-agent agent runtime policy override. Use id=codex to force Codex for one agent while defaults stay in auto mode.",
+      tags: ["advanced"],
+    },
+    "agents.list.*.agentRuntime.id": {
+      label: "Agent Runtime",
+      help: "Per-agent agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id inherits the default OpenClaw Pi behavior.",
+      tags: ["advanced"],
+    },
     "agents.list.*.embeddedHarness": {
-      label: "Agent Embedded Harness",
-      help: "Per-agent embedded harness policy override. Use runtime=codex to force Codex for one agent while defaults stay in auto mode.",
+      label: "Agent Legacy Embedded Harness",
+      help: "Legacy input for agents.list.*.agentRuntime. Run openclaw doctor --fix to rewrite it to agentRuntime.",
       tags: ["advanced"],
     },
     "agents.list.*.embeddedHarness.runtime": {
-      label: "Agent Runtime",
-      help: "Per-agent embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime inherits the default OpenClaw Pi behavior.",
+      label: "Agent Legacy Embedded Harness Runtime",
+      help: "Legacy input for agents.list.*.agentRuntime.id.",
       tags: ["advanced"],
-    },
-    "agents.list.*.embeddedHarness.fallback": {
-      label: "Agent Embedded Harness Fallback",
-      help: "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
-      tags: ["reliability"],
     },
     "gateway.port": {
       label: "Gateway Port",
@@ -23805,6 +24951,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Gateway Tool Denylist",
       help: "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
       tags: ["access", "network"],
+    },
+    "gateway.handshakeTimeoutMs": {
+      label: "Gateway Handshake Timeout",
+      help: "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
+      tags: ["network", "performance"],
     },
     "gateway.channelHealthCheckMinutes": {
       label: "Gateway Channel Health Check Interval (min)",
@@ -24135,7 +25286,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.media.asyncCompletion.directSend": {
       label: "Async Media Completion Direct Send",
-      help: "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+      help: "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
       tags: ["storage", "media", "tools"],
     },
     "tools.media.audio.enabled": {
@@ -24815,6 +25966,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
       tags: ["access", "tools"],
     },
+    "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange": {
+      label: "Web Fetch Allow IPv6 Unique Local Range",
+      help: "Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility such as sing-box, Clash, or Surge.",
+      tags: ["access", "tools"],
+    },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
       help: "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
@@ -24836,6 +25992,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Allow External Control UI Embed URLs",
       help: "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
       tags: ["security", "access", "network", "advanced"],
+    },
+    "gateway.controlUi.chatMessageMaxWidth": {
+      label: "Control UI Chat Message Max Width",
+      help: 'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
+      tags: ["advanced"],
     },
     "gateway.controlUi.allowedOrigins": {
       label: "Control UI Allowed Origins",
@@ -24951,7 +26112,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "gateway.reload.deferralTimeoutMs": {
       label: "Restart Deferral Timeout (ms)",
-      help: "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+      help: "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
       tags: ["network", "reliability", "performance"],
     },
     "gateway.nodes.browser.mode": {
@@ -25026,7 +26187,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "audio.transcription.command": {
       label: "Audio Transcription Command",
-      help: 'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{input}"]`. Prefer a pinned command so runtime environments behave consistently.',
+      help: 'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
       tags: ["media"],
     },
     "audio.transcription.timeoutSeconds": {
@@ -25178,6 +26339,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "GPT-5 Personality Overlay",
       help: 'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
       tags: ["advanced"],
+    },
+    "agents.defaults.skipOptionalBootstrapFiles": {
+      label: "Skipped Optional Bootstrap Files",
+      help: "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.",
+      tags: ["storage"],
     },
     "agents.defaults.contextInjection": {
       label: "Context Injection",
@@ -25350,6 +26516,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
       tags: ["advanced"],
     },
+    "agents.defaults.memorySearch.remote.nonBatchConcurrency": {
+      label: "Remote Non-Batch Embedding Concurrency",
+      help: "Controls concurrent inline embedding requests during non-batch memory indexing. Use a low value for local or small self-hosted providers such as Ollama; batch embedding concurrency is configured separately under remote.batch.",
+      tags: ["performance"],
+    },
     "agents.defaults.memorySearch.remote.batch.enabled": {
       label: "Remote Batch Embedding Enabled",
       help: "Enables provider batch APIs for embedding jobs when supported (OpenAI/Gemini), improving throughput on larger index runs. Keep this enabled unless debugging provider batch failures or running very small workloads.",
@@ -25379,6 +26550,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Memory Search Model",
       help: "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
       tags: ["models"],
+    },
+    "agents.defaults.memorySearch.inputType": {
+      label: "Memory Search Input Type",
+      help: "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.queryInputType": {
+      label: "Memory Search Query Input Type",
+      help: "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.documentInputType": {
+      label: "Memory Search Document Input Type",
+      help: "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
+      tags: ["advanced"],
     },
     "agents.defaults.memorySearch.outputDimensionality": {
       label: "Memory Search Output Dimensionality",
@@ -25626,13 +26812,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["performance", "storage"],
     },
     "memory.qmd.update.onBoot": {
-      label: "QMD Update on Startup",
-      help: "Runs an initial QMD update once during gateway startup (default: true). Keep enabled so recall starts from a fresh baseline; disable only when startup speed is more important than immediate freshness.",
+      label: "QMD Update on Manager Start",
+      help: "Runs an initial QMD update when the long-lived QMD manager opens (default: true). Set false to disable manager-start updates and legacy/opt-in startup refreshes.",
+      tags: ["storage"],
+    },
+    "memory.qmd.update.startup": {
+      label: "QMD Gateway Startup Refresh",
+      help: "Controls whether Gateway startup schedules a QMD refresh before memory is first used (`off`, `idle`, or `immediate`; default: off). Keep off for fastest startup and lazy memory initialization.",
+      tags: ["storage"],
+    },
+    "memory.qmd.update.startupDelayMs": {
+      label: "QMD Gateway Startup Delay (ms)",
+      help: 'Sets the idle delay before an opt-in `memory.qmd.update.startup: "idle"` refresh runs (default: 120000). Increase to keep cold-start CPU available for channels and providers.',
       tags: ["storage"],
     },
     "memory.qmd.update.waitForBootSync": {
-      label: "QMD Wait for Boot Sync",
-      help: "Blocks startup completion until the initial boot-time QMD sync finishes (default: false). Enable when you need fully up-to-date recall before serving traffic, and keep off for faster boot.",
+      label: "QMD Wait for Manager-Start Sync",
+      help: "Blocks QMD manager opening until its initial manager-start update finishes (default: false). Startup refreshes remain opt-in through `memory.qmd.update.startup`.",
       tags: ["storage"],
     },
     "memory.qmd.update.embedInterval": {
@@ -25795,6 +26991,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
       tags: ["models"],
     },
+    "models.pricing": {
+      label: "Model Pricing",
+      help: "Controls the optional background model-pricing bootstrap that fetches remote per-token cost catalogs.",
+      tags: ["models"],
+    },
+    "models.pricing.enabled": {
+      label: "Model Pricing Enabled",
+      help: "Enable the background model-pricing bootstrap. Set to false to skip OpenRouter and LiteLLM catalog fetches during Gateway startup; changing this value requires a Gateway restart.",
+      tags: ["models"],
+    },
     "models.providers": {
       label: "Model Providers",
       help: "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
@@ -25821,9 +27027,34 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
       tags: ["models"],
     },
+    "models.providers.*.contextWindow": {
+      label: "Model Provider Context Window",
+      help: "Default native context window applied to models under this provider when a model entry does not set contextWindow. Use model-level contextWindow for per-model overrides.",
+      tags: ["models"],
+    },
+    "models.providers.*.contextTokens": {
+      label: "Model Provider Context Tokens",
+      help: "Default effective runtime context cap applied to models under this provider when a model entry does not set contextTokens. Use this when runtime should budget below the native contextWindow.",
+      tags: ["security", "auth", "models"],
+    },
+    "models.providers.*.maxTokens": {
+      label: "Model Provider Max Tokens",
+      help: "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
+      tags: ["security", "auth", "performance", "models"],
+    },
+    "models.providers.*.timeoutSeconds": {
+      label: "Model Provider Request Timeout",
+      help: "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling. Use this for slow local or self-hosted model servers instead of changing global agent timeouts.",
+      tags: ["performance", "models"],
+    },
     "models.providers.*.injectNumCtxForOpenAICompat": {
       label: "Model Provider Inject num_ctx (OpenAI Compat)",
       help: "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
+      tags: ["models"],
+    },
+    "models.providers.*.params": {
+      label: "Model Provider Runtime Parameters",
+      help: "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
       tags: ["models"],
     },
     "models.providers.*.headers": {
@@ -25978,7 +27209,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "models.providers.*.models": {
       label: "Model Provider Model List",
-      help: "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
+      help: "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
       tags: ["models"],
     },
     "auth.cooldowns.billingBackoffHours": {
@@ -26201,6 +27432,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
       tags: ["performance"],
     },
+    "agents.defaults.compaction.midTurnPrecheck": {
+      label: "Compaction Mid-turn Precheck",
+      help: "Optional Pi tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.compaction.midTurnPrecheck.enabled": {
+      label: "Compaction Mid-turn Precheck Enabled",
+      help: "Enable structured mid-turn context pressure checks for Pi tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
+      tags: ["advanced"],
+    },
     "agents.defaults.compaction.postIndexSync": {
       label: "Compaction Post-Index Sync",
       help: 'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
@@ -26222,9 +27463,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["models"],
     },
     "agents.defaults.compaction.truncateAfterCompaction": {
-      label: "Truncate After Compaction",
-      help: "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+      label: "Rotate Transcript After Compaction",
+      help: "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
       tags: ["advanced"],
+    },
+    "agents.defaults.compaction.maxActiveTranscriptBytes": {
+      label: "Compaction Active Transcript Size Threshold",
+      help: 'Triggers normal local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes.',
+      tags: ["performance"],
     },
     "agents.defaults.compaction.notifyUser": {
       label: "Compaction Notify User",
@@ -26240,6 +27486,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Compaction Memory Flush Enabled",
       help: "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
       tags: ["advanced"],
+    },
+    "agents.defaults.compaction.memoryFlush.model": {
+      label: "Compaction Memory Flush Model Override",
+      help: "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
+      tags: ["models"],
     },
     "agents.defaults.compaction.memoryFlush.softThresholdTokens": {
       label: "Compaction Memory Flush Soft Threshold",
@@ -26324,6 +27575,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Heartbeat Timeout (Seconds)",
       tags: ["performance", "automation"],
     },
+    "agents.defaults.heartbeat.skipWhenBusy": {
+      label: "Heartbeat Skip When Busy",
+      help: "When true, defer heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
+    },
+    "agents.list.*.heartbeat.skipWhenBusy": {
+      label: "Heartbeat Skip When Busy",
+      help: "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
+    },
     "agents.defaults.sandbox.browser.network": {
       label: "Sandbox Browser Network",
       help: "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
@@ -26338,6 +27599,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Sandbox Docker Allow Container Namespace Join",
       help: "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
       tags: ["security", "access", "storage", "advanced"],
+    },
+    "agents.defaults.sandbox.docker.gpus": {
+      label: "Sandbox Docker GPUs",
+      help: 'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
+      tags: ["storage"],
     },
     "commands.native": {
       label: "Native Commands",
@@ -26615,11 +27881,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
       tags: ["storage"],
     },
-    "session.parentForkMaxTokens": {
-      label: "Session Parent Fork Max Tokens",
-      help: "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
-      tags: ["security", "auth", "performance", "storage"],
-    },
     "session.mainKey": {
       label: "Session Main Key",
       help: 'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
@@ -26670,6 +27931,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
       tags: ["access", "storage"],
     },
+    "session.writeLock": {
+      label: "Session Write Lock",
+      help: "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+      tags: ["storage"],
+    },
+    "session.writeLock.acquireTimeoutMs": {
+      label: "Session Write Lock Acquire Timeout",
+      help: "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+      tags: ["performance", "storage"],
+    },
     "session.agentToAgent": {
       label: "Session Agent-to-Agent",
       help: "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
@@ -26700,9 +27971,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
       tags: ["performance", "storage"],
     },
+    "session.threadBindings.spawnSessions": {
+      label: "Thread-Bound Session Spawns",
+      help: "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+      tags: ["storage"],
+    },
+    "session.threadBindings.defaultSpawnContext": {
+      label: "Thread Spawn Context",
+      help: 'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+      tags: ["storage"],
+    },
     "session.maintenance": {
       label: "Session Maintenance",
-      help: "Automatic session-store maintenance controls for pruning age, entry caps, and file rotation behavior. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
+      help: "Automatic session-store maintenance controls for pruning age, entry caps, reset archive retention, and disk budget cleanup. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
       tags: ["storage"],
     },
     "session.maintenance.mode": {
@@ -26726,8 +28007,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["performance", "storage"],
     },
     "session.maintenance.rotateBytes": {
-      label: "Session Rotate Size",
-      help: "Rotates the session store when file size exceeds a threshold such as `10mb` or `1gb`. Use this to bound single-file growth and keep backup/restore operations manageable.",
+      label: "Deprecated Session Rotate Size",
+      help: 'Deprecated and ignored. Do not use for `sessions.json` growth control; OpenClaw no longer creates automatic rotation backups, and "openclaw doctor --fix" removes this key.',
       tags: ["storage"],
     },
     "session.maintenance.resetArchiveRetention": {
@@ -26757,7 +28038,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "cron.maxConcurrentRuns": {
       label: "Cron Max Concurrent Runs",
-      help: "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+      help: "Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
       tags: ["performance", "automation"],
     },
     "cron.retry": {
@@ -27154,6 +28435,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum reconnect attempts before giving up for the current failure sequence (0 means no retries). Use finite caps for controlled failure handling in automation-sensitive environments.",
       tags: ["performance"],
     },
+    "web.whatsapp": {
+      label: "WhatsApp Web Socket Timing",
+      help: "WhatsApp Web socket timing controls passed directly to Baileys. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
+      tags: ["advanced"],
+    },
+    "web.whatsapp.keepAliveIntervalMs": {
+      label: "WhatsApp Web Keepalive Interval (ms)",
+      help: "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
+      tags: ["performance"],
+    },
+    "web.whatsapp.connectTimeoutMs": {
+      label: "WhatsApp Web Connect Timeout (ms)",
+      help: "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
+      tags: ["performance"],
+    },
+    "web.whatsapp.defaultQueryTimeoutMs": {
+      label: "WhatsApp Web Query Timeout (ms)",
+      help: "Default Baileys query timeout in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows queries need longer.",
+      tags: ["performance"],
+    },
     "discovery.wideArea": {
       label: "Wide-area Discovery",
       help: "Wide-area discovery configuration group for exposing discovery signals beyond local-link scopes. Enable only in deployments that intentionally aggregate gateway presence across sites.",
@@ -27219,6 +28520,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
       tags: ["advanced"],
     },
+    "messages.visibleReplies": {
+      label: "Visible Replies",
+      help: 'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
+      tags: ["advanced"],
+    },
     "messages.responsePrefix": {
       label: "Outbound Response Prefix",
       help: "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
@@ -27239,14 +28545,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
       tags: ["performance"],
     },
+    "messages.groupChat.visibleReplies": {
+      label: "Group Visible Replies",
+      help: 'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+      tags: ["advanced"],
+    },
     "messages.queue": {
       label: "Inbound Queue",
-      help: "Inbound message queue strategy used to buffer bursts before processing turns. Tune this for busy channels where sequential processing or batching behavior matters.",
+      help: "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is steer, with followup fallback when steering is unavailable.",
       tags: ["advanced"],
     },
     "messages.queue.mode": {
       label: "Queue Mode",
-      help: 'Queue behavior mode: "steer", "followup", "collect", "steer-backlog", "steer+backlog", "queue", or "interrupt". Keep conservative modes unless you intentionally need aggressive interruption/backlog semantics.',
+      help: 'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
       tags: ["advanced"],
     },
     "messages.queue.byChannel": {
@@ -27256,7 +28567,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.queue.debounceMs": {
       label: "Queue Debounce (ms)",
-      help: "Global queue debounce window in milliseconds before processing buffered inbound messages. Use higher values to coalesce rapid bursts, or lower values for reduced response latency.",
+      help: "Global followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
       tags: ["performance"],
     },
     "messages.queue.debounceMsByChannel": {
@@ -27266,12 +28577,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.queue.cap": {
       label: "Queue Capacity",
-      help: "Maximum number of queued inbound items retained before drop policy applies. Keep caps bounded in noisy channels so memory usage remains predictable.",
+      help: "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
       tags: ["advanced"],
     },
     "messages.queue.drop": {
       label: "Queue Drop Strategy",
-      help: 'Drop strategy when queue cap is exceeded: "old", "new", or "summarize". Use summarize when preserving intent matters, or old/new when deterministic dropping is preferred.',
+      help: 'Drop strategy when queue cap is exceeded. "summarize" drops oldest entries but preserves compact summaries; "old" drops oldest without summaries; "new" rejects the newest item. Use "summarize" for long-running chats where context matters.',
       tags: ["advanced"],
     },
     "messages.inbound": {
@@ -27332,6 +28643,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "messages.tts": {
       label: "Message Text-to-Speech",
       help: "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
+      tags: ["media"],
+    },
+    "messages.tts.persona": {
+      label: "TTS Persona",
+      help: "Default TTS persona id. Local TTS persona preferences can override this per host.",
+      tags: ["media"],
+    },
+    "messages.tts.personas": {
+      label: "TTS Personas",
+      help: "Named TTS personas that define stable spoken identity plus provider-specific speech bindings.",
+      tags: ["media"],
+    },
+    "messages.tts.personas.*": {
+      label: "TTS Persona",
+      help: "One TTS persona. Use provider-specific bindings for exact voices/models and prompt templates.",
+      tags: ["media"],
+    },
+    "messages.tts.personas.*.prompt": {
+      label: "TTS Persona Prompt",
+      help: "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
+      tags: ["media"],
+    },
+    "messages.tts.personas.*.providers": {
+      label: "TTS Persona Provider Bindings",
+      help: "Provider-specific TTS persona bindings keyed by speech provider id. These merge over messages.tts.providers for the active persona.",
       tags: ["media"],
     },
     "messages.tts.providers": {
@@ -27432,6 +28768,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
       tags: ["performance", "automation"],
     },
+    "agents.list[].heartbeat.skipWhenBusy": {
+      label: "Agent Heartbeat Skip When Busy",
+      help: "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
+    },
     "agents.list[].sandbox.browser.network": {
       label: "Agent Sandbox Browser Network",
       help: "Per-agent override for sandbox browser Docker network.",
@@ -27446,6 +28787,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Sandbox Docker Allow Container Namespace Join",
       help: "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
       tags: ["security", "access", "storage", "advanced"],
+    },
+    "agents.list[].sandbox.docker.gpus": {
+      label: "Agent Sandbox Docker GPUs",
+      help: "Per-agent Docker GPU passthrough override for sandbox containers.",
+      tags: ["storage"],
     },
     "discovery.mdns.mode": {
       label: "mDNS Discovery Mode",
@@ -27570,6 +28916,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list[].memorySearch.remote.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
+    },
+    "agents.list[].tts.personas.*.providers.*.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
+    },
+    "agents.list[].tts.providers.*.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
     },
     "agents.list[].sandbox.ssh.identityData": {
       sensitive: true,
@@ -27891,6 +29245,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       sensitive: true,
       tags: ["security", "media", "tools"],
     },
+    "messages.tts.personas.*.providers.*.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
+    },
     "mcp.servers.*.headers.*": {
       sensitive: true,
       tags: ["security"],
@@ -27898,6 +29256,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "skills.entries.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
+    },
+    "proxy.proxyUrl": {
+      sensitive: true,
+      tags: ["security"],
     },
     "models.providers.*.models[].baseUrl": {
       tags: ["models", "url-secret"],
@@ -27951,6 +29313,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.25",
+  version: "2026.5.3",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

@@ -6,7 +6,11 @@ metadata:
     "openclaw":
       {
         "emoji": "🧩",
-        "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] },
+        "requires":
+          {
+            "anyBins": ["claude", "codex", "opencode", "pi"],
+            "config": ["skills.entries.coding-agent.enabled"],
+          },
         "install":
           [
             {
@@ -56,14 +60,14 @@ bash pty:true command:"claude --dangerously-skip-permissions 'task'"
 
 ### Bash Tool Parameters
 
-| Parameter    | Type    | Description                                                |
-| ------------ | ------- | ---------------------------------------------------------- |
-| `command`    | string  | The shell command to run                                   |
-| `pty`        | boolean | Use for Codex/Pi/OpenCode                                  |
-| `workdir`    | string  | Working directory                                          |
-| `background` | boolean | **Always true for this skill**                             |
-| `timeout`    | number  | Timeout in seconds                                         |
-| `elevated`   | boolean | Run on host instead of sandbox (if allowed)                |
+| Parameter    | Type    | Description                                 |
+| ------------ | ------- | ------------------------------------------- |
+| `command`    | string  | The shell command to run                    |
+| `pty`        | boolean | Use for Codex/Pi/OpenCode                   |
+| `workdir`    | string  | Working directory                           |
+| `background` | boolean | **Always true for this skill**              |
+| `timeout`    | number  | Timeout in seconds                          |
+| `elevated`   | boolean | Run on host instead of sandbox (if allowed) |
 
 ### Process Tool Actions
 
@@ -191,11 +195,11 @@ Reuse this same notify-route injection block in every example below; only the ta
 
 ### Flags
 
-| Flag            | Effect                                             |
-| --------------- | -------------------------------------------------- |
-| `exec "prompt"` | One-shot execution inside the worker CLI           |
-| `--full-auto`   | Sandboxed but auto-approves in workspace           |
-| `--yolo`        | No sandbox, no approvals                           |
+| Flag            | Effect                                   |
+| --------------- | ---------------------------------------- |
+| `exec "prompt"` | One-shot execution inside the worker CLI |
+| `--full-auto`   | Sandboxed but auto-approves in workspace |
+| `--yolo`        | No sandbox, no approvals                 |
 
 ### Building/Creating
 

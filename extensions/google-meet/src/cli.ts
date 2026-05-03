@@ -10,9 +10,11 @@ import {
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
+import { hasCreateSpaceConfigInput, resolveCreateSpaceConfig } from "./create.js";
 import {
   buildGoogleMeetPreflightReport,
   createGoogleMeetSpace,
+  endGoogleMeetActiveConference,
   fetchGoogleMeetArtifacts,
   fetchGoogleMeetAttendance,
   fetchLatestGoogleMeetConferenceRecord,
@@ -35,6 +37,7 @@ type JoinOptions = {
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetMode;
   message?: string;
+  timeoutMs?: string;
   dialInNumber?: string;
   pin?: string;
   dtmfSequence?: string;
@@ -129,6 +132,7 @@ export type GoogleMeetExportManifest = {
 
 type SetupOptions = {
   json?: boolean;
+  mode?: GoogleMeetMode;
   transport?: GoogleMeetTransport;
 };
 
@@ -148,12 +152,18 @@ type JsonOptions = {
   json?: boolean;
 };
 
+type RecoverTabOptions = JsonOptions & {
+  transport?: GoogleMeetTransport;
+};
+
 type CreateOptions = {
   accessToken?: string;
   refreshToken?: string;
   clientId?: string;
   clientSecret?: string;
   expiresAt?: string;
+  accessType?: string;
+  entryPointAccess?: string;
   join?: boolean;
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetMode;
@@ -219,6 +229,17 @@ function formatOptional(value: unknown): string {
   return typeof value === "string" && value.trim() ? value : "n/a";
 }
 
+function parsePositiveNumber(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive number`);
+  }
+  return parsed;
+}
+
 function formatDuration(value: number | undefined): string {
   if (value === undefined) {
     return "n/a";
@@ -232,7 +253,7 @@ function formatDuration(value: number | undefined): string {
     : `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
 }
 
-function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): void {
+function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>): void {
   if (!status.found) {
     writeStdoutLine("Google Meet session: not found");
     return;
@@ -251,6 +272,15 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
     writeStdoutLine("state: %s", session.state);
     writeStdoutLine("transport: %s", session.transport);
     writeStdoutLine("mode: %s", session.mode);
+    if (session.twilio) {
+      writeStdoutLine("twilio dial-in: %s", session.twilio.dialInNumber);
+      writeStdoutLine("voice call id: %s", formatOptional(session.twilio.voiceCallId));
+      writeStdoutLine("dtmf sent: %s", formatBoolean(session.twilio.dtmfSent));
+      writeStdoutLine("intro sent: %s", formatBoolean(session.twilio.introSent));
+    }
+    if (!session.chrome) {
+      continue;
+    }
     writeStdoutLine("node: %s", session.chrome?.nodeId ?? "local/none");
     writeStdoutLine("audio bridge: %s", session.chrome?.audioBridge?.type ?? "none");
     writeStdoutLine(
@@ -258,10 +288,19 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
       session.chrome?.audioBridge?.provider ?? session.realtime.provider ?? "n/a",
     );
     writeStdoutLine("in call: %s", formatBoolean(health?.inCall));
+    writeStdoutLine("lobby waiting: %s", formatBoolean(health?.lobbyWaiting));
+    writeStdoutLine("captioning: %s", formatBoolean(health?.captioning));
+    writeStdoutLine("transcript lines: %s", health?.transcriptLines ?? 0);
+    writeStdoutLine("last caption: %s", formatOptional(health?.lastCaptionAt));
     writeStdoutLine("manual action: %s", formatBoolean(health?.manualActionRequired));
     if (health?.manualActionRequired) {
       writeStdoutLine("manual reason: %s", formatOptional(health.manualActionReason));
       writeStdoutLine("manual message: %s", formatOptional(health.manualActionMessage));
+    }
+    writeStdoutLine("speech ready: %s", formatBoolean(health?.speechReady));
+    if (health?.speechReady === false) {
+      writeStdoutLine("speech blocked reason: %s", formatOptional(health.speechBlockedReason));
+      writeStdoutLine("speech blocked message: %s", formatOptional(health.speechBlockedMessage));
     }
     writeStdoutLine("provider connected: %s", formatBoolean(health?.providerConnected));
     writeStdoutLine("realtime ready: %s", formatBoolean(health?.realtimeReady));
@@ -279,6 +318,10 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
     );
     writeStdoutLine("bridge closed: %s", formatBoolean(health?.bridgeClosed));
     writeStdoutLine("browser url: %s", formatOptional(health?.browserUrl));
+    if (health?.lastCaptionText) {
+      const speaker = health.lastCaptionSpeaker ? `${health.lastCaptionSpeaker}: ` : "";
+      writeStdoutLine("last caption text: %s%s", speaker, health.lastCaptionText);
+    }
   }
 }
 
@@ -431,7 +474,8 @@ function writeRecoverCurrentTabResult(
   result: Awaited<ReturnType<GoogleMeetRuntime["recoverCurrentTab"]>>,
 ): void {
   writeStdoutLine("Google Meet current tab: %s", result.found ? "found" : "not found");
-  writeStdoutLine("node: %s", result.nodeId);
+  writeStdoutLine("transport: %s", result.transport);
+  writeStdoutLine("node: %s", result.nodeId ?? "local/none");
   if (result.targetId) {
     writeStdoutLine("target: %s", result.targetId);
   }
@@ -445,12 +489,15 @@ function writeRecoverCurrentTabResult(
       session: {
         id: "current-tab",
         url: result.browser.browserUrl ?? result.tab?.url ?? "unknown",
-        transport: "chrome-node",
+        transport: result.transport,
         mode: "transcribe",
         state: "active",
         createdAt: "",
         updatedAt: "",
-        participantIdentity: "signed-in Google Chrome profile on a paired node",
+        participantIdentity:
+          result.transport === "chrome-node"
+            ? "signed-in Google Chrome profile on a paired node"
+            : "signed-in Google Chrome profile",
         realtime: { enabled: false, toolPolicy: "safe-read-only" },
         chrome: {
           audioBackend: "blackhole-2ch",
@@ -1006,7 +1053,7 @@ function renderTranscriptMarkdown(result: GoogleMeetArtifactsResult): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function collectGoogleMeetArtifactWarnings(
+function collectGoogleMeetArtifactWarnings(
   result: GoogleMeetArtifactsResult,
 ): GoogleMeetExportWarning[] {
   const warnings: GoogleMeetExportWarning[] = [];
@@ -1336,6 +1383,14 @@ export function registerGoogleMeetCli(params: {
     .option("--client-id <id>", "OAuth client id override")
     .option("--client-secret <secret>", "OAuth client secret override")
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option(
+      "--access-type <type>",
+      "Google Meet SpaceConfig accessType for API create: OPEN, TRUSTED, or RESTRICTED",
+    )
+    .option(
+      "--entry-point-access <type>",
+      "Google Meet SpaceConfig entryPointAccess for API create: ALL or CREATOR_APP_ONLY",
+    )
     .option("--no-join", "Only create the meeting URL; do not join it")
     .option("--transport <transport>", "Join transport: chrome, chrome-node, or twilio")
     .option(
@@ -1349,6 +1404,11 @@ export function registerGoogleMeetCli(params: {
     .option("--json", "Print JSON output", false)
     .action(async (options: CreateOptions) => {
       if (!hasCreateOAuth(params.config, options)) {
+        if (hasCreateSpaceConfigInput(options as Record<string, unknown>)) {
+          throw new Error(
+            "Google Meet access policy options require OAuth/API room creation. Configure Google Meet OAuth or remove --access-type/--entry-point-access.",
+          );
+        }
         const rt = await params.ensureRuntime();
         const result = await rt.createViaBrowser();
         const join =
@@ -1392,7 +1452,10 @@ export function registerGoogleMeetCli(params: {
       const token = await resolveGoogleMeetAccessToken(
         resolveCreateTokenOptions(params.config, options),
       );
-      const result = await createGoogleMeetSpace({ accessToken: token.accessToken });
+      const result = await createGoogleMeetSpace({
+        accessToken: token.accessToken,
+        config: resolveCreateSpaceConfig(options as Record<string, unknown>),
+      });
       const join =
         options.join !== false
           ? await (
@@ -1430,6 +1493,39 @@ export function registerGoogleMeetCli(params: {
       } else {
         writeStdoutLine("joined: no (run `openclaw googlemeet join %s`)", result.meetingUri);
       }
+    });
+
+  root
+    .command("end-active-conference")
+    .description("End the active conference for a Google Meet space")
+    .argument("[meeting]", "Meet URL, meeting code, or spaces/{id}")
+    .option("--access-token <token>", "Access token override")
+    .option("--refresh-token <token>", "Refresh token override")
+    .option("--client-id <id>", "OAuth client id override")
+    .option("--client-secret <secret>", "OAuth client secret override")
+    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option("--json", "Print JSON output", false)
+    .action(async (meeting: string | undefined, options: ResolveSpaceOptions & JsonOptions) => {
+      const token = await resolveGoogleMeetAccessToken(
+        resolveOAuthTokenOptions(params.config, options),
+      );
+      const result = await endGoogleMeetActiveConference({
+        accessToken: token.accessToken,
+        meeting: resolveMeetingInput(params.config, meeting ?? options.meeting),
+      });
+      if (options.json) {
+        writeStdoutJson({
+          ...result,
+          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        });
+        return;
+      }
+      writeStdoutLine("space: %s", result.space);
+      writeStdoutLine("ended: yes");
+      writeStdoutLine(
+        "token source: %s",
+        token.refreshed ? "refresh-token" : "cached-access-token",
+      );
     });
 
   root
@@ -1479,6 +1575,22 @@ export function registerGoogleMeetCli(params: {
           transport: options.transport,
           mode: options.mode,
           message: options.message,
+        }),
+      );
+    });
+
+  root
+    .command("test-listen")
+    .argument("[url]", "Explicit https://meet.google.com/... URL")
+    .option("--transport <transport>", "Transport: chrome or chrome-node")
+    .option("--timeout-ms <ms>", "How long to wait for fresh captions/transcript movement")
+    .action(async (url: string | undefined, options: JoinOptions) => {
+      const rt = await params.ensureRuntime();
+      writeStdoutJson(
+        await rt.testListen({
+          url: resolveMeetingInput(params.config, url),
+          transport: options.transport,
+          timeoutMs: parsePositiveNumber(options.timeoutMs, "timeout-ms"),
         }),
       );
     });
@@ -1921,9 +2033,10 @@ export function registerGoogleMeetCli(params: {
   root
     .command("status")
     .argument("[session-id]", "Meet session ID")
+    .option("--json", "Print JSON output", false)
     .action(async (sessionId?: string) => {
       const rt = await params.ensureRuntime();
-      writeStdoutJson(rt.status(sessionId));
+      writeStdoutJson(await rt.status(sessionId));
     });
 
   root
@@ -1950,7 +2063,7 @@ export function registerGoogleMeetCli(params: {
         return;
       }
       const rt = await params.ensureRuntime();
-      const status = rt.status(sessionId);
+      const status = await rt.status(sessionId);
       if (options.json) {
         writeStdoutJson(status);
         return;
@@ -1960,12 +2073,13 @@ export function registerGoogleMeetCli(params: {
 
   root
     .command("recover-tab")
-    .description("Focus and inspect an existing Google Meet tab on the Chrome node")
+    .description("Focus and inspect an existing Google Meet tab")
     .argument("[url]", "Optional Meet URL to match")
+    .option("--transport <transport>", "Transport to inspect: chrome or chrome-node")
     .option("--json", "Print JSON output", false)
-    .action(async (url: string | undefined, options: JsonOptions) => {
+    .action(async (url: string | undefined, options: RecoverTabOptions) => {
       const rt = await params.ensureRuntime();
-      const result = await rt.recoverCurrentTab({ url });
+      const result = await rt.recoverCurrentTab({ url, transport: options.transport });
       if (options.json) {
         writeStdoutJson(result);
         return;
@@ -1977,10 +2091,11 @@ export function registerGoogleMeetCli(params: {
     .command("setup")
     .description("Show Google Meet transport setup status")
     .option("--transport <transport>", "Transport to check: chrome, chrome-node, or twilio")
+    .option("--mode <mode>", "Mode to check: realtime or transcribe")
     .option("--json", "Print JSON output", false)
     .action(async (options: SetupOptions) => {
       const rt = await params.ensureRuntime();
-      const status = await rt.setupStatus({ transport: options.transport });
+      const status = await rt.setupStatus({ transport: options.transport, mode: options.mode });
       if (options.json) {
         writeStdoutJson(status);
         return;
@@ -2006,12 +2121,15 @@ export function registerGoogleMeetCli(params: {
     .argument("[message]", "Realtime instructions to speak now")
     .action(async (sessionId: string, message?: string) => {
       const rt = await params.ensureRuntime();
-      const result = rt.speak(sessionId, message);
+      const result = await rt.speak(sessionId, message);
       if (!result.found) {
         throw new Error("session not found");
       }
       if (!result.spoken) {
-        throw new Error("session has no active realtime audio bridge");
+        throw new Error(
+          result.session?.chrome?.health?.speechBlockedMessage ??
+            "session has no active realtime audio bridge",
+        );
       }
       writeStdoutLine("speaking on %s", sessionId);
     });

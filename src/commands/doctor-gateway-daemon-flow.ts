@@ -6,8 +6,8 @@ import {
   resolveNodeLaunchAgentLabel,
 } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
+import { findSystemGatewayServices, type ExtraGatewayService } from "../daemon/inspect.js";
 import {
-  isLaunchAgentListed,
   isLaunchAgentLoaded,
   launchAgentPlistExists,
   repairLaunchAgentBootstrap,
@@ -28,6 +28,13 @@ import {
 } from "./daemon-runtime.js";
 import { buildGatewayRuntimeHints, formatGatewayRuntimeSummary } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import {
+  confirmDoctorServiceRepair,
+  EXTERNAL_SERVICE_REPAIR_NOTE,
+  isServiceRepairExternallyManaged,
+  resolveServiceRepairPolicy,
+  SERVICE_REPAIR_POLICY_ENV,
+} from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
@@ -37,18 +44,9 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   title: string;
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
+  serviceRepairExternal: boolean;
 }): Promise<boolean> {
   if (process.platform !== "darwin") {
-    return false;
-  }
-
-  const listed = await isLaunchAgentListed({ env: params.env });
-  if (!listed) {
-    return false;
-  }
-
-  const loaded = await isLaunchAgentLoaded({ env: params.env });
-  if (loaded) {
     return false;
   }
 
@@ -57,9 +55,18 @@ async function maybeRepairLaunchAgentBootstrap(params: {
     return false;
   }
 
-  note("LaunchAgent is listed but not loaded in launchd.", `${params.title} LaunchAgent`);
+  const loaded = await isLaunchAgentLoaded({ env: params.env });
+  if (loaded) {
+    return false;
+  }
 
-  const shouldFix = await params.prompter.confirmRuntimeRepair({
+  note("LaunchAgent is installed but not loaded in launchd.", `${params.title} LaunchAgent`);
+  if (params.serviceRepairExternal) {
+    note(EXTERNAL_SERVICE_REPAIR_NOTE, `${params.title} LaunchAgent`);
+    return false;
+  }
+
+  const shouldFix = await confirmDoctorServiceRepair(params.prompter, {
     message: `Repair ${params.title} LaunchAgent bootstrap now?`,
     initialValue: true,
   });
@@ -86,6 +93,16 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   return true;
 }
 
+function renderBlockingSystemGatewayServices(services: ExtraGatewayService[]): string {
+  return [
+    "System-level OpenClaw gateway service detected while the user gateway service is not installed.",
+    ...services.map((svc) => `- ${svc.label} (${svc.detail})`),
+    "OpenClaw will not install a second user-level gateway service automatically.",
+    "Run `openclaw gateway status --deep` or `openclaw doctor --deep` to inspect duplicate services.",
+    `Set ${SERVICE_REPAIR_POLICY_ENV}=external if a system supervisor owns the gateway lifecycle.`,
+  ].join("\n");
+}
+
 export async function maybeRepairGatewayDaemon(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -98,6 +115,8 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
 
+  const serviceRepairPolicy = resolveServiceRepairPolicy();
+  const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
   const service = resolveGatewayService();
   // systemd can throw in containers/WSL; treat as "not loaded" and fall back to hints.
   let loaded = false;
@@ -117,6 +136,7 @@ export async function maybeRepairGatewayDaemon(params: {
       title: "Gateway",
       runtime: params.runtime,
       prompter: params.prompter,
+      serviceRepairExternal,
     });
     await maybeRepairLaunchAgentBootstrap({
       env: {
@@ -126,6 +146,7 @@ export async function maybeRepairGatewayDaemon(params: {
       title: "Node",
       runtime: params.runtime,
       prompter: params.prompter,
+      serviceRepairExternal,
     });
     if (gatewayRepaired) {
       loaded = await service.isLoaded({ env: process.env });
@@ -162,10 +183,32 @@ export async function maybeRepairGatewayDaemon(params: {
     }
     note("Gateway service not installed.", "Gateway");
     if (params.cfg.gateway?.mode !== "remote") {
-      const install = await params.prompter.confirmRuntimeRepair({
-        message: "Install gateway service now?",
-        initialValue: true,
-      });
+      if (process.platform === "linux") {
+        const systemGatewayServices = await findSystemGatewayServices();
+        if (systemGatewayServices.length > 0) {
+          note(renderBlockingSystemGatewayServices(systemGatewayServices), "Gateway");
+          return;
+        }
+      }
+      if (serviceRepairExternal) {
+        note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+        return;
+      }
+      const install = await confirmDoctorServiceRepair(
+        params.prompter,
+        {
+          message: "Install gateway service now?",
+          initialValue: true,
+          requiresInteractiveConfirmation: true,
+        },
+        serviceRepairPolicy,
+      );
+      if (!install) {
+        note(
+          `Run ${formatCliCommand("openclaw gateway install")} when you want to install the gateway service.`,
+          "Gateway",
+        );
+      }
       if (install) {
         const daemonRuntime = await params.prompter.select<GatewayDaemonRuntime>(
           {
@@ -233,10 +276,18 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (serviceRuntime?.status !== "running") {
-    const start = await params.prompter.confirmRuntimeRepair({
-      message: "Start gateway service now?",
-      initialValue: true,
-    });
+    if (serviceRepairExternal) {
+      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+      return;
+    }
+    const start = await confirmDoctorServiceRepair(
+      params.prompter,
+      {
+        message: "Start gateway service now?",
+        initialValue: true,
+      },
+      serviceRepairPolicy,
+    );
     if (start) {
       const restartResult = await service.restart({
         env: process.env,
@@ -260,10 +311,18 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (serviceRuntime?.status === "running") {
-    const restart = await params.prompter.confirmRuntimeRepair({
-      message: "Restart gateway service now?",
-      initialValue: true,
-    });
+    if (serviceRepairExternal) {
+      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+      return;
+    }
+    const restart = await confirmDoctorServiceRepair(
+      params.prompter,
+      {
+        message: "Restart gateway service now?",
+        initialValue: true,
+      },
+      serviceRepairPolicy,
+    );
     if (restart) {
       const restartResult = await service.restart({
         env: process.env,

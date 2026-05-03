@@ -4,10 +4,19 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
-import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
+
+type CollectPluginsTrustFindings =
+  typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings;
+
+async function collectPluginsTrustFindingsForTest(
+  ...args: Parameters<CollectPluginsTrustFindings>
+): Promise<Awaited<ReturnType<CollectPluginsTrustFindings>>> {
+  vi.resetModules();
+  const { collectPluginsTrustFindings } = await import("./audit-plugins-trust.js");
+  return await collectPluginsTrustFindings(...args);
+}
 
 const mockChannelPlugins = vi.hoisted(() => [
   {
@@ -19,6 +28,16 @@ const mockChannelPlugins = vi.hoisted(() => [
       resolveAccount: () => null,
     },
   },
+]);
+const mockPluginRegistryIds = vi.hoisted(() => [
+  "active-memory",
+  "anthropic",
+  "brave",
+  "discord",
+  "google",
+  "lmstudio",
+  "memory-core",
+  "ollama",
 ]);
 
 const readInstalledPackageVersionMock = vi.hoisted(() =>
@@ -39,6 +58,34 @@ vi.mock("../infra/package-update-utils.js", () => ({
 
 vi.mock("../plugins/config-state.js", () => ({
   normalizePluginId: (id: string) => id,
+  resolveEffectiveEnableState: (params: {
+    config?: {
+      enabled?: boolean;
+      deny?: string[];
+      allow?: string[];
+      entries?: Record<string, { enabled?: boolean }>;
+    };
+    id: string;
+    enabledByDefault?: boolean;
+  }) => {
+    const entry = params.config?.entries?.[params.id];
+    const denied = params.config?.deny?.includes(params.id) === true;
+    const allowed =
+      !params.config?.allow?.length ||
+      params.config.allow.includes(params.id) ||
+      params.config.allow.includes("group:plugins");
+    const enabled =
+      params.config?.enabled !== false &&
+      !denied &&
+      allowed &&
+      entry?.enabled !== false &&
+      (entry?.enabled === true || params.enabledByDefault === true);
+    return {
+      enabled,
+      activated: enabled,
+      reason: enabled ? "enabled" : "disabled",
+    };
+  },
   normalizePluginsConfig: (
     config:
       | {
@@ -56,11 +103,26 @@ vi.mock("../plugins/config-state.js", () => ({
   }),
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: (id: string) => mockChannelPlugins.find((plugin) => plugin.id === id),
-  getLoadedChannelPlugin: () => undefined,
-  listChannelPlugins: () => mockChannelPlugins,
-  normalizeChannelId: (id: unknown) => (typeof id === "string" && id ? id : null),
+vi.mock("../plugins/plugin-registry.js", () => ({
+  createPluginRegistryIdNormalizer: () => (id: string) => id,
+  loadPluginRegistrySnapshot: () => ({
+    diagnostics: [],
+    plugins: mockPluginRegistryIds.map((pluginId) => ({ pluginId })),
+  }),
+}));
+
+vi.mock("../config/commands.js", () => ({
+  resolveNativeSkillsEnabled: ({
+    globalSetting,
+    providerSetting,
+  }: {
+    globalSetting?: boolean | "auto";
+    providerSetting?: boolean | "auto";
+  }) => providerSetting === true || (providerSetting === undefined && globalSetting === true),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: () => mockChannelPlugins,
 }));
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({
@@ -100,7 +162,7 @@ describe("security audit install metadata findings", () => {
   };
 
   const runInstallMetadataAudit = async (cfg: OpenClawConfig, stateDir: string) => {
-    return await collectPluginsTrustFindings({ cfg, stateDir });
+    return await collectPluginsTrustFindingsForTest({ cfg, stateDir });
   };
 
   const writePluginIndexInstallRecords = async (
@@ -122,16 +184,6 @@ describe("security audit install metadata findings", () => {
         rootDir: path.join(stateDir, "extensions", pluginId),
         origin: "global" as const,
         enabled: true,
-        contributions: {
-          providers: [],
-          channels: [],
-          channelConfigs: [],
-          setupProviders: [],
-          cliBackends: [],
-          modelCatalogProviders: [],
-          commandAliases: [],
-          contracts: [],
-        },
         startup: {
           sidecar: true,
           memory: false,
@@ -142,7 +194,9 @@ describe("security audit install metadata findings", () => {
       })),
       diagnostics: [],
     };
-    await writePersistedInstalledPluginIndex(index, { stateDir });
+    const filePath = path.join(stateDir, "plugins", "installs.json");
+    await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    await fs.writeFile(filePath, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 });
   };
 
   beforeAll(async () => {
@@ -315,6 +369,66 @@ describe("security audit install metadata findings", () => {
     expect(phantomFinding?.detail).toContain("ghost-plugin-xyz");
     expect(phantomFinding?.detail).not.toContain("installed-plugin");
   });
+
+  it("ignores install backup and debris dirs when auditing installed plugin roots", async () => {
+    const stateDir = await makeTmpDir("installed-plugin-debris");
+    for (const name of [
+      "live-plugin",
+      ".openclaw-install-backups",
+      "node_modules",
+      "old-plugin.backup-20260502",
+      "old-plugin.disabled.20260502",
+      "old-plugin.bak",
+    ]) {
+      await fs.mkdir(path.join(stateDir, "extensions", name), {
+        recursive: true,
+      });
+    }
+
+    const findings = await runInstallMetadataAudit({}, stateDir);
+
+    const noAllowlist = findings.find(
+      (finding) => finding.checkId === "plugins.extensions_no_allowlist",
+    );
+    expect(noAllowlist?.detail).toContain("Found 1 extension(s)");
+
+    const toolsReachable = findings.find(
+      (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+    );
+    expect(toolsReachable?.detail).toContain("Enabled extension plugins: live-plugin.");
+    expect(findings.map((finding) => finding.detail).join("\n")).not.toContain(
+      ".openclaw-install-backups",
+    );
+  });
+
+  it("does not report bundled provider and utility plugins as phantom allowlist entries", async () => {
+    const stateDir = await makeTmpDir("phantom-bundled-providers");
+    await fs.mkdir(path.join(stateDir, "extensions", "installed-plugin"), {
+      recursive: true,
+    });
+
+    const findings = await runInstallMetadataAudit(
+      {
+        plugins: {
+          allow: [
+            "active-memory",
+            "anthropic",
+            "brave",
+            "google",
+            "lmstudio",
+            "memory-core",
+            "ollama",
+            "installed-plugin",
+          ],
+        },
+      },
+      stateDir,
+    );
+
+    expect(
+      findings.find((finding) => finding.checkId === "plugins.allow_phantom_entries"),
+    ).toBeUndefined();
+  });
 });
 
 describe("security audit extension tool reachability findings", () => {
@@ -335,7 +449,7 @@ describe("security audit extension tool reachability findings", () => {
     {};
 
   const runSharedExtensionsAudit = async (config: OpenClawConfig) => {
-    return await collectPluginsTrustFindings({
+    return await collectPluginsTrustFindingsForTest({
       cfg: config,
       stateDir: sharedExtensionsStateDir,
     });

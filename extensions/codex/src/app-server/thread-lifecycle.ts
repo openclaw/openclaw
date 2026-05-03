@@ -3,7 +3,8 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
-import type { CodexAppServerClient } from "./client.js";
+import { isModernCodexModel } from "../../provider.js";
+import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
   assertCodexThreadResumeResponse,
@@ -85,6 +86,9 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
         };
       } catch (error) {
+        if (isCodexAppServerConnectionClosedError(error)) {
+          throw error;
+        }
         embeddedAgentLog.warn("codex app-server thread resume failed; starting a new thread", {
           error,
         });
@@ -93,25 +97,19 @@ export async function startOrResumeThread(params: {
     }
   }
 
-  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
   const response = assertCodexThreadStartResponse(
-    await params.client.request("thread/start", {
-      model: params.params.modelId,
-      ...(modelProvider ? { modelProvider } : {}),
-      cwd: params.cwd,
-      approvalPolicy: params.appServer.approvalPolicy,
-      approvalsReviewer: params.appServer.approvalsReviewer,
-      sandbox: params.appServer.sandbox,
-      ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-      serviceName: "OpenClaw",
-      ...(params.config ? { config: params.config } : {}),
-      developerInstructions:
-        params.developerInstructions ?? buildDeveloperInstructions(params.params),
-      dynamicTools: params.dynamicTools,
-      experimentalRawEvents: true,
-      persistExtendedHistory: true,
-    } satisfies CodexThreadStartParams),
+    await params.client.request(
+      "thread/start",
+      buildThreadStartParams(params.params, {
+        cwd: params.cwd,
+        dynamicTools: params.dynamicTools,
+        appServer: params.appServer,
+        developerInstructions: params.developerInstructions,
+        config: params.config,
+      }),
+    ),
   );
+  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
   const createdAt = new Date().toISOString();
   await writeCodexAppServerBinding(params.params.sessionFile, {
     threadId: response.thread.id,
@@ -133,6 +131,34 @@ export async function startOrResumeThread(params: {
     dynamicToolsFingerprint,
     createdAt,
     updatedAt: createdAt,
+  };
+}
+
+export function buildThreadStartParams(
+  params: EmbeddedRunAttemptParams,
+  options: {
+    cwd: string;
+    dynamicTools: CodexDynamicToolSpec[];
+    appServer: CodexAppServerRuntimeOptions;
+    developerInstructions?: string;
+    config?: JsonObject;
+  },
+): CodexThreadStartParams {
+  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
+  return {
+    model: params.modelId,
+    ...(modelProvider ? { modelProvider } : {}),
+    cwd: options.cwd,
+    approvalPolicy: options.appServer.approvalPolicy,
+    approvalsReviewer: options.appServer.approvalsReviewer,
+    sandbox: options.appServer.sandbox,
+    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    serviceName: "OpenClaw",
+    ...(options.config ? { config: options.config } : {}),
+    developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
+    dynamicTools: options.dynamicTools,
+    experimentalRawEvents: true,
+    persistExtendedHistory: true,
   };
 }
 
@@ -178,7 +204,7 @@ export function buildTurnStartParams(
     sandboxPolicy: codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    effort: resolveReasoningEffort(params.thinkLevel),
+    effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
   };
 }
 
@@ -221,7 +247,7 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
   const promptOverlay = renderCodexRuntimePromptOverlay(params);
   const sections = [
-    "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
+    "You are running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-specific integrations such as messaging, cron, sessions, media, gateway, and nodes when available.",
     "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
     promptOverlay,
     params.extraSystemPrompt,
@@ -283,11 +309,22 @@ function resolveCodexAppServerModelProvider(provider: string): string | undefine
   return normalized === "openai-codex" ? "openai" : normalized;
 }
 
-function resolveReasoningEffort(
+// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) use the
+// none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
+// defaults thinkLevel to "minimal", so without translation EVERY agent turn
+// on those models pays a wasted first request + retry-with-low fallback in
+// pi-embedded-runner. Map "minimal" -> "low" upfront for modern models so the
+// first request is accepted. Older Codex models still accept "minimal"
+// directly. (#71946)
+// Exported for unit-test coverage of the model-aware translation path.
+export function resolveReasoningEffort(
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
+  modelId: string,
 ): "minimal" | "low" | "medium" | "high" | "xhigh" | null {
+  if (thinkLevel === "minimal") {
+    return isModernCodexModel(modelId) ? "low" : "minimal";
+  }
   if (
-    thinkLevel === "minimal" ||
     thinkLevel === "low" ||
     thinkLevel === "medium" ||
     thinkLevel === "high" ||

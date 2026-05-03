@@ -1,14 +1,22 @@
 import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
-import type {
-  OpenClawConfig,
-  ConfigFileSnapshot,
-  ConfigWriteNotification,
-  GatewayReloadMode,
-} from "../config/config.js";
-import { shouldAttemptLastKnownGoodRecovery } from "../config/config.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import type { ConfigWriteNotification } from "../config/io.js";
+import { formatConfigIssueLines, formatConfigIssueSummary } from "../config/issue-format.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
+import {
+  isPluginLocalInvalidConfigSnapshot,
+  shouldAttemptLastKnownGoodRecovery,
+} from "../config/recovery-policy.js";
+import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
+import type { GatewayReloadMode } from "../config/types.gateway.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecordsSync,
+} from "../plugins/installed-plugin-index-records.js";
 import { isPlainObject } from "../utils.js";
 import {
   buildGatewayReloadPlan,
@@ -24,7 +32,7 @@ export {
 };
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 
-export type GatewayReloadSettings = {
+type GatewayReloadSettings = {
   mode: GatewayReloadMode;
   debounceMs: number;
 };
@@ -68,9 +76,43 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartCron &&
     !plan.restartHeartbeat &&
     !plan.restartHealthMonitor &&
+    !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
     plan.restartChannels.size === 0
   );
+}
+
+function resolvePluginLocalInvalidReloadSnapshot(params: {
+  snapshot: ConfigFileSnapshot;
+  log: {
+    warn: (msg: string) => void;
+  };
+}): ConfigFileSnapshot | null {
+  if (!isPluginLocalInvalidConfigSnapshot(params.snapshot)) {
+    return null;
+  }
+  const validated = validateConfigObjectWithPlugins(params.snapshot.sourceConfig, {
+    pluginValidation: "skip",
+  });
+  if (!validated.ok) {
+    return null;
+  }
+  const runtimeConfig = materializeRuntimeConfig(validated.config, "load");
+  for (const issue of params.snapshot.issues) {
+    params.log.warn(
+      `config reload skipped plugin config validation issue at ${issue.path}: ${issue.message}. Run "openclaw doctor --fix" to quarantine the plugin config.`,
+    );
+  }
+  return {
+    ...params.snapshot,
+    sourceConfig: params.snapshot.sourceConfig,
+    resolved: params.snapshot.resolved,
+    valid: true,
+    runtimeConfig,
+    config: runtimeConfig,
+    issues: [],
+    warnings: [...params.snapshot.warnings, ...params.snapshot.issues, ...validated.warnings],
+  };
 }
 
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
@@ -118,9 +160,19 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
   return { mode, debounceMs };
 }
 
-export type GatewayConfigReloader = {
+type GatewayConfigReloader = {
   stop: () => Promise<void>;
 };
+
+type PluginInstallRecords = Record<string, PluginInstallRecord>;
+
+function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
+  return {
+    plugins: {
+      installs: records,
+    },
+  };
+}
 
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
@@ -131,6 +183,8 @@ export function startGatewayConfigReloader(opts: {
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   recoverSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
+  initialPluginInstallRecords?: PluginInstallRecords;
+  readPluginInstallRecords?: () => Promise<PluginInstallRecords>;
   onRecovered?: (params: {
     reason: string;
     snapshot: ConfigFileSnapshot;
@@ -157,8 +211,13 @@ export function startGatewayConfigReloader(opts: {
     config: OpenClawConfig;
     compareConfig: OpenClawConfig;
     persistedHash: string;
+    afterWrite?: ConfigWriteNotification["afterWrite"];
   } | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
+  let currentPluginInstallRecords =
+    opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
+  const readPluginInstallRecords =
+    opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -234,7 +293,10 @@ export function startGatewayConfigReloader(opts: {
     if (!recovered) {
       return null;
     }
-    opts.log.warn(`config reload restored last-known-good config after ${reason}`);
+    const issueSummary = formatConfigIssueSummary([...snapshot.issues, ...snapshot.legacyIssues]);
+    opts.log.warn(
+      `config reload restored last-known-good config after ${reason}${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
+    );
     const nextSnapshot = await opts.readSnapshot();
     if (!nextSnapshot.valid) {
       const issues = formatConfigIssueLines(nextSnapshot.issues, "").join(", ");
@@ -249,18 +311,52 @@ export function startGatewayConfigReloader(opts: {
     return nextSnapshot;
   };
 
-  const applySnapshot = async (nextConfig: OpenClawConfig, nextCompareConfig: OpenClawConfig) => {
-    const changedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
-    const pluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+  const applySnapshot = async (
+    nextConfig: OpenClawConfig,
+    nextCompareConfig: OpenClawConfig,
+    afterWrite?: ConfigWriteNotification["afterWrite"],
+  ) => {
+    const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
+    const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
       currentCompareConfig,
       nextCompareConfig,
     );
-    const pluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
+    const configPluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
       currentCompareConfig,
       nextCompareConfig,
     );
+    let nextPluginInstallRecords = currentPluginInstallRecords;
+    try {
+      nextPluginInstallRecords = await readPluginInstallRecords();
+    } catch (err) {
+      opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
+    }
+    const previousPluginInstallConfig = asPluginInstallConfig(currentPluginInstallRecords);
+    const nextPluginInstallConfig = asPluginInstallConfig(nextPluginInstallRecords);
+    const pluginInstallRecordChangedPaths = diffConfigPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const pluginInstallRecordTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const pluginInstallRecordWholeRecordPaths = listPluginInstallWholeRecordPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const changedPaths = [...configChangedPaths, ...pluginInstallRecordChangedPaths];
+    const pluginInstallTimestampNoopPaths = [
+      ...configPluginInstallTimestampNoopPaths,
+      ...pluginInstallRecordTimestampNoopPaths,
+    ];
+    const pluginInstallWholeRecordPaths = [
+      ...configPluginInstallWholeRecordPaths,
+      ...pluginInstallRecordWholeRecordPaths,
+    ];
     currentConfig = nextConfig;
     currentCompareConfig = nextCompareConfig;
+    currentPluginInstallRecords = nextPluginInstallRecords;
     settings = resolveGatewayReloadSettings(nextConfig);
     if (changedPaths.length === 0) {
       return;
@@ -276,16 +372,32 @@ export function startGatewayConfigReloader(opts: {
       opts.log.info(`skills snapshot invalidated by config change (${skillsChangedPath})`);
     }
 
+    const followUp = resolveConfigWriteFollowUp(afterWrite);
     opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
+    if (followUp.mode === "none") {
+      opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
+      return;
+    }
     const plan = buildGatewayReloadPlan(changedPaths, {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
     });
-    if (isNoopReloadPlan(plan)) {
+    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
       return;
     }
     if (settings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
+      return;
+    }
+    if (followUp.requiresRestart) {
+      queueRestart(
+        {
+          ...plan,
+          restartGateway: true,
+          restartReasons: [...plan.restartReasons, followUp.reason],
+        },
+        nextConfig,
+      );
       return;
     }
     if (settings.mode === "restart") {
@@ -352,7 +464,11 @@ export function startGatewayConfigReloader(opts: {
         const pendingWrite = pendingInProcessConfig;
         pendingInProcessConfig = null;
         missingConfigRetries = 0;
-        await applySnapshot(pendingWrite.config, pendingWrite.compareConfig);
+        await applySnapshot(
+          pendingWrite.config,
+          pendingWrite.compareConfig,
+          pendingWrite.afterWrite,
+        );
         await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
         return;
       }
@@ -366,16 +482,28 @@ export function startGatewayConfigReloader(opts: {
       if (handleMissingSnapshot(snapshot)) {
         return;
       }
+      let degradedPluginSnapshot = false;
       if (!snapshot.valid) {
         const recoveredSnapshot = await recoverAndReadSnapshot(snapshot, "invalid-config");
         if (!recoveredSnapshot) {
-          handleInvalidSnapshot(snapshot);
-          return;
+          const pluginLocalSnapshot = resolvePluginLocalInvalidReloadSnapshot({
+            snapshot,
+            log: opts.log,
+          });
+          if (!pluginLocalSnapshot) {
+            handleInvalidSnapshot(snapshot);
+            return;
+          }
+          snapshot = pluginLocalSnapshot;
+          degradedPluginSnapshot = true;
+        } else {
+          snapshot = recoveredSnapshot;
         }
-        snapshot = recoveredSnapshot;
       }
       await applySnapshot(snapshot.config, snapshot.sourceConfig);
-      await promoteAcceptedSnapshot(snapshot, "valid-config");
+      if (!degradedPluginSnapshot) {
+        await promoteAcceptedSnapshot(snapshot, "valid-config");
+      }
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
     } finally {
@@ -406,6 +534,7 @@ export function startGatewayConfigReloader(opts: {
         config: event.runtimeConfig,
         compareConfig: event.sourceConfig,
         persistedHash: event.persistedHash,
+        afterWrite: event.afterWrite,
       };
       lastAppliedWriteHash = event.persistedHash;
       scheduleAfter(0);

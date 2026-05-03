@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveZaloAccount } from "./accounts.js";
 import type { ZaloFetch } from "./api.js";
@@ -6,7 +6,7 @@ import { sendMessage, sendPhoto } from "./api.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { resolveZaloToken } from "./token.js";
 
-export type ZaloSendOptions = {
+type ZaloSendOptions = {
   token?: string;
   accountId?: string;
   cfg?: OpenClawConfig;
@@ -16,7 +16,7 @@ export type ZaloSendOptions = {
   proxy?: string;
 };
 
-export type ZaloSendResult = {
+type ZaloSendResult = {
   ok: boolean;
   messageId?: string;
   error?: string;

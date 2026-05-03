@@ -1,16 +1,19 @@
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceAudioFormat,
+  RealtimeVoiceBargeInOptions,
   RealtimeVoiceCloseReason,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
+  RealtimeVoiceToolResultOptions,
 } from "./provider-types.js";
 
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
-  sendAudio: (muLaw: Buffer) => void;
+  sendAudio: (audio: Buffer) => void;
   clearAudio?: () => void;
   sendMark?: (markName: string) => void;
 };
@@ -24,14 +27,16 @@ export type RealtimeVoiceBridgeSession = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
+  handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
   setMediaTimestamp(ts: number): void;
-  submitToolResult(callId: string, result: unknown): void;
+  submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
   triggerGreeting(instructions?: string): void;
 };
 
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
+  audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
   instructions?: string;
   initialGreetingInstructions?: string;
@@ -64,18 +69,21 @@ export function createRealtimeVoiceBridgeSession(
     connect: () => requireBridge().connect(),
     sendAudio: (audio) => requireBridge().sendAudio(audio),
     sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
+    handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
-    submitToolResult: (callId, result) => requireBridge().submitToolResult(callId, result),
+    submitToolResult: (callId, result, options) =>
+      requireBridge().submitToolResult(callId, result, options),
     triggerGreeting: (instructions) => requireBridge().triggerGreeting?.(instructions),
   };
   const canSendAudio = () => params.audioSink.isOpen?.() ?? true;
   bridge = params.provider.createBridge({
     providerConfig: params.providerConfig,
+    audioFormat: params.audioFormat,
     instructions: params.instructions,
     tools: params.tools,
-    onAudio: (muLaw) => {
+    onAudio: (audio) => {
       if (canSendAudio()) {
-        params.audioSink.sendAudio(muLaw);
+        params.audioSink.sendAudio(audio);
       }
     },
     onClearAudio: () => {

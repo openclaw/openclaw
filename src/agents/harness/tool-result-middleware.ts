@@ -5,7 +5,7 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
-import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
+import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -122,15 +122,30 @@ function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
 
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
-  handlers: AgentToolResultMiddleware[] = listAgentToolResultMiddlewares(ctx.runtime),
+  handlers?: AgentToolResultMiddleware[],
 ) {
   const middlewareContext = { ...ctx, harness: ctx.harness ?? ctx.runtime };
+  let resolvedHandlers = handlers;
+  const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
+    const { loadAgentToolResultMiddlewaresForRuntime } =
+      await import("../../plugins/agent-tool-result-middleware-loader.js");
+    return loadAgentToolResultMiddlewaresForRuntime({
+      runtime: ctx.runtime,
+    });
+  });
+  const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
+    if (resolvedHandlers) {
+      return resolvedHandlers;
+    }
+    resolvedHandlers = await resolvedHandlersLoader.load();
+    return resolvedHandlers;
+  };
   return {
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
       let current = event.result;
-      for (const handler of handlers) {
+      for (const handler of await resolveHandlers()) {
         try {
           const next = await handler({ ...event, result: current }, middlewareContext);
           // Middleware may mutate event.result in place for legacy Pi parity.

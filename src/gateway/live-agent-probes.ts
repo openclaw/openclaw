@@ -5,7 +5,7 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const execFileAsync = promisify(execFile);
 
-export type CronListCliResult = {
+type CronListCliResult = {
   jobs?: Array<{
     id?: string;
     name?: string;
@@ -18,7 +18,7 @@ export type CronListCliResult = {
 
 export type CronListJob = NonNullable<CronListCliResult["jobs"]>[number];
 
-export type LiveCronProbeSpec = {
+type LiveCronProbeSpec = {
   nonce: string;
   name: string;
   message: string;
@@ -74,6 +74,7 @@ export function buildLiveCronProbeMessage(params: {
   if (params.attempt === 0) {
     return (
       "Use the OpenClaw MCP tool `openclaw-tools/cron` (server `openclaw-tools`, tool `cron`). " +
+      "If the harness shows Claude-style MCP names, use `mcp__openclaw-tools__cron` or `mcp__openclaw_tools__cron`. " +
       `Call it with JSON arguments ${params.argsJson}. ` +
       "Preserve the JSON exactly, including job.sessionTarget and job.sessionKey; do not omit, rename, or flatten those fields. " +
       "Do the actual tool call; I will verify externally with the OpenClaw cron CLI. " +
@@ -83,6 +84,7 @@ export function buildLiveCronProbeMessage(params: {
   if (claudeLike) {
     return (
       "Retry the OpenClaw MCP tool `openclaw-tools/cron` now. " +
+      "If the harness shows Claude-style MCP names, use `mcp__openclaw-tools__cron` or `mcp__openclaw_tools__cron`. " +
       `Use these exact JSON arguments: ${params.argsJson}. ` +
       "Preserve job.sessionTarget and job.sessionKey exactly as provided. " +
       `If the cron job is created, reply exactly: ${params.exactReply}. ` +
@@ -94,6 +96,7 @@ export function buildLiveCronProbeMessage(params: {
   return (
     "Your previous OpenClaw cron MCP tool call was cancelled before the job was created. " +
     "Retry the OpenClaw MCP tool `openclaw-tools/cron` now. " +
+    "If the harness shows Claude-style MCP names, use `mcp__openclaw-tools__cron` or `mcp__openclaw_tools__cron`. " +
     `Use these exact JSON arguments: ${params.argsJson}. ` +
     "Preserve job.sessionTarget and job.sessionKey exactly as provided. " +
     `If the cron job is created, reply exactly: ${params.exactReply}. ` +
