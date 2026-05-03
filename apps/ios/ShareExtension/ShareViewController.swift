@@ -90,9 +90,9 @@ final class ShareViewController: UIViewController {
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments
         self.logger.info(
-            "share payload trace=\(traceId, privacy: .public) titleChars=\(payload.title?.count ?? 0) textChars=\(payload.text?.count ?? 0) hasURL=\(payload.url != nil) imageAttachments=\(self.pendingAttachments.count)"
+            "share payload trace=\(traceId, privacy: .public) titleChars=\(payload.title?.count ?? 0) textChars=\(payload.text?.count ?? 0) hasURL=\(payload.url != nil) attachments=\(self.pendingAttachments.count)"
         )
-        let message = self.composeDraft(from: payload)
+        let message = self.composeDraft(from: payload, attachments: self.pendingAttachments)
         await MainActor.run {
             self.draftTextView.text = message
             self.sendButton.isEnabled = true
@@ -326,7 +326,7 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    private func composeDraft(from payload: SharedContentPayload) -> String {
+    private func composeDraft(from payload: SharedContentPayload, attachments: [ShareAttachment] = []) -> String {
         var lines: [String] = []
         let title = self.sanitizeDraftFragment(payload.title)
         let text = self.sanitizeDraftFragment(payload.text)
@@ -335,6 +335,9 @@ final class ShareViewController: UIViewController {
         if let title, !title.isEmpty { lines.append(title) }
         if let text, !text.isEmpty { lines.append(text) }
         if !url.isEmpty { lines.append(url) }
+        if lines.isEmpty, let firstAudio = attachments.first(where: { $0.type == "audio" }) {
+            lines.append("Shared audio: \(firstAudio.fileName)")
+        }
 
         return lines.joined(separator: "\n\n")
     }
@@ -376,6 +379,7 @@ final class ShareViewController: UIViewController {
         var unknownCount = 0
         var attachments: [ShareAttachment] = []
         let maxImageAttachments = 3
+        let maxAudioAttachments = 1
 
         for item in items {
             if title == nil {
@@ -395,6 +399,14 @@ final class ShareViewController: UIViewController {
                     imageCount += 1
                     if attachments.count < maxImageAttachments,
                        let attachment = await self.loadImageAttachment(from: provider, index: attachments.count)
+                    {
+                        attachments.append(attachment)
+                    }
+                } else if provider.hasItemConformingToTypeIdentifier(UTType.audio.identifier) {
+                    fileCount += 1
+                    let audioCount = attachments.filter { $0.type == "audio" }.count
+                    if audioCount < maxAudioAttachments,
+                       let attachment = await self.loadAudioAttachment(from: provider, index: audioCount)
                     {
                         attachments.append(attachment)
                     }
@@ -439,6 +451,33 @@ final class ShareViewController: UIViewController {
             content: data.base64EncodedString())
     }
 
+    private func loadAudioAttachment(from provider: NSItemProvider, index: Int) async -> ShareAttachment? {
+        let audioUTI = self.preferredAudioTypeIdentifier(from: provider) ?? UTType.audio.identifier
+        guard let rawData = await self.loadDataValue(from: provider, typeIdentifier: audioUTI)
+            ?? self.loadFileDataValue(from: provider, typeIdentifier: audioUTI)
+            ?? self.loadAudioDataFromFileURL(from: provider)
+        else {
+            return nil
+        }
+
+        let maxBytes = 5_000_000
+        guard rawData.count > 0, rawData.count <= maxBytes else {
+            self.logger.warning("audio attachment skipped size=\(rawData.count, privacy: .public)")
+            return nil
+        }
+
+        let type = UTType(audioUTI)
+        let mimeType = type?.preferredMIMEType ?? "audio/mpeg"
+        let ext = type?.preferredFilenameExtension ?? "m4a"
+        let fileName = self.preferredFileName(from: provider) ?? "shared-audio-\(index + 1).\(ext)"
+
+        return ShareAttachment(
+            type: "audio",
+            mimeType: mimeType,
+            fileName: self.ensureFileExtension(fileName, fallbackExtension: ext),
+            content: rawData.base64EncodedString())
+    }
+
     private func preferredImageTypeIdentifier(from provider: NSItemProvider) -> String? {
         for identifier in provider.registeredTypeIdentifiers {
             guard let utType = UTType(identifier) else { continue }
@@ -447,6 +486,26 @@ final class ShareViewController: UIViewController {
             }
         }
         return nil
+    }
+
+    private func preferredAudioTypeIdentifier(from provider: NSItemProvider) -> String? {
+        for identifier in provider.registeredTypeIdentifiers {
+            guard let utType = UTType(identifier) else { continue }
+            if utType.conforms(to: .audio) {
+                return identifier
+            }
+        }
+        return nil
+    }
+
+    private func preferredFileName(from provider: NSItemProvider) -> String? {
+        let trimmed = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func ensureFileExtension(_ fileName: String, fallbackExtension: String) -> String {
+        guard URL(fileURLWithPath: fileName).pathExtension.isEmpty else { return fileName }
+        return "\(fileName).\(fallbackExtension)"
     }
 
     private func normalizedJPEGData(from image: UIImage, maxBytes: Int) -> Data? {
