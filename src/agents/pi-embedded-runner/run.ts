@@ -1740,7 +1740,11 @@ export async function runEmbeddedPiAgent(
                   `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
               );
             }
-            const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            const kind = isCompactionFailure
+              ? "compaction_failure"
+              : overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS
+                ? "context_overflow_exhausted"
+                : "context_overflow";
             attempt.setTerminalLifecycleMeta?.({
               replayInvalid: resolveReplayInvalidForAttempt(),
               livenessState: "blocked",

@@ -712,7 +712,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(3);
     expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
-    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(result.meta.error?.kind).toBe("context_overflow_exhausted");
   });
 
   it("fires compaction hooks during overflow recovery for ownsCompaction engines", async () => {

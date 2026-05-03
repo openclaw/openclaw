@@ -435,7 +435,7 @@ describe("overflow compaction in run loop", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(3);
     // 4 attempts: 3 overflow+compact+retry cycles + final overflow → error
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
-    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(result.meta.error?.kind).toBe("context_overflow_exhausted");
     expect(result.payloads?.[0]?.isError).toBe(true);
   });
 
