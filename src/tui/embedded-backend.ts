@@ -3,6 +3,7 @@ import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
+import { listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
@@ -45,12 +46,15 @@ import {
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { listPluginCommands } from "../plugins/commands.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
   TuiBackend,
+  TuiCommandChoice,
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
@@ -335,6 +339,30 @@ export class EmbeddedTuiBackend implements TuiBackend {
       contextWindow: entry.contextWindow,
       reasoning: entry.reasoning,
     }));
+  }
+
+  async listCommands(_opts?: { agentId?: string; provider?: string }): Promise<TuiCommandChoice[]> {
+    const cfg = getRuntimeConfig();
+    const seen = new Set<string>();
+    const commands: TuiCommandChoice[] = [];
+    const pushIfMissing = (name: string, description?: string) => {
+      const normalizedName = normalizeLowercaseStringOrEmpty(name.replace(/^\//, "").trim());
+      if (!normalizedName || seen.has(normalizedName)) {
+        return;
+      }
+      seen.add(normalizedName);
+      commands.push({ name: normalizedName, description });
+    };
+    for (const command of listChatCommandsForConfig(cfg)) {
+      const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
+      for (const alias of aliases) {
+        pushIfMissing(alias, command.description);
+      }
+    }
+    for (const pluginCommand of listPluginCommands()) {
+      pushIfMissing(pluginCommand.name, pluginCommand.description);
+    }
+    return commands;
   }
 
   private abortSessionRuns(sessionKey: string) {

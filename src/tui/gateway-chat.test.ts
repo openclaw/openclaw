@@ -570,4 +570,43 @@ describe("GatewayChatClient", () => {
     await expect(historyPromise).resolves.toEqual({ messages: [] });
     expect(request).toHaveBeenCalledTimes(2);
   });
+
+  it("lists text-scope commands for autocomplete and deduplicates aliases", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockResolvedValue({
+      commands: [
+        {
+          name: "active-memory",
+          description: "Enable, disable, or inspect Active Memory for this session.",
+          source: "plugin",
+          scope: "text",
+          acceptsArgs: true,
+          textAliases: ["/active-memory", "/ACTIVE-MEMORY"],
+        },
+      ],
+    });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    const commands = await client.listCommands({
+      agentId: "default",
+      provider: "openai",
+    });
+
+    expect(request).toHaveBeenCalledWith("commands.list", {
+      agentId: "default",
+      provider: "openai",
+      scope: "text",
+      includeArgs: false,
+    });
+    expect(commands).toEqual([
+      {
+        name: "active-memory",
+        description: "Enable, disable, or inspect Active Memory for this session.",
+      },
+    ]);
+  });
 });

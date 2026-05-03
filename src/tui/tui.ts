@@ -11,6 +11,7 @@ import {
   ProcessTerminal,
   Text,
   TUI,
+  type SlashCommand,
 } from "@mariozechner/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
@@ -23,13 +24,14 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { getSlashCommands } from "./commands.js";
+import { getBuiltinSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { EmbeddedTuiBackend } from "./embedded-backend.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
+import type { TuiCommandChoice } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
@@ -548,18 +550,103 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   root.addChild(footer);
   root.addChild(editor);
 
+  let remoteCommands: TuiCommandChoice[] = [];
+  let remoteCommandsRefreshSeq = 0;
+  let remoteCommandsCacheKey = "";
+  let remoteCommandsRefreshInFlight: Promise<void> | null = null;
+
+  const dedupeSlashCommands = (commands: SlashCommand[]): SlashCommand[] => {
+    const seen = new Set<string>();
+    const deduped: SlashCommand[] = [];
+    for (const command of commands) {
+      const normalizedName = normalizeLowercaseStringOrEmpty(command.name);
+      if (!normalizedName || seen.has(normalizedName)) {
+        continue;
+      }
+      seen.add(normalizedName);
+      deduped.push({
+        ...command,
+        name: normalizedName,
+      });
+    }
+    return deduped;
+  };
+
+  const mergeAutocompleteCommands = (): SlashCommand[] => {
+    const localCommands = getBuiltinSlashCommands({
+      local: isLocalMode,
+      provider: sessionInfo.modelProvider,
+      model: sessionInfo.model,
+      thinkingLevels: sessionInfo.thinkingLevels,
+    });
+    const dynamicCommands: SlashCommand[] = remoteCommands.map((command) => ({
+      name: command.name,
+      description: command.description ?? "",
+    }));
+    // Merge remote plugin/active-memory command entries into TUI autocomplete,
+    // but keep local command argument completion behavior on name collisions.
+    return dedupeSlashCommands([...localCommands, ...dynamicCommands]);
+  };
+
+  const refreshRemoteCommands = async (force = false): Promise<void> => {
+    if (!isConnected || typeof client.listCommands !== "function") {
+      return;
+    }
+    const resolveRefreshKey = () =>
+      `${normalizeLowercaseStringOrEmpty(currentAgentId)}:${normalizeLowercaseStringOrEmpty(sessionInfo.modelProvider)}`;
+    let refreshKey = resolveRefreshKey();
+    if (!force && refreshKey === remoteCommandsCacheKey) {
+      return;
+    }
+    if (remoteCommandsRefreshInFlight) {
+      await remoteCommandsRefreshInFlight;
+      if (!isConnected || typeof client.listCommands !== "function") {
+        return;
+      }
+      refreshKey = resolveRefreshKey();
+      if (refreshKey === remoteCommandsCacheKey) {
+        return;
+      }
+    }
+    const seq = ++remoteCommandsRefreshSeq;
+    const requestAgentId = currentAgentId;
+    const requestProvider = sessionInfo.modelProvider;
+    remoteCommandsRefreshInFlight = (async () => {
+      try {
+        const commands = await client.listCommands?.({
+          agentId: requestAgentId,
+          provider: requestProvider,
+        });
+        if (seq !== remoteCommandsRefreshSeq) {
+          return;
+        }
+        remoteCommands = Array.isArray(commands)
+          ? commands
+              .map((command) => ({
+                name: normalizeLowercaseStringOrEmpty(command.name),
+                description: command.description,
+              }))
+              .filter((command) => Boolean(command.name))
+          : [];
+        remoteCommandsCacheKey = refreshKey;
+        updateAutocompleteProvider();
+      } catch {
+        if (seq !== remoteCommandsRefreshSeq) {
+          return;
+        }
+        remoteCommands = [];
+        remoteCommandsCacheKey = "";
+        updateAutocompleteProvider();
+      } finally {
+        remoteCommandsRefreshInFlight = null;
+      }
+    })();
+    await remoteCommandsRefreshInFlight;
+  };
+
   const updateAutocompleteProvider = () => {
     editor.setAutocompleteProvider(
-      new CombinedAutocompleteProvider(
-        getSlashCommands({
-          cfg: config,
-          local: isLocalMode,
-          provider: sessionInfo.modelProvider,
-          model: sessionInfo.model,
-          thinkingLevels: sessionInfo.thinkingLevels,
-        }),
-        process.cwd(),
-      ),
+      new CombinedAutocompleteProvider(mergeAutocompleteCommands(), process.cwd()),
     );
   };
 
@@ -954,6 +1041,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     updateHeader,
     updateFooter,
     updateAutocompleteProvider,
+    refreshRemoteCommands,
     setActivityStatus,
     clearLocalRunIds,
     rememberSessionKey: rememberCurrentSessionKey,
@@ -1026,6 +1114,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       loadHistory,
       setSession,
       refreshAgents,
+      refreshRemoteCommands,
       abortActive,
       setActivityStatus,
       formatSessionKey,
@@ -1151,6 +1240,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       await restoreRememberedSession();
       updateHeader();
       await loadHistory();
+      await refreshRemoteCommands(true);
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
         4000,
@@ -1170,6 +1260,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     wasDisconnected = true;
     historyLoaded = false;
     pauseStreamingWatchdog();
+    remoteCommands = [];
+    remoteCommandsCacheKey = "";
+    remoteCommandsRefreshSeq += 1;
+    updateAutocompleteProvider();
     const disconnectState = isLocalMode
       ? {
           connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,
