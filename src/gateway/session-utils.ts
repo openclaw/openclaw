@@ -1635,11 +1635,9 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = listThinkingLevelOptions(
-    thinkingProvider,
-    thinkingModel,
-    params.modelCatalog,
-  );
+  const thinkingLevels = lightweight
+    ? []
+    : listThinkingLevelOptions(thinkingProvider, thinkingModel, params.modelCatalog);
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
