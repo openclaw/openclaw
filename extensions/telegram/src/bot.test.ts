@@ -6,6 +6,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
+import {
+  bindTelegramApprovalReply,
+  clearTelegramApprovalReplyBindingsForTest,
+} from "./approval-reply-bindings.js";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
 const {
   answerCallbackQuerySpy,
@@ -71,6 +75,57 @@ function waitForReplyCalls(count: number) {
   return done.promise;
 }
 
+function bindExecApprovalReplyForTest(
+  overrides: Partial<Parameters<typeof bindTelegramApprovalReply>[0]> = {},
+) {
+  return bindTelegramApprovalReply({
+    accountId: "default",
+    chatId: "1234",
+    messageId: "77",
+    approvalId: "approval-1",
+    approvalKind: "exec",
+    createdAtMs: Date.now() - 1_000,
+    expiresAtMs: Date.now() + 60_000,
+    allowedDecisions: ["allow-once", "allow-always", "deny"],
+    commandText: "printf ok",
+    ...overrides,
+  });
+}
+
+function makeApprovalReplyMessageCtx(params?: {
+  text?: string;
+  senderId?: number;
+  replyToMessageId?: number;
+  chatId?: number;
+}) {
+  return {
+    message: {
+      chat: { id: params?.chatId ?? 1234, type: "private" },
+      from: { id: params?.senderId ?? 9, first_name: "Ada", username: "ada_bot" },
+      text: params?.text ?? "approved",
+      date: 1736380800,
+      message_id: 99,
+      ...(params?.replyToMessageId == null
+        ? {}
+        : { reply_to_message: { message_id: params.replyToMessageId } }),
+    },
+    me: { username: "openclaw_bot" },
+    getFile: async () => ({ download: async () => new Uint8Array() }),
+  };
+}
+
+function useExecApprovalConfig(approvers = ["9"]) {
+  loadConfig.mockReturnValue({
+    channels: {
+      telegram: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        execApprovals: { enabled: true, approvers, target: "dm" },
+      },
+    },
+  });
+}
+
 async function loadEnvelopeTimestampHelpers() {
   return await import("../../../test/helpers/envelope-timestamp.js");
 }
@@ -96,6 +151,7 @@ describe("createTelegramBot", () => {
   beforeEach(() => {
     setMyCommandsSpy.mockClear();
     clearPluginInteractiveHandlers();
+    clearTelegramApprovalReplyBindingsForTest();
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
@@ -505,6 +561,114 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-style");
+  });
+
+  it("binds an authorized Telegram text approval reply to the exact pending exec approval", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+
+    useExecApprovalConfig();
+    createTelegramBot({ token: "tok" });
+    bindExecApprovalReplyForTest();
+    const messageHandler = getOnHandler("message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await messageHandler(makeApprovalReplyMessageCtx({ replyToMessageId: 77 }));
+
+    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        channels: expect.objectContaining({
+          telegram: expect.objectContaining({
+            execApprovals: expect.objectContaining({
+              enabled: true,
+              approvers: ["9"],
+              target: "dm",
+            }),
+          }),
+        }),
+      }),
+      approvalId: "approval-1",
+      decision: "allow-once",
+      senderId: "9",
+      allowPluginFallback: true,
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects stale Telegram text approval replies", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+
+    useExecApprovalConfig();
+    createTelegramBot({ token: "tok" });
+    bindExecApprovalReplyForTest({ expiresAtMs: Date.now() - 1 });
+    const messageHandler = getOnHandler("message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await messageHandler(makeApprovalReplyMessageCtx({ replyToMessageId: 77 }));
+
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects unrelated Telegram approval words without a replied-to pending request", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+
+    useExecApprovalConfig();
+    createTelegramBot({ token: "tok" });
+    bindExecApprovalReplyForTest();
+    const messageHandler = getOnHandler("message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await messageHandler(makeApprovalReplyMessageCtx());
+
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects Telegram text approval replies from unauthorized senders", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+
+    useExecApprovalConfig(["9"]);
+    createTelegramBot({ token: "tok" });
+    bindExecApprovalReplyForTest();
+    const messageHandler = getOnHandler("message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await messageHandler(makeApprovalReplyMessageCtx({ senderId: 10, replyToMessageId: 77 }));
+
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects Telegram text decisions that the pending approval did not offer", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+
+    useExecApprovalConfig();
+    createTelegramBot({ token: "tok" });
+    bindExecApprovalReplyForTest({ allowedDecisions: ["allow-once", "deny"] });
+    const messageHandler = getOnHandler("message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await messageHandler(
+      makeApprovalReplyMessageCtx({ text: "allow always", replyToMessageId: 77 }),
+    );
+
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
   });
 
   it("allows approval callbacks when exec approvals are enabled even without generic inlineButtons capability", async () => {

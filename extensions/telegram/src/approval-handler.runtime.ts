@@ -1,5 +1,6 @@
 import type {
   ChannelApprovalCapabilityHandlerContext,
+  ChannelApprovalKind,
   PendingApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
@@ -14,6 +15,11 @@ import {
 } from "openclaw/plugin-sdk/infra-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  bindTelegramApprovalReply,
+  unbindTelegramApprovalReply,
+  type TelegramApprovalReplyBinding,
+} from "./approval-reply-bindings.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
@@ -100,11 +106,24 @@ function buildPendingPayload(params: {
   };
 }
 
+function resolveReplyBindingAllowedDecisions(params: {
+  request: ApprovalRequest;
+  approvalKind: ChannelApprovalKind;
+  view: PendingApprovalView;
+}) {
+  if (params.view.actions.length > 0) {
+    return params.view.actions.map((action) => action.decision);
+  }
+  return params.approvalKind === "exec"
+    ? resolveExecApprovalRequestAllowedDecisions((params.request as ExecApprovalRequest).request)
+    : [];
+}
+
 export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   TelegramPendingDelivery,
   { chatId: string; messageThreadId?: number },
   PendingMessage,
-  never
+  TelegramApprovalReplyBinding
 >({
   eventKinds: ["exec", "plugin"],
   availability: {
@@ -176,6 +195,26 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     },
   },
   interactions: {
+    bindPending: ({ accountId, entry, request, approvalKind, view }) => {
+      const resolvedAccountId = normalizeOptionalString(accountId);
+      if (!resolvedAccountId) {
+        return null;
+      }
+      return bindTelegramApprovalReply({
+        accountId: resolvedAccountId,
+        chatId: entry.chatId,
+        messageId: entry.messageId,
+        approvalId: request.id,
+        approvalKind,
+        createdAtMs: request.createdAtMs,
+        expiresAtMs: view.expiresAtMs,
+        allowedDecisions: resolveReplyBindingAllowedDecisions({ request, approvalKind, view }),
+        commandText: view.approvalKind === "exec" ? view.commandText : null,
+      });
+    },
+    unbindPending: ({ binding }) => {
+      unbindTelegramApprovalReply(binding);
+    },
     clearPendingActions: async ({ cfg, accountId, context, entry }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {

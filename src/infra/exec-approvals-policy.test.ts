@@ -177,6 +177,22 @@ describe("exec approvals policy helpers", () => {
     ).toBe(true);
   });
 
+  it("does not treat exact-command allow-always approvals as blanket shell trust", () => {
+    expect(
+      hasDurableExecApproval({
+        analysisOk: false,
+        segmentAllowlistEntries: [],
+        allowlist: [
+          {
+            pattern: "=command:613b5a60181648fd",
+            source: "allow-always",
+          },
+        ],
+        commandText: 'powershell -NoProfile -Command "Write-Output bye"',
+      }),
+    ).toBe(false);
+  });
+
   it("treats fully allow-always-matched segments as durable trust", () => {
     expect(
       hasDurableExecApproval({

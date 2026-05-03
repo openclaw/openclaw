@@ -33,6 +33,10 @@ import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
+  parseTelegramApprovalReplyDecision,
+  resolveTelegramApprovalReplyBinding,
+} from "./approval-reply-bindings.js";
+import {
   isSenderAllowed,
   normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
@@ -1022,6 +1026,72 @@ export const registerTelegramHandlers = ({
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
     // We buffer “near-limit” messages and append immediately-following parts.
     const text = typeof msg.text === "string" ? msg.text : undefined;
+    const approvalReplyDecision = parseTelegramApprovalReplyDecision(text);
+    if (approvalReplyDecision) {
+      const replyToMessageId =
+        typeof msg.reply_to_message?.message_id === "number"
+          ? String(msg.reply_to_message.message_id)
+          : undefined;
+      if (!replyToMessageId) {
+        logVerbose("telegram: ignored text approval without a reply target");
+        return;
+      }
+      const lookup = resolveTelegramApprovalReplyBinding({
+        accountId,
+        chatId: String(chatId),
+        replyToMessageId,
+        nowMs: Date.now(),
+      });
+      if (!lookup.ok) {
+        logVerbose(
+          `telegram: ignored text approval reply without pending binding (${lookup.reason})`,
+        );
+        return;
+      }
+      if (!lookup.binding.allowedDecisions.includes(approvalReplyDecision)) {
+        logVerbose(
+          `telegram: ignored unsupported text approval decision ${approvalReplyDecision} ` +
+            `for ${lookup.binding.approvalId}`,
+        );
+        return;
+      }
+      const senderId = msg.from?.id != null ? String(msg.from.id) : "";
+      if (!senderId) {
+        logVerbose("telegram: ignored text approval reply without a sender id");
+        return;
+      }
+      const runtimeCfg = telegramDeps.loadConfig();
+      const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
+        cfg: runtimeCfg,
+        accountId,
+        senderId,
+      });
+      const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
+        cfg: runtimeCfg,
+        accountId,
+        senderId,
+      });
+      const authorizedApprovalSender =
+        lookup.binding.approvalKind === "plugin"
+          ? pluginApprovalAuthorizedSender
+          : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
+      if (!authorizedApprovalSender) {
+        logVerbose(`telegram: ignored text approval reply from unauthorized sender ${senderId}`);
+        return;
+      }
+      try {
+        await (telegramDeps.resolveExecApproval ?? resolveTelegramExecApproval)({
+          cfg: runtimeCfg,
+          approvalId: lookup.binding.approvalId,
+          decision: approvalReplyDecision,
+          senderId,
+          allowPluginFallback: pluginApprovalAuthorizedSender,
+        });
+      } catch (resolveErr) {
+        warn(`telegram: failed to resolve text approval reply: ${String(resolveErr)}`);
+      }
+      return;
+    }
     const isCommandLike = (text ?? "").trim().startsWith("/");
     if (text && !isCommandLike) {
       const nowMs = Date.now();
