@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Google Meet: refresh realtime browser state during status and retry delayed speech after Meet finishes joining, so a just-opened in-call tab no longer leaves speech stuck behind stale `not-in-call` health.
 - Google Meet: grant Meet media permissions through the Playwright browser context when CDP grants do not affect the attached Chrome page, and report in-call microphone/speaker permission problems instead of marking realtime speech ready.
 - Google Chat: update the setup example to use the accepted `groups.<space>.enabled` key instead of the legacy `allow` alias, with a schema regression for the documented group shape. Thanks @vincentkoc.
 - Control UI/WebChat: collapse duplicate in-flight internal text sends onto the active Gateway run so rapid repeat submits do not start fresh `agent:main:main` dispatches. Fixes #75737. Thanks @dsdsddd1 and @BunsDev.

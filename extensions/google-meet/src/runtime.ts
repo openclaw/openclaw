@@ -216,12 +216,12 @@ export class GoogleMeetRuntime {
       const sessions = [...this.#sessions.values()].toSorted((a, b) =>
         a.createdAt.localeCompare(b.createdAt),
       );
-      await Promise.all(sessions.map((session) => this.#refreshCaptionHealthForSession(session)));
+      await Promise.all(sessions.map((session) => this.#refreshStatusHealthForSession(session)));
       return { found: true, sessions };
     }
     const session = this.#sessions.get(sessionId);
     if (session) {
-      await this.#refreshCaptionHealthForSession(session);
+      await this.#refreshStatusHealthForSession(session);
     }
     return session ? { found: true, session } : { found: false };
   }
@@ -357,7 +357,7 @@ export class GoogleMeetRuntime {
       reusable.updatedAt = nowIso();
       const spoken =
         mode === "realtime" && speechInstructions
-          ? (await this.speak(reusable.id, speechInstructions)).spoken
+          ? await this.#speakWhenReady(reusable, speechInstructions)
           : false;
       return { session: reusable, spoken };
     }
@@ -506,7 +506,7 @@ export class GoogleMeetRuntime {
       transport === "twilio"
         ? delegatedTwilioSpoken
         : mode === "realtime" && speechInstructions
-          ? (await this.speak(session.id, speechInstructions)).spoken
+          ? await this.#speakWhenReady(session, speechInstructions)
           : false;
     return { session, spoken };
   }
@@ -568,6 +568,34 @@ export class GoogleMeetRuntime {
     session.updatedAt = nowIso();
     this.#refreshHealth(sessionId);
     return { found: true, spoken: true, session };
+  }
+
+  async #speakWhenReady(session: GoogleMeetSession, instructions: string): Promise<boolean> {
+    let result = await this.speak(session.id, instructions);
+    if (result.spoken || !session.chrome?.audioBridge || session.transport === "twilio") {
+      return result.spoken;
+    }
+    const waitMs = Math.min(
+      Math.max(0, this.params.config.chrome.waitForInCallMs),
+      Math.max(0, this.params.config.chrome.joinTimeoutMs),
+    );
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+      await sleep(250);
+      result = await this.speak(session.id, instructions);
+      if (result.spoken) {
+        return true;
+      }
+      const health = result.session?.chrome?.health;
+      if (health?.manualActionRequired || result.session?.state !== "active") {
+        return false;
+      }
+      const blocked = health?.speechBlockedReason;
+      if (blocked && blocked !== "not-in-call" && blocked !== "browser-unverified") {
+        return false;
+      }
+    }
+    return false;
   }
 
   async testSpeech(request: GoogleMeetJoinRequest): Promise<{
@@ -735,12 +763,27 @@ export class GoogleMeetRuntime {
     await this.#refreshBrowserHealthForChromeSession(session);
   }
 
-  async #refreshBrowserHealthForChromeSession(session: GoogleMeetSession) {
+  async #refreshStatusHealthForSession(session: GoogleMeetSession) {
+    if (session.transport === "chrome" || session.transport === "chrome-node") {
+      if (session.chrome?.health?.manualActionRequired) {
+        this.#refreshSpeechReadiness(session);
+        return;
+      }
+      await this.#refreshBrowserHealthForChromeSession(session, { force: true, readOnly: true });
+      return;
+    }
+    this.#refreshSpeechReadiness(session);
+  }
+
+  async #refreshBrowserHealthForChromeSession(
+    session: GoogleMeetSession,
+    options: { force?: boolean; readOnly?: boolean } = {},
+  ) {
     if (!isManagedChromeBrowserSession(session)) {
       this.#refreshSpeechReadiness(session);
       return;
     }
-    if (session.mode === "realtime" && evaluateSpeechReadiness(session).ready) {
+    if (!options.force && session.mode === "realtime" && evaluateSpeechReadiness(session).ready) {
       this.#refreshSpeechReadiness(session);
       return;
     }
@@ -751,11 +794,13 @@ export class GoogleMeetRuntime {
               runtime: this.params.runtime,
               config: this.params.config,
               mode: session.mode,
+              readOnly: options.readOnly,
               url: session.url,
             })
           : await recoverCurrentMeetTab({
               config: this.params.config,
               mode: session.mode,
+              readOnly: options.readOnly,
               url: session.url,
             });
       if (result.found && result.browser && session.chrome) {
@@ -775,6 +820,9 @@ export class GoogleMeetRuntime {
 
   #refreshSpeechReadiness(session: GoogleMeetSession) {
     const readiness = evaluateSpeechReadiness(session);
+    if (readiness.ready) {
+      session.notes = session.notes.filter((note) => !note.startsWith("Realtime speech blocked:"));
+    }
     if (session.chrome) {
       session.chrome.health = {
         ...session.chrome.health,
