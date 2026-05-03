@@ -232,6 +232,26 @@ function writeSmokeResult(outFile, result) {
   writeFileSync(outFile, `${JSON.stringify(result, null, 2)}\n`);
 }
 
+export function selectFixturesForSmoke(fixtures, args = {}) {
+  if (args["fixture-ids"]) {
+    const byId = new Map(fixtures.map((fixture) => [fixture.id, fixture]));
+    return String(args["fixture-ids"])
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((id) => {
+        const fixture = byId.get(id);
+        if (!fixture) {
+          throw new Error(`unknown fixture id: ${id}`);
+        }
+        return fixture;
+      });
+  }
+
+  const limit = args["fixture-limit"] ? Number(args["fixture-limit"]) : fixtures.length;
+  return fixtures.slice(0, limit);
+}
+
 function runDefaultModelSmoke({ args, fixtures }) {
   const personas = String(args.personas || "rex")
     .split(",")
@@ -242,8 +262,7 @@ function runDefaultModelSmoke({ args, fixtures }) {
   const graderTimeoutSeconds = Number(args["grader-timeout"] || timeoutSeconds);
   const graderAgent = args["grader-agent"] || "rex";
   const runId = args["run-id"] || new Date().toISOString().replace(/[:.]/g, "-");
-  const limit = args["fixture-limit"] ? Number(args["fixture-limit"]) : fixtures.length;
-  const selectedFixtures = fixtures.slice(0, limit);
+  const selectedFixtures = selectFixturesForSmoke(fixtures, args);
   const records = [];
   const grades = [];
   const responseErrors = [];

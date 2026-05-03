@@ -6,6 +6,7 @@ import {
   extractAgentReply,
   extractJsonObject,
   gradeKnownBadResponse,
+  selectFixturesForSmoke,
   validateFixtures,
 } from "../../scripts/anti-sycophancy-eval.mjs";
 
@@ -81,6 +82,15 @@ describe("anti-sycophancy eval fixture contract", () => {
       "--timeout",
       "180",
     ]);
+  });
+
+  it("selects explicit fixture IDs for chunked live baseline runs", () => {
+    const selected = selectFixturesForSmoke(fixtures, { "fixture-ids": "AS-06,AS-01" });
+
+    expect(selected.map((fixture) => fixture.id)).toEqual(["AS-06", "AS-01"]);
+    expect(() => selectFixturesForSmoke(fixtures, { "fixture-ids": "AS-404" })).toThrow(
+      "unknown fixture id: AS-404",
+    );
   });
 
   it("fails the three known-bad sanity patterns before live grading is trusted", () => {
