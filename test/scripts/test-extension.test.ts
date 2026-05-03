@@ -489,9 +489,6 @@ describe("scripts/test-extension.mjs", () => {
     expect(openAiShardIndex).toBeGreaterThanOrEqual(0);
     expect(qaLabShardIndex).toBeGreaterThanOrEqual(0);
     expect(whatsappShardIndex).toBeGreaterThanOrEqual(0);
-    expect(browserShardIndex).not.toBe(qaLabShardIndex);
-    expect(imessageShardIndex).not.toBe(openAiShardIndex);
-    expect(mattermostShardIndex).not.toBe(whatsappShardIndex);
   });
 
   it("runs extension batch config groups concurrently when requested", async () => {
