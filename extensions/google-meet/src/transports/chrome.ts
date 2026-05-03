@@ -333,16 +333,19 @@ function meetStatusScript(params: {
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
   const captureCaptions = ${JSON.stringify(params.captureCaptions)};
   const buttons = [...document.querySelectorAll('button')];
+  const buttonLabel = (button) =>
+    [
+      button.getAttribute("aria-label"),
+      button.getAttribute("data-tooltip"),
+      text(button),
+    ]
+      .filter(Boolean)
+      .join(" ");
+  const buttonLabels = buttons.map(buttonLabel).filter(Boolean);
   const notes = [];
   const findButton = (pattern) =>
     buttons.find((button) => {
-      const label = [
-        button.getAttribute("aria-label"),
-        button.getAttribute("data-tooltip"),
-        text(button),
-      ]
-        .filter(Boolean)
-        .join(" ");
+      const label = buttonLabel(button);
       return pattern.test(label) && !button.disabled;
     });
   const input = [...document.querySelectorAll('input')].find((el) =>
@@ -355,9 +358,10 @@ function meetStatusScript(params: {
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
   const pageText = text(document.body).toLowerCase();
+  const permissionText = [pageText, ...buttonLabels].join("\\n");
   const host = location.hostname.toLowerCase();
   const pageUrl = location.href;
-  const permissionNeeded = /permission needed|allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera|speaker)/i.test(pageText);
+  const permissionNeeded = /permission needed|microphone problem|speaker problem|allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera|speaker)/i.test(permissionText);
   const mic = buttons.find((button) => /turn off microphone|turn on microphone|microphone/i.test(button.getAttribute('aria-label') || text(button)));
   if (!allowMicrophone && mic && /turn off microphone/i.test(mic.getAttribute('aria-label') || text(mic))) {
     mic.click();

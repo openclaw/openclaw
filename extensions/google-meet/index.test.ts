@@ -2118,6 +2118,64 @@ describe("google-meet plugin", () => {
     expect(captionButton.click).toHaveBeenCalledTimes(1);
   });
 
+  it("reports in-call Meet audio permission problems from button labels", () => {
+    const makeButton = (label: string) => ({
+      disabled: false,
+      innerText: "",
+      textContent: "",
+      click: vi.fn(),
+      getAttribute: vi.fn((name: string) => (name === "aria-label" ? label : null)),
+    });
+    const document = {
+      body: { innerText: "", textContent: "" },
+      title: "Meet",
+      querySelector: vi.fn(() => null),
+      querySelectorAll: vi.fn((selector: string) => {
+        if (selector === "button") {
+          return [
+            makeButton("Leave call"),
+            makeButton("Microphone problem. Show more info"),
+            makeButton("Microphone: Permission needed"),
+            makeButton("Speaker: Permission needed"),
+          ];
+        }
+        if (selector === "input") {
+          return [];
+        }
+        return [];
+      }),
+    };
+    const context = createContext({
+      JSON,
+      document,
+      location: {
+        href: "https://meet.google.com/abc-defg-hij",
+        hostname: "meet.google.com",
+      },
+      window: {},
+    });
+    const inspect = new Script(
+      `(${chromeTransportTesting.meetStatusScriptForTest({
+        allowMicrophone: true,
+        autoJoin: false,
+        captureCaptions: false,
+        guestName: "OpenClaw Agent",
+      })})`,
+    ).runInContext(context) as () => string;
+
+    const result = JSON.parse(inspect()) as {
+      inCall?: boolean;
+      manualActionRequired?: boolean;
+      manualActionReason?: string;
+      manualActionMessage?: string;
+    };
+
+    expect(result.inCall).toBe(true);
+    expect(result.manualActionRequired).toBe(true);
+    expect(result.manualActionReason).toBe("meet-permission-required");
+    expect(result.manualActionMessage).toContain("Allow microphone/camera/speaker permissions");
+  });
+
   it("joins Chrome on a paired node without local Chrome or BlackHole", async () => {
     const { methods, nodesList, nodesInvoke } = setup(
       {
