@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/SDK: allow community plugins to use `api.runtime.state.openKeyedStore` for restart-safe keyed state by declaring `"contracts": { "usesKeyedStore": true }` in their manifest. Community plugins are subject to a 500-entry-per-namespace limit (vs 1,000 for bundled plugins) while keeping the same per-plugin total limit of 1,000 live rows. Bundled plugins retain implicit access. Fixes #76433.
 - Plugins/onboarding: let Manual setup install optional official plugins, including ClawHub-backed diagnostics with npm fallback, and expose the external Codex plugin as a selectable provider setup choice. Thanks @vincentkoc.
 - Plugins/CLI: include package dependency install state in `openclaw plugins list --json` so scripts can spot missing plugin dependencies without runtime-loading plugins.
 - Discord/status: add degraded Discord transport and gateway event-loop starvation signals to `openclaw channels status`, `openclaw status --deep`, and fetch-timeout logs so intermittent socket resets do not look like a healthy running channel. (#76327) Thanks @joshavant.
