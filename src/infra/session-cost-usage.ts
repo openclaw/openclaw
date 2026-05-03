@@ -17,11 +17,13 @@ import {
 } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { asFiniteNumber } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import { formatErrorMessage } from "./errors.js";
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -76,7 +78,18 @@ const emptyTotals = (): CostUsageTotals => ({
 
 const USAGE_COST_CACHE_VERSION = 2;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
-const usageCostRefreshes = new Set<string>();
+const logger = createSubsystemLogger("usage-cost-cache");
+
+type UsageCostRefreshState = {
+  agentId?: string;
+  config?: OpenClawConfig;
+  fullRefreshRequested: boolean;
+  pendingSessionFiles: Set<string>;
+  running: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+};
+
+const usageCostRefreshes = new Map<string, UsageCostRefreshState>();
 
 type UsageCostCachedUsageEntry = CostUsageTotals & { timestamp: number };
 
@@ -1166,20 +1179,85 @@ export function requestCostUsageCacheRefresh(params?: {
   sessionFiles?: string[];
 }): void {
   const agentId = params?.agentId ?? "main";
-  if (usageCostRefreshes.has(agentId)) {
+  const existing = usageCostRefreshes.get(agentId);
+  if (existing) {
+    mergeUsageCostRefreshRequest(existing, params);
     return;
   }
-  usageCostRefreshes.add(agentId);
+
+  const state: UsageCostRefreshState = {
+    agentId: params?.agentId,
+    config: params?.config,
+    fullRefreshRequested: false,
+    pendingSessionFiles: new Set(),
+    running: false,
+  };
+  mergeUsageCostRefreshRequest(state, params);
+  usageCostRefreshes.set(agentId, state);
+  scheduleUsageCostRefresh(agentId, state);
+}
+
+function mergeUsageCostRefreshRequest(
+  state: UsageCostRefreshState,
+  params?: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionFiles?: string[];
+  },
+): void {
+  if (params?.config) {
+    state.config = params.config;
+  }
+  if (params?.agentId) {
+    state.agentId = params.agentId;
+  }
+  if (!params?.sessionFiles) {
+    state.fullRefreshRequested = true;
+    return;
+  }
+  for (const sessionFile of params.sessionFiles) {
+    state.pendingSessionFiles.add(sessionFile);
+  }
+}
+
+function scheduleUsageCostRefresh(agentId: string, state: UsageCostRefreshState): void {
+  if (state.running || state.timer) {
+    return;
+  }
   const timer = setTimeout(() => {
-    void refreshCostUsageCache({
-      config: params?.config,
-      agentId: params?.agentId,
-      sessionFiles: params?.sessionFiles,
-    }).finally(() => {
-      usageCostRefreshes.delete(agentId);
-    });
+    state.timer = undefined;
+    void runQueuedUsageCostRefresh(agentId, state);
   }, 0);
   timer.unref?.();
+  state.timer = timer;
+}
+
+async function runQueuedUsageCostRefresh(
+  agentId: string,
+  state: UsageCostRefreshState,
+): Promise<void> {
+  state.running = true;
+  try {
+    while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
+      const sessionFiles = [...state.pendingSessionFiles];
+      state.pendingSessionFiles.clear();
+      state.fullRefreshRequested = false;
+      await refreshCostUsageCache({
+        config: state.config,
+        agentId: state.agentId,
+        sessionFiles,
+      });
+    }
+  } catch (error) {
+    logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
+  } finally {
+    state.running = false;
+    if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
+      scheduleUsageCostRefresh(agentId, state);
+    } else {
+      usageCostRefreshes.delete(agentId);
+    }
+  }
 }
 
 /**

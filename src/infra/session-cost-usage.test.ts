@@ -28,6 +28,16 @@ describe("session cost usage", () => {
       JSON.stringify(entry),
       "",
     ].join("\n");
+  const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await predicate()) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error("Timed out waiting for condition");
+  };
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
@@ -386,6 +396,73 @@ describe("session cost usage", () => {
       expect(summary.summary?.dailyBreakdown).toEqual([
         { date: "2026-02-05", tokens: 20, cost: 0.02 },
       ]);
+    });
+  });
+
+  it("batches stale session summary refreshes for the same agent", async () => {
+    const root = await makeSessionCostRoot("cost-cache-session-batch");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const firstSessionFile = path.join(sessionsDir, "sess-cache-batch-a.jsonl");
+    const secondSessionFile = path.join(sessionsDir, "sess-cache-batch-b.jsonl");
+    const entry = (timestamp: string, totalTokens: number) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        usage: {
+          input: totalTokens,
+          output: 0,
+          totalTokens,
+          cost: { total: totalTokens / 1000 },
+        },
+      },
+    });
+
+    await Promise.all([
+      fs.writeFile(
+        firstSessionFile,
+        JSON.stringify(entry("2026-02-05T12:00:00.000Z", 10)),
+        "utf-8",
+      ),
+      fs.writeFile(
+        secondSessionFile,
+        JSON.stringify(entry("2026-02-05T12:00:00.000Z", 20)),
+        "utf-8",
+      ),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      const [firstCold, secondCold] = await Promise.all([
+        loadSessionCostSummaryFromCache({
+          sessionId: "sess-cache-batch-a",
+          sessionFile: firstSessionFile,
+        }),
+        loadSessionCostSummaryFromCache({
+          sessionId: "sess-cache-batch-b",
+          sessionFile: secondSessionFile,
+        }),
+      ]);
+
+      expect(firstCold.summary).toBeNull();
+      expect(secondCold.summary).toBeNull();
+
+      await waitFor(async () => {
+        const [firstWarm, secondWarm] = await Promise.all([
+          loadSessionCostSummaryFromCache({
+            sessionId: "sess-cache-batch-a",
+            sessionFile: firstSessionFile,
+            requestRefresh: false,
+          }),
+          loadSessionCostSummaryFromCache({
+            sessionId: "sess-cache-batch-b",
+            sessionFile: secondSessionFile,
+            requestRefresh: false,
+          }),
+        ]);
+        return firstWarm.summary?.totalTokens === 10 && secondWarm.summary?.totalTokens === 20;
+      });
     });
   });
 
