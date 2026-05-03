@@ -280,6 +280,18 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
+  it("falls back to the generic label when the upstream error message is whitespace only", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(appServerError({ message: "   ", willRetry: false }));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toBe("codex app-server error");
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(Boolean(result.promptError)).toBe(true);
+  });
+
   it("projects usageLimitExceeded errors using the latest rate-limit snapshot", async () => {
     const projector = await createProjector();
 

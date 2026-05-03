@@ -899,7 +899,13 @@ export class CodexAppServerEventProjector {
       additionalDetails: input.additionalDetails,
       rateLimits: this.latestRateLimitSnapshot,
     });
-    const finalMessage = projected ?? input.message?.trim() ?? input.fallbackMessage;
+    // `??` only short-circuits on null/undefined, so a whitespace-only
+    // `input.message` (which trims to `""`) would otherwise become the prompt
+    // error string and silently disable downstream `Boolean(promptError)`
+    // structured-error checks. Treat empty trims as absent.
+    const trimmed = input.message?.trim();
+    const trimmedMessage = trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
+    const finalMessage = projected ?? trimmedMessage ?? input.fallbackMessage;
     this.promptError = finalMessage;
     this.promptErrorSource = "prompt";
     if (input.codexErrorInfo !== null || projected !== undefined) {
