@@ -16,6 +16,7 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "./server-cron.js"');
     expect(serverImpl).toContain('from "./server-cron-lazy.js"');
     expect(serverImpl).not.toContain('from "./server-methods.js"');
+    expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
     expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
   });

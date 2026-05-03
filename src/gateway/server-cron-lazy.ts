@@ -20,6 +20,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
   let loaded: LoadedGatewayCronState | null = null;
   let loading: Promise<LoadedGatewayCronState> | null = null;
+  let stopped = false;
 
   const load = async (): Promise<LoadedGatewayCronState> => {
     if (loaded) {
@@ -37,15 +38,39 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
 
   const cron: CronServiceContract = {
     async start() {
+      stopped = false;
       const resolved = await load();
+      if (stopped) {
+        return;
+      }
       if (resolved.started) {
         return;
       }
       resolved.started = true;
       await resolved.state.cron.start();
+      if (stopped && resolved.started) {
+        resolved.started = false;
+        resolved.state.cron.stop();
+      }
     },
     stop() {
-      loaded?.state.cron.stop();
+      stopped = true;
+      if (loaded) {
+        loaded.started = false;
+        loaded.state.cron.stop();
+        return;
+      }
+      if (loading) {
+        void loading
+          .then((resolved) => {
+            if (!stopped) {
+              return;
+            }
+            resolved.started = false;
+            resolved.state.cron.stop();
+          })
+          .catch(() => {});
+      }
     },
     async status() {
       return await (await load()).state.cron.status();
