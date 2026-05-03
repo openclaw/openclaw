@@ -264,12 +264,18 @@ Keep the primary agent focused by delegating bounded work to specialist agents:
 
 ```bash
 pnpm subagents:check
+pnpm subagents:plan
 ```
 
 Use read-only subagents for codebase investigation, JiT tests, browser-flow
 debugging, security hardening review, and business-agent packaging. Use parallel
 subagents only when their scopes are independent or their write sets are
 explicitly disjoint.
+
+Generate a delegation plan before multi-agent work. The plan groups changed files
+by specialist, marks whether that specialist exists in `.gemini/agents`, and
+flags assignments that are safe for parallel read-only review versus assignments
+that need explicit file ownership before write-capable work.
 
 ## Temporary tunnels
 
