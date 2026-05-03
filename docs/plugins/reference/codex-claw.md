@@ -16,7 +16,7 @@ Installs a Codex Desktop bridge that loads OpenClaw AGENTS.md and SOUL.md contex
 
 ## Surface
 
-plugin
+skills
 
 ## Related docs
 

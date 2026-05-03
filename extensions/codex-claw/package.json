@@ -1,12 +1,35 @@
 {
   "name": "@openclaw/codex-claw",
-  "version": "2026.5.3",
-  "description": "OpenClaw bridge for installing Codex Desktop AGENTS.md and SOUL.md context loading",
+  "version": "2026.5.4",
+  "description": "Codex Desktop bridge for OpenClaw AGENTS.md and SOUL.md session context, post-compaction reinjection, and compatibility review",
+  "keywords": [
+    "openclaw",
+    "codex",
+    "codex-desktop",
+    "agents-md",
+    "soul-md",
+    "session-context",
+    "prompt-bootstrap",
+    "post-compaction",
+    "personality",
+    "agent-md"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
+  "files": [
+    "README.md",
+    "index.ts",
+    "openclaw.plugin.json",
+    "package.json",
+    "src/cli.ts",
+    "src/codex-desktop-bridge.ts",
+    "src/review-prompt.ts",
+    "skills/**/*",
+    "tsconfig.json"
+  ],
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
@@ -14,11 +37,19 @@
     "extensions": [
       "./index.ts"
     ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/codex-claw",
+      "defaultChoice": "clawhub",
+      "minHostVersion": ">=2026.5.3"
+    },
     "compat": {
       "pluginApi": ">=2026.5.3"
     },
     "build": {
       "openclawVersion": "2026.5.3"
+    },
+    "release": {
+      "publishToClawHub": true
     }
   }
 }

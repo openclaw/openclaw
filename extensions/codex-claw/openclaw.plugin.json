@@ -7,6 +7,7 @@
     "onStartup": false,
     "onCommands": ["codex-claw"]
   },
+  "skills": ["./skills"],
   "commandAliases": [
     {
       "name": "codex-claw"
