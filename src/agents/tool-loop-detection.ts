@@ -129,7 +129,7 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
  * Uses tool name + deterministic JSON serialization digest of params.
  */
 export function hashToolCall(toolName: string, params: unknown): string {
-  return `${toolName}:${digestStable(params)}`;
+  return `${toolName}:${digestStable(normalizeLoopDetectionParams(toolName, params))}`;
 }
 
 function stableStringify(value: unknown): string {
@@ -147,6 +147,39 @@ function stableStringify(value: unknown): string {
 function digestStable(value: unknown): string {
   const serialized = stableStringifyFallback(value);
   return createHash("sha256").update(serialized).digest("hex");
+}
+
+function normalizeUpdatePlanShape(value: unknown): unknown {
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const rawPlan = Array.isArray(value.plan) ? value.plan : [];
+  const normalizedPlan = rawPlan.map((entry) => {
+    if (!isPlainObject(entry)) {
+      return { status: null, hasStep: false };
+    }
+    const status = typeof entry.status === "string" ? entry.status : null;
+    const hasStep = typeof entry.step === "string" && entry.step.trim().length > 0;
+    return { status, hasStep };
+  });
+
+  const explanation = typeof value.explanation === "string" ? value.explanation.trim() : "";
+
+  return {
+    planLength: normalizedPlan.length,
+    statuses: normalizedPlan.map((entry) => entry.status),
+    stepPresence: normalizedPlan.map((entry) => entry.hasStep),
+    hasExplanation: explanation.length > 0,
+  };
+}
+
+function normalizeLoopDetectionParams(toolName: string, params: unknown): unknown {
+  if (toolName !== "update_plan") {
+    return params;
+  }
+
+  return normalizeUpdatePlanShape(params);
 }
 
 function stableStringifyFallback(value: unknown): string {
@@ -323,7 +356,7 @@ function hashToolOutcome(
 
   return {
     resultHash: digestStable({
-      details,
+      details: toolName === "update_plan" ? normalizeUpdatePlanShape(details) : details,
       text,
     }),
   };
