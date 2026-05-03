@@ -7,6 +7,7 @@ import {
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
+import { type ChatState, loadChatHistory } from "../controllers/chat.ts";
 import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { parseAgentSessionKey } from "../session-key.ts";
@@ -289,6 +290,9 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     });
     void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
     await refreshSessionOptions(state);
+    // Rehydrate chat history after the session metadata refresh so Lit re-renders
+    // messages from the server instead of losing older assistant message text.
+    void loadChatHistory(state as unknown as ChatState);
   } catch (err) {
     // Roll back so the picker reflects the actual server model.
     state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };

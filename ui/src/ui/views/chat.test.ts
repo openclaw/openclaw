@@ -42,6 +42,7 @@ const loadSessionsMock = vi.hoisted(() =>
     }
   }),
 );
+const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../icons.ts", () => ({
   icons: {},
@@ -153,6 +154,10 @@ vi.mock("../controllers/agents.ts", () => ({
 
 vi.mock("../controllers/sessions.ts", () => ({
   loadSessions: loadSessionsMock,
+}));
+
+vi.mock("../controllers/chat.ts", () => ({
+  loadChatHistory: loadChatHistoryMock,
 }));
 
 vi.mock("./agents-utils.ts", () => ({
@@ -434,6 +439,7 @@ describe("chat compaction divider", () => {
 
 afterEach(() => {
   loadSessionsMock.mockClear();
+  loadChatHistoryMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   resetChatViewState();
   resetChatAttachmentPayloadStoreForTest();
@@ -797,7 +803,6 @@ describe("chat session controls", () => {
       key: "main",
       model: "openai/gpt-5-mini",
     });
-    expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
     await flushTasks();
     expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
@@ -807,6 +812,9 @@ describe("chat session controls", () => {
       sessionKey: "main",
     });
     expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
+    // Model switch must rehydrate chat history to prevent older assistant
+    // messages rendering blank after the sessions-list re-render (#76582).
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
   });
 
   it("clears the session model override back to the default model", async () => {
