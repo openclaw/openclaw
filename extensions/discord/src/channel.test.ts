@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -83,6 +87,7 @@ function installDiscordRuntime(discord: Record<string, unknown>) {
 }
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   probeDiscordMock.mockReset();
   monitorDiscordProviderMock.mockReset();
   auditDiscordChannelPermissionsMock.mockReset();
@@ -419,6 +424,66 @@ describe("discordPlugin outbound", () => {
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
     expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
+  });
+
+  it("starts named accounts with SecretRef tokens from the active runtime config snapshot", async () => {
+    probeDiscordMock.mockResolvedValue({
+      ok: true,
+      bot: { username: "Subagent" },
+      application: {
+        intents: {
+          messageContent: "limited",
+          guildMembers: "disabled",
+          presence: "disabled",
+        },
+      },
+      elapsedMs: 1,
+    });
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const sourceCfg = {
+      channels: {
+        discord: {
+          accounts: {
+            subagent: {
+              historyLimit: 25,
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_SUBAGENT",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeCfg = {
+      channels: {
+        discord: {
+          accounts: {
+            subagent: {
+              historyLimit: 25,
+              token: "discord-token-subagent",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeCfg, sourceCfg);
+
+    await startDiscordAccount(sourceCfg, "subagent");
+
+    expect(probeDiscordMock).toHaveBeenCalledWith("discord-token-subagent", 2500, {
+      includeApplication: true,
+    });
+    expect(monitorDiscordProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: "discord-token-subagent",
+        accountId: "subagent",
+        config: runtimeCfg,
+        historyLimit: 25,
+      }),
+    );
   });
 
   it("stagger starts later accounts in multi-bot setups", async () => {

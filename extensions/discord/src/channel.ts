@@ -25,6 +25,7 @@ import {
   listDiscordAccountIds,
   resolveDiscordAccount,
   resolveDiscordAccountAllowFrom,
+  resolveDiscordRuntimeConfig,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { getDiscordApprovalCapability } from "./approval-native.js";
@@ -539,7 +540,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
-          const startupDelayMs = resolveDiscordStartupDelayMs(ctx.cfg, account.accountId);
+          const cfg = resolveDiscordRuntimeConfig(ctx.cfg);
+          const startupDelayMs = resolveDiscordStartupDelayMs(cfg, account.accountId);
           if (startupDelayMs > 0) {
             ctx.log?.info(
               `[${account.accountId}] delaying provider startup ${Math.round(startupDelayMs / 1000)}s to reduce Discord startup rate limits`,
@@ -586,7 +588,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           return (await loadDiscordProviderRuntime()).monitorDiscordProvider({
             token,
             accountId: account.accountId,
-            config: ctx.cfg,
+            config: cfg,
             runtime: ctx.runtime,
             channelRuntime: ctx.channelRuntime,
             abortSignal: ctx.abortSignal,

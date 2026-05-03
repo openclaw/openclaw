@@ -12,6 +12,11 @@ import {
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordAccountConfig, DiscordActionConfig, OpenClawConfig } from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
@@ -28,6 +33,16 @@ export type ResolvedDiscordAccount = {
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
 export const listDiscordAccountIds = listAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
+
+export function resolveDiscordRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return (
+    selectApplicableRuntimeConfig({
+      inputConfig: cfg,
+      runtimeConfig: getRuntimeConfigSnapshot(),
+      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
+    }) ?? cfg
+  );
+}
 
 export function resolveDiscordAccountConfig(
   cfg: OpenClawConfig,
@@ -100,14 +115,13 @@ export function resolveDiscordAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedDiscordAccount {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
-  );
-  const baseEnabled = params.cfg.channels?.discord?.enabled !== false;
-  const merged = mergeDiscordAccountConfig(params.cfg, accountId);
+  const cfg = resolveDiscordRuntimeConfig(params.cfg);
+  const accountId = normalizeAccountId(params.accountId ?? resolveDefaultDiscordAccountId(cfg));
+  const baseEnabled = cfg.channels?.discord?.enabled !== false;
+  const merged = mergeDiscordAccountConfig(cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const tokenResolution = resolveDiscordToken(params.cfg, { accountId });
+  const tokenResolution = resolveDiscordToken(cfg, { accountId });
   return {
     accountId,
     enabled,

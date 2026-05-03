@@ -1,3 +1,8 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordActionGate,
@@ -10,6 +15,7 @@ import {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("resolveDiscordAccount allowFrom precedence", () => {
@@ -84,6 +90,45 @@ describe("resolveDiscordAccount allowFrom precedence", () => {
     });
 
     expect(resolved.config.allowFrom).toBeUndefined();
+  });
+
+  it("resolves named account token SecretRefs from the active runtime config snapshot", () => {
+    const sourceCfg = {
+      channels: {
+        discord: {
+          accounts: {
+            subagent: {
+              name: "Subagent",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_SUBAGENT",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeCfg = {
+      channels: {
+        discord: {
+          accounts: {
+            subagent: {
+              name: "Subagent",
+              token: "discord-token-subagent",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeCfg, sourceCfg);
+
+    expect(resolveDiscordAccount({ cfg: sourceCfg, accountId: "subagent" })).toMatchObject({
+      accountId: "subagent",
+      name: "Subagent",
+      token: "discord-token-subagent",
+      tokenSource: "config",
+    });
   });
 });
 
