@@ -549,6 +549,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       resolveAccountSnapshot: ({ account, runtime, probe }) => {
         const slackProbe = probe;
         const missingReadbackScopes = slackProbe?.readbackMissingScopes ?? [];
+        const probeReadbackState = slackProbe?.readbackState;
+        const hasReadbackProbe = typeof probeReadbackState === "string";
         const mode = account.config.mode ?? "socket";
         const configured =
           (mode === "http"
@@ -571,15 +573,15 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
             ...(slackProbe?.readbackRequiredScopes
               ? { readbackRequiredScopes: slackProbe.readbackRequiredScopes }
               : {}),
-            ...(missingReadbackScopes.length > 0
+            ...(hasReadbackProbe || missingReadbackScopes.length > 0
               ? { readbackMissingScopes: missingReadbackScopes }
               : {}),
-            ...(!runtime?.readbackState && slackProbe?.readbackState
-              ? { readbackState: slackProbe.readbackState }
-              : {}),
-            ...(!runtime?.lastReadbackError && slackProbe?.readbackError
-              ? { lastReadbackError: slackProbe.readbackError }
-              : {}),
+            ...(hasReadbackProbe ? { readbackState: probeReadbackState } : {}),
+            ...(hasReadbackProbe
+              ? { lastReadbackError: slackProbe?.readbackError ?? null }
+              : slackProbe?.readbackError
+                ? { lastReadbackError: slackProbe.readbackError }
+                : {}),
           },
         };
       },

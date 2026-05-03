@@ -977,6 +977,42 @@ describe("slackPlugin config", () => {
     expect(snapshot?.appTokenStatus).toBe("missing");
   });
 
+  it("lets a healthy readback probe clear stale runtime readback warnings", async () => {
+    const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
+      account: {
+        accountId: "default",
+        name: "Default",
+        enabled: true,
+        configured: true,
+        botTokenStatus: "available",
+        appTokenStatus: "available",
+        botTokenSource: "config",
+        appTokenSource: "config",
+        config: {},
+      } as never,
+      cfg: {} as OpenClawConfig,
+      runtime: {
+        accountId: "default",
+        running: true,
+        readbackState: "mismatch",
+        lastReadbackError: "history scope missing",
+        readbackMissingScopes: ["channels:history"],
+      } as never,
+      probe: {
+        ok: true,
+        readbackState: "ok",
+        readbackError: null,
+        readbackMissingScopes: [],
+        readbackRequiredScopes: ["channels:history"],
+      },
+    });
+
+    expect(snapshot?.readbackState).toBe("ok");
+    expect(snapshot?.lastReadbackError).toBeNull();
+    expect(snapshot?.readbackMissingScopes).toEqual([]);
+    expect(snapshot?.readbackRequiredScopes).toEqual(["channels:history"]);
+  });
+
   it("keeps HTTP mode signing-secret unavailable accounts configured in snapshots", async () => {
     const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
       account: {
