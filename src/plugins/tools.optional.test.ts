@@ -491,6 +491,43 @@ describe("resolvePluginTools optional tools", () => {
     );
   });
 
+  it("auto-loads cold registry for path-based (bundled-origin) plugins without pre-warming (#76598)", () => {
+    const config = createContext().config;
+    const registry = createToolRegistry([createOptionalDemoEntry()]);
+    loadOpenClawPluginsMock.mockReturnValue(registry);
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "optional-demo",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["optional_tool"],
+        },
+      },
+    });
+
+    // No ensureStandalonePluginToolRegistryLoaded pre-call and no pinned channel registry —
+    // resolvePluginTools must trigger standalone load itself when the registry is cold.
+    // This is the regression path from PR #76004 where path-based plugin tools disappeared.
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activate: false,
+        onlyPluginIds: ["optional-demo"],
+        toolDiscovery: true,
+      }),
+    );
+  });
+
   it("does not reuse a pinned gateway registry for manifest-unavailable tools", () => {
     const config = createContext().config;
     installToolManifestSnapshot({
