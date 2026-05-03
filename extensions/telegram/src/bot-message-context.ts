@@ -161,15 +161,15 @@ export const buildTelegramMessageContext = async ({
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-  const topicNameCachePath = resolveTopicNameCachePath(
-    await resolveTelegramMessageContextStorePath({
-      cfg,
-      agentId: account.accountId,
-      sessionRuntime,
-    }),
-  );
   let topicName: string | undefined;
   if (isForum && resolvedThreadId != null) {
+    const topicNameCachePath = resolveTopicNameCachePath(
+      await resolveTelegramMessageContextStorePath({
+        cfg,
+        agentId: account.accountId,
+        sessionRuntime,
+      }),
+    );
     const ftCreated = msg.forum_topic_created;
     const ftEdited = msg.forum_topic_edited;
     const ftClosed = msg.forum_topic_closed;
