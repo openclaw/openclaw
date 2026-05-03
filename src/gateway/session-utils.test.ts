@@ -1143,7 +1143,7 @@ describe("listSessionsFromStore selected model display", () => {
           lastMessagePreview: "last 0",
         }),
       );
-      expect(listed.sessions[0]?.agentRuntime).toBeUndefined();
+      expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
       expect(listed.sessions[0]?.thinkingOptions).toEqual([]);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
