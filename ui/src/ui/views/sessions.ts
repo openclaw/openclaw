@@ -519,13 +519,15 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     ? `${pathForTab("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
     : null;
   const badgeClass =
-    row.kind === "direct"
-      ? "data-table-badge--direct"
-      : row.kind === "group"
-        ? "data-table-badge--group"
-        : row.kind === "global"
-          ? "data-table-badge--global"
-          : "data-table-badge--unknown";
+    row.kind === "cron"
+      ? "data-table-badge--cron"
+      : row.kind === "direct"
+        ? "data-table-badge--direct"
+        : row.kind === "group"
+          ? "data-table-badge--group"
+          : row.kind === "global"
+            ? "data-table-badge--global"
+            : "data-table-badge--unknown";
 
   return [
     html`<tr>
