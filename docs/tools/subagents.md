@@ -47,7 +47,7 @@ session**:
 /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]
 ```
 
-Use top-level `/steer <message>` to steer the current requester session's active run. Use `/subagents steer <id|#> <message>` when the target is a child run.
+Use top-level [`/steer <message>`](/tools/steer) to steer the current requester session's active run. Use `/subagents steer <id|#> <message>` when the target is a child run.
 
 `/subagents info` shows run metadata (status, timestamps, session id,
 transcript path, cleanup). Use `sessions_history` for a bounded,
