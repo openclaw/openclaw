@@ -91,7 +91,43 @@ describe("resolveDiscordToken", () => {
     expect(res.source).toBe("config");
   });
 
-  it("throws when token is an unresolved SecretRef object", () => {
+  it("resolves env-backed SecretRef from process.env", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN_SUBAGENT", "resolved-env-token");
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            subagent: {
+              token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN_SUBAGENT" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const res = resolveDiscordToken(cfg, { accountId: "subagent" });
+    expect(res.token).toBe("resolved-env-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("returns none when env-backed SecretRef env var is not set", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            subagent: {
+              token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN_SUBAGENT" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const res = resolveDiscordToken(cfg, { accountId: "subagent" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  });
+
+  it("resolves channel-level env-backed SecretRef", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "channel-level-resolved");
     const cfg = {
       channels: {
         discord: {
@@ -99,9 +135,39 @@ describe("resolveDiscordToken", () => {
         },
       },
     } as unknown as OpenClawConfig;
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("channel-level-resolved");
+    expect(res.source).toBe("config");
+  });
 
+  it("throws for non-env SecretRef that cannot be resolved", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "file", provider: "vault", id: "discord-token" },
+        },
+      },
+    } as unknown as OpenClawConfig;
     expect(() => resolveDiscordToken(cfg)).toThrow(
       /channels\.discord\.token: unresolved SecretRef/i,
     );
+  });
+
+  it("strips Bot prefix from env-backed SecretRef resolved token", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN_WORK", "Bot my-actual-token");
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN_WORK" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const res = resolveDiscordToken(cfg, { accountId: "work" });
+    expect(res.token).toBe("my-actual-token");
+    expect(res.source).toBe("config");
   });
 });
