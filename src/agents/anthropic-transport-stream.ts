@@ -779,10 +779,19 @@ function buildAnthropicParams(
           params.output_config = { effort: options.effort };
         }
       } else {
-        params.thinking = {
-          type: "enabled",
-          budget_tokens: options.thinkingBudgetTokens || 1024,
-        };
+        // Use nullish coalescing so an explicit 0 budget (produced by
+        // adjustMaxTokensForThinking when the token envelope is too small)
+        // is not coerced to 1024 by the falsy || operator.
+        // When the resolved budget is 0 the API would reject budget_tokens:0
+        // with a 400, so we skip the thinking block entirely — thinking
+        // cannot be meaningfully enabled in this token envelope.
+        const budgetTokens = options.thinkingBudgetTokens ?? 1024;
+        if (budgetTokens > 0) {
+          params.thinking = {
+            type: "enabled",
+            budget_tokens: budgetTokens,
+          };
+        }
       }
     } else if (options?.thinkingEnabled === false) {
       params.thinking = { type: "disabled" };
