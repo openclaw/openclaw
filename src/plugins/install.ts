@@ -8,6 +8,10 @@ import {
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
+  resolveManagedNpmRootDependencySpec,
+  upsertManagedNpmRootDependency,
+} from "../infra/npm-managed-root.js";
+import {
   formatPrereleaseResolutionError,
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
@@ -1177,7 +1181,14 @@ export async function installPluginFromNpmSpec(
   }
 
   logger.info?.(`Installing ${spec} into ${npmRoot}…`);
-  await fs.mkdir(npmRoot, { recursive: true });
+  await upsertManagedNpmRootDependency({
+    npmRoot,
+    packageName: parsedSpec.name,
+    dependencySpec: resolveManagedNpmRootDependencySpec({
+      parsedSpec,
+      resolution: npmResolution,
+    }),
+  });
   const install = await runCommandWithTimeout(
     [
       "npm",
