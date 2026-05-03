@@ -6,26 +6,20 @@ import {
   stopActiveManagedProxyRegistration,
 } from "./net/proxy/active-proxy-state.js";
 
-const { connectSpy, tlsConnectSpy, tunnelSpy, fakeSession, fakeTlsSocket } = vi.hoisted(() => {
+const { connectSpy, tunnelSpy, fakeSession, fakeTlsSocket } = vi.hoisted(() => {
   const fakeSession = { close: vi.fn(), destroy: vi.fn() };
   const fakeTlsSocket = { encrypted: true };
   return {
     fakeSession,
     fakeTlsSocket,
     connectSpy: vi.fn(() => fakeSession),
-    tlsConnectSpy: vi.fn(() => fakeTlsSocket),
-    tunnelSpy: vi.fn(async () => ({ tunneled: true })),
+    tunnelSpy: vi.fn(async () => fakeTlsSocket),
   };
 });
 
 vi.mock("node:http2", () => ({
   default: { connect: connectSpy },
   connect: connectSpy,
-}));
-
-vi.mock("node:tls", () => ({
-  default: { connect: tlsConnectSpy },
-  connect: tlsConnectSpy,
 }));
 
 vi.mock("./net/http-connect-tunnel.js", () => ({
@@ -35,7 +29,6 @@ vi.mock("./net/http-connect-tunnel.js", () => ({
 describe("connectApnsHttp2Session", () => {
   beforeEach(() => {
     connectSpy.mockClear();
-    tlsConnectSpy.mockClear();
     tunnelSpy.mockClear();
     _resetActiveManagedProxyStateForTests();
   });
@@ -68,11 +61,6 @@ describe("connectApnsHttp2Session", () => {
       targetHost: "api.push.apple.com",
       targetPort: 443,
       timeoutMs: 10_000,
-    });
-    expect(tlsConnectSpy).toHaveBeenCalledWith({
-      socket: { tunneled: true },
-      servername: "api.push.apple.com",
-      ALPNProtocols: ["h2"],
     });
     expect(connectSpy).toHaveBeenCalledWith("https://api.push.apple.com", {
       createConnection: expect.any(Function),

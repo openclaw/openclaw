@@ -1,5 +1,4 @@
 import http2 from "node:http2";
-import tls from "node:tls";
 import { openHttpConnectTunnel } from "./net/http-connect-tunnel.js";
 import { getActiveManagedProxyUrl } from "./net/proxy/active-proxy-state.js";
 
@@ -39,16 +38,11 @@ export async function connectApnsHttp2Session(
   }
 
   const apnsHost = new URL(authority).hostname;
-  const tunnel = await openHttpConnectTunnel({
+  const tlsSocket = await openHttpConnectTunnel({
     proxyUrl,
     targetHost: apnsHost,
     targetPort: 443,
     timeoutMs: params.timeoutMs,
-  });
-  const tlsSocket = tls.connect({
-    socket: tunnel,
-    servername: apnsHost,
-    ALPNProtocols: ["h2"],
   });
 
   return http2.connect(authority, {
