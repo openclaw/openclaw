@@ -1,5 +1,6 @@
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { coerceSecretRef, normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -23,6 +24,34 @@ export function normalizeDiscordToken(raw: unknown, _path: string): string | und
     return undefined;
   }
   return trimmed.replace(/^Bot\s+/i, "");
+}
+
+// Returns true iff `cfg.secrets.providers[providerName]` (or, if absent, the
+// resolved default secrets-provider alias for env) is configured to honor a
+// SecretRef whose intent is `env:<providerName>:<id>` — i.e. the provider's
+// source is `env` and any allowlist permits `id`. This mirrors Telegram's
+// resolveEnvSecretRefValue policy gate (extensions/telegram/src/token.ts) so
+// that a Discord channel-startup env-fallback only fires when the operator-
+// configured SecretRef policy actually permits reading process.env[id].
+function envSecretRefMatchesProviderPolicy(
+  cfg: OpenClawConfig | undefined,
+  providerName: string,
+  id: string,
+): boolean {
+  const providerConfig = cfg?.secrets?.providers?.[providerName];
+  if (providerConfig) {
+    if (providerConfig.source !== "env") {
+      return false;
+    }
+    if (providerConfig.allowlist && !providerConfig.allowlist.includes(id)) {
+      return false;
+    }
+    return true;
+  }
+  // Provider not explicitly configured — only allow fallthrough when this is
+  // the default env-provider alias the runtime would have resolved anyway.
+  const defaultEnvAlias = resolveDefaultSecretProviderAlias({ secrets: cfg?.secrets }, "env");
+  return providerName === defaultEnvAlias;
 }
 
 export function resolveDiscordToken(
@@ -54,15 +83,38 @@ export function resolveDiscordToken(
   }
 
   // If the top-level token is an unresolved SecretRef, only fall through to the
-  // process.env DISCORD_BOT_TOKEN fallback when the ref's intent is identical
-  // (env source, DISCORD_BOT_TOKEN id). For any other configured SecretRef
-  // shape (file, exec, alternate env id) we preserve operator intent and report
-  // the token as unavailable rather than silently substituting an unrelated env
-  // token, which could otherwise start the wrong bot account.
-  const topTokenRef = coerceSecretRef(topTokenValue);
+  // process.env DISCORD_BOT_TOKEN fallback when the ref's intent matches it AND
+  // the operator's secret-provider policy permits the env read. We check three
+  // things, in order, and short-circuit to source=none on any miss:
+  //
+  //   1. ref.source === "env"                     — non-env refs (file, exec)
+  //                                                 must be resolved upstream;
+  //                                                 we will not substitute env
+  //                                                 for a vault/file lookup.
+  //   2. ref.id === DISCORD_DEFAULT_BOT_ENV_VAR   — env refs pointing at a
+  //                                                 different env var (e.g.
+  //                                                 DISCORD_PROD_BOT_TOKEN)
+  //                                                 must not be silently
+  //                                                 substituted by the bare
+  //                                                 DISCORD_BOT_TOKEN fallback.
+  //   3. provider policy allows env:<provider>:<id> — mirrors Telegram's
+  //                                                   resolveEnvSecretRefValue
+  //                                                   gate so a misconfigured
+  //                                                   secrets provider (wrong
+  //                                                   source or excluded by an
+  //                                                   allowlist) cannot bypass
+  //                                                   operator policy via the
+  //                                                   channel env fallback.
+  //
+  // Anything else preserves operator intent and surfaces a user-actionable
+  // "Discord bot token missing" error from createDiscordRestClient instead of
+  // crashing channel startup with the internal SecretRef contract error.
+  const topTokenRef = coerceSecretRef(topTokenValue, cfg?.secrets?.defaults);
   if (topTokenRef) {
     const matchesEnvFallback =
-      topTokenRef.source === "env" && topTokenRef.id === DISCORD_DEFAULT_BOT_ENV_VAR;
+      topTokenRef.source === "env" &&
+      topTokenRef.id === DISCORD_DEFAULT_BOT_ENV_VAR &&
+      envSecretRefMatchesProviderPolicy(cfg, topTokenRef.provider, topTokenRef.id);
     if (!matchesEnvFallback) {
       return { token: "", source: "none" };
     }

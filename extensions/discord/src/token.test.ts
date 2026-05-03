@@ -198,4 +198,83 @@ describe("resolveDiscordToken", () => {
     expect(res.token).toBe("");
     expect(res.source).toBe("none");
   });
+
+  it("does not fall through to env when the configured SecretRef provider is not env-source", () => {
+    // Operator wired secrets.providers.vault as exec-sourced but referenced it
+    // from channels.discord.token as if it were env-sourced. The provider
+    // policy disagrees with the SecretRef's source, so the env fallback must
+    // not silently rescue the misconfiguration.
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = {
+      secrets: {
+        providers: {
+          vault: { source: "exec" },
+        },
+      },
+      channels: {
+        discord: {
+          token: { source: "env", provider: "vault", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  });
+
+  it("does not fall through to env when the configured env provider's allowlist excludes the id", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = {
+      secrets: {
+        providers: {
+          tight: { source: "env", allowlist: ["OTHER_TOKEN"] },
+        },
+      },
+      channels: {
+        discord: {
+          token: { source: "env", provider: "tight", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  });
+
+  it("does not fall through to env when the SecretRef provider is not configured and is not the default env alias", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "ghost", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  });
+
+  it("falls through to env when the configured env provider explicitly allowlists the id", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = {
+      secrets: {
+        providers: {
+          envprov: { source: "env", allowlist: ["DISCORD_BOT_TOKEN", "OTHER_TOKEN"] },
+        },
+      },
+      channels: {
+        discord: {
+          token: { source: "env", provider: "envprov", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("env-token");
+    expect(res.source).toBe("env");
+  });
 });
