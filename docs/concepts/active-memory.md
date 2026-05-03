@@ -658,13 +658,9 @@ blocking prompt-build hook budget by default and move cold-start setup grace
 behind explicit `setupGraceTimeoutMs` config, so the plugin no longer silently
 extends 15000 ms configs to 45000 ms on the main lane."_
 
-The embedded recall runner currently still receives the raw `timeoutMs` value
-as its inner budget; the in-flight fix to extend that with `setupGraceTimeoutMs`
-is tracked at [#74480](https://github.com/openclaw/openclaw/pull/74480). Until
-that lands, very-cold first recalls can still time out at the inner layer even
-with `setupGraceTimeoutMs` set — though the outer-layer setting still
-substantially mitigates the symptom by giving the prompt-build hook room to
-cover the warm-up window.
+The embedded recall runner uses the same effective timeout budget, so
+`setupGraceTimeoutMs` covers both the outer prompt-build watchdog and the inner
+blocking recall run.
 
 For resource-tight gateways where cold-start latency is a known trade-off,
 lower values (5000–15000 ms) work too — the trade-off is a higher chance of
@@ -735,8 +731,7 @@ default `memory-core` path uses `memory_search`; `memory-lancedb` uses
     around the first eligible reply after a restart.
 
     See [Cold-start grace](#cold-start-grace) under Recommended setup for the
-    recommended `setupGraceTimeoutMs` value (and the open caveat about the
-    embedded recall budget tracked at #74480).
+    recommended `setupGraceTimeoutMs` value.
 
   </Accordion>
 </AccordionGroup>
