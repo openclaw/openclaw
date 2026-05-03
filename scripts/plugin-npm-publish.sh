@@ -81,7 +81,7 @@ build_package_runtime() {
     return
   fi
   log "Package-local runtime build: ${package_dir}"
-  node scripts/lib/plugin-npm-runtime-build.mjs "${package_dir}"
+  node scripts/lib/plugin-npm-runtime-build.mjs "${package_dir}" >&2
 }
 
 mirror_auth_token=""
