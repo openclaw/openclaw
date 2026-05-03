@@ -697,7 +697,7 @@ function collectAttemptExplicitToolAllowlistSources(params: {
     { label: "group tools.allow", allow: groupPolicy?.allow },
     { label: "sandbox tools.allow", allow: params.sandboxToolPolicy?.allow },
     { label: "subagent tools.allow", allow: subagentPolicy?.allow },
-    { label: "runtime toolsAllow", allow: params.toolsAllow },
+    { label: "runtime toolsAllow", allow: params.toolsAllow, enforceWhenToolsDisabled: true },
   ]);
 }
 

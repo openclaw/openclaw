@@ -122,6 +122,7 @@ Docs: https://docs.openclaw.ai
 - Active Memory: preserve the target agent context when building embedded recall plugin tools so `memory_search` and `memory_get` stay available for explicit recall sessions. Fixes #76343. Thanks @Countermarch.
 - Plugins/externalization: repair missing configured plugin installs from npm by default, reserve ClawHub downloads for explicit `clawhubSpec` metadata, and cover agent-runtime/env-selected plugin repair. Thanks @vincentkoc.
 - Plugins/install: allow official catalog-matched npm channel plugins such as Feishu to pass the trusted install scanner path while keeping spoofed package names blocked. Thanks @vincentkoc.
+- Tools/llm-task: keep JSON-only embedded model runs from tripping inherited tool allowlists when tools are intentionally disabled, while preserving runtime `toolsAllow` failures. Fixes #74019. Thanks @amknight.
 - Tools/profiles: make `tools.profile: "full"` grant all tools including optional plugin tools such as browser, so the full profile no longer silently drops plugin-provided tools that require an explicit allowlist entry. Fixes #76507. Thanks @amknight.
 - Feishu: keep timeout env parsing separate from the HTTP client wrapper so package security scans no longer report a false env-harvesting hit during install. Thanks @vincentkoc.
 - Upgrade/config: validate configured web-search providers and statically suppressed model/provider pairs against the active plugin set at config load, so stale plugin state fails loud before runtime fallback.
