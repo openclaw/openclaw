@@ -13,7 +13,6 @@ type ApnsAuthority = "https://api.push.apple.com" | "https://api.sandbox.push.ap
 export type ConnectApnsHttp2SessionParams = {
   authority: string;
   timeoutMs: number;
-  getManagedProxyUrl?: () => string | undefined;
 };
 
 function assertApnsAuthority(authority: string): ApnsAuthority {
@@ -34,7 +33,7 @@ export async function connectApnsHttp2Session(
   params: ConnectApnsHttp2SessionParams,
 ): Promise<http2.ClientHttp2Session> {
   const authority = assertApnsAuthority(params.authority);
-  const proxyUrl = (params.getManagedProxyUrl ?? getActiveManagedProxyUrl)();
+  const proxyUrl = getActiveManagedProxyUrl();
   if (!proxyUrl) {
     return http2.connect(authority);
   }

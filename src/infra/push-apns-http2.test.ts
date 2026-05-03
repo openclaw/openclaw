@@ -1,5 +1,10 @@
 import type http2 from "node:http2";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  _resetActiveManagedProxyStateForTests,
+  registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+} from "./net/proxy/active-proxy-state.js";
 
 const { connectSpy, tlsConnectSpy, tunnelSpy, fakeSession, fakeTlsSocket } = vi.hoisted(() => {
   const fakeSession = { close: vi.fn(), destroy: vi.fn() };
@@ -32,6 +37,7 @@ describe("connectApnsHttp2Session", () => {
     connectSpy.mockClear();
     tlsConnectSpy.mockClear();
     tunnelSpy.mockClear();
+    _resetActiveManagedProxyStateForTests();
   });
   it("uses direct http2.connect when managed proxy is inactive", async () => {
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
@@ -39,7 +45,6 @@ describe("connectApnsHttp2Session", () => {
     const session = await connectApnsHttp2Session({
       authority: "https://api.sandbox.push.apple.com",
       timeoutMs: 10_000,
-      getManagedProxyUrl: () => undefined,
     });
 
     expect(session).toBe(fakeSession);
@@ -48,13 +53,14 @@ describe("connectApnsHttp2Session", () => {
   });
 
   it("uses an HTTP CONNECT tunnel when managed proxy is active", async () => {
+    const registration = registerActiveManagedProxyUrl("http://proxy.example:8080");
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
 
     const session = await connectApnsHttp2Session({
       authority: "https://api.push.apple.com",
       timeoutMs: 10_000,
-      getManagedProxyUrl: () => "http://proxy.example:8080",
     });
+    stopActiveManagedProxyRegistration(registration);
 
     expect(session).toBe(fakeSession);
     expect(tunnelSpy).toHaveBeenCalledWith({
@@ -87,7 +93,6 @@ describe("connectApnsHttp2Session", () => {
       const session = await connectApnsHttp2Session({
         authority: "https://api.push.apple.com",
         timeoutMs: 10_000,
-        getManagedProxyUrl: () => undefined,
       });
 
       expect(session).toBe(fakeSession);
@@ -108,7 +113,6 @@ describe("connectApnsHttp2Session", () => {
       connectApnsHttp2Session({
         authority: "https://example.com",
         timeoutMs: 10_000,
-        getManagedProxyUrl: () => "http://proxy.example:8080",
       }),
     ).rejects.toThrow("Unsupported APNs authority");
   });
