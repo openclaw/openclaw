@@ -404,6 +404,54 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
   });
 
+  it("does not let runtime fallback metadata override official catalog install specs", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "acpx",
+      targetDir: "/tmp/openclaw-plugins/acpx",
+      version: "2026.5.2-beta.2",
+      npmResolution: {
+        name: "@openclaw/acpx",
+        version: "2026.5.2-beta.2",
+        resolvedSpec: "@openclaw/acpx@2026.5.2-beta.2",
+        integrity: "sha512-acpx",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "acpx",
+        label: "ACPX Runtime",
+        install: {
+          npmSpec: "@openclaw/acpx",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        acp: {
+          backend: "acpx",
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/acpx",
+        expectedPluginId: "acpx",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "acpx" from @openclaw/acpx.',
+    ]);
+  });
+
   it("does not install disabled configured plugin entries", async () => {
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
@@ -580,6 +628,83 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       warnings: [],
     });
   });
+
+  it.each([
+    [
+      "npm",
+      {
+        source: "npm",
+        spec: "@openclaw/matrix-fork",
+        resolvedName: "@openclaw/matrix-fork",
+        resolvedSpec: "@openclaw/matrix-fork@1.2.3",
+        installPath: "/missing/matrix-fork",
+      },
+    ],
+    [
+      "clawhub",
+      {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/matrix-fork@stable",
+        clawhubPackage: "@openclaw/matrix-fork",
+        installPath: "/missing/matrix-fork",
+      },
+    ],
+  ])(
+    "keeps %s install records whose package names only share a bundled prefix",
+    async (_, record) => {
+      const records = { matrix: record };
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+      mocks.listChannelPluginCatalogEntries.mockReturnValue([
+        {
+          id: "matrix",
+          pluginId: "matrix",
+          origin: "bundled",
+          meta: { label: "Matrix" },
+          install: {
+            npmSpec: "@openclaw/matrix",
+          },
+        },
+      ]);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        plugins: [
+          {
+            id: "matrix",
+            origin: "bundled",
+            packageName: "@openclaw/matrix",
+            channels: ["matrix"],
+          },
+        ],
+        diagnostics: [
+          {
+            pluginId: "matrix",
+            message: "manifest without channelConfigs metadata",
+          },
+        ],
+      });
+
+      const { repairMissingConfiguredPluginInstalls } =
+        await import("./missing-configured-plugin-install.js");
+      const result = await repairMissingConfiguredPluginInstalls({
+        cfg: {
+          plugins: {
+            entries: {
+              matrix: { enabled: true },
+            },
+          },
+          channels: {
+            matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+          },
+        },
+        env: {},
+      });
+
+      expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+      expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+      expect(result).toEqual({ changes: [], warnings: [] });
+    },
+  );
 
   it("defers missing external payload repair during the package update doctor pass", async () => {
     const records = {

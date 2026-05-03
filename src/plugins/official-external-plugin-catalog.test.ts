@@ -23,17 +23,17 @@ describe("official external plugin catalog", () => {
     );
   });
 
-  it("opts current beta-only official launch packages into prerelease npm tags", () => {
+  it("keeps official launch package specs on the production package names", () => {
     expect(
       resolveOfficialExternalPluginInstall(getOfficialExternalPluginCatalogEntry("acpx")!)?.npmSpec,
-    ).toBe("@openclaw/acpx@beta");
+    ).toBe("@openclaw/acpx");
     expect(
       resolveOfficialExternalPluginInstall(getOfficialExternalPluginCatalogEntry("googlechat")!)
         ?.npmSpec,
-    ).toBe("@openclaw/googlechat@beta");
+    ).toBe("@openclaw/googlechat");
     expect(
       resolveOfficialExternalPluginInstall(getOfficialExternalPluginCatalogEntry("line")!)?.npmSpec,
-    ).toBe("@openclaw/line@beta");
+    ).toBe("@openclaw/line");
   });
 
   it("keeps Matrix and Mattermost out of the external catalog until cutover", () => {

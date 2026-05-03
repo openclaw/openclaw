@@ -34,7 +34,7 @@ function npmViewArgv(spec: string): string[] {
   return ["npm", "view", spec, "name", "version", "dist.integrity", "dist.shasum", "--json"];
 }
 
-function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string; spec: string }) {
+function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string }) {
   const installCalls = params.calls.filter(
     (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
   );
@@ -49,7 +49,6 @@ function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string;
     "--no-fund",
     "--prefix",
     params.npmRoot,
-    params.spec,
   ]);
 }
 
@@ -150,7 +149,6 @@ function mockNpmViewAndInstallMany(
     peerDependencies?: Record<string, string>;
   }>,
 ) {
-  const packagesBySpec = new Map(packages.map((pkg) => [pkg.spec, pkg]));
   const packagesByName = new Map(packages.map((pkg) => [pkg.packageName, pkg]));
   runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
     const viewPackage = packages.find(
@@ -169,12 +167,21 @@ function mockNpmViewAndInstallMany(
       );
     }
     if (argv[0] === "npm" && argv[1] === "install") {
-      const spec = argv.at(-1);
-      const pkg = spec ? packagesBySpec.get(spec) : undefined;
-      if (!pkg) {
-        throw new Error(`unexpected npm install spec: ${spec ?? ""}`);
+      const prefixIndex = argv.indexOf("--prefix");
+      const npmRoot = prefixIndex >= 0 ? argv[prefixIndex + 1] : undefined;
+      if (!npmRoot) {
+        throw new Error(`unexpected npm install command: ${argv.join(" ")}`);
       }
-      writeInstalledNpmPlugin(pkg);
+      const manifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      for (const packageName of Object.keys(manifest.dependencies ?? {})) {
+        const pkg = packagesByName.get(packageName);
+        if (!pkg) {
+          throw new Error(`unexpected managed npm dependency: ${packageName}`);
+        }
+        writeInstalledNpmPlugin(pkg);
+      }
       return successfulSpawn();
     }
     if (argv[0] === "npm" && argv[1] === "uninstall") {
@@ -236,7 +243,6 @@ describe("installPluginFromNpmSpec", () => {
     expectNpmInstallIntoRoot({
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot,
-      spec: "@openclaw/voice-call@0.0.1",
     });
   });
 
@@ -348,7 +354,6 @@ describe("installPluginFromNpmSpec", () => {
     expectNpmInstallIntoRoot({
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot,
-      spec: "dangerous-plugin@1.0.0",
     });
   });
 
@@ -525,7 +530,6 @@ describe("installPluginFromNpmSpec", () => {
       expectNpmInstallIntoRoot({
         calls: runCommandWithTimeoutMock.mock.calls,
         npmRoot,
-        spec,
       });
     },
   );
@@ -599,8 +603,51 @@ describe("installPluginFromNpmSpec", () => {
     expectNpmInstallIntoRoot({
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot,
-      spec: "@openclaw/voice-call@0.0.2",
     });
+  });
+
+  it("preserves previously installed sibling plugins during npm install", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/voice-call@0.0.1",
+        packageName: "@openclaw/voice-call",
+        version: "0.0.1",
+        pluginId: "voice-call",
+        npmRoot,
+      },
+      {
+        spec: "@openclaw/whatsapp@0.0.1",
+        packageName: "@openclaw/whatsapp",
+        version: "0.0.1",
+        pluginId: "whatsapp",
+        npmRoot,
+      },
+    ]);
+
+    const result1 = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call@0.0.1",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+    expect(result1.ok).toBe(true);
+
+    runCommandWithTimeoutMock.mockClear();
+    const result2 = await installPluginFromNpmSpec({
+      spec: "@openclaw/whatsapp@0.0.1",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+    expect(result2.ok).toBe(true);
+
+    expectNpmInstallIntoRoot({
+      calls: runCommandWithTimeoutMock.mock.calls,
+      npmRoot,
+    });
+    expect(fs.existsSync(path.join(npmRoot, "node_modules", "@openclaw", "voice-call"))).toBe(true);
+    expect(fs.existsSync(path.join(npmRoot, "node_modules", "@openclaw", "whatsapp"))).toBe(true);
   });
 
   it("aborts when integrity drift callback rejects the fetched artifact", async () => {
@@ -689,7 +736,6 @@ describe("installPluginFromNpmSpec", () => {
     expectNpmInstallIntoRoot({
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot,
-      spec: "@openclaw/voice-call@beta",
     });
   });
 });

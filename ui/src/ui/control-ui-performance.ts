@@ -4,6 +4,7 @@ import type { Tab } from "./navigation.ts";
 
 type ControlUiPerformanceHost = {
   tab: Tab;
+  isConnected?: boolean;
   eventLog?: unknown[];
   eventLogBuffer?: unknown[];
   requestUpdate?: () => void;
@@ -89,7 +90,7 @@ export function scheduleControlUiTabVisibleTiming(
   host.requestUpdate?.();
 
   const record = () => {
-    if (host.controlUiTabPaintSeq !== seq || host.tab !== tab) {
+    if (host.isConnected === false || host.controlUiTabPaintSeq !== seq || host.tab !== tab) {
       return;
     }
     recordControlUiPerformanceEvent(host, "control-ui.tab.visible", {

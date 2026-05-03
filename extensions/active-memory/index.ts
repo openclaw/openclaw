@@ -2273,6 +2273,7 @@ async function runRecallSubagent(params: {
 
   try {
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
+    const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
     const result = await params.api.runtime.agent.runEmbeddedPiAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
@@ -2286,7 +2287,7 @@ async function runRecallSubagent(params: {
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
-      timeoutMs: params.config.timeoutMs,
+      timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
       toolsAllow: ["memory_recall", "memory_search", "memory_get"],
