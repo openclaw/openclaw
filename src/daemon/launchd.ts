@@ -444,9 +444,10 @@ export async function repairLaunchAgentBootstrap(args: {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
-  await execLaunchctl(["enable", `${domain}/${label}`]);
+  const serviceTarget = `${domain}/${label}`;
+  await execLaunchctl(["enable", serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
-  let repairStatus: LaunchAgentBootstrapRepairResult["status"] = "repaired";
+  let repairStatus: "repaired" | "already-loaded" = "repaired";
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
     const normalized = normalizeLowercaseStringOrEmpty(detail);
@@ -456,7 +457,11 @@ export async function repairLaunchAgentBootstrap(args: {
     }
     repairStatus = "already-loaded";
   }
-  const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+  if (repairStatus === "repaired") {
+    return { ok: true, status: repairStatus };
+  }
+
+  const kick = await execLaunchctl(["kickstart", serviceTarget]);
   if (kick.code !== 0) {
     return {
       ok: false,
