@@ -265,17 +265,17 @@ describe("exec approval reply helpers", () => {
           buttons: [
             {
               label: "Allow Once",
-              value: "/approve req-1 allow-once",
+              value: "/approve slug-1 allow-once",
               style: "success",
             },
             {
               label: "Allow Always",
-              value: "/approve req-1 allow-always",
+              value: "/approve slug-1 allow-always",
               style: "primary",
             },
             {
               label: "Deny",
-              value: "/approve req-1 deny",
+              value: "/approve slug-1 deny",
               style: "danger",
             },
           ],
@@ -331,12 +331,12 @@ describe("exec approval reply helpers", () => {
           buttons: [
             {
               label: "Allow Once",
-              value: "/approve req-ask-always allow-once",
+              value: "/approve slug-always allow-once",
               style: "success",
             },
             {
               label: "Deny",
-              value: "/approve req-ask-always deny",
+              value: "/approve slug-always deny",
               style: "danger",
             },
           ],

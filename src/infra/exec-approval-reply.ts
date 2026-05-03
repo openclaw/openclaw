@@ -335,10 +335,7 @@ export function buildExecApprovalPendingReplyPayload(
 
   return {
     text: lines.join("\n\n"),
-    interactive: buildApprovalInteractiveReply({
-      approvalId: params.approvalId,
-      allowedDecisions,
-    }),
+    interactive: buildApprovalInteractiveReplyFromActionDescriptors(descriptors),
     channelData: {
       execApproval: {
         approvalId: params.approvalId,

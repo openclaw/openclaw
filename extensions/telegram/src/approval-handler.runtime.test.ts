@@ -3,7 +3,7 @@ import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
 type TelegramPayload = {
   text: string;
-  buttons?: Array<Array<{ text: string }>>;
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
 };
 
 describe("telegramApprovalNativeRuntime", () => {
@@ -48,6 +48,65 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(payload.text).toContain("/approve req-1 allow-once");
     expect(payload.text).not.toContain("allow-always");
     expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
+  });
+
+  it("keeps exec approval callbacks compact enough for Telegram inline buttons", async () => {
+    const approvalId = "a1bcdef0-long-approval-id-that-would-overflow-telegram-callback-data";
+    const approvalSlug = approvalId.slice(0, 8);
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: approvalId,
+        request: {
+          command: "echo hi",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId,
+        commandText: "echo hi",
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: `/approve ${approvalId} allow-once`,
+            style: "success",
+          },
+          {
+            decision: "allow-always",
+            label: "Allow Always",
+            command: `/approve ${approvalId} allow-always`,
+            style: "primary",
+          },
+          {
+            decision: "deny",
+            label: "Deny",
+            command: `/approve ${approvalId} deny`,
+            style: "danger",
+          },
+        ],
+      } as never,
+    })) as TelegramPayload;
+
+    expect(payload.text).toContain(`/approve ${approvalSlug} allow-once`);
+    expect(payload.buttons?.[0]?.map((button) => button.callback_data)).toEqual([
+      `/approve ${approvalSlug} allow-once`,
+      `/approve ${approvalSlug} always`,
+      `/approve ${approvalSlug} deny`,
+    ]);
+    expect(
+      payload.buttons?.[0]?.every(
+        (button) => Buffer.byteLength(button.callback_data, "utf8") <= 64,
+      ),
+    ).toBe(true);
   });
 
   it("passes topic thread ids to typing and message delivery", async () => {

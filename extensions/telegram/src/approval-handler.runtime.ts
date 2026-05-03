@@ -6,7 +6,6 @@ import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/a
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
-  buildApprovalInteractiveReplyFromActionDescriptors,
   buildExecApprovalPendingReplyPayload,
   type ExecApprovalPendingReplyParams,
   type ExecApprovalRequest,
@@ -63,6 +62,7 @@ function buildPendingPayload(params: {
   nowMs: number;
   view: PendingApprovalView;
 }): TelegramPendingDelivery {
+  const approvalCommandId = params.request.id.slice(0, 8);
   const payload =
     params.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({
@@ -71,8 +71,8 @@ function buildPendingPayload(params: {
         })
       : buildExecApprovalPendingReplyPayload({
           approvalId: params.request.id,
-          approvalSlug: params.request.id.slice(0, 8),
-          approvalCommandId: params.request.id,
+          approvalSlug: approvalCommandId,
+          approvalCommandId,
           command: params.view.approvalKind === "exec" ? params.view.commandText : "",
           cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
           host:
@@ -86,7 +86,7 @@ function buildPendingPayload(params: {
   return {
     text: payload.text ?? "",
     buttons: resolveTelegramInlineButtons({
-      interactive: buildApprovalInteractiveReplyFromActionDescriptors(params.view.actions),
+      interactive: payload.interactive,
     }),
   };
 }

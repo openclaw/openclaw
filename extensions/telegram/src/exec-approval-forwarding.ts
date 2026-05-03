@@ -33,7 +33,7 @@ export function buildTelegramExecApprovalPendingPayload(params: {
   return buildExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
-    approvalCommandId: params.request.id,
+    approvalCommandId: params.request.id.slice(0, 8),
     command: resolveExecApprovalCommandDisplay(params.request.request).commandText,
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",
