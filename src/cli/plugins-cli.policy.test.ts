@@ -32,6 +32,7 @@ describe("plugins cli policy mutations", () => {
   }
 
   it("refreshes the persisted plugin registry after enabling a plugin", async () => {
+    const sourceConfig = {} as OpenClawConfig;
     const enabledConfig = {
       plugins: {
         entries: {
@@ -39,7 +40,7 @@ describe("plugins cli policy mutations", () => {
         },
       },
     } as OpenClawConfig;
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    loadConfig.mockReturnValue(sourceConfig);
     enablePluginInConfig.mockReturnValue({
       config: enabledConfig,
       enabled: true,
@@ -49,6 +50,9 @@ describe("plugins cli policy mutations", () => {
 
     await runPluginsCommand(["plugins", "enable", "alpha"]);
 
+    expect(enablePluginInConfig).toHaveBeenCalledWith(sourceConfig, "alpha", {
+      updateChannelConfig: false,
+    });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: enabledConfig,
@@ -100,7 +104,9 @@ describe("plugins cli policy mutations", () => {
 
       await runPluginsCommand(["plugins", "enable", alias]);
 
-      expect(enablePluginInConfig).toHaveBeenCalledWith(sourceConfig, pluginId);
+      expect(enablePluginInConfig).toHaveBeenCalledWith(sourceConfig, pluginId, {
+        updateChannelConfig: false,
+      });
       expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
     },
   );
@@ -142,4 +148,15 @@ describe("plugins cli policy mutations", () => {
       expect(refreshPluginRegistry).not.toHaveBeenCalled();
     },
   );
+
+  it("does not create a channel config when disabling a channel plugin by policy", async () => {
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    mockPluginRegistry(["twitch"]);
+
+    await runPluginsCommand(["plugins", "disable", "twitch"]);
+
+    const nextConfig = writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+    expect(nextConfig.plugins?.entries?.twitch?.enabled).toBe(false);
+    expect(nextConfig.channels?.twitch).toBeUndefined();
+  });
 });

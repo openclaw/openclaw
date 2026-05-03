@@ -609,7 +609,7 @@ For tooling that writes config over the gateway API, prefer this flow:
 - `config.patch` for partial updates (JSON merge patch: objects merge, `null`
   deletes, arrays replace)
 - `config.apply` only when you intend to replace the entire config
-- `update.run` for explicit self-update plus restart
+- `update.run` for explicit self-update plus restart; include `continuationMessage` when the post-restart session should run one follow-up turn
 - `update.status` to inspect the latest update restart sentinel and verify the running version after a restart
 
 Agents should treat `config.schema.lookup` as the first stop for exact

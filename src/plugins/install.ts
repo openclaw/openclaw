@@ -8,9 +8,11 @@ import {
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
+  readManagedNpmRootInstalledDependency,
   removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
   upsertManagedNpmRootDependency,
+  type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
 import {
   formatPrereleaseResolutionError,
@@ -115,12 +117,6 @@ type PluginInstallPolicyRequest = {
 };
 
 const defaultLogger: PluginInstallLogger = {};
-const TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES = new Map([
-  ["@openclaw/acpx", "acpx"],
-  ["@openclaw/codex", "codex"],
-  ["@openclaw/google-meet", "google-meet"],
-  ["@openclaw/voice-call", "voice-call"],
-]);
 
 function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
   | {
@@ -196,26 +192,6 @@ function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
   );
 }
 
-function isTrustedOfficialNpmPluginInstall(params: {
-  installPolicyRequest?: PluginInstallPolicyRequest;
-  packageName: string;
-  pluginId: string;
-}): boolean {
-  if (params.installPolicyRequest?.kind !== "plugin-npm") {
-    return false;
-  }
-  const requested = parseRegistryNpmSpec(params.installPolicyRequest.requestedSpecifier ?? "");
-  if (!requested) {
-    return false;
-  }
-  const expectedPluginId = TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES.get(requested.name);
-  return (
-    expectedPluginId !== undefined &&
-    params.packageName === requested.name &&
-    params.pluginId === expectedPluginId
-  );
-}
-
 function buildBlockedInstallResult(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
 }): Extract<InstallPluginResult, { ok: false }> {
@@ -247,10 +223,11 @@ async function rollbackManagedNpmPluginInstall(params: {
         "--no-audit",
         "--no-fund",
         "--prefix",
-        params.npmRoot,
+        ".",
         params.packageName,
       ],
       {
+        cwd: params.npmRoot,
         timeoutMs: Math.max(params.timeoutMs, 300_000),
         env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
       },
@@ -277,6 +254,23 @@ async function rollbackManagedNpmPluginInstall(params: {
       `Failed to remove managed npm dependency ${params.packageName}: ${String(error)}`,
     );
   }
+}
+
+function resolveInstalledNpmResolutionMismatch(params: {
+  packageName: string;
+  expected: NpmSpecResolution;
+  installed: ManagedNpmRootInstalledDependency | null;
+}): string | null {
+  if (!params.installed) {
+    return `npm install did not record package-lock metadata for ${params.packageName}`;
+  }
+  if (params.expected.version && params.installed.version !== params.expected.version) {
+    return `npm install resolved ${params.packageName} to version ${params.installed.version ?? "unknown"}, expected ${params.expected.version}`;
+  }
+  if (params.expected.integrity && params.installed.integrity !== params.expected.integrity) {
+    return `npm install resolved ${params.packageName} with integrity ${params.installed.integrity ?? "unknown"}, expected ${params.expected.integrity}`;
+  }
+  return null;
 }
 
 type PackageInstallCommonParams = InstallSafetyOverrides & {
@@ -777,19 +771,12 @@ async function validatePackagePluginInstallSource(params: {
   const scanMode = params.resolveEffectiveMode
     ? await params.resolveEffectiveMode(pluginId)
     : params.mode;
-  const trustedOfficialInstall =
-    params.trustedSourceLinkedOfficialInstall ||
-    isTrustedOfficialNpmPluginInstall({
-      installPolicyRequest: params.installPolicyRequest,
-      packageName: pkgName,
-      pluginId,
-    });
   const scanResult = await runInstallSourceScan({
     subject: `Plugin "${pluginId}"`,
     scan: async () =>
       await params.runtime.scanPackageInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        trustedSourceLinkedOfficialInstall: trustedOfficialInstall,
+        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
         packageDir: params.packageDir,
         pluginId,
         logger: params.logger,
@@ -832,6 +819,9 @@ async function scanAndLinkInstalledPackage(params: {
     subject: `Plugin "${params.pluginId}"`,
     scan: async () =>
       await params.runtime.scanInstalledPackageDependencyTree({
+        allowManagedNpmRootPackagePeerSymlinks:
+          params.dependencyScanRootDir !== undefined &&
+          path.resolve(params.dependencyScanRootDir) !== path.resolve(params.installedDir),
         logger: params.logger,
         packageDir: params.dependencyScanRootDir ?? params.installedDir,
         pluginId: params.pluginId,
@@ -1254,10 +1244,10 @@ export async function installPluginFromNpmSpec(
         noFund: true,
       }),
       "--prefix",
-      npmRoot,
-      spec,
+      ".",
     ],
     {
+      cwd: npmRoot,
       timeoutMs: Math.max(timeoutMs, 300_000),
       env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
     },
@@ -1273,12 +1263,51 @@ export async function installPluginFromNpmSpec(
     };
   }
 
+  let installedDependency: ManagedNpmRootInstalledDependency | null;
+  try {
+    installedDependency = await readManagedNpmRootInstalledDependency({
+      npmRoot,
+      packageName: parsedSpec.name,
+    });
+  } catch (error) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: parsedSpec.name,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
+    return {
+      ok: false,
+      error: `Failed to verify npm install metadata for ${parsedSpec.name}: ${String(error)}`,
+    };
+  }
+  const resolutionMismatch = resolveInstalledNpmResolutionMismatch({
+    packageName: parsedSpec.name,
+    expected: npmResolution,
+    installed: installedDependency,
+  });
+  if (resolutionMismatch) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: parsedSpec.name,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
+    return {
+      ok: false,
+      error: resolutionMismatch,
+    };
+  }
+
   const result = await installPluginFromInstalledPackageDir({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     packageDir: installRoot,
     dependencyScanRootDir: npmRoot,
     logger,
     expectedPluginId,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     mode: effectiveMode,
     installPolicyRequest: {
       kind: "plugin-npm",

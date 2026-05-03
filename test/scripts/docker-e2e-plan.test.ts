@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LIVE_RETRIES,
@@ -8,6 +9,9 @@ import {
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mjs";
 
 const orderLanes = <T>(lanes: T[]) => lanes;
+const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+  scripts?: Record<string, string>;
+};
 
 function planFor(
   overrides: Partial<Parameters<typeof resolveDockerE2ePlan>[0]> = {},
@@ -238,6 +242,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "bundled-plugin-install-uninstall-22",
       "bundled-plugin-install-uninstall-23",
     ]);
+  });
+
+  it("keeps planned pnpm docker lanes backed by package scripts", () => {
+    const plan = planFor({
+      includeOpenWebUI: true,
+      planReleaseAll: true,
+      profile: RELEASE_PATH_PROFILE,
+    });
+    const scripts = packageJson.scripts ?? {};
+    const missing = plan.lanes
+      .flatMap((lane) =>
+        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu), (match) => ({
+          lane: lane.name,
+          script: match[1],
+        })),
+      )
+      .filter(({ script }) => !scripts[script]);
+
+    expect(missing).toEqual([]);
   });
 
   it("keeps legacy release chunk names as aggregate aliases", () => {

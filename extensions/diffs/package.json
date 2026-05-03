@@ -33,7 +33,13 @@
       "pluginApi": ">=2026.5.3"
     },
     "build": {
-      "openclawVersion": "2026.5.3"
+      "openclawVersion": "2026.5.3",
+      "staticAssets": [
+        {
+          "source": "./assets/viewer-runtime.js",
+          "output": "assets/viewer-runtime.js"
+        }
+      ]
     },
     "release": {
       "publishToClawHub": true,

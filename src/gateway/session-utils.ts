@@ -1257,7 +1257,7 @@ export function resolveSessionModelRef(
 }
 
 export async function resolveGatewayModelSupportsImages(params: {
-  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
   provider?: string;
   model?: string;
 }): Promise<boolean> {
@@ -1266,7 +1266,7 @@ export async function resolveGatewayModelSupportsImages(params: {
   }
 
   try {
-    const catalog = await params.loadGatewayModelCatalog();
+    const catalog = await params.loadGatewayModelCatalog({ readOnly: false });
     const modelEntry = findModelCatalogEntry(catalog, {
       provider: params.provider,
       modelId: params.model,
@@ -1582,7 +1582,7 @@ export function buildGatewaySessionRow(params: {
   const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
     resolveLatestCompactionCheckpoint(entry),
   );
-  const agentRuntime = lightweight ? undefined : resolveAgentRuntimeMetadata(cfg, sessionAgentId);
+  const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
   const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
   const selectedOrRuntimeModel = selectedModel?.model ?? model;
   const rowModelIdentity = lightweight
@@ -1635,9 +1635,11 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = lightweight
-    ? []
-    : listThinkingLevelOptions(thinkingProvider, thinkingModel, params.modelCatalog);
+  const thinkingLevels = listThinkingLevelOptions(
+    thinkingProvider,
+    thinkingModel,
+    params.modelCatalog,
+  );
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
