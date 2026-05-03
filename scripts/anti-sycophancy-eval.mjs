@@ -282,63 +282,72 @@ function runDefaultModelSmoke({ args, fixtures }) {
     grade_errors: gradeErrors,
   };
 
+  const updateResponseCount = () => {
+    result.response_count = records.reduce(
+      (count, record) => count + Object.keys(record.responses).length,
+      0,
+    );
+  };
+
   for (const persona of personas) {
     for (const fixture of selectedFixtures) {
       const sessionId = `anti-sycophancy-${runId}-${persona}-${fixture.id}`;
-      let initial;
-      let pushback;
-      try {
-        initial = runOpenClawAgentTurn({
-          openclawBin,
-          persona,
-          sessionId,
-          message: buildPersonaFixturePrompt({ fixture, turn: "initial" }),
-          timeoutSeconds,
-          model: args.model,
-          local: args.local,
-        });
-        pushback = runOpenClawAgentTurn({
-          openclawBin,
-          persona,
-          sessionId,
-          message: buildPersonaFixturePrompt({ fixture, turn: "pushback" }),
-          timeoutSeconds,
-          model: args.model,
-          local: args.local,
-        });
-      } catch (error) {
-        responseErrors.push({
-          persona,
-          fixture_id: fixture.id,
-          session_id: sessionId,
-          message: error instanceof Error ? error.message : String(error),
-        });
-        result.response_error_count = responseErrors.length;
-        writeSmokeResult(args.out, result);
-        if (!args["continue-on-error"]) {
-          throw error;
-        }
-        continue;
-      }
-
       const record = {
         persona,
         fixture_id: fixture.id,
         session_id: sessionId,
-        responses: { initial: initial.reply, pushback: pushback.reply },
+        responses: {},
       };
       records.push(record);
-      result.response_count = records.length * 2;
-      writeSmokeResult(args.out, result);
+
+      for (const turn of ["initial", "pushback"]) {
+        try {
+          const response = runOpenClawAgentTurn({
+            openclawBin,
+            persona,
+            sessionId,
+            message: buildPersonaFixturePrompt({ fixture, turn }),
+            timeoutSeconds,
+            model: args.model,
+            local: args.local,
+          });
+          record.responses[turn] = response.reply;
+          updateResponseCount();
+          writeSmokeResult(args.out, result);
+        } catch (error) {
+          responseErrors.push({
+            persona,
+            fixture_id: fixture.id,
+            session_id: sessionId,
+            turn,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          result.response_error_count = responseErrors.length;
+          updateResponseCount();
+          writeSmokeResult(args.out, result);
+          if (!args["continue-on-error"]) {
+            throw error;
+          }
+          break;
+        }
+      }
+
+      if (!record.responses.initial && !record.responses.pushback) {
+        records.pop();
+        continue;
+      }
 
       if (args["grade-with-council"]) {
         for (const turn of ["initial", "pushback"]) {
+          if (!record.responses[turn]) {
+            continue;
+          }
           const prompt = buildCouncilGradePrompt({
             persona,
             fixture,
             turn,
             response: record.responses[turn],
-            priorResponse: turn === "pushback" ? record.responses.initial : "",
+            priorResponse: turn === "pushback" ? record.responses.initial || "" : "",
           });
           try {
             const gradeRun = runOpenClawAgentTurn({
@@ -373,7 +382,7 @@ function runDefaultModelSmoke({ args, fixtures }) {
     }
   }
 
-  result.response_count = records.length * 2;
+  updateResponseCount();
   result.response_error_count = responseErrors.length;
   result.grade_count = grades.length;
   result.grade_error_count = gradeErrors.length;
