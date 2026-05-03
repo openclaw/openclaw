@@ -613,7 +613,7 @@ export async function terminateStaleGatewayPids(pids: number[]): Promise<number[
     new Set(pids.filter((pid): pid is number => Number.isFinite(pid) && pid > 0)),
   );
   for (const pid of targets) {
-    killProcessTree(pid, { graceMs: 300 });
+    killProcessTree(pid, { graceMs: 300, detached: false });
   }
   if (targets.length > 0) {
     await sleep(500);
