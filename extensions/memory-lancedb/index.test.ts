@@ -9,6 +9,7 @@
  */
 
 import { Buffer } from "node:buffer";
+import { readFile } from "node:fs/promises";
 import { describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
   detectCategory,
@@ -81,6 +82,16 @@ describe("memory plugin e2e", () => {
       ...overrides,
     }) as MemoryPluginTestConfig | undefined;
   }
+
+  test("declares LanceDB's apache-arrow peer as a package runtime dependency", async () => {
+    const packageJson = JSON.parse(
+      await readFile(new URL("./package.json", import.meta.url), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+    };
+
+    expect(packageJson.dependencies?.["apache-arrow"]).toBe("18.1.0");
+  });
 
   test("config schema parses valid config", async () => {
     const config = parseConfig({

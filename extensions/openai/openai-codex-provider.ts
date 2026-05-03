@@ -363,6 +363,7 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
   return buildOauthProviderAuthResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+    profileId: ctx.profileId,
     access: creds.access,
     refresh: creds.refresh,
     expires: creds.expires,
@@ -413,6 +414,7 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
       defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+      profileId: ctx.profileId,
       access: creds.access,
       refresh: creds.refresh,
       expires: creds.expires,

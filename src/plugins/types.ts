@@ -320,6 +320,13 @@ export type ProviderAuthContext = {
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
+  /**
+   * Optional caller-requested auth profile id for interactive login flows.
+   *
+   * Provider methods may honor this when the provider cannot derive a stable
+   * account-specific id from the upstream OAuth/token response.
+   */
+  profileId?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   /**

@@ -7,6 +7,7 @@ import type { ProviderAuthResult } from "../plugins/types.js";
 export function buildOauthProviderAuthResult(params: {
   providerId: string;
   defaultModel: string;
+  profileId?: string | null;
   access: string;
   refresh?: string | null;
   expires?: number | null;
@@ -25,6 +26,7 @@ export function buildOauthProviderAuthResult(params: {
     profilePrefix: params.profilePrefix,
     profileName: params.profileName ?? email,
   });
+  const requestedProfileId = params.profileId?.trim();
 
   const credential: AuthProfileCredential = {
     type: "oauth",
@@ -38,7 +40,7 @@ export function buildOauthProviderAuthResult(params: {
   } as AuthProfileCredential;
 
   return {
-    profiles: [{ profileId, credential }],
+    profiles: [{ profileId: requestedProfileId || profileId, credential }],
     configPatch:
       params.configPatch ??
       ({

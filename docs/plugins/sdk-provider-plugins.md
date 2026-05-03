@@ -174,6 +174,11 @@ API key auth, and dynamic model resolution.
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
+    Interactive provider auth methods receive `ctx.profileId` when the caller
+    passes `openclaw models auth login --profile-id <id>`. OAuth providers that
+    cannot derive a stable account-specific profile id from upstream identity
+    data should pass that value through to their auth result.
+
     If the upstream provider uses different control tokens than OpenClaw, add a
     small bidirectional text transform instead of replacing the stream path:
 

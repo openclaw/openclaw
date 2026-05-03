@@ -445,6 +445,49 @@ describe("modelsAuthLoginCommand", () => {
     );
   });
 
+  it("passes an explicit profile id through provider auth login", async () => {
+    const runtime = createRuntime();
+    runProviderAuth.mockImplementation(async (ctx) => ({
+      profiles: [
+        {
+          profileId: ctx.profileId,
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ],
+      defaultModel: "openai-codex/gpt-5.5",
+    }));
+
+    await modelsAuthLoginCommand(
+      { provider: "openai-codex", profileId: "openai-codex:account2" },
+      runtime,
+    );
+
+    expect(runProviderAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "openai-codex:account2" }),
+    );
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai-codex:account2",
+      credential: expect.objectContaining({
+        type: "oauth",
+        provider: "openai-codex",
+      }),
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:account2"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Auth profile: openai-codex:account2 (openai-codex/oauth)",
+    );
+  });
+
   it("loads the owning plugin for an explicit provider even in a clean config", async () => {
     const runtime = createRuntime();
     const runClaudeCliMigration = vi.fn().mockResolvedValue({
