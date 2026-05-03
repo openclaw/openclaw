@@ -570,6 +570,26 @@ Behavior notes:
 
   </Accordion>
 
+  <Accordion title="Messages lost after reconnect">
+    Symptom: messages sent while the gateway was disconnected are read on WhatsApp but never get an auto-reply. Common after a transport restart, prekey renegotiation, or short network blip.
+
+    By default, offline catch-up messages (Baileys `messages.upsert` with `type: "append"`) are skipped to avoid replaying stale history. Opt in to processing them with `replyToOfflineMessages`. The age cap (`offlineMessageMaxAgeSeconds`, default 300) prevents flooding when a long-disconnected gateway reconnects:
+
+    ```json5
+    {
+      channels: {
+        whatsapp: {
+          replyToOfflineMessages: true,
+          offlineMessageMaxAgeSeconds: 300,
+        },
+      },
+    }
+    ```
+
+    Untimestamped or invalid-timestamp catch-up messages are always rejected, regardless of the age cap.
+
+  </Accordion>
+
   <Accordion title="QR login times out behind a proxy">
     Symptom: `openclaw channels login --channel whatsapp` fails before showing a usable QR code with `status=408 Request Time-out` or a TLS socket disconnect.
 
@@ -691,7 +711,7 @@ High-signal WhatsApp fields:
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
 - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
-- operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`
+- operations: `configWrites`, `debounceMs`, `replyToOfflineMessages`, `offlineMessageMaxAgeSeconds`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
 - prompts: `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt`
 

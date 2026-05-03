@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/diagnostics: make diagnostics OpenTelemetry and Prometheus ClawHub-first installs while keeping npm fallback metadata for release cutovers. Thanks @vincentkoc.
 - Plugins/onboarding: carry ClawHub install metadata through channel setup catalogs so missing channel plugins can install from ClawHub before npm/local fallback. Thanks @vincentkoc.
 - Plugins/runtime: scope broad runtime preloads to the effective plugin ids derived from config, startup planning, configured channels, slots, and auto-enable rules instead of importing every discoverable plugin.
+- WhatsApp: add opt-in `replyToOfflineMessages` and `offlineMessageMaxAgeSeconds` config so offline catch-up messages received after a reconnect can be processed instead of silently skipped, with a default 5-minute age cap and explicit rejection of untimestamped appends. Refs #50093, #19856, #1619, #18672, #1952, #2767, #20952, #14069. Thanks @rafaelmariano-glitch and @faahim.
 
 ### Fixes
 
