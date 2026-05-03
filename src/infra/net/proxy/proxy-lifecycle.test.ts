@@ -125,7 +125,7 @@ describe("startProxy", () => {
       proxyUrl: "http://127.0.0.1:3128",
     });
 
-    expect(getActiveManagedProxyUrl()).toBe("http://127.0.0.1:3128");
+    expect(getActiveManagedProxyUrl()?.href).toBe("http://127.0.0.1:3128/");
 
     await stopProxy(handle);
 
@@ -291,7 +291,7 @@ describe("startProxy", () => {
     expect((global as Record<string, unknown>)["GLOBAL_AGENT"]).toBeUndefined();
   });
 
-  it("keeps process-wide proxy hooks active until the last same-URL overlapping handle stops", async () => {
+  it("rejects overlapping handles with the same managed proxy URL", async () => {
     const patchedHttpRequest = vi.fn() as unknown as typeof http.request;
     const patchedHttpGet = vi.fn() as unknown as typeof http.get;
     const patchedHttpsRequest = vi.fn() as unknown as typeof https.request;
@@ -311,23 +311,20 @@ describe("startProxy", () => {
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
     });
-    const secondHandle = await startProxy({
-      enabled: true,
-      proxyUrl: "http://127.0.0.1:3128",
-    });
 
-    expect(http.request).toBe(patchedHttpRequest);
-    expect(https.request).toBe(patchedHttpsRequest);
-    expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
-
-    await stopProxy(firstHandle);
+    await expect(
+      startProxy({
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      }),
+    ).rejects.toThrow("cannot activate a managed proxy");
 
     expect(http.request).toBe(patchedHttpRequest);
     expect(https.request).toBe(patchedHttpsRequest);
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
 
-    await stopProxy(secondHandle);
+    await stopProxy(firstHandle);
 
     expect(http.request).toBe(originalHttpRequest);
     expect(http.get).toBe(originalHttpGet);
@@ -348,7 +345,7 @@ describe("startProxy", () => {
         enabled: true,
         proxyUrl: "http://127.0.0.1:3129",
       }),
-    ).rejects.toThrow("cannot activate a different managed proxy");
+    ).rejects.toThrow("cannot activate a managed proxy");
 
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");

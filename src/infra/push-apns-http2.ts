@@ -1,6 +1,9 @@
 import http2 from "node:http2";
 import { openHttpConnectTunnel } from "./net/http-connect-tunnel.js";
-import { getActiveManagedProxyUrl } from "./net/proxy/active-proxy-state.js";
+import {
+  getActiveManagedProxyUrl,
+  type ActiveManagedProxyUrl,
+} from "./net/proxy/active-proxy-state.js";
 
 const APNS_AUTHORITIES = new Set([
   "https://api.push.apple.com",
@@ -43,7 +46,7 @@ function assertApnsAuthority(authority: string): ApnsAuthority {
 
 async function openProxiedApnsHttp2Session(params: {
   authority: ApnsAuthority;
-  proxyUrl: string;
+  proxyUrl: ActiveManagedProxyUrl;
   timeoutMs: number;
 }): Promise<http2.ClientHttp2Session> {
   const apnsHost = new URL(params.authority).hostname;
@@ -81,7 +84,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
   const authority = assertApnsAuthority(params.authority);
   const session = await openProxiedApnsHttp2Session({
     authority,
-    proxyUrl: params.proxyUrl,
+    proxyUrl: new URL(params.proxyUrl),
     timeoutMs: params.timeoutMs,
   });
 

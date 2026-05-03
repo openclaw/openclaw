@@ -1,22 +1,22 @@
+export type ActiveManagedProxyUrl = Readonly<URL>;
+
 export type ActiveManagedProxyRegistration = {
-  proxyUrl: string;
+  proxyUrl: ActiveManagedProxyUrl;
   stopped: boolean;
 };
 
-let activeProxyUrl: string | undefined;
-let activeProxyHandleCount = 0;
+let activeProxyUrl: ActiveManagedProxyUrl | undefined;
 
-export function registerActiveManagedProxyUrl(proxyUrl: string): ActiveManagedProxyRegistration {
-  if (activeProxyUrl !== undefined && activeProxyUrl !== proxyUrl) {
+export function registerActiveManagedProxyUrl(proxyUrl: URL): ActiveManagedProxyRegistration {
+  if (activeProxyUrl !== undefined) {
     throw new Error(
-      "proxy: cannot activate a different managed proxy while another proxy is active; " +
+      "proxy: cannot activate a managed proxy while another proxy is active; " +
         "stop the current proxy before changing proxy.proxyUrl.",
     );
   }
 
-  activeProxyUrl = proxyUrl;
-  activeProxyHandleCount += 1;
-  return { proxyUrl, stopped: false };
+  activeProxyUrl = new URL(proxyUrl.href);
+  return { proxyUrl: activeProxyUrl, stopped: false };
 }
 
 export function stopActiveManagedProxyRegistration(
@@ -26,19 +26,15 @@ export function stopActiveManagedProxyRegistration(
     return;
   }
   registration.stopped = true;
-  if (activeProxyHandleCount > 0) {
-    activeProxyHandleCount -= 1;
-  }
-  if (activeProxyHandleCount === 0) {
+  if (activeProxyUrl?.href === registration.proxyUrl.href) {
     activeProxyUrl = undefined;
   }
 }
 
-export function getActiveManagedProxyUrl(): string | undefined {
+export function getActiveManagedProxyUrl(): ActiveManagedProxyUrl | undefined {
   return activeProxyUrl;
 }
 
 export function _resetActiveManagedProxyStateForTests(): void {
   activeProxyUrl = undefined;
-  activeProxyHandleCount = 0;
 }

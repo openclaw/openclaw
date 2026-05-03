@@ -114,7 +114,7 @@ describe("openHttpConnectTunnel", () => {
     const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
 
     const result = await openHttpConnectTunnel({
-      proxyUrl: "http://proxy.example:8080",
+      proxyUrl: new URL("http://proxy.example:8080"),
       targetHost: "api.push.apple.com",
       targetPort: 443,
       timeoutMs: 10_000,
@@ -146,7 +146,7 @@ describe("openHttpConnectTunnel", () => {
     const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
 
     await openHttpConnectTunnel({
-      proxyUrl: "https://proxy.example:8443",
+      proxyUrl: new URL("https://proxy.example:8443"),
       targetHost: "api.sandbox.push.apple.com",
       targetPort: 443,
     });
@@ -171,7 +171,7 @@ describe("openHttpConnectTunnel", () => {
 
     await expect(
       openHttpConnectTunnel({
-        proxyUrl: "http://user:secret@proxy.example:8080",
+        proxyUrl: new URL("http://user:secret@proxy.example:8080"),
         targetHost: "api.push.apple.com",
         targetPort: 443,
       }),
@@ -192,7 +192,7 @@ describe("openHttpConnectTunnel", () => {
     let caught: unknown;
     try {
       await openHttpConnectTunnel({
-        proxyUrl: "http://user:secret@proxy.example:8080/?token=hidden#fragment",
+        proxyUrl: new URL("http://user:secret@proxy.example:8080/?token=hidden#fragment"),
         targetHost: "api.push.apple.com",
         targetPort: 443,
       });
@@ -219,7 +219,7 @@ describe("openHttpConnectTunnel", () => {
 
     await expect(
       openHttpConnectTunnel({
-        proxyUrl: "http://%E0%A4%A@proxy.example:8080",
+        proxyUrl: new URL("http://%E0%A4%A@proxy.example:8080"),
         targetHost: "api.push.apple.com",
         targetPort: 443,
       }),
@@ -234,7 +234,7 @@ describe("openHttpConnectTunnel", () => {
 
     await expect(
       openHttpConnectTunnel({
-        proxyUrl: "http://proxy.example:8080",
+        proxyUrl: new URL("http://proxy.example:8080"),
         targetHost: "api.push.apple.com",
         targetPort: 443,
       }),
@@ -253,7 +253,7 @@ describe("openHttpConnectTunnel", () => {
 
     let resolved = false;
     const tunnel = openHttpConnectTunnel({
-      proxyUrl: "http://proxy.example:8080",
+      proxyUrl: new URL("http://proxy.example:8080"),
       targetHost: "api.push.apple.com",
       targetPort: 443,
     }).then((socket) => {
@@ -278,7 +278,7 @@ describe("openHttpConnectTunnel", () => {
 
     await expect(
       openHttpConnectTunnel({
-        proxyUrl: "http://proxy.example:8080",
+        proxyUrl: new URL("http://proxy.example:8080"),
         targetHost: "api.push.apple.com",
         targetPort: 443,
       }),
@@ -295,7 +295,7 @@ describe("openHttpConnectTunnel", () => {
 
     await expect(
       openHttpConnectTunnel({
-        proxyUrl: "http://proxy.example:8080",
+        proxyUrl: new URL("http://proxy.example:8080"),
         targetHost: "api.push.apple.com",
         targetPort: 443,
         timeoutMs: 1,

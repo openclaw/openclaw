@@ -1,5 +1,6 @@
 import type http2 from "node:http2";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HttpConnectTunnelParams } from "./net/http-connect-tunnel.js";
 import {
   _resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
@@ -69,7 +70,7 @@ const { connectSpy, tunnelSpy, fakeRequest, fakeSession, fakeTlsSocket } = vi.ho
     fakeSession,
     fakeTlsSocket,
     connectSpy: vi.fn(() => fakeSession),
-    tunnelSpy: vi.fn(async () => fakeTlsSocket),
+    tunnelSpy: vi.fn(async (_params: HttpConnectTunnelParams) => fakeTlsSocket),
   };
 });
 
@@ -112,7 +113,7 @@ describe("connectApnsHttp2Session", () => {
   });
 
   it("uses an HTTP CONNECT tunnel when managed proxy is active", async () => {
-    const registration = registerActiveManagedProxyUrl("http://proxy.example:8080");
+    const registration = registerActiveManagedProxyUrl(new URL("http://proxy.example:8080"));
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
 
     const session = await connectApnsHttp2Session({
@@ -122,12 +123,16 @@ describe("connectApnsHttp2Session", () => {
     stopActiveManagedProxyRegistration(registration);
 
     expect(session).toBe(fakeSession);
-    expect(tunnelSpy).toHaveBeenCalledWith({
-      proxyUrl: "http://proxy.example:8080",
-      targetHost: "api.push.apple.com",
-      targetPort: 443,
-      timeoutMs: 10_000,
-    });
+    const tunnelCall = tunnelSpy.mock.calls.at(-1)?.[0];
+    const proxyUrl = tunnelCall?.proxyUrl;
+    expect(proxyUrl).toBeInstanceOf(URL);
+    if (!(proxyUrl instanceof URL)) {
+      throw new Error("expected active managed proxy URL");
+    }
+    expect(proxyUrl.href).toBe("http://proxy.example:8080/");
+    expect(tunnelCall?.targetHost).toBe("api.push.apple.com");
+    expect(tunnelCall?.targetPort).toBe(443);
+    expect(tunnelCall?.timeoutMs).toBe(10_000);
     expect(connectSpy).toHaveBeenCalledWith("https://api.push.apple.com", {
       createConnection: expect.any(Function),
     });
@@ -170,12 +175,16 @@ describe("connectApnsHttp2Session", () => {
     });
 
     expect(result).toEqual({ status: 403, body: '{"reason":"InvalidProviderToken"}' });
-    expect(tunnelSpy).toHaveBeenCalledWith({
-      proxyUrl: "http://proxy.example:8080",
-      targetHost: "api.sandbox.push.apple.com",
-      targetPort: 443,
-      timeoutMs: 10_000,
-    });
+    const tunnelCall = tunnelSpy.mock.calls.at(-1)?.[0];
+    const proxyUrl = tunnelCall?.proxyUrl;
+    expect(proxyUrl).toBeInstanceOf(URL);
+    if (!(proxyUrl instanceof URL)) {
+      throw new Error("expected explicit proxy URL");
+    }
+    expect(proxyUrl.href).toBe("http://proxy.example:8080/");
+    expect(tunnelCall?.targetHost).toBe("api.sandbox.push.apple.com");
+    expect(tunnelCall?.targetPort).toBe(443);
+    expect(tunnelCall?.timeoutMs).toBe(10_000);
     expect(fakeSession.request).toHaveBeenCalledWith({
       ":method": "POST",
       ":path": `/3/device/${"0".repeat(64)}`,
