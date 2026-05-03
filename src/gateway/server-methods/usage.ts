@@ -397,7 +397,6 @@ function mergeUsageCacheStatus(
     cachedFiles: target.cachedFiles + source.cachedFiles,
     pendingFiles: target.pendingFiles + source.pendingFiles,
     staleFiles: target.staleFiles + source.staleFiles,
-    cachePath: target.cachePath ?? source.cachePath,
     refreshedAt:
       target.refreshedAt === undefined
         ? source.refreshedAt

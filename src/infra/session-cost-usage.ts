@@ -129,6 +129,7 @@ type UsageCostTranscriptFile = {
 type UsageCostCacheLock = {
   pid: number;
   startedAt: number;
+  token?: string;
 };
 
 const cloneTotals = (totals: CostUsageTotals): CostUsageTotals => ({
@@ -183,11 +184,12 @@ async function readUsageCostCacheLock(lockPath: string): Promise<UsageCostCacheL
       !Number.isInteger(lock.pid) ||
       lock.pid <= 0 ||
       typeof lock.startedAt !== "number" ||
-      !Number.isFinite(lock.startedAt)
+      !Number.isFinite(lock.startedAt) ||
+      (lock.token !== undefined && typeof lock.token !== "string")
     ) {
       return null;
     }
-    return { pid: lock.pid, startedAt: lock.startedAt };
+    return { pid: lock.pid, startedAt: lock.startedAt, token: lock.token };
   } catch {
     return null;
   }
@@ -226,14 +228,26 @@ async function acquireUsageCostCacheRefreshLock(cachePath: string): Promise<{
 }> {
   const lockPath = resolveUsageCostCacheLockPath(cachePath);
   await fs.promises.mkdir(path.dirname(lockPath), { recursive: true });
+  const lock: UsageCostCacheLock = {
+    pid: process.pid,
+    startedAt: Date.now(),
+    token: `${process.pid}:${Date.now()}:${process.hrtime.bigint()}`,
+  };
   try {
     const handle = await fs.promises.open(lockPath, "wx");
-    await handle.writeFile(`${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`);
+    await handle.writeFile(`${JSON.stringify(lock)}\n`);
     await handle.close();
     return {
       acquired: true,
       release: async () => {
-        await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
+        const current = await readUsageCostCacheLock(lockPath);
+        if (
+          current?.pid === lock.pid &&
+          current.startedAt === lock.startedAt &&
+          current.token === lock.token
+        ) {
+          await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
+        }
       },
     };
   } catch (err) {
@@ -382,7 +396,6 @@ function buildCostUsageSummaryFromCache(params: {
   files: UsageCostTranscriptFile[];
   startMs: number;
   endMs: number;
-  cachePath: string;
   pricingFingerprint: string;
   refreshing: boolean;
 }): CostUsageSummary {
@@ -446,7 +459,6 @@ function buildCostUsageSummaryFromCache(params: {
       cachedFiles,
       pendingFiles: staleFiles.length,
       staleFiles: staleFiles.length,
-      cachePath: params.cachePath,
       refreshedAt: params.cache.updatedAt || undefined,
     },
   };
@@ -1016,6 +1028,7 @@ export async function refreshCostUsageCache(params?: {
   agentId?: string;
   maxFiles?: number;
   sessionFiles?: string[];
+  startMs?: number;
 }): Promise<UsageCostRefreshResult> {
   const cachePath = resolveUsageCostCachePath(params?.agentId);
   const lock = await acquireUsageCostCacheRefreshLock(cachePath);
@@ -1027,6 +1040,11 @@ export async function refreshCostUsageCache(params?: {
     const cache = await readUsageCostCache(cachePath);
     const files = await listUsageCountedTranscriptFiles(params?.agentId);
     const sessionSummaryFiles = new Set(params?.sessionFiles ?? []);
+    const refreshStartMs = params?.startMs;
+    const refreshFiles =
+      refreshStartMs === undefined || sessionSummaryFiles.size > 0
+        ? files
+        : files.filter((file) => file.mtimeMs >= refreshStartMs);
     const livePaths = new Set(files.map((file) => file.filePath));
     for (const filePath of Object.keys(cache.files)) {
       if (!livePaths.has(filePath)) {
@@ -1040,7 +1058,7 @@ export async function refreshCostUsageCache(params?: {
         : undefined;
     const staleFiles = getUsageCostStaleFiles({
       cache,
-      files,
+      files: refreshFiles,
       pricingFingerprint,
       sessionSummaryFiles,
     })
@@ -1096,11 +1114,25 @@ export async function loadCostUsageSummaryFromCache(params: {
       pricingFingerprint,
     });
     if (params.refreshMode === "sync-when-empty" && cachedFiles === 0) {
-      await refreshCostUsageCache({ config: params.config, agentId: params.agentId });
+      const result = await refreshCostUsageCache({
+        config: params.config,
+        agentId: params.agentId,
+        startMs: params.startMs,
+      });
       [cache, files] = await Promise.all([
         readUsageCostCache(cachePath),
         listUsageCountedTranscriptFiles(params.agentId),
       ]);
+      if (result === "refreshed") {
+        const remainingStaleFiles = getUsageCostStaleFiles({
+          cache,
+          files,
+          pricingFingerprint,
+        });
+        if (remainingStaleFiles.length > 0) {
+          requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
+        }
+      }
     } else {
       requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
     }
@@ -1111,7 +1143,6 @@ export async function loadCostUsageSummaryFromCache(params: {
     files,
     startMs: params.startMs,
     endMs: params.endMs,
-    cachePath,
     pricingFingerprint,
     refreshing: usageCostRefreshes.has(params.agentId ?? "main") || refreshRunning,
   });
@@ -1221,7 +1252,6 @@ export async function loadSessionCostSummaryFromCache(params: {
       cachedFiles: stale ? 0 : 1,
       pendingFiles: stale ? 1 : 0,
       staleFiles: stale ? 1 : 0,
-      cachePath,
       refreshedAt: cache.updatedAt || undefined,
     },
   };

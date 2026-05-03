@@ -26,7 +26,6 @@ function mergeUsageCacheStatus(
     cachedFiles: Math.max(sessionsStatus.cachedFiles, costStatus.cachedFiles),
     pendingFiles: Math.max(sessionsStatus.pendingFiles, costStatus.pendingFiles),
     staleFiles: Math.max(sessionsStatus.staleFiles, costStatus.staleFiles),
-    cachePath: sessionsStatus.cachePath ?? costStatus.cachePath,
     refreshedAt:
       Math.max(sessionsStatus.refreshedAt ?? 0, costStatus.refreshedAt ?? 0) || undefined,
   };

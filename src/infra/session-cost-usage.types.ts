@@ -65,7 +65,6 @@ export type CostUsageSummary = {
     cachedFiles: number;
     pendingFiles: number;
     staleFiles: number;
-    cachePath?: string;
     refreshedAt?: number;
   };
 };

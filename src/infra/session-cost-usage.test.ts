@@ -392,6 +392,71 @@ describe("session cost usage", () => {
       expect(summary.totals.totalTokens).toBe(30);
       expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
       expect(summary.cacheStatus?.status).toBe("fresh");
+      expect(summary.cacheStatus).not.toHaveProperty("cachePath");
+    });
+  });
+
+  it("limits synchronous cold aggregate rebuilds to the requested range", async () => {
+    const root = await makeSessionCostRoot("cost-cache-cold-sync-range");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const oldSessionFile = path.join(sessionsDir, "sess-cache-cold-sync-old.jsonl");
+    const currentSessionFile = path.join(sessionsDir, "sess-cache-cold-sync-current.jsonl");
+    await fs.writeFile(
+      oldSessionFile,
+      transcriptText("sess-cache-cold-sync-old", {
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 100,
+            output: 100,
+            totalTokens: 200,
+            cost: { total: 0.2 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      currentSessionFile,
+      transcriptText("sess-cache-cold-sync-current", {
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 10,
+            output: 20,
+            totalTokens: 30,
+            cost: { total: 0.03 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.utimes(
+      oldSessionFile,
+      new Date("2025-12-05T12:00:00.000Z"),
+      new Date("2025-12-05T12:00:00.000Z"),
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        refreshMode: "sync-when-empty",
+      });
+
+      expect(summary.totals.totalTokens).toBe(30);
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      await waitFor(async () => {
+        const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+          files: Record<string, unknown>;
+        };
+        return Boolean(cache.files[oldSessionFile]);
+      });
     });
   });
 
