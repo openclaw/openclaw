@@ -157,6 +157,11 @@ export async function resolveConnectAuthDecision(params: {
   let authOk = params.state.authOk;
   let authMethod = params.state.authMethod;
 
+  // Deferred bootstrap failure: only charged if the overall handshake still
+  // fails after all fallback paths run. A device with a stale bootstrap token
+  // but a valid device token must not accumulate bootstrap failures.
+  let pendingBootstrapFailure = false;
+
   const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;
   if (params.hasDeviceIdentity && params.deviceId && params.publicKey && bootstrapTokenCandidate) {
     let bootstrapRateLimited = false;
@@ -194,13 +199,16 @@ export async function resolveConnectAuthDecision(params: {
         params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN);
       } else if (!authOk) {
         authResult = { ok: false, reason: tokenCheck.reason ?? "bootstrap_token_invalid" };
-        params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN);
+        pendingBootstrapFailure = true;
       }
     }
   }
 
   const deviceTokenCandidate = params.state.deviceTokenCandidate;
   if (!params.hasDeviceIdentity || !params.deviceId || authOk || !deviceTokenCandidate) {
+    if (pendingBootstrapFailure) {
+      params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN);
+    }
     return { authResult, authOk, authMethod };
   }
 
@@ -234,6 +242,8 @@ export async function resolveConnectAuthDecision(params: {
       if (params.state.sharedAuthProvided) {
         params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
       }
+      // Bootstrap failure deferred above is discarded — device-token success
+      // proves legitimacy; charging the bootstrap scope would be a false positive.
     } else {
       authResult = {
         ok: false,
@@ -243,6 +253,9 @@ export async function resolveConnectAuthDecision(params: {
             : (authResult.reason ?? "device_token_mismatch"),
       };
       params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+      if (pendingBootstrapFailure) {
+        params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN);
+      }
     }
   }
 

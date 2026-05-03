@@ -342,14 +342,43 @@ describe("bootstrap token rate limiting", () => {
     expect(rl.check).toHaveBeenCalledWith("192.0.2.1", "bootstrap-token");
     expect(rl.check).not.toHaveBeenCalledWith(expect.anything(), "device-token");
   });
+
+  it("does NOT record a bootstrap failure when the device-token fallback succeeds", async () => {
+    // A device with a stale bootstrap token but a valid device token is a
+    // legitimate user — charging the bootstrap scope would lock it out.
+    const rl = createFullRateLimiter({ allowed: true });
+    const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({
+      ok: false,
+      reason: "bootstrap_token_invalid",
+    }));
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: true }));
+    const decision = await resolveConnectAuthDecision({
+      state: createBaseState({
+        bootstrapTokenCandidate: "stale-bootstrap",
+        deviceTokenCandidate: "valid-device",
+        deviceTokenCandidateSource: "explicit-device-token",
+      }),
+      hasDeviceIdentity: true,
+      deviceId: "dev-1",
+      publicKey: "pub-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      verifyBootstrapToken,
+      verifyDeviceToken,
+      rateLimiter: rl.limiter,
+      clientIp: "192.0.2.5",
+    });
+    expect(decision.authOk).toBe(true);
+    expect(decision.authMethod).toBe("device-token");
+    expect(rl.recordFailure).not.toHaveBeenCalledWith("192.0.2.5", "bootstrap-token");
+  });
 });
 
 // ─── Bootstrap token rate limiting (integration) ─────────────────────────────
 //
 // Uses a real AuthRateLimiter instance (not a mock) to prove that repeated
 // failed bootstrap attempts trigger the lockout, and that the mutex-stall
-// DoS vector (Finding 1, arxiv PoC: scripts/poc-bootstrap-dos-real.mjs) is
-// blocked before verifyBootstrapToken is ever called.
+// DoS vector (Finding 1) is blocked before verifyBootstrapToken is ever called.
 
 describe("bootstrap token rate limiting — integration with real AuthRateLimiter", () => {
   it("locks out an attacker IP after repeated failed bootstrap attempts", async () => {
