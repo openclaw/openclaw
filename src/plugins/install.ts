@@ -114,7 +114,12 @@ type PluginInstallPolicyRequest = {
 };
 
 const defaultLogger: PluginInstallLogger = {};
-const TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES = new Map([["@openclaw/codex", "codex"]]);
+const TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES = new Map([
+  ["@openclaw/acpx", "acpx"],
+  ["@openclaw/codex", "codex"],
+  ["@openclaw/google-meet", "google-meet"],
+  ["@openclaw/voice-call", "voice-call"],
+]);
 
 function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
   | {

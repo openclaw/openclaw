@@ -260,43 +260,67 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
-  it("allows the official Codex npm plugin to spawn its managed app-server", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const warnings: string[] = [];
-    mockNpmViewAndInstall({
+  it.each([
+    {
+      spec: "@openclaw/acpx",
+      pluginId: "acpx",
+      indexJs: `import { spawn } from "node:child_process";\nspawn("codex-acp", []);`,
+    },
+    {
       spec: "@openclaw/codex",
-      packageName: "@openclaw/codex",
-      version: "2026.5.2",
       pluginId: "codex",
-      npmRoot,
       indexJs: `import { spawn } from "node:child_process";\nspawn("codex", ["app-server"]);`,
-    });
+    },
+    {
+      spec: "@openclaw/google-meet",
+      pluginId: "google-meet",
+      indexJs: `import { spawnSync } from "node:child_process";\nspawnSync("node", ["bridge.js"]);`,
+    },
+    {
+      spec: "@openclaw/voice-call",
+      pluginId: "voice-call",
+      indexJs: `import { spawn } from "node:child_process";\nspawn("ngrok", ["http", "3000"]);`,
+    },
+  ])(
+    "allows official npm plugin $spec with reviewed launch code",
+    async ({ spec, pluginId, indexJs }) => {
+      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+      const warnings: string[] = [];
+      mockNpmViewAndInstall({
+        spec,
+        packageName: spec,
+        version: "2026.5.2",
+        pluginId,
+        npmRoot,
+        indexJs,
+      });
 
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/codex",
-      npmDir: npmRoot,
-      logger: {
-        info: () => {},
-        warn: (msg: string) => warnings.push(msg),
-      },
-    });
+      const result = await installPluginFromNpmSpec({
+        spec,
+        npmDir: npmRoot,
+        logger: {
+          info: () => {},
+          warn: (msg: string) => warnings.push(msg),
+        },
+      });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.pluginId).toBe("codex");
-    expect(
-      warnings.some((warning) =>
-        warning.includes("allowed because it is an official OpenClaw package"),
-      ),
-    ).toBe(true);
-    expectNpmInstallIntoRoot({
-      calls: runCommandWithTimeoutMock.mock.calls,
-      npmRoot,
-      spec: "@openclaw/codex",
-    });
-  });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.pluginId).toBe(pluginId);
+      expect(
+        warnings.some((warning) =>
+          warning.includes("allowed because it is an official OpenClaw package"),
+        ),
+      ).toBe(true);
+      expectNpmInstallIntoRoot({
+        calls: runCommandWithTimeoutMock.mock.calls,
+        npmRoot,
+        spec,
+      });
+    },
+  );
 
   it("rejects non-registry npm specs", async () => {
     const result = await installPluginFromNpmSpec({ spec: "github:evil/evil" });
