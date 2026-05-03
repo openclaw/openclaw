@@ -13,4 +13,6 @@ export type GatewayWsClient = {
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
+  invalidated?: boolean;
+  invalidatedReason?: string;
 };
