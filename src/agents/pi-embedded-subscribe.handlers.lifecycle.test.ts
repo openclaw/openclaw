@@ -1,11 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { handleAgentEnd } from "./pi-embedded-subscribe.handlers.lifecycle.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { emitFirstProgressOnce } from "./pi-embedded-subscribe.lifecycle-progress.js";
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: vi.fn(),
 }));
+
+beforeEach(() => {
+  vi.mocked(emitAgentEvent).mockClear();
+});
 
 function createContext(
   lastAssistant: unknown,
@@ -60,6 +66,36 @@ async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedPiSubscribeContext) {
   expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
   return warn.mock.calls[0]?.[1];
 }
+
+describe("embedded lifecycle progress", () => {
+  it("emits first-progress once", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.firstProgressEmitted = false;
+
+    emitFirstProgressOnce(ctx, "tool", { name: "read", toolCallId: "tc-1" });
+    emitFirstProgressOnce(ctx, "assistant");
+
+    expect(emitAgentEvent).toHaveBeenCalledTimes(1);
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "first-progress",
+          source: "tool",
+          name: "read",
+          toolCallId: "tc-1",
+        }),
+      }),
+    );
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "first-progress", source: "tool", name: "read", toolCallId: "tc-1" },
+    });
+  });
+});
 
 describe("handleAgentEnd", () => {
   it("logs the resolved error message when run ends with assistant error", async () => {
@@ -537,6 +573,39 @@ describe("handleAgentEnd", () => {
         phase: "error",
         error: "LLM request failed: connection refused by the provider endpoint.",
       },
+    });
+  });
+
+  it("emits startup-failed before terminal end when an aborted run never made progress", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalStopReason = "aborted";
+    ctx.state.firstProgressEmitted = false;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenNthCalledWith(1, {
+      stream: "lifecycle",
+      data: { phase: "startup-failed", reason: "startup_aborted", stopReason: "aborted" },
+    });
+    expect(onAgentEvent).toHaveBeenNthCalledWith(2, {
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "aborted" },
+    });
+  });
+
+  it("does not emit startup-failed for aborted runs after first progress", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalStopReason = "aborted";
+    ctx.state.firstProgressEmitted = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "aborted" },
     });
   });
 

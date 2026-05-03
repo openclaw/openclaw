@@ -30,6 +30,7 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { emitFirstProgressOnce } from "./pi-embedded-subscribe.lifecycle-progress.js";
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import {
   extractToolResultMediaArtifact,
@@ -622,6 +623,7 @@ export function handleToolExecutionStart(
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
+    emitFirstProgressOnce(ctx, "tool", { name: toolName, toolCallId });
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
     emitAgentEvent({

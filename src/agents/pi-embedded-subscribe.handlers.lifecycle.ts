@@ -115,6 +115,27 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       ...(ctx.state.terminalStopReason ? { stopReason: ctx.state.terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
     };
+    if (ctx.state.terminalStopReason === "aborted" && !ctx.state.firstProgressEmitted) {
+      const startupFailureData = {
+        phase: "startup-failed",
+        reason: "startup_aborted",
+        stopReason: ctx.state.terminalStopReason,
+        endedAt: Date.now(),
+      };
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "lifecycle",
+        data: startupFailureData,
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "startup-failed",
+          reason: "startup_aborted",
+          stopReason: ctx.state.terminalStopReason,
+        },
+      });
+    }
     if (isError) {
       emitAgentEvent({
         runId: ctx.params.runId,

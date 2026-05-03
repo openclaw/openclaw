@@ -25,6 +25,7 @@ import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { emitFirstProgressOnce } from "./pi-embedded-subscribe.lifecycle-progress.js";
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import { warnIfAssistantEmittedToolText } from "./pi-embedded-subscribe.tool-text-diagnostics.js";
@@ -620,6 +621,9 @@ export function handleMessageUpdate(
         data,
       });
       ctx.state.emittedAssistantUpdate = true;
+      if (cleanedText.trim()) {
+        emitFirstProgressOnce(ctx, "assistant");
+      }
       if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
         void ctx.params.onPartialReply(data);
       }
@@ -751,6 +755,9 @@ export function handleMessageEnd(
       data,
     });
     ctx.state.emittedAssistantUpdate = true;
+    if (cleanedText.trim()) {
+      emitFirstProgressOnce(ctx, "assistant");
+    }
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }
 
