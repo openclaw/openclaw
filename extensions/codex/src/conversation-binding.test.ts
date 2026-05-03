@@ -106,13 +106,25 @@ describe("codex conversation binding", () => {
 
   it("preserves Codex auth and omits the public OpenAI provider for native bind threads", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        work: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
         schemaVersion: 1,
         threadId: "thread-old",
         cwd: tempDir,
-        authProfileId: "openai-codex:work",
+        authProfileId: "work",
         modelProvider: "openai",
       }),
     );
@@ -136,7 +148,7 @@ describe("codex conversation binding", () => {
     });
 
     expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: "openai-codex:work" }),
+      expect.objectContaining({ authProfileId: "work" }),
     );
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
@@ -145,7 +157,7 @@ describe("codex conversation binding", () => {
     });
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
-      '"authProfileId": "openai-codex:work"',
+      '"authProfileId": "work"',
     );
     await expect(
       fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
