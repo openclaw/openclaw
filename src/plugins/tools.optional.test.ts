@@ -590,13 +590,17 @@ describe("resolvePluginTools optional tools", () => {
         },
       ],
     });
+    const partialRegistry = createToolRegistry([multiEntry]);
+    partialRegistry.plugins.push({ id: "optional-demo", status: "loaded" });
+    const fullRegistry = createToolRegistry([multiEntry, optionalEntry]);
     setActivePluginRegistry?.(
-      createToolRegistry([multiEntry]) as never,
+      partialRegistry as never,
       "partial-test-tool-registry",
       "gateway-bindable",
       "/tmp",
     );
-    loadOpenClawPluginsMock.mockReturnValue(createToolRegistry([multiEntry, optionalEntry]));
+    resolveRuntimePluginRegistryMock.mockReturnValue(partialRegistry);
+    loadOpenClawPluginsMock.mockReturnValue(fullRegistry);
 
     const tools = resolvePluginTools(
       createResolveToolsParams({
@@ -609,6 +613,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         activate: false,
+        cache: false,
         onlyPluginIds: ["multi", "optional-demo"],
         toolDiscovery: true,
       }),
@@ -1566,34 +1571,57 @@ describe("resolvePluginTools optional tools", () => {
 
   it("adds enabled non-startup tool plugins to the active tool runtime scope", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
+    const context = createContext();
+    const config = {
+      ...context.config,
+      plugins: {
+        ...context.config.plugins,
+        allow: ["tavily"],
+        entries: {
+          tavily: { enabled: true },
+        },
+      },
+    };
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "optional-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["optional_tool"],
+          },
+        },
+        {
+          id: "tavily",
+          origin: "bundled",
+          enabledByDefault: false,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["tavily_search"],
+          },
+        },
+      ],
+    });
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
     resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
+    loadOpenClawPluginsMock.mockReturnValue(createToolRegistry([]));
 
     resolvePluginTools({
       context: {
-        ...createContext(),
-        config: {
-          plugins: {
-            enabled: true,
-            allow: ["tavily"],
-            entries: {
-              tavily: { enabled: true },
-            },
-          },
-        },
+        ...context,
+        config,
       } as never,
-      toolAllowlist: ["optional_tool", "tavily"],
+      toolAllowlist: ["*", "tavily"],
       allowGatewaySubagentBinding: true,
     });
-
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: expect.arrayContaining(["tavily"]),
-        toolDiscovery: true,
-      }),
-    );
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        cache: false,
         onlyPluginIds: expect.arrayContaining(["tavily"]),
         toolDiscovery: true,
       }),
