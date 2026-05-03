@@ -1,3 +1,4 @@
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -34,6 +35,55 @@ function getProviderModelId(model: unknown): string {
   return normalizeOptionalString(id) ?? "";
 }
 
+/**
+ * Default `input` modalities for explicit model entries that don't specify
+ * one and have no matching implicit (discovery) entry to inherit from.
+ *
+ * Without this, models silently default to text-only at query time,
+ * which silently breaks image attachments for Claude 3.5+ / 4.x, GPT-4o,
+ * Gemini 1.5+, and every other modern vision-capable model whose explicit
+ * entry was authored before `input` became required.
+ *
+ * Kept conservative: only adds "image" for ID patterns that are
+ * known-vision-capable. Anything else stays undefined (which downstream
+ * still treats as text-only, matching prior behavior).
+ */
+const VISION_CAPABLE_ID_PATTERNS: readonly RegExp[] = [
+  // Anthropic Claude 3.5+, 3.7, 4.x (dot and dash variants, all regions/profiles)
+  /claude-(?:3-5|3\.5|3-7|3\.7|opus-4|sonnet-4|haiku-4|4-\d)/i,
+  // OpenAI multimodal families: gpt-4o / 4.1 / 4-turbo / 5 and the o-series
+  // (o1, o3, o4). The o-series alternatives are anchored to a start / slash
+  // prefix so they only match model-name tokens like "o1", "o1-mini",
+  // "openai/o3-pro", or "o4-mini" — not arbitrary substrings like
+  // "nova-pro-o4-v1" or "fo1-embed".
+  /gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-5|(?:^|\/)(?:o1|o3|o4)(?:$|-)/i,
+  // Google multimodal families
+  /gemini-(?:1\.5|2|2\.5|pro-vision)/i,
+  // Meta vision-specific variants. Llama 3.2 ships vision only in the 11B /
+  // 90B "vision" SKUs; the small 1B / 3B "instruct" SKUs are text-only, so we
+  // only flag IDs that explicitly mark a vision variant.
+  /llama-(?:3\.2|4)[^\s]*vision/i,
+];
+
+function explicitEntryLooksVisionCapable(id: string): boolean {
+  if (!id) return false;
+  return VISION_CAPABLE_ID_PATTERNS.some((re) => re.test(id));
+}
+
+function applyInputDefaultForExplicitOnlyEntry(
+  entry: ModelDefinitionConfig,
+): ModelDefinitionConfig {
+  const id = getProviderModelId(entry);
+  const existing = (entry as { input?: unknown }).input;
+  if (Array.isArray(existing)) {
+    return entry;
+  }
+  if (!explicitEntryLooksVisionCapable(id)) {
+    return entry;
+  }
+  return { ...entry, input: ["text", "image"] } as ModelDefinitionConfig;
+}
+
 export function mergeProviderModels(
   implicit: ProviderConfig,
   explicit: ProviderConfig,
@@ -49,9 +99,13 @@ export function mergeProviderModels(
       ? explicit.headers
       : undefined;
   if (implicitModels.length === 0) {
+    const explicitWithDefaults = explicitModels.map((m) =>
+      applyInputDefaultForExplicitOnlyEntry(m),
+    );
     return {
       ...implicit,
       ...explicit,
+      ...(explicitWithDefaults.length > 0 ? { models: explicitWithDefaults } : {}),
       ...(implicitHeaders || explicitHeaders
         ? {
             headers: {
@@ -78,7 +132,7 @@ export function mergeProviderModels(
     seen.add(id);
     const implicitModel = implicitById.get(id);
     if (!implicitModel) {
-      return explicitModel;
+      return applyInputDefaultForExplicitOnlyEntry(explicitModel as ModelDefinitionConfig);
     }
 
     const contextWindow = resolvePreferredTokenLimit({
@@ -145,7 +199,10 @@ export function mergeProviders(params: {
       continue;
     }
     const implicit = out[providerKey];
-    out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
+    out[providerKey] = mergeProviderModels(
+      implicit ?? ({ models: [] } as unknown as ProviderConfig),
+      explicit,
+    );
   }
   return out;
 }
