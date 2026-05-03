@@ -683,7 +683,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
 
           deleteConfirmDismissers.set(popover, dismissPopover);
 
-          cancel.addEventListener("click", () => dismissPopover());
+          cancel.addEventListener("click", dismissPopover);
           yes.addEventListener("click", () => {
             if (check.checked) {
               try {

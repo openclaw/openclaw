@@ -62,6 +62,7 @@ Docs: https://docs.openclaw.ai
 - Status: show the `openai-codex` OAuth profile for `openai/gpt-*` sessions running through the native Codex runtime instead of reporting auth as unknown. (#76197) Thanks @mbelinky.
 - Gateway: avoid repeated plugin tool descriptor config hashing so large runtime configs do not block reply startup and trigger reconnect/timeouts. (#75944) Thanks @joshavant.
 - Plugins/externalization: keep diagnostics ClawHub packages and persisted bundled-plugin relocation on npm-first install metadata for launch, and omit Discord from the core package now that its external package is published. Thanks @vincentkoc.
+- Control UI/chat: remove the delete-confirm popover outside-click listener on every dismiss path, so Cancel, Delete, outside clicks, and same-button toggles no longer leave stale document listeners behind. Refs #75590 and #69982. Thanks @Ricardo-M-L.
 - Setup/TUI: bound the Terminal hatch bootstrap run so a stalled provider request times out instead of leaving first-run hatching stuck behind the watchdog. (#76241) Thanks @joshavant.
 - Cron/CLI runtimes: route isolated cron jobs through configured per-agent CLI runtimes only when the resolved model provider is compatible, so OpenAI job overrides no longer inherit a mismatched Claude CLI backend. Thanks @vishutdhar.
 - Plugins/Codex: allow the official npm Codex plugin to install without the unsafe-install override, keep `/codex` command ownership, and cover the real npm Docker live path through managed `.openclaw/npm` dependencies plus uninstall failure proof.
