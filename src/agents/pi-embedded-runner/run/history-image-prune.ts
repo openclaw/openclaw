@@ -23,6 +23,8 @@ type PrunableContextAgent = {
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
 
 interface HistoryImagePruneOptions {
+  /** Number of most-recent completed turns to preserve.
+   * Must be >= 0. Values < 0 are clamped to 0. */
   preserveRecentCompletedTurns?: number;
 }
 
@@ -59,10 +61,14 @@ function resolvePruneBeforeIndex(
     completedTurnStarts.push(currentTurnStart);
   }
 
-  const preserveRecentCompletedTurns =
-    options?.preserveRecentCompletedTurns ?? PRESERVE_RECENT_COMPLETED_TURNS;
+  const preserveRecentCompletedTurns = Math.max(
+    0,
+    options?.preserveRecentCompletedTurns ?? PRESERVE_RECENT_COMPLETED_TURNS,
+  );
 
-  if (preserveRecentCompletedTurns <= 0) {
+  if (preserveRecentCompletedTurns === 0) {
+    // Prune all completed turns — caller has fresh images and wants no
+    // stale visual baggage from history.
     return completedTurnStarts.length > 0 ? messages.length : -1;
   }
 
@@ -165,14 +171,26 @@ export function pruneProcessedHistoryImages(
   return prunedMessages;
 }
 
+/** Current-turn image state shared between attempt.ts and the provider
+ *  replay transform so both paths prune consistently. */
+let activeTurnHasFreshImages = false;
+
+export function setActiveTurnHasFreshImages(value: boolean): void {
+  activeTurnHasFreshImages = value;
+}
+
 export function installHistoryImagePruneContextTransform(agent: PrunableContextAgent): () => void {
   const originalTransformContext = agent.transformContext;
+  // The session transcript (activeSession.messages) is intentionally left
+  // intact — only the replay/prompt view is pruned, per the pruning docs
+  // (docs/concepts/session-pruning.md).
   agent.transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
     const transformed = originalTransformContext
       ? await originalTransformContext.call(agent, messages, signal)
       : messages;
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    return pruneProcessedHistoryImages(sourceMessages) ?? sourceMessages;
+    const options = activeTurnHasFreshImages ? { preserveRecentCompletedTurns: 0 } : undefined;
+    return pruneProcessedHistoryImages(sourceMessages, options) ?? sourceMessages;
   };
   return () => {
     agent.transformContext = originalTransformContext;

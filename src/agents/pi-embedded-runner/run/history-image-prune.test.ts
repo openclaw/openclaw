@@ -309,13 +309,17 @@ describe("pruneProcessedHistoryImages", () => {
       assistantTurn(),
     ];
 
-    const didMutate = pruneProcessedHistoryImages(messages, {
+    const result = pruneProcessedHistoryImages(messages, {
       preserveRecentCompletedTurns: 0,
     });
 
-    expect(didMutate).toBe(true);
-    const content = expectArrayMessageContent(messages[0], "expected recent user content");
-    expect(content[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
+    expect(result).not.toBeNull();
+    // Original messages are left intact (pruning returns a clone)
+    const originalContent = expectArrayMessageContent(messages[0], "original intact");
+    expect(originalContent[1]).toMatchObject({ type: "image", data: "abc" });
+    // Returned clone has the image replaced with the pruned marker
+    const prunedContent = expectArrayMessageContent(result![0], "pruned result");
+    expect(prunedContent[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
   });
 
   it("does not change messages when no assistant turn exists", () => {

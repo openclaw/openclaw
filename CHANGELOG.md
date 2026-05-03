@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Bug fixes
+
+- **Multimodal:** Prune all history images when the current turn carries fresh attachments, preventing stale image data from contaminating new image analysis. The aggressive pruning is now applied to both the prompt-build hook path and the provider replay transform, keeping the session transcript intact per pruning docs. (#76732, fixes #66702)
+
 ### Highlights
 
 - Plugins/file-transfer: add bundled file-transfer plugin with `file_fetch`, `dir_list`, `dir_fetch`, and `file_write` agent tools for binary file ops on paired nodes; default-deny per-node path policy under `plugins.entries.file-transfer.config.nodes` with operator approval, symlink traversal refused by default (opt-in `followSymlinks`), and a 16 MB byte ceiling per round-trip. (#74742) Thanks @omarshahine.

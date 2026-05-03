@@ -321,6 +321,7 @@ import {
 import {
   installHistoryImagePruneContextTransform,
   pruneProcessedHistoryImages,
+  setActiveTurnHasFreshImages,
 } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
@@ -2623,6 +2624,7 @@ export async function runEmbeddedAttempt(
         // image data cannot contaminate the new analysis.
         const currentTurnHasImages =
           (params.images?.length ?? 0) > 0 || (params.imageOrder?.length ?? 0) > 0;
+        setActiveTurnHasFreshImages(currentTurnHasImages);
         const promptBuildMessages =
           pruneProcessedHistoryImages(
             activeSession.messages,
