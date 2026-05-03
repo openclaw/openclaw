@@ -645,6 +645,48 @@ export async function sendChatMessage(
   }
 }
 
+async function requestChatEditUserMessage(
+  state: ChatState,
+  params: {
+    messageId: string;
+    content: string;
+    expectedRevision?: number;
+  },
+) {
+  const sessionKey = state.sessionKey || "main";
+
+  const res = await state.client!.request("chat.edit_user_message", {
+    sessionKey,
+    messageId: params.messageId,
+    content: params.content,
+    expectedRevision: params.expectedRevision,
+    idempotencyKey: crypto.randomUUID(),
+  });
+
+  await loadChatHistory(state);
+
+  return res;
+}
+export async function editUserMessage(
+  state: ChatState,
+  params: {
+    messageId: string;
+    content: string;
+    expectedRevision?: number;
+  },
+) {
+  const sessionKey = state.sessionKey || "main";
+
+  await state.client!.request("chat.edit_user_message", {
+    sessionKey,
+    messageId: params.messageId,
+    content: params.content,
+    expectedRevision: params.expectedRevision,
+    idempotencyKey: crypto.randomUUID(),
+  });
+
+  await loadChatHistory(state);
+}
 export async function sendDetachedChatMessage(
   state: ChatState,
   message: string,
