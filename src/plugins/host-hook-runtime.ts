@@ -22,6 +22,7 @@ type SchedulerJobRecord = {
   pluginName?: string;
   job: PluginSessionSchedulerJobRegistration;
   generation: number;
+  ownerRegistry?: PluginRegistry;
 };
 
 type PluginHostRuntimeState = {
@@ -356,6 +357,7 @@ export function registerPluginSessionSchedulerJob(params: {
   pluginId: string;
   pluginName?: string;
   job: PluginSessionSchedulerJobRegistration;
+  ownerRegistry?: PluginRegistry;
 }): PluginSessionSchedulerJobHandle | undefined {
   const id = normalizeOptionalString(params.job.id);
   const sessionKey = normalizeOptionalString(params.job.sessionKey);
@@ -371,6 +373,7 @@ export function registerPluginSessionSchedulerJob(params: {
     pluginName: params.pluginName,
     job: { ...params.job, id, sessionKey, kind },
     generation,
+    ...(params.ownerRegistry ? { ownerRegistry: params.ownerRegistry } : {}),
   });
   state.schedulerJobsByPlugin.set(params.pluginId, jobs);
   return { id, pluginId: params.pluginId, sessionKey, kind };
@@ -450,6 +453,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
   preserveJobIds?: ReadonlySet<string>;
   excludeJobKeys?: ReadonlySet<string>;
   shouldCleanup?: () => boolean;
+  preserveOwnerRegistry?: PluginRegistry | null;
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
   const state = getPluginHostRuntimeState();
   const failures: Array<{ pluginId: string; hookId: string; error: unknown }> = [];
@@ -552,6 +556,12 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         continue;
       }
       if (registryRecordKeys.has(schedulerJobKey(pluginId, jobId, record.job.sessionKey))) {
+        continue;
+      }
+      if (
+        params.preserveOwnerRegistry !== undefined &&
+        record.ownerRegistry === params.preserveOwnerRegistry
+      ) {
         continue;
       }
       if (params.excludeJobKeys?.has(makePluginSessionSchedulerJobKey(pluginId, jobId))) {
