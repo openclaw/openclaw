@@ -1,4 +1,4 @@
-import { normalizeToolName } from "../agents/tool-policy.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
@@ -84,6 +84,10 @@ export function buildPluginToolMetadataKey(pluginId: string, toolName: string): 
 
 function normalizeAllowlist(list?: string[]) {
   return new Set((list ?? []).map(normalizeToolName).filter(Boolean));
+}
+
+function allowlistIncludesDefaultPluginTools(allowlist: Set<string>): boolean {
+  return allowlist.size === 0 || allowlist.has(DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY);
 }
 
 function isOptionalToolAllowed(params: {
@@ -289,8 +293,8 @@ function pluginToolNamesMatchAllowlist(params: {
   optional: boolean;
   allowlist: Set<string>;
 }): boolean {
-  if (params.allowlist.size === 0) {
-    return !params.optional;
+  if (!params.optional && allowlistIncludesDefaultPluginTools(params.allowlist)) {
+    return true;
   }
   return isOptionalToolEntryPotentiallyAllowed(params);
 }
@@ -303,7 +307,7 @@ function manifestToolContractMatchesAllowlist(params: {
   if (params.toolNames.length === 0) {
     return false;
   }
-  if (params.allowlist.size === 0) {
+  if (allowlistIncludesDefaultPluginTools(params.allowlist)) {
     return true;
   }
   if (params.allowlist.has("*") || params.allowlist.has("group:plugins")) {
@@ -322,7 +326,7 @@ function listManifestToolNamesForAvailability(params: {
   allowlist: Set<string>;
 }): string[] {
   if (
-    params.allowlist.size === 0 ||
+    allowlistIncludesDefaultPluginTools(params.allowlist) ||
     params.allowlist.has("*") ||
     params.allowlist.has("group:plugins")
   ) {
