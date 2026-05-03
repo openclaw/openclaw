@@ -12,7 +12,7 @@ Adds the Microsoft Teams channel surface for sending and receiving OpenClaw mess
 ## Distribution
 
 - Package: `@openclaw/msteams`
-- Install route: ClawHub + npm
+- Install route: npm; ClawHub
 
 ## Surface
 

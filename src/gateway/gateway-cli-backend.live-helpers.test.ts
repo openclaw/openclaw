@@ -129,7 +129,7 @@ describe("gateway cli backend live helpers", () => {
       cliModelKey: "codex-cli/gpt-5.4",
       configModelKey: "openai/gpt-5.4",
       configModelSwitchTarget: undefined,
-      agentRuntime: { id: "codex-cli", fallback: "none" },
+      agentRuntime: { id: "codex-cli" },
     });
 
     expect(
@@ -143,7 +143,7 @@ describe("gateway cli backend live helpers", () => {
       cliModelKey: "claude-cli/claude-sonnet-4-6",
       configModelKey: "anthropic/claude-sonnet-4-6",
       configModelSwitchTarget: "anthropic/claude-opus-4-6",
-      agentRuntime: { id: "claude-cli", fallback: "none" },
+      agentRuntime: { id: "claude-cli" },
     });
   });
 

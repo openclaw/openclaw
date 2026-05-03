@@ -404,7 +404,7 @@ export function runAgentAttempt(params: {
         runtimeOverride: agentRuntimeOverride,
       }) ?? params.providerOverride);
   const agentHarnessPolicy = isRawModelRun
-    ? ({ runtime: "pi", fallback: "pi" } as const)
+    ? ({ runtime: "pi" } as const)
     : resolveAgentHarnessPolicy({
         provider: params.providerOverride,
         modelId: params.modelOverride,

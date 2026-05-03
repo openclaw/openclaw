@@ -664,6 +664,7 @@ export function validateConfigObjectRaw(
 export function validateConfigObject(
   raw: unknown,
   opts?: {
+    manifestRegistry?: Pick<PluginMetadataSnapshot, "manifestRegistry">["manifestRegistry"];
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
@@ -673,7 +674,9 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: materializeRuntimeConfig(result.config, "snapshot"),
+    config: materializeRuntimeConfig(result.config, "snapshot", {
+      manifestRegistry: opts?.manifestRegistry,
+    }),
   };
 }
 
@@ -731,14 +734,25 @@ function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: ValidateConfigWithPluginsParams & { applyDefaults: boolean },
 ): ValidateConfigWithPluginsResult {
-  const base = opts.applyDefaults
-    ? validateConfigObject(raw, { sourceRaw: opts.sourceRaw })
-    : validateConfigObjectRaw(raw, { sourceRaw: opts.sourceRaw });
+  const base = validateConfigObjectRaw(raw, { sourceRaw: opts.sourceRaw });
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }
 
-  const config = base.config;
+  let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
+    ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
+    : null;
+  if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "skip") {
+    const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(base.config);
+    if (pluginMetadataSnapshot) {
+      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
+    }
+  }
+  const config = opts.applyDefaults
+    ? materializeRuntimeConfig(base.config, "snapshot", {
+        manifestRegistry: registryInfo?.registry,
+      })
+    : base.config;
   if (opts.pluginValidation === "skip") {
     return {
       ok: true,
@@ -773,9 +787,6 @@ function validateConfigObjectWithPluginsBase(
     >;
   };
 
-  let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
-    ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
-    : null;
   let compatConfig: OpenClawConfig | null | undefined;
   let compatPluginIds: ReadonlySet<string> | null = null;
   let compatPluginIdsResolved = false;
