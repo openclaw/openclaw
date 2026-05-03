@@ -451,7 +451,9 @@ function parseYmdDate(dateStr: string): Date | null {
     return null;
   }
   const [, y, m, d] = match;
-  const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
+  // Treat YYYY-MM-DD buckets as date-only values. `new Date("YYYY-MM-DD")`
+  // and UTC construction shift labels back a day for users west of UTC.
+  const date = new Date(Number(y), Number(m) - 1, Number(d));
   return Number.isNaN(date.valueOf()) ? null : date;
 }
 

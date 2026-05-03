@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
+  CostUsageTotals,
   SessionDailyModelUsage,
   SessionMessageCounts,
   SessionModelUsage,
@@ -21,7 +22,11 @@ import {
   resolveExistingUsageSessionFile,
   type DiscoveredSession,
 } from "../../infra/session-cost-usage.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  isValidAgentId,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -52,6 +57,7 @@ const COST_USAGE_CACHE_MAX = 256;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
+type CostUsageDailyEntry = CostUsageSummary["daily"][number];
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
   | { mode: "specific"; utcOffsetMinutes: number };
@@ -63,6 +69,16 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
+
+class InvalidCostUsageAgentIdError extends Error {
+  readonly agentId: string;
+
+  constructor(agentId: string) {
+    super(`unknown agent id "${agentId}"`);
+    this.name = "InvalidCostUsageAgentIdError";
+    this.agentId = agentId;
+  }
+}
 
 function findCostUsageCacheEvictionKey(): string | undefined {
   for (const [key, entry] of costUsageCache) {
@@ -320,12 +336,182 @@ async function discoverAllSessionsForUsage(params: {
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);
 }
 
+function resolveCostUsageAgentIds(config: OpenClawConfig, agentId?: string): string[] {
+  const seen = new Set<string>();
+  const agentIds: string[] = [];
+  for (const agent of listAgentsForGateway(config).agents) {
+    const id = normalizeOptionalString(agent.id);
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    agentIds.push(id);
+  }
+
+  const requestedAgentId = normalizeOptionalString(agentId);
+  if (!requestedAgentId) {
+    return agentIds;
+  }
+
+  if (!isValidAgentId(requestedAgentId)) {
+    throw new InvalidCostUsageAgentIdError(requestedAgentId);
+  }
+
+  const normalizedAgentId = normalizeAgentId(requestedAgentId);
+  if (!seen.has(normalizedAgentId)) {
+    throw new InvalidCostUsageAgentIdError(requestedAgentId);
+  }
+
+  return [normalizedAgentId];
+}
+
+function createEmptyCostUsageTotals(): CostUsageTotals {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    totalCost: 0,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
+function addCostUsageTotals(
+  target: CostUsageTotals,
+  source: Partial<CostUsageTotals> | undefined,
+): void {
+  if (!source) {
+    return;
+  }
+  target.input += source.input ?? 0;
+  target.output += source.output ?? 0;
+  target.cacheRead += source.cacheRead ?? 0;
+  target.cacheWrite += source.cacheWrite ?? 0;
+  target.totalTokens += source.totalTokens ?? 0;
+  target.totalCost += source.totalCost ?? 0;
+  target.inputCost += source.inputCost ?? 0;
+  target.outputCost += source.outputCost ?? 0;
+  target.cacheReadCost += source.cacheReadCost ?? 0;
+  target.cacheWriteCost += source.cacheWriteCost ?? 0;
+  target.missingCostEntries += source.missingCostEntries ?? 0;
+}
+
+function countInclusiveDays(startMs: number, endMs: number): number {
+  return Math.max(1, Math.floor((endMs - startMs) / DAY_MS) + 1);
+}
+
+function withCostUsageRangeDays(params: {
+  summary: CostUsageSummary;
+  startMs: number;
+  endMs: number;
+}): CostUsageSummary {
+  return {
+    ...params.summary,
+    days: countInclusiveDays(params.startMs, params.endMs),
+  };
+}
+
+function mergeCostUsageSummaries(params: {
+  summaries: CostUsageSummary[];
+  startMs: number;
+  endMs: number;
+}): CostUsageSummary {
+  const totals = createEmptyCostUsageTotals();
+  const dailyByDate = new Map<string, CostUsageDailyEntry>();
+
+  for (const summary of params.summaries) {
+    addCostUsageTotals(totals, summary.totals);
+    for (const entry of summary.daily) {
+      const existing = dailyByDate.get(entry.date) ?? {
+        date: entry.date,
+        ...createEmptyCostUsageTotals(),
+      };
+      addCostUsageTotals(existing, entry);
+      dailyByDate.set(entry.date, existing);
+    }
+  }
+
+  return {
+    updatedAt: Date.now(),
+    days: countInclusiveDays(params.startMs, params.endMs),
+    daily: Array.from(dailyByDate.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+    totals,
+  };
+}
+
+async function loadCostUsageSummaryForAgents(params: {
+  startMs: number;
+  endMs: number;
+  config: OpenClawConfig;
+  agentIds: string[];
+}): Promise<CostUsageSummary> {
+  if (params.agentIds.length === 0) {
+    const summary = await loadCostUsageSummary({
+      startMs: params.startMs,
+      endMs: params.endMs,
+      config: params.config,
+    });
+    return withCostUsageRangeDays({
+      summary,
+      startMs: params.startMs,
+      endMs: params.endMs,
+    });
+  }
+  if (params.agentIds.length === 1) {
+    const summary = await loadCostUsageSummary({
+      startMs: params.startMs,
+      endMs: params.endMs,
+      config: params.config,
+      agentId: params.agentIds[0],
+    });
+    return withCostUsageRangeDays({
+      summary,
+      startMs: params.startMs,
+      endMs: params.endMs,
+    });
+  }
+
+  const results = await Promise.allSettled(
+    params.agentIds.map((agentId) =>
+      loadCostUsageSummary({
+        startMs: params.startMs,
+        endMs: params.endMs,
+        config: params.config,
+        agentId,
+      }),
+    ),
+  );
+  const summaries = results.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : [],
+  );
+  if (summaries.length === 0) {
+    const firstRejected = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (firstRejected) {
+      throw firstRejected.reason;
+    }
+  }
+  return mergeCostUsageSummaries({
+    summaries,
+    startMs: params.startMs,
+    endMs: params.endMs,
+  });
+}
+
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
   config: OpenClawConfig;
+  agentId?: string;
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.startMs}-${params.endMs}`;
+  const agentIds = resolveCostUsageAgentIds(params.config, params.agentId);
+  const cacheKey = `${params.startMs}-${params.endMs}-${agentIds.join(",")}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
@@ -340,10 +526,11 @@ async function loadCostUsageSummaryCached(params: {
   }
 
   const entry: CostUsageCacheEntry = cached ?? {};
-  const inFlight = loadCostUsageSummary({
+  const inFlight = loadCostUsageSummaryForAgents({
     startMs: params.startMs,
     endMs: params.endMs,
     config: params.config,
+    agentIds,
   })
     .then((summary) => {
       setCostUsageCache(cacheKey, { summary, updatedAt: Date.now() });
@@ -382,6 +569,8 @@ export const __test = {
   parseDays,
   parseDateRange,
   discoverAllSessionsForUsage,
+  resolveCostUsageAgentIds,
+  mergeCostUsageSummaries,
   loadCostUsageSummaryCached,
   costUsageCache,
 };
@@ -402,7 +591,21 @@ export const usageHandlers: GatewayRequestHandlers = {
       mode: params?.mode,
       utcOffset: params?.utcOffset,
     });
-    const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
+    let summary: CostUsageSummary;
+    try {
+      summary = await loadCostUsageSummaryCached({
+        startMs,
+        endMs,
+        config,
+        agentId: normalizeOptionalString(params?.agentId),
+      });
+    } catch (error) {
+      if (error instanceof InvalidCostUsageAgentIdError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
+      throw error;
+    }
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params, context }) => {
