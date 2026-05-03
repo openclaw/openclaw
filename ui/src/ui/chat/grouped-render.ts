@@ -676,7 +676,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           }
           function closeOnOutside(evt: MouseEvent) {
             const target = evt.target;
-            if (target instanceof Node && !popover.contains(target) && target !== btn) {
+            if (target instanceof Node && !popover.contains(target) && !btn.contains(target)) {
               dismissPopover();
             }
           }

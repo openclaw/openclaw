@@ -303,6 +303,14 @@ function openDeleteConfirm(deleteButton: HTMLButtonElement) {
   deleteButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
+function clickDeleteButtonIconPath(deleteButton: HTMLButtonElement) {
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  icon.appendChild(path);
+  deleteButton.appendChild(icon);
+  path.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+}
+
 function setupArmedDeleteConfirm() {
   const flushAnimationFrames = stubAnimationFrameQueue();
   const addListenerSpy = vi.spyOn(document, "addEventListener");
@@ -450,6 +458,15 @@ describe("grouped chat rendering", () => {
     const fixture = setupArmedDeleteConfirm();
 
     openDeleteConfirm(fixture.deleteButton);
+
+    expectDeleteConfirmDismissed(fixture);
+    expect(fixture.onDelete).not.toHaveBeenCalled();
+  });
+
+  it("removes the delete confirm outside-click listener when the delete button icon toggles it", () => {
+    const fixture = setupArmedDeleteConfirm();
+
+    clickDeleteButtonIconPath(fixture.deleteButton);
 
     expectDeleteConfirmDismissed(fixture);
     expect(fixture.onDelete).not.toHaveBeenCalled();
