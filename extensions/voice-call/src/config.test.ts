@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  VoiceCallConfigSchema,
+  resolveTwilioAuthToken,
+  resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallNumberRouteKey,
+  resolveVoiceCallSessionKey,
   validateProviderConfig,
   normalizeVoiceCallConfig,
   resolveVoiceCallConfig,
@@ -9,6 +14,10 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
   return createVoiceCallBaseConfig({ provider });
+}
+
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default", id };
 }
 
 function requireElevenLabsTtsConfig(config: Pick<VoiceCallConfig, "tts">) {
@@ -80,6 +89,24 @@ describe("validateProviderConfig", () => {
   });
 
   describe("twilio provider", () => {
+    it("accepts SecretRef-backed auth tokens before runtime resolution", () => {
+      const config = VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "twilio",
+        fromNumber: "+15550001234",
+        twilio: {
+          accountSid: "AC123",
+          authToken: envRef("TWILIO_AUTH_TOKEN"),
+        },
+      });
+
+      expect(config.twilio?.authToken).toEqual(envRef("TWILIO_AUTH_TOKEN"));
+      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
+      expect(() => resolveTwilioAuthToken(config)).toThrow(
+        'plugins.entries.voice-call.config.twilio.authToken: unresolved SecretRef "env:default:TWILIO_AUTH_TOKEN"',
+      );
+    });
+
     it("passes validation with mixed config and env vars", () => {
       process.env.TWILIO_AUTH_TOKEN = "secret";
       let config = createBaseConfig("twilio");
@@ -232,6 +259,116 @@ describe("resolveVoiceCallConfig", () => {
 
     expect(config.staleCallReaperSeconds).toBe(120);
   });
+
+  it("keeps voice sessions scoped by phone by default", () => {
+    const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
+
+    expect(config.sessionScope).toBe("per-phone");
+    expect(
+      resolveVoiceCallSessionKey({
+        config,
+        callId: "call-123",
+        phone: "+1 (555) 000-1111",
+      }),
+    ).toBe("voice:15550001111");
+  });
+
+  it("can scope voice sessions to each call", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      sessionScope: "per-call",
+    });
+
+    expect(config.sessionScope).toBe("per-call");
+    expect(
+      resolveVoiceCallSessionKey({
+        config,
+        callId: "call-123",
+        phone: "+1 (555) 000-1111",
+      }),
+    ).toBe("voice:call:call-123");
+  });
+
+  it("preserves explicit voice session keys", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      sessionScope: "per-call",
+    });
+
+    expect(
+      resolveVoiceCallSessionKey({
+        config,
+        callId: "call-123",
+        phone: "+1 (555) 000-1111",
+        explicitSessionKey: "meet-room-1",
+      }),
+    ).toBe("meet-room-1");
+  });
+
+  it("resolves per-number inbound route overrides over global voice settings", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      inboundGreeting: "Hello from global.",
+      agentId: "main",
+      responseModel: "openai/gpt-5.4-mini",
+      responseSystemPrompt: "Global voice assistant.",
+      responseTimeoutMs: 10000,
+      tts: {
+        provider: "openai",
+        providers: {
+          openai: { voice: "coral", speed: 1 },
+        },
+      },
+      numbers: {
+        "+15550001111": {
+          inboundGreeting: "Silver Fox Cards, how can I help?",
+          agentId: "cards",
+          responseModel: "openai/gpt-5.5",
+          responseSystemPrompt: "You are a baseball card expert.",
+          responseTimeoutMs: 20000,
+          tts: {
+            providers: {
+              openai: { voice: "alloy" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveVoiceCallNumberRouteKey(config, "+1 (555) 000-1111")).toBe("+15550001111");
+    const effective = resolveVoiceCallEffectiveConfig(config, "+1 (555) 000-1111");
+
+    expect(effective.numberRouteKey).toBe("+15550001111");
+    expect(effective.config.inboundGreeting).toBe("Silver Fox Cards, how can I help?");
+    expect(effective.config.agentId).toBe("cards");
+    expect(effective.config.responseModel).toBe("openai/gpt-5.5");
+    expect(effective.config.responseSystemPrompt).toBe("You are a baseball card expert.");
+    expect(effective.config.responseTimeoutMs).toBe(20000);
+    expect(effective.config.tts?.provider).toBe("openai");
+    expect(effective.config.tts?.providers?.openai).toEqual({ voice: "alloy", speed: 1 });
+  });
+
+  it("falls back to global voice settings when no per-number route matches", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      inboundGreeting: "Hello from global.",
+      numbers: {
+        "+15550001111": {
+          inboundGreeting: "Hello from route.",
+        },
+      },
+    });
+
+    const effective = resolveVoiceCallEffectiveConfig(config, "+15550002222");
+
+    expect(effective.numberRouteKey).toBeUndefined();
+    expect(effective.config).toBe(config);
+    expect(effective.config.inboundGreeting).toBe("Hello from global.");
+  });
 });
 
 describe("normalizeVoiceCallConfig", () => {
@@ -251,6 +388,13 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.streaming.providers).toEqual({});
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
+    expect(normalized.realtime.fastContext).toEqual({
+      enabled: false,
+      timeoutMs: 800,
+      maxResults: 3,
+      sources: ["memory", "sessions"],
+      fallbackToConsult: false,
+    });
     expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toEqual([]);

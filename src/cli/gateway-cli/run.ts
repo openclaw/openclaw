@@ -7,7 +7,9 @@ import type {
   GatewayAuthMode,
   GatewayBindMode,
   GatewayTailscaleMode,
+  ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
+import { formatConfigIssueSummary } from "../../config/issue-format.js";
 import { CONFIG_PATH, resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
@@ -34,6 +36,7 @@ import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { withProgress } from "../progress.js";
 import { parsePort } from "../shared/parse-port.js";
+import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
 
 type GatewayRunOpts = {
@@ -269,18 +272,21 @@ function getGatewayStartGuardErrors(params: {
 
 async function readGatewayStartupConfig(params: {
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
-}): Promise<{ cfg: OpenClawConfig; snapshot: ConfigFileSnapshot | null }> {
+}): Promise<{
+  cfg: OpenClawConfig;
+  snapshot: ConfigFileSnapshot | null;
+  startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
+}> {
   const {
-    readBestEffortConfig,
-    readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata,
     recoverConfigFromLastKnownGood,
     recoverConfigFromJsonRootSuffix,
   } = await import("../../config/config.js");
-  let cfg = await params.startupTrace.measure("cli.config-load", () => readBestEffortConfig());
-  let snapshot: ConfigFileSnapshot | null = await params.startupTrace.measure(
-    "cli.config-snapshot",
-    () => readConfigFileSnapshot().catch(() => null),
-  );
+  let snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
+    await params.startupTrace.measure("cli.config-snapshot", () =>
+      readConfigFileSnapshotWithPluginMetadata().catch(() => null),
+    );
+  let snapshot: ConfigFileSnapshot | null = snapshotRead?.snapshot ?? null;
   if (snapshot?.exists && !snapshot.valid) {
     const invalidSnapshot = snapshot;
     const recovered = await params.startupTrace.measure("cli.config-recovery", () =>
@@ -290,8 +296,12 @@ async function readGatewayStartupConfig(params: {
       }),
     );
     if (recovered) {
+      const issueSummary = formatConfigIssueSummary([
+        ...invalidSnapshot.issues,
+        ...invalidSnapshot.legacyIssues,
+      ]);
       gatewayLog.warn(
-        `gateway: restored invalid effective config from last-known-good backup: ${invalidSnapshot.path}`,
+        `gateway: restored invalid effective config from last-known-good backup: ${invalidSnapshot.path}${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
       );
       try {
         const { writeRestartSentinel } = await import("../../infra/restart-sentinel.js");
@@ -311,9 +321,10 @@ async function readGatewayStartupConfig(params: {
           `gateway: failed to persist config auto-recovery notice: ${formatErrorMessage(err)}`,
         );
       }
-      snapshot = await params.startupTrace.measure("cli.config-snapshot-reload", () =>
-        readConfigFileSnapshot().catch(() => null),
+      snapshotRead = await params.startupTrace.measure("cli.config-snapshot-reload", () =>
+        readConfigFileSnapshotWithPluginMetadata().catch(() => null),
       );
+      snapshot = snapshotRead?.snapshot ?? null;
     } else {
       const repaired = await params.startupTrace.measure("cli.config-prefix-recovery", () =>
         recoverConfigFromJsonRootSuffix(invalidSnapshot),
@@ -322,16 +333,19 @@ async function readGatewayStartupConfig(params: {
         gatewayLog.warn(
           `gateway: repaired invalid effective config by stripping a non-JSON prefix: ${invalidSnapshot.path}`,
         );
-        snapshot = await params.startupTrace.measure("cli.config-snapshot-reload", () =>
-          readConfigFileSnapshot().catch(() => null),
+        snapshotRead = await params.startupTrace.measure("cli.config-snapshot-reload", () =>
+          readConfigFileSnapshotWithPluginMetadata().catch(() => null),
         );
+        snapshot = snapshotRead?.snapshot ?? null;
       }
     }
   }
-  if (snapshot?.valid) {
-    cfg = snapshot.config;
-  }
-  return { cfg, snapshot };
+  const cfg = snapshot?.config ?? {};
+  return {
+    cfg,
+    snapshot,
+    ...(snapshotRead ? { startupConfigSnapshotRead: snapshotRead } : {}),
+  };
 }
 
 function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): GatewayRunOpts {
@@ -362,7 +376,7 @@ function isGatewayLockError(err: unknown): err is GatewayLockError {
   );
 }
 
-function isHealthyGatewayLockError(err: unknown): boolean {
+function isGatewayAlreadyRunningLockError(err: unknown): boolean {
   if (!isGatewayLockError(err) || typeof err.message !== "string") {
     return false;
   }
@@ -370,6 +384,20 @@ function isHealthyGatewayLockError(err: unknown): boolean {
     err.message.includes("gateway already running") ||
     err.message.includes("another gateway instance is already listening")
   );
+}
+
+function isHealthyGatewayLockError(err: unknown): boolean {
+  return isGatewayAlreadyRunningLockError(err);
+}
+
+function resolveGatewayLockErrorExitCode(
+  err: unknown,
+  supervisor: RespawnSupervisor | null,
+): number {
+  if (supervisor === "systemd" && isGatewayAlreadyRunningLockError(err)) {
+    return EXIT_CONFIG_ERROR;
+  }
+  return isHealthyGatewayLockError(err) ? 0 : 1;
 }
 
 function normalizeGatewayHealthProbeHost(host: string): string {
@@ -441,15 +469,17 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       await params.startLoop();
       return;
     } catch (err) {
-      const isGatewayAlreadyRunning =
-        err instanceof GatewayLockError &&
-        typeof err.message === "string" &&
-        err.message.includes("gateway already running");
-      if (!isGatewayAlreadyRunning) {
+      if (!isGatewayAlreadyRunningLockError(err)) {
         throw err;
       }
 
       if (await probeHealth({ host: params.healthHost, port: params.port })) {
+        if (supervisor === "systemd") {
+          throw new GatewayLockError(
+            "gateway already running under systemd; existing gateway is healthy, exiting with code 78 to prevent a systemd Restart=always loop",
+            err,
+          );
+        }
         params.log.info(
           `gateway already running under ${supervisor}; existing gateway is healthy, leaving it in control`,
         );
@@ -483,6 +513,7 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
 }
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
+  installQaParentWatchdog();
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
@@ -540,7 +571,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 
   gatewayLog.info("loading configuration…");
-  const { cfg, snapshot } = await readGatewayStartupConfig({ startupTrace });
+  const { cfg, snapshot, startupConfigSnapshotRead } = await readGatewayStartupConfig({
+    startupTrace,
+  });
   void maybeLogPendingControlUiBuild(cfg).catch((err) => {
     gatewayLog.warn(`Control UI asset check failed: ${String(err)}`);
   });
@@ -819,14 +852,16 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           auth: authOverride,
           tailscale: tailscaleOverride,
           startupStartedAt,
+          ...(startupConfigSnapshotRead ? { startupConfigSnapshotRead } : {}),
         }),
     });
 
+  const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");
+  const supervisor = detectRespawnSupervisor(process.env);
   try {
-    const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");
     await runGatewayLoopWithSupervisedLockRecovery({
       startLoop,
-      supervisor: detectRespawnSupervisor(process.env),
+      supervisor,
       port,
       healthHost,
       log: gatewayLog,
@@ -850,7 +885,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       }
       const { maybeExplainGatewayServiceStop } = await import("./shared.js");
       await maybeExplainGatewayServiceStop();
-      defaultRuntime.exit(isHealthyGatewayLockError(err) ? 0 : 1);
+      defaultRuntime.exit(resolveGatewayLockErrorExitCode(err, supervisor));
       return;
     }
     await maybeWriteGatewayStartupFailureBundle(err);
@@ -861,6 +896,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
 export const __testing = {
   normalizeGatewayHealthProbeHost,
+  resolveGatewayLockErrorExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
 

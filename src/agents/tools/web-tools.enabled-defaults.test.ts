@@ -1,17 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { clearActiveRuntimeWebToolsMetadata } from "../../secrets/runtime-web-tools-state.js";
+import {
+  clearActiveRuntimeWebToolsMetadata,
+  setActiveRuntimeWebToolsMetadata,
+} from "../../secrets/runtime-web-tools-state.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
+
+const runWebSearchCalls = vi.hoisted(
+  () => [] as Array<{ config?: unknown; runtimeWebSearch?: unknown }>,
+);
+const activeSecretsRuntimeSnapshot = vi.hoisted(() => ({
+  current: null as null | { config: unknown },
+}));
+
+vi.mock("../../secrets/runtime.js", () => ({
+  getActiveSecretsRuntimeSnapshot: () => activeSecretsRuntimeSnapshot.current,
+}));
 
 vi.mock("../../web-search/runtime.js", async () => {
   const { getActivePluginRegistry } = await import("../../plugins/runtime.js");
+  const { getActiveRuntimeWebToolsMetadata } =
+    await import("../../secrets/runtime-web-tools-state.js");
   const resolveRuntimeDefinition = (options?: {
     config?: unknown;
     runtimeWebSearch?: { selectedProvider?: string; providerConfigured?: string };
   }) => {
     const providerId =
-      options?.runtimeWebSearch?.selectedProvider ?? options?.runtimeWebSearch?.providerConfigured;
+      options?.runtimeWebSearch?.selectedProvider ??
+      options?.runtimeWebSearch?.providerConfigured ??
+      getActiveRuntimeWebToolsMetadata()?.search?.selectedProvider ??
+      getActiveRuntimeWebToolsMetadata()?.search?.providerConfigured;
     const registration = getActivePluginRegistry()?.webSearchProviders.find(
       (entry) => entry.provider.id === providerId,
     );
@@ -33,9 +52,14 @@ vi.mock("../../web-search/runtime.js", async () => {
     resolveWebSearchDefinition: resolveRuntimeDefinition,
     resolveWebSearchProviderId: () => "",
     runWebSearch: async (options: {
+      config?: unknown;
       args: Record<string, unknown>;
       runtimeWebSearch?: unknown;
     }) => {
+      runWebSearchCalls.push({
+        config: options.config,
+        runtimeWebSearch: options.runtimeWebSearch,
+      });
       const resolved = resolveRuntimeDefinition(options as never);
       if (!resolved) {
         throw new Error("web_search is disabled or no provider is available.");
@@ -51,11 +75,14 @@ vi.mock("../../web-search/runtime.js", async () => {
 beforeEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearActiveRuntimeWebToolsMetadata();
+  activeSecretsRuntimeSnapshot.current = null;
+  runWebSearchCalls.length = 0;
 });
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearActiveRuntimeWebToolsMetadata();
+  activeSecretsRuntimeSnapshot.current = null;
 });
 
 describe("web tools defaults", () => {
@@ -111,7 +138,98 @@ describe("web tools defaults", () => {
 
     const result = await tool?.execute?.("call-runtime-provider", {});
 
-    expect(tool?.description).toBe("custom runtime tool");
+    expect(tool?.description).toContain("Search the web");
     expect(result?.details).toMatchObject({ ok: true });
+  });
+
+  it("late-binds managed web_search execution to the current runtime snapshot", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push(
+      {
+        pluginId: "stale-search",
+        pluginName: "Stale Search",
+        source: "test",
+        provider: {
+          id: "stale",
+          label: "Stale Search",
+          hint: "Stale runtime provider",
+          envVars: [],
+          placeholder: "stale-...",
+          signupUrl: "https://example.com/stale",
+          autoDetectOrder: 1,
+          credentialPath: "tools.web.search.stale.apiKey",
+          getCredentialValue: () => "configured",
+          setCredentialValue: () => {},
+          createTool: () => ({
+            description: "stale runtime tool",
+            parameters: {},
+            execute: async () => ({ provider: "stale" }),
+          }),
+        },
+      },
+      {
+        pluginId: "fresh-search",
+        pluginName: "Fresh Search",
+        source: "test",
+        provider: {
+          id: "fresh",
+          label: "Fresh Search",
+          hint: "Fresh runtime provider",
+          envVars: [],
+          placeholder: "fresh-...",
+          signupUrl: "https://example.com/fresh",
+          autoDetectOrder: 2,
+          credentialPath: "tools.web.search.fresh.apiKey",
+          getCredentialValue: () => "configured",
+          setCredentialValue: () => {},
+          createTool: () => ({
+            description: "fresh runtime tool",
+            parameters: {},
+            execute: async () => ({ provider: "fresh" }),
+          }),
+        },
+      },
+    );
+    setActivePluginRegistry(registry);
+    setActiveRuntimeWebToolsMetadata({
+      search: {
+        providerConfigured: "fresh",
+        providerSource: "configured",
+        selectedProvider: "fresh",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      fetch: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      diagnostics: [],
+    });
+    const runtimeConfig = {
+      tools: { web: { search: { provider: "fresh", fresh: { apiKey: "runtime-key" } } } },
+    };
+    activeSecretsRuntimeSnapshot.current = { config: runtimeConfig };
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "stale" } } } },
+      sandboxed: true,
+      runtimeWebSearch: {
+        providerConfigured: "stale",
+        providerSource: "configured",
+        selectedProvider: "stale",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+      lateBindRuntimeConfig: true,
+    });
+
+    const result = await tool?.execute?.("call-runtime-provider", {});
+
+    expect(result?.details).toMatchObject({ provider: "fresh" });
+    expect(runWebSearchCalls).toHaveLength(1);
+    expect(runWebSearchCalls[0]?.config).toBe(runtimeConfig);
+    expect(runWebSearchCalls[0]?.runtimeWebSearch).toMatchObject({
+      selectedProvider: "fresh",
+    });
   });
 });

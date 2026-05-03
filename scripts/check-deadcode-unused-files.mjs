@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { KNIP_UNUSED_FILE_ALLOWLIST } from "./deadcode-unused-files.allowlist.mjs";
+import {
+  KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST,
+  KNIP_UNUSED_FILE_ALLOWLIST,
+} from "./deadcode-unused-files.allowlist.mjs";
 
 const KNIP_VERSION = "6.8.0";
 const KNIP_ARGS = [
@@ -23,6 +26,10 @@ function uniqueSorted(values) {
   return [...new Set(values.map(normalizeRepoPath))].toSorted((left, right) =>
     left.localeCompare(right),
   );
+}
+
+function isLikelyRepoFilePath(value) {
+  return /^(apps|docs|extensions|packages|scripts|src|test|ui)\//u.test(normalizeRepoPath(value));
 }
 
 export function parseKnipCompactUnusedFiles(output) {
@@ -47,22 +54,30 @@ export function parseKnipCompactUnusedFiles(output) {
     if (sawUnusedFilesSection && !inUnusedFilesSection) {
       continue;
     }
-    files.push(line.slice(separatorIndex + 2).trim());
+    const file = line.slice(separatorIndex + 2).trim();
+    if (isLikelyRepoFilePath(file)) {
+      files.push(file);
+    }
   }
 
   return uniqueSorted(files);
 }
 
-export function compareUnusedFilesToAllowlist(actualFiles, allowlistFiles) {
+export function compareUnusedFilesToAllowlist(
+  actualFiles,
+  allowlistFiles,
+  optionalAllowlistFiles = [],
+) {
   const actual = uniqueSorted(actualFiles);
   const allowed = uniqueSorted(allowlistFiles);
-  const allowedSet = new Set(allowed);
+  const optionalAllowed = uniqueSorted(optionalAllowlistFiles);
+  const allowedOrOptionalSet = new Set([...allowed, ...optionalAllowed]);
   const actualSet = new Set(actual);
 
   return {
     actual,
     allowed,
-    unexpected: actual.filter((file) => !allowedSet.has(file)),
+    unexpected: actual.filter((file) => !allowedOrOptionalSet.has(file)),
     stale: allowed.filter((file) => !actualSet.has(file)),
     duplicateAllowedCount: allowlistFiles.length - new Set(allowlistFiles).size,
     allowlistIsSorted:
@@ -109,9 +124,13 @@ export function runKnipUnusedFiles() {
   };
 }
 
-export function checkUnusedFiles(output, allowlistFiles = KNIP_UNUSED_FILE_ALLOWLIST) {
+export function checkUnusedFiles(
+  output,
+  allowlistFiles = KNIP_UNUSED_FILE_ALLOWLIST,
+  optionalAllowlistFiles = KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST,
+) {
   const actual = parseKnipCompactUnusedFiles(output);
-  const comparison = compareUnusedFilesToAllowlist(actual, allowlistFiles);
+  const comparison = compareUnusedFilesToAllowlist(actual, allowlistFiles, optionalAllowlistFiles);
   return {
     ok:
       comparison.allowlistIsSorted &&

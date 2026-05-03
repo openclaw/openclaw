@@ -7,6 +7,7 @@ import {
   ensureExplicitGatewayAuth,
   resolveExplicitGatewayAuth,
 } from "../gateway/call.js";
+import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
@@ -99,7 +100,7 @@ export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
-  readonly connection: { url: string; token?: string; password?: string };
+  readonly connection: ResolvedGatewayConnection;
   hello?: HelloOk;
 
   onEvent?: (evt: GatewayEvent) => void;
@@ -160,7 +161,13 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   start() {
-    this.client.start();
+    void startGatewayClientWhenEventLoopReady(this.client, {
+      clientOptions: { preauthHandshakeTimeoutMs: this.connection.preauthHandshakeTimeoutMs },
+    }).then((readiness) => {
+      if (!readiness.ready && !readiness.aborted) {
+        this.onDisconnected?.("gateway event loop readiness timeout");
+      }
+    });
   }
 
   stop() {
@@ -175,6 +182,7 @@ export class GatewayChatClient implements TuiBackend {
     const runId = opts.runId ?? randomUUID();
     await this.client.request("chat.send", {
       sessionKey: opts.sessionKey,
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       message: opts.message,
       thinking: opts.thinking,
       deliver: opts.deliver,

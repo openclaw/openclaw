@@ -4,6 +4,8 @@ import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -14,16 +16,22 @@ import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
-import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence,
+} from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
+  modelKey,
   normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -34,6 +42,7 @@ import type { ProviderSyntheticAuthResult } from "../../plugins/provider-externa
 import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
@@ -53,10 +62,18 @@ type ProgressRuntime = typeof import("../../cli/progress.js");
 type TerminalTableRuntime = typeof import("../../terminal/table.js");
 type ListProbeRuntime = typeof import("./list.probe.js");
 
-let providerUsageRuntimePromise: Promise<ProviderUsageRuntime> | undefined;
-let progressRuntimePromise: Promise<ProgressRuntime> | undefined;
-let terminalTableRuntimePromise: Promise<TerminalTableRuntime> | undefined;
-let listProbeRuntimePromise: Promise<ListProbeRuntime> | undefined;
+const providerUsageRuntimeLoader = createLazyImportLoader<ProviderUsageRuntime>(
+  () => import("../../infra/provider-usage.js"),
+);
+const progressRuntimeLoader = createLazyImportLoader<ProgressRuntime>(
+  () => import("../../cli/progress.js"),
+);
+const terminalTableRuntimeLoader = createLazyImportLoader<TerminalTableRuntime>(
+  () => import("../../terminal/table.js"),
+);
+const listProbeRuntimeLoader = createLazyImportLoader<ListProbeRuntime>(
+  () => import("./list.probe.js"),
+);
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
@@ -69,23 +86,19 @@ type StatusSyntheticAuth = {
 };
 
 function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
-  providerUsageRuntimePromise ??= import("../../infra/provider-usage.js");
-  return providerUsageRuntimePromise;
+  return providerUsageRuntimeLoader.load();
 }
 
 function loadProgressRuntime(): Promise<ProgressRuntime> {
-  progressRuntimePromise ??= import("../../cli/progress.js");
-  return progressRuntimePromise;
+  return progressRuntimeLoader.load();
 }
 
 function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
-  terminalTableRuntimePromise ??= import("../../terminal/table.js");
-  return terminalTableRuntimePromise;
+  return terminalTableRuntimeLoader.load();
 }
 
 function loadListProbeRuntime(): Promise<ListProbeRuntime> {
-  listProbeRuntimePromise ??= import("./list.probe.js");
-  return listProbeRuntimePromise;
+  return listProbeRuntimeLoader.load();
 }
 
 function resolveProviderConfigForStatus(
@@ -161,6 +174,9 @@ export async function modelsStatusCommand(
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
   const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
+  const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
@@ -192,7 +208,7 @@ export async function modelsStatusCommand(
 
   const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const rawModel = agentModelPrimary ?? rawDefaultsModel;
-  const resolvedLabel = `${resolved.provider}/${resolved.model}`;
+  const resolvedLabel = modelKey(resolved.provider, resolved.model);
   const defaultLabel = rawModel || resolvedLabel;
   const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
@@ -241,8 +257,21 @@ export async function modelsStatusCommand(
   const providersFromEnv = new Set<string>();
   // Use the shared provider-env registry so `models status` stays aligned with
   // env-backed providers beyond the text-model defaults (for example image-gen).
-  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates()).toSorted()) {
-    if (resolveEnvApiKey(provider)) {
+  const envLookupParams = {
+    config: cfg,
+    workspaceDir,
+  };
+  const envCandidateMap = resolveProviderEnvApiKeyCandidates(envLookupParams);
+  const authEvidenceMap = resolveProviderEnvAuthEvidence(envLookupParams);
+  for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
+    if (
+      resolveEnvApiKey(provider, process.env, {
+        config: cfg,
+        workspaceDir,
+        candidateMap: envCandidateMap,
+        authEvidenceMap,
+      })
+    ) {
       providersFromEnv.add(provider);
     }
   }
@@ -296,6 +325,7 @@ export async function modelsStatusCommand(
         store,
         modelsPath,
         agentDir,
+        workspaceDir,
         syntheticAuth: syntheticAuthByProvider.get(provider),
       }),
     )
@@ -373,6 +403,9 @@ export async function modelsStatusCommand(
       async (update) => {
         return await runAuthProbes({
           cfg,
+          agentId: workspaceAgentId,
+          agentDir,
+          workspaceDir,
           providers,
           modelCandidates,
           options: {

@@ -84,6 +84,7 @@ export type AppViewState = {
   localMediaPreviewRoots: string[];
   embedSandboxMode: EmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
+  chatMessageMaxWidth?: string | null;
   sessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;
@@ -119,6 +120,7 @@ export type AppViewState = {
   realtimeTalkDetail: string | null;
   realtimeTalkTranscript: string | null;
   chatManualRefreshInFlight: boolean;
+  chatMobileControlsOpen: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
@@ -405,6 +407,10 @@ export type AppViewState = {
     refreshSessionsAfterChat: Set<string>;
     connect: () => void;
     setTab: (tab: Tab) => void;
+    setChatMobileControlsOpen: (
+      open: boolean,
+      options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
+    ) => void;
     setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
     setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
     setCustomThemeImportUrl: (next: string) => void;

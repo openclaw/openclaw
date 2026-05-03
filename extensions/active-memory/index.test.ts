@@ -185,15 +185,26 @@ describe("active-memory plugin", () => {
 
   it("registers a before_prompt_build hook", () => {
     expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function), {
-      timeoutMs: 45_000,
+      timeoutMs: 15_000,
     });
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(45_000);
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(15_000);
   });
 
-  it("registers before_prompt_build with the configured recall timeout plus setup grace", () => {
+  it("registers before_prompt_build with the configured recall timeout", () => {
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 90_000,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(90_000);
+  });
+
+  it("registers before_prompt_build with explicit setup grace when configured", () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 90_000,
+      setupGraceTimeoutMs: 30_000,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
@@ -1039,6 +1050,7 @@ describe("active-memory plugin", () => {
       "If memory_recall is unavailable, use memory_search and memory_get.",
     );
     expect(runParams?.toolsAllow).toEqual(["memory_recall", "memory_search", "memory_get"]);
+    expect(runParams?.allowGatewaySubagentBinding).toBe(true);
     expect(runParams?.prompt).toContain(
       "When searching for preference or habit recall, use a permissive recall limit or memory_search threshold before deciding that no useful memory exists.",
     );
@@ -1384,6 +1396,22 @@ describe("active-memory plugin", () => {
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("config.modelFallbackPolicy is deprecated"),
     );
+    // #74587: deprecation warning must spell out the chain-resolution
+    // semantics so operators don't read it as a promise of runtime failover.
+    // The previous wording ("set config.modelFallback if you want a fallback
+    // model") cost real users hours of debug time before they hit the source
+    // and saw `getModelRef` only walks candidates once.
+    const warnCalls = (api.logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    const deprecationMessage = warnCalls
+      .map(([first]) => (typeof first === "string" ? first : ""))
+      .find((message) => message.includes("config.modelFallbackPolicy is deprecated"));
+    expect(deprecationMessage).toBeDefined();
+    // Positive: the warning describes chain-resolution last-resort behavior.
+    expect(deprecationMessage).toContain("chain-resolution");
+    expect(deprecationMessage).toContain("last-resort");
+    // Negative: the warning explicitly disclaims runtime failover, since
+    // that's the wrong mental model the previous wording invited.
+    expect(deprecationMessage).toMatch(/NOT a runtime failover/i);
   });
 
   it("does not use a built-in fallback model even when default-remote is configured", async () => {
@@ -1585,6 +1613,7 @@ describe("active-memory plugin", () => {
 
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 20,
@@ -1647,6 +1676,7 @@ describe("active-memory plugin", () => {
 
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 20,
@@ -1702,6 +1732,7 @@ describe("active-memory plugin", () => {
 
   it("keeps timeout status when the timeout transcript is empty", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1,
@@ -1732,6 +1763,7 @@ describe("active-memory plugin", () => {
 
   it("keeps timeout status when the timeout transcript path does not exist", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1,
@@ -1755,6 +1787,50 @@ describe("active-memory plugin", () => {
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=timeout")]);
     expect(lines.some((line) => line.includes("timeout_partial"))).toBe(false);
+  });
+
+  it("does not inject embedded timeout boilerplate from partial transcripts", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:timeout-boilerplate-transcript";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-timeout-boilerplate-transcript",
+      updatedAt: 0,
+    };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "LLM request timed out after 15000 ms.",
+          },
+        },
+      ]);
+      await new Promise<never>(() => {});
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? timeout boilerplate", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    const lines = getActiveMemoryLines(sessionKey);
+    expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=timeout")]);
+    expect(lines.some((line) => line.includes("timeout_partial"))).toBe(false);
+    expect(lines.some((line) => line.includes("LLM request timed out"))).toBe(false);
   });
 
   it("returns partial transcript text when an aborted subagent rejects before the race timeout wins", async () => {
@@ -2157,10 +2233,10 @@ describe("active-memory plugin", () => {
   it("does not spend the model timeout budget on active-memory subagent setup", async () => {
     const CONFIGURED_TIMEOUT_MS = 10;
     __testing.setMinimumTimeoutMsForTests(1);
-    __testing.setSetupGraceTimeoutMsForTests(100);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: CONFIGURED_TIMEOUT_MS,
+      setupGraceTimeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -2189,7 +2265,7 @@ describe("active-memory plugin", () => {
 
   it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
     const CONFIGURED_TIMEOUT_MS = 200;
-    const MARGIN_MS = 500;
+    const HARD_DEADLINE_MARGIN_MS = 4_800;
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -2223,7 +2299,176 @@ describe("active-memory plugin", () => {
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
     // Hard deadline: wall-clock time must be near timeoutMs, not 30s.
-    expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + MARGIN_MS);
+    expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + HARD_DEADLINE_MARGIN_MS);
+  });
+
+  it("fast-fails terminal zero-hit memory_search results without waiting for recall timeout", async () => {
+    const CONFIGURED_TIMEOUT_MS = 1_000;
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:terminal-zero-hit";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-terminal-zero-hit", updatedAt: 0 };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: { results: [], debug: { backend: "qmd", hits: 0, searchMs: 8 } },
+          },
+        },
+      ]);
+      await new Promise<never>(() => {});
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? zero hit", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("done status=empty"))).toBe(true);
+    expect(infoLines.some((line: string) => line.includes("done status=timeout"))).toBe(false);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
+    ]);
+  });
+
+  it("does not fast-fail memory_search results solely because debug hits is zero", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 500,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:terminal-zero-hit-with-results";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-terminal-zero-hit-with-results",
+      updatedAt: 0,
+    };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              results: [{ path: "memory/food.md", text: "User usually orders ramen." }],
+              debug: { backend: "qmd", hits: 0, searchMs: 8 },
+            },
+          },
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { payloads: [{ text: "User usually orders ramen." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? zero hit with results", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result?.prependContext).toContain("User usually orders ramen.");
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=ok"),
+      expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
+    ]);
+  });
+
+  it("fast-fails unavailable memory_search results without injecting provider errors", async () => {
+    const CONFIGURED_TIMEOUT_MS = 1_000;
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:terminal-unavailable";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-terminal-unavailable", updatedAt: 0 };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              disabled: true,
+              warning: "Memory search is unavailable due to an embedding/provider error.",
+              action: "Check the embedding provider configuration, then retry memory_search.",
+              error: "embedding request failed",
+            },
+          },
+        },
+      ]);
+      await new Promise<never>(() => {});
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? unavailable", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("done status=empty"))).toBe(true);
+    expect(infoLines.some((line: string) => line.includes("done status=timeout"))).toBe(false);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining(
+        "🔎 Active Memory Debug: Memory search is unavailable due to an embedding/provider error. Check the embedding provider configuration, then retry memory_search.",
+      ),
+    ]);
+  });
+
+  it("does not treat memory_get misses as terminal recall results", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 500,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_get",
+            details: { path: "memory/missing.md", text: "", disabled: true, error: "not found" },
+          },
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { payloads: [{ text: "User usually orders ramen after late flights." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? memory get miss", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:memory-get-miss",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result?.prependContext).toContain("User usually orders ramen after late flights.");
   });
 
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {
@@ -3085,5 +3330,158 @@ describe("active-memory plugin", () => {
         }),
       ),
     ).toMatchObject({ status: "ok", summary: "memory 1" });
+  });
+
+  it("skips recall after consecutive timeouts when circuit breaker trips (#74054)", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1,
+      logging: true,
+      circuitBreakerMaxTimeouts: 2,
+      circuitBreakerCooldownMs: 60_000,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedPiAgent.mockImplementation(async () => await new Promise<never>(() => {}));
+
+    // First two calls should actually attempt the subagent (and timeout).
+    await hooks.before_prompt_build(
+      { prompt: "circuit breaker test 1", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-test",
+        messageProvider: "webchat",
+      },
+    );
+    await hooks.before_prompt_build(
+      { prompt: "circuit breaker test 2", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-test",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+
+    // Third call should be skipped by the circuit breaker.
+    await hooks.before_prompt_build(
+      { prompt: "circuit breaker test 3", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-test",
+        messageProvider: "webchat",
+      },
+    );
+    // The subagent should NOT have been called a third time.
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("circuit breaker open"))).toBe(true);
+  });
+
+  it("resets circuit breaker after a successful recall", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 50,
+      logging: true,
+      circuitBreakerMaxTimeouts: 1,
+      circuitBreakerCooldownMs: 60_000,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    // First call: timeout (trips the breaker with max=1).
+    runEmbeddedPiAgent.mockImplementationOnce(async () => await new Promise<never>(() => {}));
+    await hooks.before_prompt_build(
+      { prompt: "cb reset test timeout", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-reset",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+
+    // Second call should be skipped by circuit breaker.
+    await hooks.before_prompt_build(
+      { prompt: "cb reset test skipped", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-reset",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+
+    // Simulate cooldown expiry by manipulating the circuit breaker entry.
+    const cbKey = __testing.buildCircuitBreakerKey("main", "github-copilot", "gpt-5.4-mini");
+    const entry = __testing.getCircuitBreakerEntry(cbKey);
+    if (entry) {
+      entry.lastTimeoutAt = Date.now() - 120_000;
+    }
+
+    // Third call should go through (cooldown expired) and succeed.
+    runEmbeddedPiAgent.mockImplementationOnce(async () => ({
+      payloads: [{ text: "- lemon pepper wings" }],
+    }));
+    await hooks.before_prompt_build(
+      { prompt: "cb reset test success", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-reset",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+
+    // Fourth call should also go through since the breaker was reset on success.
+    runEmbeddedPiAgent.mockImplementationOnce(async () => ({
+      payloads: [{ text: "- buffalo wings" }],
+    }));
+    await hooks.before_prompt_build(
+      { prompt: "cb reset test still ok", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cb-reset",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it("normalizes circuit breaker config with defaults", () => {
+    const config = __testing.normalizePluginConfig({});
+    expect(config.circuitBreakerMaxTimeouts).toBe(3);
+    expect(config.circuitBreakerCooldownMs).toBe(60_000);
+  });
+
+  it("normalizes setup grace config with a zero default and bounded opt-in", () => {
+    expect(__testing.normalizePluginConfig({}).setupGraceTimeoutMs).toBe(0);
+    expect(
+      __testing.normalizePluginConfig({ setupGraceTimeoutMs: 30_001 }).setupGraceTimeoutMs,
+    ).toBe(30_000);
+    expect(__testing.normalizePluginConfig({ setupGraceTimeoutMs: -1 }).setupGraceTimeoutMs).toBe(
+      0,
+    );
+  });
+
+  it("clamps circuit breaker config within valid ranges", () => {
+    const config = __testing.normalizePluginConfig({
+      circuitBreakerMaxTimeouts: 0,
+      circuitBreakerCooldownMs: 1000,
+    });
+    expect(config.circuitBreakerMaxTimeouts).toBe(1);
+    expect(config.circuitBreakerCooldownMs).toBe(5000);
   });
 });

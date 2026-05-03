@@ -8,13 +8,13 @@ import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type ProviderAttributionVerification =
+type ProviderAttributionVerification =
   | "vendor-documented"
   | "vendor-hidden-api-spec"
   | "vendor-sdk-hook-only"
   | "internal-runtime";
 
-export type ProviderAttributionHook =
+type ProviderAttributionHook =
   | "request-headers"
   | "default-headers"
   | "user-agent-extra"
@@ -32,7 +32,7 @@ export type ProviderAttributionPolicy = {
   headers?: Record<string, string>;
 };
 
-export type ProviderAttributionIdentity = Pick<ProviderAttributionPolicy, "product" | "version">;
+type ProviderAttributionIdentity = Pick<ProviderAttributionPolicy, "product" | "version">;
 
 export type ProviderRequestTransport = "stream" | "websocket" | "http" | "media-understanding";
 export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "other";
@@ -444,7 +444,7 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
   }
 }
 
-export function isOpenAIResponsesApi(api: string | null | undefined): boolean {
+function isOpenAIResponsesApi(api: string | null | undefined): boolean {
   const normalizedApi = normalizeOptionalLowercaseString(api);
   return normalizedApi !== undefined && OPENAI_RESPONSES_APIS.has(normalizedApi);
 }
@@ -601,7 +601,6 @@ export function resolveProviderRequestPolicy(
   const policy = resolveProviderAttributionPolicy(provider, env);
   const endpointResolution = resolveProviderEndpoint(input.baseUrl);
   const endpointClass = endpointResolution.endpointClass;
-  const api = normalizeOptionalLowercaseString(input.api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
     endpointClass === "openai-public" ||
@@ -614,19 +613,9 @@ export function resolveProviderRequestPolicy(
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
 
   let attributionProvider: string | undefined;
-  if (
-    provider === "openai" &&
-    (api === "openai-completions" ||
-      api === "openai-responses" ||
-      (input.capability === "audio" && api === "openai-audio-transcriptions")) &&
-    usesOpenAIPublicAttributionHost
-  ) {
+  if (provider === "openai" && usesOpenAIPublicAttributionHost) {
     attributionProvider = "openai";
-  } else if (
-    provider === "openai-codex" &&
-    (api === "openai-codex-responses" || api === "openai-responses") &&
-    usesOpenAICodexAttributionHost
-  ) {
+  } else if (provider === "openai-codex" && usesOpenAICodexAttributionHost) {
     attributionProvider = "openai-codex";
   } else if (provider === "openrouter" && policy?.enabledByDefault) {
     // OpenRouter attribution is documented, but only apply it to known

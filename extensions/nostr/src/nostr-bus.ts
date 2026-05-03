@@ -24,14 +24,6 @@ import {
 } from "./nostr-state-store.js";
 import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 
-export {
-  validatePrivateKey,
-  getPublicKeyFromPrivate,
-  isValidPubkey,
-  normalizePubkey,
-  pubkeyToNpub,
-} from "./nostr-key-utils.js";
-
 // ============================================================================
 // Constants
 // ============================================================================
@@ -52,7 +44,7 @@ const HEALTH_WINDOW_MS = 60000; // 1 minute window for health stats
 // Types
 // ============================================================================
 
-export interface NostrBusOptions {
+interface NostrBusOptions {
   /** Private key in hex or nsec format */
   privateKey: string;
   /** WebSocket relay URLs (defaults to damus + nos.lol) */

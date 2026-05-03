@@ -100,8 +100,12 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
     provider: "openai-codex",
-    aliases: ["codex", "codex-cli"],
-    readCredentials: () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+    aliases: ["codex", "codex-cli", "codex-app-server"],
+    readCredentials: (options) =>
+      readCodexCliCredentialsCached({
+        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+      }),
     bootstrapOnly: true,
   },
   {
@@ -195,14 +199,17 @@ function normalizeProfileScope(values: Iterable<string> | undefined): Set<string
   return out;
 }
 
-function isExternalCliProviderInScope(
-  providerConfig: ExternalCliSyncProvider,
-  options?: ExternalCliAuthProfileOptions,
-): boolean {
+function isExternalCliProviderInScope(params: {
+  providerConfig: ExternalCliSyncProvider;
+  store: AuthProfileStore;
+  options?: ExternalCliAuthProfileOptions;
+}): boolean {
+  const { providerConfig, options, store } = params;
   const providerScope = normalizeProviderScope(options?.providerIds);
   const profileScope = normalizeProfileScope(options?.profileIds);
   if (providerScope === undefined && profileScope === undefined) {
-    return true;
+    const existing = store.profiles[providerConfig.profileId];
+    return existing?.type === "oauth" && existing.provider === providerConfig.provider;
   }
   if (profileScope?.has(providerConfig.profileId.toLowerCase())) {
     return true;
@@ -225,7 +232,7 @@ export function resolveExternalCliAuthProfiles(
   const profiles: ExternalCliResolvedProfile[] = [];
   const now = Date.now();
   for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
-    if (!isExternalCliProviderInScope(providerConfig, options)) {
+    if (!isExternalCliProviderInScope({ providerConfig, store, options })) {
       continue;
     }
     const creds = providerConfig.readCredentials({

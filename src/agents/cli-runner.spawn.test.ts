@@ -25,7 +25,11 @@ import {
   resetClaudeLiveSessionsForTest,
   runClaudeLiveSessionTurn,
 } from "./cli-runner/claude-live-session.js";
-import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
+import {
+  buildCliEnvAuthLog,
+  buildCliExecLogLine,
+  executePreparedCliRun,
+} from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -127,6 +131,27 @@ function buildPreparedCliRunContext(params: {
 }
 
 describe("runCliAgent spawn path", () => {
+  it("formats redacted CLI resume diagnostics without exposing raw session ids", () => {
+    const logLine = buildCliExecLogLine({
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      promptChars: 42,
+      trigger: "heartbeat",
+      useResume: true,
+      cliSessionId: "claude-session-secret",
+      resolvedSessionId: "claude-session-secret",
+      reusableSessionId: "claude-session-secret",
+      hasHistoryPrompt: false,
+    });
+
+    expect(logLine).toContain("trigger=heartbeat");
+    expect(logLine).toContain("useResume=true");
+    expect(logLine).toContain("session=present");
+    expect(logLine).toContain("reuse=reusable");
+    expect(logLine).toContain("historyPrompt=none");
+    expect(logLine).not.toContain("claude-session-secret");
+  });
+
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -924,6 +949,106 @@ describe("runCliAgent spawn path", () => {
         runId: "run-live-large-line",
         backend: {
           liveSession: "claude-stdio",
+        },
+      }),
+    );
+
+    expect(result.text).toHaveLength(largeText.length);
+    expect(result.text).toBe(largeText);
+  });
+
+  it("honors configured Claude live stream-json raw turn limits", async () => {
+    const largeText = "x".repeat(1500);
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          JSON.stringify({
+            type: "result",
+            session_id: "live-session-tight-output-limit",
+            result: largeText,
+          }) + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-tight-output-limit",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-tight-output-limit",
+          backend: {
+            liveSession: "claude-stdio",
+            reliability: {
+              outputLimits: {
+                maxTurnRawChars: 1024,
+              },
+            },
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message: "Claude CLI JSONL line exceeded output limit.",
+    });
+  });
+
+  it("accepts operator-raised Claude live stream-json raw turn limits", async () => {
+    const largeText = "x".repeat(1500);
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          JSON.stringify({
+            type: "result",
+            session_id: "live-session-raised-output-limit",
+            result: largeText,
+          }) + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-raised-output-limit",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-raised-output-limit",
+        backend: {
+          liveSession: "claude-stdio",
+          reliability: {
+            outputLimits: {
+              maxTurnRawChars: 4096,
+            },
+          },
         },
       }),
     );

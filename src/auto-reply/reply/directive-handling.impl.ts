@@ -104,6 +104,7 @@ export async function handleDirectiveOnly(
     aliasIndex,
     allowedModelCatalog,
     resetModelOverride,
+    workspaceDir: params.workspaceDir,
     surface: params.surface,
     sessionEntry,
   });
@@ -595,7 +596,7 @@ export async function handleDirectiveOnly(
     parts.push(
       modelSelection.isDefault
         ? `Model reset to default (${labelWithAlias}).`
-        : `Model set to ${labelWithAlias}.`,
+        : `Model set to ${labelWithAlias} for this session.`,
     );
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);

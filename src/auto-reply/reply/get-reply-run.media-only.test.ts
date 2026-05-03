@@ -130,6 +130,7 @@ let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
 let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
+let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
 let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
@@ -241,6 +242,7 @@ describe("runPreparedReply media-only handling", () => {
     ({ routeReply } = await import("./route-reply.runtime.js"));
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
+    ({ buildGroupChatContext } = await import("./groups.js"));
     ({ buildInboundUserContextPrefix } = await import("./inbound-meta.js"));
     ({ __testing: replyRunTesting, getActiveReplyRunCount } =
       await import("./reply-run-registry.js"));
@@ -300,7 +302,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
-  it("does not propagate empty-assistant silence for direct runs", async () => {
+  it("keeps empty-assistant silence disabled for direct runs by default", async () => {
     await runPreparedReply(
       baseParams({
         ctx: {
@@ -321,6 +323,85 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "direct",
           OriginatingChannel: "slack",
           OriginatingTo: "D123",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+  });
+
+  it.each(["direct", "dm"] as const)(
+    "propagates empty-assistant silence for %s runs with explicit direct silent replies",
+    async (chatType) => {
+      await runPreparedReply(
+        baseParams({
+          ctx: {
+            Body: "",
+            RawBody: "",
+            CommandBody: "",
+            ThreadHistoryBody: "Earlier direct message",
+            OriginatingChannel: "slack",
+            OriginatingTo: "D123",
+            ChatType: chatType,
+          },
+          sessionCtx: {
+            Body: "",
+            BodyStripped: "",
+            ThreadHistoryBody: "Earlier direct message",
+            MediaPath: "/tmp/input.png",
+            Provider: "slack",
+            ChatType: chatType,
+            OriginatingChannel: "slack",
+            OriginatingTo: "D123",
+          },
+          cfg: {
+            session: {},
+            channels: {},
+            agents: {
+              defaults: {
+                silentReply: {
+                  direct: "allow",
+                },
+              },
+            },
+          },
+        }),
+      );
+
+      const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+      expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+    },
+  );
+
+  it("does not borrow target-session silence for native commands sent from direct chats", async () => {
+    await runPreparedReply(
+      baseParams({
+        sessionKey: "agent:main:telegram:group:target",
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier direct message",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "D123",
+          ChatType: "direct",
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:direct:source",
+          CommandTargetSessionKey: "agent:main:telegram:group:target",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier direct message",
+          MediaPath: "/tmp/input.png",
+          Provider: "telegram",
+          ChatType: "direct",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "D123",
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:direct:source",
+          CommandTargetSessionKey: "agent:main:telegram:group:target",
         },
       }),
     );
@@ -776,6 +857,32 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
+  it("treats reset-triggered steer mode as interrupt when the session lane is empty", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "steer" });
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
+    vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
+
+    const result = await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+        isNewSession: true,
+        sessionId: "session-reset-new",
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+    expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.shouldSteer).toBe(false);
+    expect(call?.shouldFollowup).toBe(false);
+    expect(call?.resetTriggered).toBe(true);
+  });
   it("rechecks same-session ownership after async prep before registering a new reply operation", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
@@ -1017,6 +1124,62 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
     expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
     expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
+  });
+
+  it("uses persisted Discord chat metadata for system-event CLI static prompt identity", async () => {
+    vi.mocked(buildGroupChatContext).mockImplementationOnce(({ sessionCtx }) =>
+      [`group`, sessionCtx.Provider, sessionCtx.ChatType, sessionCtx.GroupChannel].join(":"),
+    );
+
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+        isNewSession: false,
+        systemSent: true,
+        ctx: {
+          Body: "scheduled wake",
+          RawBody: "scheduled wake",
+          CommandBody: "scheduled wake",
+          Provider: "cron-event",
+          SessionKey: "agent:main:discord:guild-1:channel-1",
+        },
+        sessionCtx: {
+          Body: "scheduled wake",
+          BodyStripped: "scheduled wake",
+          Provider: "cron-event",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          systemSent: true,
+          chatType: "channel",
+          channel: "discord",
+          groupId: "guild-1",
+          groupChannel: "#ops",
+          lastChannel: "discord",
+          lastTo: "channel-1",
+          origin: {
+            provider: "discord",
+            surface: "discord",
+            chatType: "channel",
+            to: "channel-1",
+          },
+        } as SessionEntry,
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(buildGroupChatContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionCtx: expect.objectContaining({
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "channel",
+          GroupChannel: "#ops",
+        }),
+      }),
+    );
+    expect(call?.followupRun.run.extraSystemPromptStatic).toBe("group:discord:channel:#ops");
   });
 
   it("uses a non-empty transcript marker while keeping bare reset startup instructions out of visible transcript prompt", async () => {

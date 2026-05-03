@@ -66,6 +66,7 @@ export function resolveProviderAuthOverview(params: {
   store: AuthProfileStore;
   modelsPath: string;
   agentDir?: string;
+  workspaceDir?: string;
   syntheticAuth?: { value: string; source: string };
 }): ProviderAuthOverview {
   const { provider, cfg, store } = params;
@@ -123,7 +124,10 @@ export function resolveProviderAuthOverview(params: {
   const tokenCount = profiles.filter((id) => store.profiles[id]?.type === "token").length;
   const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
 
-  const envKey = resolveEnvApiKey(provider);
+  const envKey = resolveEnvApiKey(provider, process.env, {
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+  });
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
 

@@ -329,6 +329,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("uses provider-neutral web_search prompt metadata", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["web_search"],
+    });
+
+    expect(prompt).toContain("- web_search: Search the web using the configured provider");
+    expect(prompt).not.toContain("Brave API");
+  });
+
   it("documents ACP sessions_spawn agent targeting requirements", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -352,6 +362,10 @@ describe("buildAgentSystemPrompt", () => {
         "Use ACP for Codex only when the user explicitly asks for ACP/acpx or wants to test the ACP path.",
       ],
       acpEnabled: true,
+      runtimeInfo: {
+        channel: "discord",
+        capabilities: ["threadbound-acp-spawn"],
+      },
     });
 
     expect(prompt).toContain("Native Codex app-server plugin is available");
@@ -369,6 +383,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
     );
+  });
+
+  it("omits ACP thread-spawn guidance when the runtime capability is absent", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "exec"],
+      acpEnabled: true,
+      runtimeInfo: {
+        channel: "discord",
+        capabilities: [],
+      },
+    });
+
+    expect(prompt).toContain(
+      'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent',
+    );
+    expect(prompt).not.toContain("default ACP harness requests to thread-bound");
+    expect(prompt).not.toContain('use `sessions_spawn` (`runtime: "acp"`, `thread: true`)');
   });
 
   it("omits ACP harness guidance when ACP is disabled", () => {
@@ -759,6 +791,26 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("uses Slack interactive reply hints instead of generic inline button config guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "slack",
+      },
+      messageToolHints: [
+        "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
+        "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+      ],
+    });
+
+    expect(prompt).toContain("Slack interactive replies");
+    expect(prompt).toContain("[[slack_buttons: Label:value, Other:other]]");
+    expect(prompt).not.toContain("Inline buttons not enabled for slack");
+    expect(prompt).not.toContain("slack.capabilities.inlineButtons");
+    expect(prompt).not.toContain("buttons=[[{text,callback_data,style?}]]");
+  });
+
   it("describes message-tool-only source delivery without requiring target", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -773,6 +825,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("use `message(action=send)` for visible channel output");
     expect(prompt).toContain("The target defaults to the current source channel");
     expect(prompt).toContain("final answers are private in this mode");
+    expect(prompt).not.toContain("## Silent Replies");
+    expect(prompt).not.toContain(SILENT_REPLY_TOKEN);
     expect(prompt).not.toContain(
       `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
     );
@@ -785,6 +839,18 @@ describe("buildAgentSystemPrompt", () => {
       runtimeInfo: {
         channel: "telegram",
         capabilities: ["inlineButtons"],
+      },
+    });
+
+    expect(prompt).toContain("rely on native approval card/buttons when they appear");
+    expect(prompt).toContain("do not also send plain chat /approve instructions");
+  });
+
+  it("suppresses plain chat approval commands for native approval channels", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "slack",
       },
     });
 

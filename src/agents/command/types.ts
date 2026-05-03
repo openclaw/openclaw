@@ -17,6 +17,9 @@ export type { AgentStreamParams } from "./shared-types.js";
 export type AgentCommandResultMetaOverrides = {
   transport?: "embedded";
   fallbackFrom?: "gateway";
+  fallbackReason?: "gateway_timeout";
+  fallbackSessionId?: string;
+  fallbackSessionKey?: string;
 };
 
 export type AcpTurnSource = "manual_spawn";
@@ -68,6 +71,8 @@ export type AgentCommandOpts = {
   threadId?: string | number;
   /** Message channel context. */
   messageChannel?: string;
+  /** Tool-policy/output surface context. Defaults to messageChannel. */
+  messageProvider?: string;
   /** Delivery channel. */
   channel?: string;
   /** Account ID for multi-account channel routing. */

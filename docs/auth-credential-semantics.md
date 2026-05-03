@@ -80,6 +80,17 @@ the target agent signs in separately and creates its own local profile.
   candidate for it, `models status --probe` reports `status: no_model` with
   `reasonCode: no_model`.
 
+## External CLI credential discovery
+
+- Runtime-only credentials owned by external CLIs are discovered only when the
+  provider, runtime, or auth profile is in scope for the current operation, or
+  when a stored local profile for that external source already exists.
+- Auth-store callers should choose an explicit external-CLI discovery mode:
+  `none` for persisted/plugin auth only, `existing` for refreshing already
+  stored external CLI profiles, or `scoped` for a concrete provider/profile set.
+- Read-only/status paths pass `allowKeychainPrompt: false`; they use file-backed
+  external CLI credentials only and do not read or reuse macOS Keychain results.
+
 ## OAuth SecretRef Policy Guard
 
 - SecretRef input is for static credentials only.

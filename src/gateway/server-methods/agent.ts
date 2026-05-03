@@ -10,6 +10,8 @@ import {
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import { resolveTrustedGroupId } from "../../agents/pi-tools.policy.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
@@ -39,6 +41,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { formatUncaughtError } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -64,6 +67,10 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -120,9 +127,37 @@ import {
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+
+function formatAttachmentFailureForLog(err: unknown): string {
+  const primary = formatUncaughtError(err);
+  const cause = err instanceof Error ? err.cause : undefined;
+  if (cause === undefined) {
+    return primary;
+  }
+  const causeText = formatUncaughtError(cause);
+  if (!causeText || causeText === primary) {
+    return primary;
+  }
+  return `${primary}\nCaused by: ${causeText}`;
+}
+
+function logAttachmentFailure(
+  logGateway: Pick<GatewayRequestContext["logGateway"], "error">,
+  label: string,
+  err: unknown,
+): void {
+  logGateway.error(label, {
+    error: formatAttachmentFailureForLog(err),
+    consoleMessage: `${label}: ${formatForLog(err)}`,
+  });
+}
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -179,6 +214,87 @@ function resolveSessionRuntimeWorkspace(params: {
     runtimeWorkspaceDir: workspaceOverride ?? resolveAgentWorkspaceDir(params.cfg, sessionAgentId),
     isCanonicalWorkspace: !workspaceOverride,
   };
+}
+
+function shouldSkipStartupContextForSpawnedSandbox(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  spawnedBy?: string;
+}): boolean {
+  if (!params.spawnedBy) {
+    return false;
+  }
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, agentId);
+  if (sandboxCfg.mode === "off") {
+    return false;
+  }
+  if (sandboxCfg.mode === "non-main") {
+    const mainSessionKey = resolveAgentMainSessionKey({
+      cfg: params.cfg,
+      agentId,
+    });
+    if (params.sessionKey.trim() === mainSessionKey.trim()) {
+      return false;
+    }
+  }
+  return sandboxCfg.workspaceAccess !== "rw";
+}
+
+type TrustedGroupMetadata = {
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+};
+
+function normalizeTrustedGroupMetadata(value?: {
+  groupId?: unknown;
+  groupChannel?: unknown;
+  groupSpace?: unknown;
+  space?: unknown;
+}): TrustedGroupMetadata {
+  return {
+    groupId: normalizeOptionalString(value?.groupId),
+    groupChannel: normalizeOptionalString(value?.groupChannel),
+    groupSpace: normalizeOptionalString(value?.groupSpace ?? value?.space),
+  };
+}
+
+function resolveSessionKeyGroupId(sessionKey: string): string | undefined {
+  const { baseSessionKey } = parseThreadSessionSuffix(sessionKey);
+  const conversation = parseRawSessionConversationRef(baseSessionKey ?? sessionKey);
+  if (!conversation || (conversation.kind !== "group" && conversation.kind !== "channel")) {
+    return undefined;
+  }
+  return conversation.rawId;
+}
+
+function resolveTrustedGroupMetadata(params: {
+  sessionKey: string;
+  spawnedBy?: string;
+  stored: TrustedGroupMetadata;
+  inherited?: TrustedGroupMetadata;
+}): TrustedGroupMetadata {
+  return {
+    groupId:
+      params.stored.groupId ??
+      params.inherited?.groupId ??
+      resolveSessionKeyGroupId(params.sessionKey) ??
+      (params.spawnedBy ? resolveSessionKeyGroupId(params.spawnedBy) : undefined),
+    groupChannel: params.stored.groupChannel ?? params.inherited?.groupChannel,
+    groupSpace: params.stored.groupSpace ?? params.inherited?.groupSpace,
+  };
+}
+
+function requestGroupMatchesTrusted(params: {
+  requestGroupId?: string;
+  trustedGroupId?: string;
+}): boolean {
+  const requestGroupId = params.requestGroupId?.trim();
+  if (!requestGroupId) {
+    return true;
+  }
+  return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
 }
 
 function emitSessionsChanged(
@@ -326,8 +442,8 @@ function dispatchAgentRunFromGateway(params: {
   }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
+      const aborted = result?.meta?.aborted === true;
       if (shouldTrackTask) {
-        const aborted = result?.meta?.aborted === true;
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
           status: aborted ? "timed_out" : "succeeded",
@@ -336,8 +452,9 @@ function dispatchAgentRunFromGateway(params: {
       }
       const payload = {
         runId: params.runId,
-        status: "ok" as const,
-        summary: "completed",
+        status: aborted ? ("timeout" as const) : ("ok" as const),
+        summary: aborted ? "aborted" : "completed",
+        ...(aborted ? { stopReason: result?.meta?.stopReason ?? "rpc" } : {}),
         result,
       };
       setGatewayDedupeEntry({
@@ -354,6 +471,7 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
+      const aborted = isAbortError(err);
       if (shouldTrackTask) {
         const error = String(err);
         tryFinalizeTrackedAgentTask({
@@ -366,22 +484,23 @@ function dispatchAgentRunFromGateway(params: {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: params.runId,
-        status: "error" as const,
-        summary: String(err),
+        status: aborted ? ("timeout" as const) : ("error" as const),
+        summary: aborted ? "aborted" : String(err),
+        ...(aborted ? { stopReason: "rpc" } : {}),
       };
       setGatewayDedupeEntry({
         dedupe: params.context.dedupe,
         key: `agent:${params.idempotencyKey}`,
         entry: {
           ts: Date.now(),
-          ok: false,
+          ok: aborted,
           payload,
-          error,
+          ...(aborted ? {} : { error }),
         },
       });
-      params.respond(false, payload, error, {
+      params.respond(aborted, payload, aborted ? undefined : error, {
         runId: params.runId,
-        error: formatForLog(err),
+        ...(aborted ? {} : { error: formatForLog(err) }),
       });
     })
     .finally(() => {
@@ -542,6 +661,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         // MediaOffloadError indicates a server-side storage fault (ENOSPC, EPERM,
         // etc.). Map it to UNAVAILABLE so clients can retry without treating it as
         // a bad request. All other errors are input-validation failures → 4xx.
+        logAttachmentFailure(context.logGateway, "agent attachment parse failed", err);
         const isServerFault = err instanceof MediaOffloadError;
         respond(
           false,
@@ -838,24 +958,55 @@ export const agentHandlers: GatewayRequestHandlers = {
           : normalizeOptionalString(entry.pluginOwnerId);
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
-      let inheritedGroup:
-        | { groupId?: string; groupChannel?: string; groupSpace?: string }
-        | undefined;
-      if (spawnedByValue && (!resolvedGroupId || !resolvedGroupChannel || !resolvedGroupSpace)) {
+      const storedGroup = normalizeTrustedGroupMetadata(entry);
+      let inheritedGroup: TrustedGroupMetadata | undefined;
+      if (
+        spawnedByValue &&
+        (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
+      ) {
         try {
           const parentEntry = loadSessionEntry(spawnedByValue)?.entry;
-          inheritedGroup = {
+          inheritedGroup = normalizeTrustedGroupMetadata({
             groupId: parentEntry?.groupId,
             groupChannel: parentEntry?.groupChannel,
             groupSpace: parentEntry?.space,
-          };
+          });
         } catch {
           inheritedGroup = undefined;
         }
       }
-      resolvedGroupId = resolvedGroupId || inheritedGroup?.groupId;
-      resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
-      resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
+      const trustedGroup = resolveTrustedGroupMetadata({
+        sessionKey: canonicalKey,
+        spawnedBy: spawnedByValue,
+        stored: storedGroup,
+        inherited: inheritedGroup,
+      });
+      const validatedGroup = trustedGroup.groupId
+        ? resolveTrustedGroupId({
+            groupId: trustedGroup.groupId,
+            sessionKey: canonicalKey,
+            spawnedBy: spawnedByValue,
+          })
+        : undefined;
+      if (validatedGroup?.dropped) {
+        resolvedGroupId = undefined;
+        resolvedGroupChannel = undefined;
+        resolvedGroupSpace = undefined;
+      } else {
+        const trustRequestSelectors =
+          Boolean(trustedGroup.groupId) &&
+          requestGroupMatchesTrusted({
+            requestGroupId: normalizedSpawned.groupId,
+            trustedGroupId: trustedGroup.groupId,
+          });
+        resolvedGroupId = trustedGroup.groupId;
+        resolvedGroupChannel =
+          trustedGroup.groupChannel ??
+          (trustRequestSelectors ? normalizedSpawned.groupChannel : undefined);
+        resolvedGroupSpace =
+          trustedGroup.groupSpace ??
+          (trustRequestSelectors ? normalizedSpawned.groupSpace : undefined);
+      }
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent
       // with deliver: false), seed it from the request's channel/to/threadId params.
@@ -909,29 +1060,31 @@ export const agentHandlers: GatewayRequestHandlers = {
         spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
-        groupId: resolvedGroupId ?? entry?.groupId,
-        groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
-        space: resolvedGroupSpace ?? entry?.space,
+        groupId: resolvedGroupId,
+        groupChannel: resolvedGroupChannel,
+        space: resolvedGroupSpace,
         ...(pluginOwnerId ? { pluginOwnerId } : {}),
         cliSessionIds: entry?.cliSessionIds,
         cliSessionBindings: entry?.cliSessionBindings,
         claudeCliSessionId: entry?.claudeCliSessionId,
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
-      const sendPolicy = resolveSendPolicy({
-        cfg,
-        entry,
-        sessionKey: canonicalKey,
-        channel: entry?.channel,
-        chatType: entry?.chatType,
-      });
-      if (sendPolicy === "deny") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-        );
-        return;
+      if (request.deliver === true) {
+        const sendPolicy = resolveSendPolicy({
+          cfg,
+          entry: sessionEntry,
+          sessionKey: canonicalKey,
+          channel: sessionEntry?.channel,
+          chatType: sessionEntry?.chatType,
+        });
+        if (sendPolicy === "deny") {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+          );
+          return;
+        }
       }
       resolvedSessionId = sessionId;
       const canonicalSessionKey = canonicalKey;
@@ -1007,6 +1160,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedTo = deliveryPlan.resolvedTo;
     let effectivePlan = deliveryPlan;
     let deliveryDowngradeReason: string | null = null;
+    let deliveryTargetResolutionError: Error | undefined;
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
       const cfgResolved = cfgForAgent ?? cfg;
@@ -1044,7 +1198,30 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       if (fallback.resolvedTarget?.ok) {
         resolvedTo = fallback.resolvedTo;
+      } else if (fallback.resolvedTarget && !fallback.resolvedTarget.ok) {
+        deliveryTargetResolutionError = fallback.resolvedTarget.error;
       }
+    }
+
+    if (wantsDelivery && isDeliverableMessageChannel(resolvedChannel) && !resolvedTo) {
+      if (!bestEffortDeliver) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            deliveryTargetResolutionError
+              ? String(deliveryTargetResolutionError)
+              : `delivery target is required for ${resolvedChannel}: pass --to/--reply-to or configure a default target`,
+          ),
+        );
+        return;
+      }
+      context.logGateway.info(
+        deliveryTargetResolutionError
+          ? `agent delivery target missing (bestEffortDeliver): ${String(deliveryTargetResolutionError)}`
+          : "agent delivery target missing (bestEffortDeliver): no deliverable target",
+      );
     }
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
@@ -1152,18 +1329,27 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
 
         if (shouldPrependStartupContext && resolvedSessionKey) {
-          const { runtimeWorkspaceDir } = resolveSessionRuntimeWorkspace({
-            cfg: cfgForAgent ?? cfg,
-            sessionKey: resolvedSessionKey,
-            sessionEntry,
-            spawnedBy: spawnedByValue,
-          });
-          const startupContextPrelude = await buildSessionStartupContextPrelude({
-            workspaceDir: runtimeWorkspaceDir,
-            cfg: cfgForAgent ?? cfg,
-          });
-          if (startupContextPrelude) {
-            message = `${startupContextPrelude}\n\n${message}`;
+          const startupCfg = cfgForAgent ?? cfg;
+          if (
+            !shouldSkipStartupContextForSpawnedSandbox({
+              cfg: startupCfg,
+              sessionKey: resolvedSessionKey,
+              spawnedBy: spawnedByValue,
+            })
+          ) {
+            const { runtimeWorkspaceDir } = resolveSessionRuntimeWorkspace({
+              cfg: startupCfg,
+              sessionKey: resolvedSessionKey,
+              sessionEntry,
+              spawnedBy: spawnedByValue,
+            });
+            const startupContextPrelude = await buildSessionStartupContextPrelude({
+              workspaceDir: runtimeWorkspaceDir,
+              cfg: startupCfg,
+            });
+            if (startupContextPrelude) {
+              message = `${startupContextPrelude}\n\n${message}`;
+            }
           }
         }
         if (!isRawModelRun) {
@@ -1219,6 +1405,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             acpTurnSource: request.acpTurnSource,
             internalEvents: request.internalEvents,
             inputProvenance,
+            cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
             abortSignal: activeRunAbort.controller.signal,
             // Internal-only: allow workspace override for spawned subagent runs.
             workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({

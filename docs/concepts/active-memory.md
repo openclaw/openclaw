@@ -558,35 +558,38 @@ plugins.entries.active-memory
 
 The most important fields are:
 
-| Key                         | Type                                                                                                 | Meaning                                                                                                |
-| --------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `enabled`                   | `boolean`                                                                                            | Enables the plugin itself                                                                              |
-| `config.agents`             | `string[]`                                                                                           | Agent ids that may use active memory                                                                   |
-| `config.model`              | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model |
-| `config.allowedChatTypes`   | `("direct" \| "group" \| "channel")[]`                                                               | Session types that may run Active Memory; defaults to direct-message style sessions                    |
-| `config.allowedChatIds`     | `string[]`                                                                                           | Optional per-conversation allowlist applied after `allowedChatTypes`; non-empty lists fail closed      |
-| `config.deniedChatIds`      | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                |
-| `config.queryMode`          | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                      |
-| `config.promptStyle`        | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory   |
-| `config.thinking`           | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                  |
-| `config.promptOverride`     | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                       |
-| `config.promptAppend`       | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                               |
-| `config.timeoutMs`          | `number`                                                                                             | Hard timeout for the blocking memory sub-agent, capped at 120000 ms                                    |
-| `config.maxSummaryChars`    | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                          |
-| `config.logging`            | `boolean`                                                                                            | Emits active memory logs while tuning                                                                  |
-| `config.persistTranscripts` | `boolean`                                                                                            | Keeps blocking memory sub-agent transcripts on disk instead of deleting temp files                     |
-| `config.transcriptDir`      | `string`                                                                                             | Relative blocking memory sub-agent transcript directory under the agent sessions folder                |
+| Key                          | Type                                                                                                 | Meaning                                                                                                |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `enabled`                    | `boolean`                                                                                            | Enables the plugin itself                                                                              |
+| `config.agents`              | `string[]`                                                                                           | Agent ids that may use active memory                                                                   |
+| `config.model`               | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model |
+| `config.allowedChatTypes`    | `("direct" \| "group" \| "channel")[]`                                                               | Session types that may run Active Memory; defaults to direct-message style sessions                    |
+| `config.allowedChatIds`      | `string[]`                                                                                           | Optional per-conversation allowlist applied after `allowedChatTypes`; non-empty lists fail closed      |
+| `config.deniedChatIds`       | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                |
+| `config.queryMode`           | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                      |
+| `config.promptStyle`         | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory   |
+| `config.thinking`            | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                  |
+| `config.promptOverride`      | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                       |
+| `config.promptAppend`        | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                               |
+| `config.timeoutMs`           | `number`                                                                                             | Hard timeout for the blocking memory sub-agent, capped at 120000 ms                                    |
+| `config.setupGraceTimeoutMs` | `number`                                                                                             | Advanced extra setup budget before the recall timeout expires; defaults to 0 and is capped at 30000 ms |
+| `config.maxSummaryChars`     | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                          |
+| `config.logging`             | `boolean`                                                                                            | Emits active memory logs while tuning                                                                  |
+| `config.persistTranscripts`  | `boolean`                                                                                            | Keeps blocking memory sub-agent transcripts on disk instead of deleting temp files                     |
+| `config.transcriptDir`       | `string`                                                                                             | Relative blocking memory sub-agent transcript directory under the agent sessions folder                |
 
 Useful tuning fields:
 
-| Key                           | Type     | Meaning                                                                            |
-| ----------------------------- | -------- | ---------------------------------------------------------------------------------- |
-| `config.maxSummaryChars`      | `number` | Maximum total characters allowed in the active-memory summary                      |
-| `config.recentUserTurns`      | `number` | Prior user turns to include when `queryMode` is `recent`                           |
-| `config.recentAssistantTurns` | `number` | Prior assistant turns to include when `queryMode` is `recent`                      |
-| `config.recentUserChars`      | `number` | Max chars per recent user turn                                                     |
-| `config.recentAssistantChars` | `number` | Max chars per recent assistant turn                                                |
-| `config.cacheTtlMs`           | `number` | Cache reuse for repeated identical queries (range: 1000-120000 ms; default: 15000) |
+| Key                                | Type     | Meaning                                                                                                                                                           |
+| ---------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.maxSummaryChars`           | `number` | Maximum total characters allowed in the active-memory summary                                                                                                     |
+| `config.recentUserTurns`           | `number` | Prior user turns to include when `queryMode` is `recent`                                                                                                          |
+| `config.recentAssistantTurns`      | `number` | Prior assistant turns to include when `queryMode` is `recent`                                                                                                     |
+| `config.recentUserChars`           | `number` | Max chars per recent user turn                                                                                                                                    |
+| `config.recentAssistantChars`      | `number` | Max chars per recent assistant turn                                                                                                                               |
+| `config.cacheTtlMs`                | `number` | Cache reuse for repeated identical queries (range: 1000-120000 ms; default: 15000)                                                                                |
+| `config.circuitBreakerMaxTimeouts` | `number` | Skip recall after this many consecutive timeouts for the same agent/model. Resets on a successful recall or after the cooldown expires (range: 1-20; default: 3). |
+| `config.circuitBreakerCooldownMs`  | `number` | How long to skip recall after the circuit breaker trips, in ms (range: 5000-600000; default: 60000).                                                              |
 
 ## Recommended setup
 

@@ -29,6 +29,14 @@ OpenClaw loads skills from these sources, **highest precedence first**:
 
 If a skill name conflicts, the highest source wins.
 
+Codex CLI's native `$CODEX_HOME/skills` directory is not one of these OpenClaw
+skill roots. In Codex harness mode, local app-server launches use isolated
+per-agent Codex homes, so personal Codex CLI skills are not loaded implicitly.
+Use `openclaw migrate codex --dry-run` to inventory them and
+`openclaw migrate codex` to choose skill directories with an interactive
+checkbox prompt before copying them into the current OpenClaw agent workspace.
+For non-interactive runs, repeat `--skill <name>` for the exact skills to copy.
+
 ## Per-agent vs shared skills
 
 In **multi-agent** setups each agent has its own workspace:
@@ -130,6 +138,9 @@ Native `openclaw skills install` installs into the active workspace
 `./skills` under your current working directory (or falls back to the
 configured OpenClaw workspace). OpenClaw picks that up as
 `<workspace>/skills` on the next session.
+Configured skill roots also support one grouping level, such as
+`skills/<group>/<skill>/SKILL.md`, so related third-party skills can be
+kept under a shared folder without broad recursive scanning.
 
 ClawHub skill pages expose the latest security scan state before install,
 with scanner detail pages for VirusTotal, ClawScan, and static analysis.
@@ -177,7 +188,9 @@ instructions to reference the skill folder path.
   When `true`, the skill is exposed as a user slash command.
 </ParamField>
 <ParamField path="disable-model-invocation" type="boolean" default="false">
-  When `true`, the skill is excluded from the model prompt (still available via user invocation).
+  When `true`, OpenClaw keeps the skill's instructions out of the agent's normal
+  prompt. The skill is still installed and can still be run explicitly as a
+  slash command when `user-invocable` is also `true`.
 </ParamField>
 <ParamField path="command-dispatch" type='"tool"'>
   When set to `tool`, the slash command bypasses the model and dispatches directly to a tool.
