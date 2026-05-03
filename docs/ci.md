@@ -137,7 +137,7 @@ gh workflow run openclaw-performance.yml --ref main -f profile=diagnostic -f rep
 gh workflow run openclaw-performance.yml --ref main -f profile=smoke -f repeat=1 -f deep_profile=true -f live_gpt54=true
 ```
 
-The workflow installs OCM from a pinned release and Kova from the pinned `kova_ref` input, then runs three lanes:
+The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at the pinned `kova_ref` input, then runs three lanes:
 
 - `mock-provider`: Kova diagnostic scenarios against a local-build runtime with deterministic fake OpenAI-compatible auth.
 - `mock-deep-profile`: CPU/heap/trace profiling for startup, gateway, and agent-turn hotspots.
