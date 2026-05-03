@@ -245,7 +245,9 @@ export function resolveChannelProgressDraftLabel(params: {
   if (progress.label === false) {
     return undefined;
   }
-  if (typeof progress.label === "string" && progress.label.trim() && progress.label !== "auto") {
+  const normalizedLabel =
+    typeof progress.label === "string" ? normalizeOptionalLowercaseString(progress.label) : null;
+  if (typeof progress.label === "string" && progress.label.trim() && normalizedLabel !== "auto") {
     return progress.label.trim();
   }
   const labels = normalizeProgressLabels(progress.labels);

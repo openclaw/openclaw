@@ -133,6 +133,12 @@ describe("channel-streaming", () => {
     expect(resolveChannelProgressDraftLabel({ random: () => 0.99 })).toBe(
       DEFAULT_PROGRESS_DRAFT_LABELS.at(-1),
     );
+    expect(
+      resolveChannelProgressDraftLabel({
+        entry: { streaming: { progress: { label: " AUTO " } } },
+        random: () => 0,
+      }),
+    ).toBe(DEFAULT_PROGRESS_DRAFT_LABELS[0]);
   });
 
   it("supports explicit progress labels and custom label sets", () => {
