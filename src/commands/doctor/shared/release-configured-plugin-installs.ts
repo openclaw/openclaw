@@ -336,17 +336,31 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   completed: boolean;
   touchedConfig: boolean;
 }> {
-  if (
-    !shouldRunConfiguredPluginInstallReleaseStep({
-      currentVersion: params.currentVersion,
-      touchedVersion: params.touchedVersion,
-    })
-  ) {
-    return { changes: [], warnings: [], completed: false, touchedConfig: false };
-  }
   const env = params.env ?? process.env;
   const updateInProgress = isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]);
   const configured = collectReleaseConfiguredPluginIds({ cfg: params.cfg, env });
+  const shouldRunReleaseStep = shouldRunConfiguredPluginInstallReleaseStep({
+    currentVersion: params.currentVersion,
+    touchedVersion: params.touchedVersion,
+  });
+  if (!shouldRunReleaseStep) {
+    if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
+      return { changes: [], warnings: [], completed: false, touchedConfig: false };
+    }
+    const repaired = await repairMissingPluginInstallsForIds({
+      cfg: params.cfg,
+      pluginIds: configured.pluginIds,
+      channelIds: configured.channelIds,
+      blockedPluginIds: collectBlockedPluginIds(params.cfg),
+      env,
+    });
+    return {
+      changes: repaired.changes,
+      warnings: repaired.warnings,
+      completed: repaired.warnings.length === 0,
+      touchedConfig: false,
+    };
+  }
   if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
     return { changes: [], warnings: [], completed: true, touchedConfig: !updateInProgress };
   }
