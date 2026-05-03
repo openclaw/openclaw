@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import { loadOpenClawPlugins } from "./loader.js";
 import { getMemoryRuntime } from "./memory-state.js";
 
 function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
@@ -17,7 +18,15 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   if (onlyPluginIds.length === 0) {
     return getMemoryRuntime();
   }
-  getLoadedRuntimePluginRegistry({ requiredPluginIds: onlyPluginIds });
+  const activeRegistry = getLoadedRuntimePluginRegistry({ requiredPluginIds: onlyPluginIds });
+  if (!activeRegistry) {
+    loadOpenClawPlugins({
+      config: cfg,
+      onlyPluginIds,
+      cache: true,
+      pluginSdkResolution: "dist",
+    });
+  }
   return getMemoryRuntime();
 }
 

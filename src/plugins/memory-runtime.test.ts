@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveRuntimePluginRegistryMock =
   vi.fn<typeof import("./loader.js").resolveRuntimePluginRegistry>();
+const loadOpenClawPluginsMock = vi.fn<typeof import("./loader.js").loadOpenClawPlugins>();
 const getLoadedRuntimePluginRegistryMock =
   vi.fn<typeof import("./active-runtime-registry.js").getLoadedRuntimePluginRegistry>();
 const applyPluginAutoEnableMock =
@@ -24,6 +25,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("./loader.js", () => ({
   resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
+  loadOpenClawPlugins: loadOpenClawPluginsMock,
 }));
 
 vi.mock("./active-runtime-registry.js", () => ({
@@ -62,11 +64,18 @@ function createMemoryRuntimeFixture() {
 }
 
 function expectMemoryRuntimeLoaded(rawConfig: unknown, autoEnabledConfig: unknown) {
-  void rawConfig;
   void autoEnabledConfig;
   expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalledWith(
     expect.objectContaining({
       requiredPluginIds: ["memory-core"],
+    }),
+  );
+  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: rawConfig,
+      onlyPluginIds: ["memory-core"],
+      cache: true,
+      pluginSdkResolution: "dist",
     }),
   );
 }
@@ -130,6 +139,7 @@ describe("memory runtime auto-enable loading", () => {
     } = await import("./memory-runtime.js"));
     resolveRuntimePluginRegistryMock.mockReset();
     getLoadedRuntimePluginRegistryMock.mockReset();
+    loadOpenClawPluginsMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     getMemoryRuntimeMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
@@ -217,6 +227,7 @@ describe("memory runtime auto-enable loading", () => {
 
     expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
     expect(getLoadedRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
