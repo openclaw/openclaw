@@ -118,7 +118,7 @@ function resolveModelsConfigInput(config?: OpenClawConfig): {
   if (!config) {
     const loaded = getRuntimeConfig();
     return {
-      config: runtimeSource ?? loaded,
+      config: loaded, // FIX: use lean reference config, not accumulated snapshot
       sourceConfigForSecrets: runtimeSource ?? loaded,
     };
   }
