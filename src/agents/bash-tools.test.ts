@@ -449,7 +449,6 @@ const EXPECTED_TOTAL_LINES_THREE = 3;
 type DisallowedElevationCase = LabeledCase & {
   defaultLevel: "off" | "on";
   overrides?: Partial<ExecToolConfig>;
-  requestElevated?: boolean;
   expectedError?: string;
   expectedOutputIncludes?: string;
 };
@@ -463,14 +462,13 @@ const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
   }),
 ];
 const DISALLOWED_ELEVATION_CASES: DisallowedElevationCase[] = [
-  withLabel("rejects elevated requests when not allowed", {
+  withLabel("ignores model-supplied elevated requests when not allowed", {
     defaultLevel: "off",
     overrides: {
       messageProvider: "telegram",
       sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
     },
-    requestElevated: true,
-    expectedError: "Context: provider=telegram session=agent:main:main",
+    expectedOutputIncludes: "hi",
   }),
   withLabel("does not default to elevated when not allowed", {
     defaultLevel: "on",
@@ -525,15 +523,12 @@ const expectNotifyNoopEvents = (
 const runDisallowedElevationCase = async ({
   defaultLevel,
   overrides,
-  requestElevated,
   expectedError,
   expectedOutputIncludes,
 }: DisallowedElevationCase) => {
   const customBash = createDisallowedElevatedExecTool(defaultLevel, overrides);
   if (expectedError) {
-    await expect(
-      executeExecCommand(customBash, ECHO_HI_COMMAND, { elevated: requestElevated }),
-    ).rejects.toThrow(expectedError);
+    await expect(executeExecCommand(customBash, ECHO_HI_COMMAND)).rejects.toThrow(expectedError);
     return;
   }
 

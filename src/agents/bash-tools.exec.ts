@@ -6,8 +6,6 @@ import {
   type ExecHost,
   type ExecSecurity,
   loadExecApprovals,
-  maxAsk,
-  minSecurity,
   requireValidExecTarget,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -38,8 +36,6 @@ import {
   type ExecProcessOutcome,
   applyPathPrepend,
   applyShellPath,
-  normalizeExecAsk,
-  normalizeExecSecurity,
   normalizePathPrepend,
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
@@ -1452,11 +1448,6 @@ export function createExecTool(
         background?: boolean;
         timeout?: number;
         pty?: boolean;
-        elevated?: boolean;
-        host?: string;
-        security?: string;
-        ask?: string;
-        node?: string;
       };
 
       if (!params.command) {
@@ -1497,14 +1488,7 @@ export function createExecTool(
               ? "ask"
               : "off";
       const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
-      const elevatedMode =
-        typeof params.elevated === "boolean"
-          ? params.elevated
-            ? elevatedDefaultMode === "full"
-              ? "full"
-              : "ask"
-            : "off"
-          : effectiveDefaultMode;
+      const elevatedMode = effectiveDefaultMode;
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
@@ -1545,7 +1529,7 @@ export function createExecTool(
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
-      const requestedTarget = requireValidExecTarget(params.host);
+      const requestedTarget = requireValidExecTarget(undefined);
       const target = resolveExecTarget({
         configuredTarget: defaults?.host,
         requestedTarget,
@@ -1557,15 +1541,13 @@ export function createExecTool(
       const approvalDefaults = loadExecApprovals().defaults;
       const configuredSecurity =
         defaults?.security ?? approvalDefaults?.security ?? (host === "sandbox" ? "deny" : "full");
-      const requestedSecurity = normalizeExecSecurity(params.security);
-      let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
+      let security = configuredSecurity;
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
       // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
       const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "off";
-      const requestedAsk = normalizeExecAsk(params.ask);
-      let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
+      let ask = configuredAsk;
       const bypassApprovals = elevatedRequested && elevatedMode === "full";
       if (bypassApprovals) {
         ask = "off";
@@ -1688,7 +1670,7 @@ export function createExecTool(
           workdir,
           env,
           requestedEnv: params.env,
-          requestedNode: params.node?.trim(),
+          requestedNode: undefined,
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
           turnSourceChannel: defaults?.messageProvider,
