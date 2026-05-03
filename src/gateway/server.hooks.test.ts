@@ -425,6 +425,78 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("waitForResult returns the agent output synchronously and honors announceToMain", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "done",
+        outputText: "agent output text",
+      });
+      const response = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Wait",
+        waitForResult: true,
+        announceToMain: false,
+        deliver: false,
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        ok?: boolean;
+        status?: string;
+        runId?: string;
+        sessionKey?: string;
+        result?: string;
+      };
+      expect(body.ok).toBe(true);
+      expect(body.status).toBe("completed");
+      expect(body.result).toBe("agent output text");
+      requireNonEmptyString(body.runId, "waitForResult run id");
+      requireNonEmptyString(body.sessionKey, "waitForResult session key");
+      // The run completed before the response was sent (no fire-and-forget).
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      // announceToMain: false suppresses the success summary event.
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
+    });
+  });
+
+  test("waitForResult surfaces non-ok runs as 500 and still announces the failure", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        summary: "boom",
+      });
+      const response = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Fail",
+        waitForResult: true,
+        announceToMain: false,
+        deliver: false,
+      });
+      expect(response.status).toBe(500);
+      const body = (await response.json()) as {
+        ok?: boolean;
+        status?: string;
+        error?: string;
+      };
+      expect(body.ok).toBe(false);
+      expect(body.status).toBe("error");
+      expect(body.error).toBe("boom");
+      // Failures are announced even when announceToMain is false, so errors
+      // stay visible to a human operator.
+      const failureEvents = await waitForSystemEventTexts(resolveMainKey());
+      expect(failureEvents).toContain("Hook Fail (error): boom");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("queues direct and mapped wake payloads as system events", async () => {
     testState.hooksConfig = {
       enabled: true,
