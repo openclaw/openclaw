@@ -57,18 +57,23 @@ describe("resolveOfficialPluginOnboardingInstallEntries", () => {
     expect(pluginIds).toContain("diagnostics-prometheus");
   });
 
-  it("keeps dual-source diagnostics plugins ClawHub-first", () => {
+  it("keeps diagnostics install defaults aligned with ClawHub readiness", () => {
     const entries = resolveOfficialPluginOnboardingInstallEntries({ config: {} });
 
-    for (const pluginId of ["diagnostics-otel", "diagnostics-prometheus"]) {
-      expect(entries.find((entry) => entry.pluginId === pluginId)?.install).toEqual(
-        expect.objectContaining({
-          clawhubSpec: `clawhub:@openclaw/${pluginId}`,
-          npmSpec: `@openclaw/${pluginId}`,
-          defaultChoice: "clawhub",
-        }),
-      );
-    }
+    expect(entries.find((entry) => entry.pluginId === "diagnostics-otel")?.install).toEqual(
+      expect.objectContaining({
+        clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
+        npmSpec: "@openclaw/diagnostics-otel",
+        defaultChoice: "clawhub",
+      }),
+    );
+    expect(entries.find((entry) => entry.pluginId === "diagnostics-prometheus")?.install).toEqual(
+      expect.objectContaining({
+        clawhubSpec: "clawhub:@openclaw/diagnostics-prometheus",
+        npmSpec: "@openclaw/diagnostics-prometheus",
+        defaultChoice: "npm",
+      }),
+    );
   });
 });
 
