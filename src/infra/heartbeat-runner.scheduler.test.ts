@@ -588,6 +588,42 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("preserves immediate delivery for no-argument plugin compatibility wakes", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    requestHeartbeat({
+      source: "other",
+      intent: "immediate",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        source: "other",
+        intent: "immediate",
+        reason: "requested",
+      }),
+    );
+    runner.stop();
+  });
+
   it("preserves immediate delivery for repeated background-task wakes", async () => {
     // Task-registry terminal updates wake the heartbeat with reason
     // 'background-task'. Documented as immediate so users don't wait for the
