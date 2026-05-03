@@ -93,4 +93,55 @@ describe("protected worktree policy", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("allows protected shell mutations only after an exec approval", () => {
+    expect(
+      evaluateProtectedWorktree({
+        request: {
+          policyVersion: "v1",
+          actionType: "shell_exec",
+          targetResource: "/protected",
+          context: { command: "echo hi > x" },
+        },
+        config,
+      })?.reasonCode,
+    ).toBe("protected_worktree");
+
+    expect(
+      evaluateProtectedWorktree({
+        request: {
+          policyVersion: "v1",
+          actionType: "shell_exec",
+          targetResource: "/protected",
+          context: {
+            command: "echo hi > x",
+            actionSinkApproval: {
+              source: "exec-approval",
+              approvalId: "req-1",
+            },
+          },
+        },
+        config,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not let exec approval bypass protected file writes", () => {
+    expect(
+      evaluateProtectedWorktree({
+        request: {
+          policyVersion: "v1",
+          actionType: "file_write",
+          targetResource: "/protected/file",
+          context: {
+            actionSinkApproval: {
+              source: "exec-approval",
+              approvalId: "req-1",
+            },
+          },
+        },
+        config,
+      })?.reasonCode,
+    ).toBe("protected_worktree");
+  });
 });

@@ -72,6 +72,35 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
     } | null => null,
   ),
 );
+const actionSinkRuntimeMocks = vi.hoisted(() => {
+  class ActionSinkPolicyDeniedError extends Error {
+    readonly name = "ActionSinkPolicyDeniedError";
+    readonly decision: "allow" | "block" | "requireApproval";
+    readonly policyId: string;
+    readonly reasonCode: string;
+
+    constructor(result: {
+      decision: "allow" | "block" | "requireApproval";
+      policyId?: string;
+      reasonCode: string;
+      reason: string;
+    }) {
+      super(result.reason);
+      this.decision = result.decision;
+      this.policyId = result.policyId ?? "action-sink-policy";
+      this.reasonCode = result.reasonCode;
+    }
+  }
+  return {
+    ActionSinkPolicyDeniedError,
+    evaluateConfiguredActionSinkPolicySync: vi.fn(() => ({
+      decision: "allow" as const,
+      policyId: "action-sink-policy",
+      reasonCode: "allowed" as const,
+      reason: "Allowed",
+    })),
+  };
+});
 
 vi.mock("../infra/exec-approvals.js", () => ({
   evaluateShellAllowlist: evaluateShellAllowlistMock,
@@ -122,6 +151,14 @@ vi.mock("./bash-process-registry.js", () => ({
 vi.mock("../infra/exec-inline-eval.js", () => ({
   describeInterpreterInlineEval: vi.fn(() => "python -c"),
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
+}));
+
+vi.mock("../security/action-sink-runtime.js", () => ({
+  ActionSinkPolicyDeniedError: actionSinkRuntimeMocks.ActionSinkPolicyDeniedError,
+  evaluateConfiguredActionSinkPolicySync:
+    actionSinkRuntimeMocks.evaluateConfiguredActionSinkPolicySync,
+  isActionSinkPolicyDeniedError: (error: unknown) =>
+    error instanceof actionSinkRuntimeMocks.ActionSinkPolicyDeniedError,
 }));
 
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
@@ -176,6 +213,13 @@ describe("processGatewayAllowlist", () => {
     }));
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
+    actionSinkRuntimeMocks.evaluateConfiguredActionSinkPolicySync.mockReset();
+    actionSinkRuntimeMocks.evaluateConfiguredActionSinkPolicySync.mockReturnValue({
+      decision: "allow",
+      policyId: "action-sink-policy",
+      reasonCode: "allowed",
+      reason: "Allowed",
+    });
     buildExecApprovalPendingToolResultMock.mockReturnValue({
       details: { status: "approval-pending" },
       content: [],
@@ -275,6 +319,32 @@ describe("processGatewayAllowlist", () => {
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result).toEqual({ execCommandOverride: undefined });
+  });
+
+  it("asks for approval when Action Sink requires it before protected shell execution", async () => {
+    buildEnforcedShellCommandMock.mockReturnValue({
+      ok: true,
+      command: "echo hi > x",
+    });
+    actionSinkRuntimeMocks.evaluateConfiguredActionSinkPolicySync.mockReturnValueOnce({
+      decision: "block",
+      policyId: "protectedWorktree",
+      reasonCode: "protected_worktree",
+      reason: "Mutation targets protected root /Users/admin/Projects/mission-control-production",
+    });
+    const warnings: string[] = [];
+
+    const result = await runGatewayAllowlist({
+      command: "echo hi > x",
+      workdir: "/Users/admin/Projects/mission-control-production",
+      warnings,
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(warnings).toContain(
+      "Warning: Action Sink policy requires approval before this command can run: Mutation targets protected root /Users/admin/Projects/mission-control-production",
+    );
   });
 
   it("keeps denying allowlist misses when durable trust does not match", async () => {

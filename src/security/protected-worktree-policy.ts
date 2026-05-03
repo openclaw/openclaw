@@ -26,6 +26,19 @@ export function isPathInside(parent: string, child: string): boolean {
   );
 }
 
+function hasExecApproval(request: PolicyRequest): boolean {
+  const approval = request.context?.actionSinkApproval;
+  if (typeof approval !== "object" || approval === null) {
+    return false;
+  }
+  const record = approval as Record<string, unknown>;
+  return (
+    record.source === "exec-approval" &&
+    typeof record.approvalId === "string" &&
+    record.approvalId.trim().length > 0
+  );
+}
+
 export function evaluateProtectedWorktree(params: {
   request: PolicyRequest;
   config: Pick<ActionSinkPolicyConfig, "protectedRoots" | "assignedWorktrees">;
@@ -57,6 +70,9 @@ export function evaluateProtectedWorktree(params: {
   }
 
   if (protectedRoot) {
+    if (action === "shell_exec" && hasExecApproval(params.request)) {
+      return undefined;
+    }
     return policyResult({
       policyId: "protectedWorktree",
       decision: "block",

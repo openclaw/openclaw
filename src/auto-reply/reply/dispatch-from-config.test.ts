@@ -2368,6 +2368,51 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("suppresses Telegram-origin local exec approval prompts when Discord approver DMs are enabled", async () => {
+    setNoAbort();
+    const cfg = {
+      channels: {
+        discord: {
+          enabled: true,
+          execApprovals: {
+            enabled: true,
+            approvers: ["123"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "Telegram",
+      OriginatingTo: "telegram:7463849194",
+      AccountId: "default",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+      await options?.onToolResult?.({
+        text: "Approval required.\n\n```txt\n/approve 12345678 allow-once\n```",
+        channelData: {
+          execApproval: {
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      });
+      return { text: "done" } as ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("/approve 12345678") }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "done" }),
+    );
+  });
+
   it("deduplicates same-agent inbound replies across main and direct session keys", async () => {
     setNoAbort();
     const cfg = emptyConfig;

@@ -64,6 +64,29 @@ describe("outbound action-sink policy request builders", () => {
     });
   });
 
+  it("treats approved exec followup delivery as completion even with ordinary status text", () => {
+    const actionSinkContext = {
+      source: "approved_exec_completion" as const,
+      approvalId: "req-1",
+      idempotencyKey: "exec-approval-followup:req-1",
+      sessionKey: "agent:main:telegram:chat-1",
+      channel: "telegram",
+      to: "chat-1",
+    };
+
+    const request = buildOutboundDeliveryPolicyRequest({
+      cfg: {} as never,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "The command returned with exit code 0." }],
+      session: { key: "agent:main:telegram:chat-1", agentId: "main" },
+      actionSinkContext,
+    });
+
+    expect(request.actionType).toBe("completion_claim");
+    expect(request.context?.actionSinkContext).toBe(actionSinkContext);
+  });
+
   it("carries task registry delivery context for outbound delivery policy", () => {
     const actionSinkContext = {
       source: "task_registry_delivery" as const,

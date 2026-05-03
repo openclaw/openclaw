@@ -18,13 +18,25 @@ function textFromPayload(payload: ReplyPayload): string {
   return parts.join("\n");
 }
 
+function isApprovedExecCompletionDelivery(params: DeliverOutboundPayloadsParams): boolean {
+  const context = params.actionSinkContext;
+  return (
+    typeof context === "object" &&
+    context !== null &&
+    (context as Record<string, unknown>).source === "approved_exec_completion"
+  );
+}
+
 export function buildOutboundDeliveryPolicyRequest(
   params: DeliverOutboundPayloadsParams,
 ): PolicyRequest {
   const text = params.payloads.map(textFromPayload).filter(Boolean).join("\n");
   return {
     policyVersion: "v1",
-    actionType: containsCompletionClaim(text) ? "completion_claim" : "message_send",
+    actionType:
+      isApprovedExecCompletionDelivery(params) || containsCompletionClaim(text)
+        ? "completion_claim"
+        : "message_send",
     toolName: "outbound.deliver",
     targetResource: `${params.channel}:${params.to}`,
     payloadSummary: {

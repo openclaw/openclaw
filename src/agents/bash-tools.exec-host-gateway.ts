@@ -19,7 +19,11 @@ import {
 } from "../infra/exec-inline-eval.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logWarn } from "../logger.js";
-import { isActionSinkPolicyDeniedError } from "../security/action-sink-runtime.js";
+import type { PolicyResult } from "../security/action-sink-policy.js";
+import {
+  evaluateConfiguredActionSinkPolicySync,
+  isActionSinkPolicyDeniedError,
+} from "../security/action-sink-runtime.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -93,6 +97,40 @@ function hasGatewayAllowlistMiss(params: {
     (!params.analysisOk || !params.allowlistSatisfied) &&
     !params.durableApprovalSatisfied
   );
+}
+
+type ActionSinkExecPreflight = {
+  requiresApproval: boolean;
+  reason?: string;
+  reasonCode?: PolicyResult["reasonCode"];
+};
+
+function actionSinkExecPreflightRequiresApproval(
+  params: ProcessGatewayAllowlistParams,
+): ActionSinkExecPreflight {
+  const result = evaluateConfiguredActionSinkPolicySync({
+    policyVersion: "v1",
+    actionType: "shell_exec",
+    toolName: "exec",
+    targetResource: params.workdir,
+    payloadSummary: params.command,
+    actor: {
+      id: params.agentId,
+      sessionKey: params.notifySessionKey ?? params.sessionKey,
+    },
+    context: {
+      command: params.command,
+      cwd: params.workdir,
+    },
+  });
+
+  if (result.decision === "requireApproval") {
+    return { requiresApproval: true, reason: result.reason, reasonCode: result.reasonCode };
+  }
+  if (result.decision === "block" && result.reasonCode === "protected_worktree") {
+    return { requiresApproval: true, reason: result.reason, reasonCode: result.reasonCode };
+  }
+  return { requiresApproval: false };
 }
 
 export async function processGatewayAllowlist(
@@ -173,6 +211,8 @@ export async function processGatewayAllowlist(
     allowlistSatisfied &&
     !enforcedCommand &&
     allowlistPlanUnavailableReason !== null;
+  const actionSinkPreflight = actionSinkExecPreflightRequiresApproval(params);
+  const requiresActionSinkApproval = actionSinkPreflight.requiresApproval;
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -183,7 +223,8 @@ export async function processGatewayAllowlist(
     }) ||
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
-    requiresInlineEvalApproval;
+    requiresInlineEvalApproval ||
+    requiresActionSinkApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
@@ -192,6 +233,11 @@ export async function processGatewayAllowlist(
   if (requiresAllowlistPlanApproval) {
     params.warnings.push(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; explicit approval is required.`,
+    );
+  }
+  if (requiresActionSinkApproval) {
+    params.warnings.push(
+      `Warning: Action Sink policy requires approval before this command can run: ${actionSinkPreflight.reason}`,
     );
   }
 

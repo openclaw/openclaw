@@ -98,6 +98,49 @@ describe("createDiscordNativeApprovalAdapter", () => {
     ).toBe(true);
   });
 
+  it("handles Telegram-origin exec approvals when Discord is the only eligible approval DM route", async () => {
+    const adapter = createDiscordNativeApprovalAdapter();
+
+    expect(
+      shouldHandleDiscordApprovalRequest({
+        cfg: NATIVE_DELIVERY_CFG as never,
+        accountId: "main",
+        request: {
+          id: "approval-1",
+          request: {
+            command: "pwd",
+            turnSourceChannel: "telegram",
+            turnSourceTo: "123456789",
+            turnSourceAccountId: "main",
+            sessionKey: "agent:main:telegram:dm:123456789",
+          },
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      adapter.native?.resolveApproverDmTargets?.({
+        cfg: NATIVE_DELIVERY_CFG as never,
+        accountId: "main",
+        approvalKind: "exec",
+        request: {
+          id: "approval-1",
+          request: {
+            command: "pwd",
+            turnSourceChannel: "telegram",
+            turnSourceTo: "123456789",
+            turnSourceAccountId: "main",
+            sessionKey: "agent:main:telegram:dm:123456789",
+          },
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        },
+      }),
+    ).toEqual([{ to: "555555555" }]);
+  });
+
   it("describes the correct Discord exec-approval setup path", () => {
     const text = getDiscordApprovalCapability().describeExecApprovalSetup?.({
       channel: "discord",
