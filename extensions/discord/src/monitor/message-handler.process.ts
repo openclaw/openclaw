@@ -645,10 +645,10 @@ export async function processDiscordMessage(
                   ? (payload) => draftPreview.updateFromPartial(payload.text)
                   : undefined,
                 onAssistantMessageStart: draftPreview.draftStream
-                  ? draftPreview.handleAssistantMessageBoundary
+                  ? () => draftPreview.handleAssistantMessageBoundary()
                   : undefined,
                 onReasoningEnd: draftPreview.draftStream
-                  ? draftPreview.handleAssistantMessageBoundary
+                  ? () => draftPreview.handleAssistantMessageBoundary()
                   : undefined,
                 onModelSelected,
                 suppressDefaultToolProgressMessages:
