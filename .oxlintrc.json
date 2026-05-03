@@ -111,7 +111,7 @@
     "vitest/prefer-called-once": "error",
     "vitest/prefer-called-times": "error",
     "vitest/prefer-expect-type-of": "error",
-    "eslint/no-underscore-dangle": ["error", { "allow": ["__testing"] }]
+    "eslint/no-underscore-dangle": "off"
   },
   "ignorePatterns": [
     "dist/",
