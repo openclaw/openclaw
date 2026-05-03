@@ -86,7 +86,7 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
-import { editMessageTelegram } from "./send.js";
+import { deleteMessageTelegram, editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
@@ -262,9 +262,11 @@ export const dispatchTelegramMessage = async ({
     sendTyping,
     sendRecordVoice,
     ackReactionPromise,
+    ackSticker,
     reactionApi,
     removeAckAfterReply,
     statusReactionController,
+    accountId,
   } = context;
   const statusReactionTiming = {
     ...DEFAULT_TIMING,
@@ -275,6 +277,33 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     await reactionApi(chatId, msg.message_id, []);
+  };
+  let ackStickerCleanupScheduled = false;
+  const cleanupAckStickerAfterReply = () => {
+    if (!ackSticker?.removeAfterReply || ackStickerCleanupScheduled) {
+      return;
+    }
+    ackStickerCleanupScheduled = true;
+    void ackSticker.ackStickerPromise
+      .then(async (result) => {
+        if (!result?.messageId) {
+          return;
+        }
+        await sleepWithAbort(DEFAULT_TIMING.doneHoldMs);
+        await deleteMessageTelegram(result.chatId || chatId, result.messageId, {
+          cfg,
+          accountId,
+          api: bot.api,
+        });
+      })
+      .catch((err: unknown) => {
+        logAckFailure({
+          log: logVerbose,
+          channel: "telegram",
+          target: `${chatId}/ack-sticker`,
+          error: err,
+        });
+      });
   };
   const finalizeTelegramStatusReaction = async (params: {
     outcome: "done" | "error";
@@ -1278,6 +1307,7 @@ export const dispatchTelegramMessage = async ({
         },
       });
     }
+    cleanupAckStickerAfterReply();
     clearGroupHistory();
     return;
   }
@@ -1418,5 +1448,6 @@ export const dispatchTelegramMessage = async ({
       },
     });
   }
+  cleanupAckStickerAfterReply();
   clearGroupHistory();
 };

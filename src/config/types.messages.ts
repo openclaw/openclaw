@@ -88,6 +88,19 @@ export type StatusReactionsConfig = {
   timing?: StatusReactionsTimingConfig;
 };
 
+export type AckReactionScope = "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
+
+export type AckStickerConfig = {
+  /** Telegram sticker file_id used to acknowledge inbound messages. */
+  fileId?: string;
+  /** When to send ack stickers. Defaults to messages.ackReactionScope. */
+  scope?: AckReactionScope;
+  /** Remove the ack sticker after reply delivery (default: false). */
+  removeAfterReply?: boolean;
+  /** Send the ack sticker silently without a notification (default: true). */
+  silent?: boolean;
+};
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
@@ -126,7 +139,9 @@ export type MessagesConfig = {
   /** Emoji reaction used to acknowledge inbound messages (empty disables). */
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */
-  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
+  ackReactionScope?: AckReactionScope;
+  /** Telegram sticker used to acknowledge inbound messages. */
+  ackSticker?: AckStickerConfig;
   /** Remove ack reaction after reply is sent (default: false). */
   removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */

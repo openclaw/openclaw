@@ -13748,6 +13748,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                       minimum: 0,
                       maximum: 9007199254740991,
                     },
+                    ackSticker: {
+                      type: "object",
+                      properties: {
+                        fileId: {
+                          type: "string",
+                        },
+                        scope: {
+                          type: "string",
+                          enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+                        },
+                        removeAfterReply: {
+                          type: "boolean",
+                        },
+                        silent: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
                   },
                   additionalProperties: false,
                 },
@@ -13760,6 +13779,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+              },
+              ackSticker: {
+                type: "object",
+                properties: {
+                  fileId: {
+                    type: "string",
+                  },
+                  scope: {
+                    type: "string",
+                    enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+                  },
+                  removeAfterReply: {
+                    type: "boolean",
+                  },
+                  silent: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
             },
             additionalProperties: false,
@@ -13990,6 +14028,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                       minimum: 0,
                       maximum: 9007199254740991,
                     },
+                    ackSticker: {
+                      type: "object",
+                      properties: {
+                        fileId: {
+                          type: "string",
+                        },
+                        scope: {
+                          type: "string",
+                          enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+                        },
+                        removeAfterReply: {
+                          type: "boolean",
+                        },
+                        silent: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
                   },
                   additionalProperties: false,
                 },
@@ -14024,6 +14081,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     additionalProperties: false,
                   },
                 ],
+              },
+              ackSticker: {
+                type: "object",
+                properties: {
+                  fileId: {
+                    type: "string",
+                  },
+                  scope: {
+                    type: "string",
+                    enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+                  },
+                  removeAfterReply: {
+                    type: "boolean",
+                  },
+                  silent: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
             },
             additionalProperties: false,
@@ -14378,6 +14454,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         ackReaction: {
           type: "string",
+        },
+        ackSticker: {
+          type: "object",
+          properties: {
+            fileId: {
+              type: "string",
+            },
+            scope: {
+              type: "string",
+              enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+            },
+            removeAfterReply: {
+              type: "boolean",
+            },
+            silent: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
         },
         errorPolicy: {
           type: "string",
@@ -14810,6 +14905,32 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                             minimum: 0,
                             maximum: 9007199254740991,
                           },
+                          ackSticker: {
+                            type: "object",
+                            properties: {
+                              fileId: {
+                                type: "string",
+                              },
+                              scope: {
+                                type: "string",
+                                enum: [
+                                  "group-mentions",
+                                  "group-all",
+                                  "direct",
+                                  "all",
+                                  "off",
+                                  "none",
+                                ],
+                              },
+                              removeAfterReply: {
+                                type: "boolean",
+                              },
+                              silent: {
+                                type: "boolean",
+                              },
+                            },
+                            additionalProperties: false,
+                          },
                         },
                         additionalProperties: false,
                       },
@@ -14822,6 +14943,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                       type: "integer",
                       minimum: 0,
                       maximum: 9007199254740991,
+                    },
+                    ackSticker: {
+                      type: "object",
+                      properties: {
+                        fileId: {
+                          type: "string",
+                        },
+                        scope: {
+                          type: "string",
+                          enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+                        },
+                        removeAfterReply: {
+                          type: "boolean",
+                        },
+                        silent: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
                     },
                   },
                   additionalProperties: false,
@@ -15052,6 +15192,32 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                             minimum: 0,
                             maximum: 9007199254740991,
                           },
+                          ackSticker: {
+                            type: "object",
+                            properties: {
+                              fileId: {
+                                type: "string",
+                              },
+                              scope: {
+                                type: "string",
+                                enum: [
+                                  "group-mentions",
+                                  "group-all",
+                                  "direct",
+                                  "all",
+                                  "off",
+                                  "none",
+                                ],
+                              },
+                              removeAfterReply: {
+                                type: "boolean",
+                              },
+                              silent: {
+                                type: "boolean",
+                              },
+                            },
+                            additionalProperties: false,
+                          },
                         },
                         additionalProperties: false,
                       },
@@ -15086,6 +15252,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                           additionalProperties: false,
                         },
                       ],
+                    },
+                    ackSticker: {
+                      type: "object",
+                      properties: {
+                        fileId: {
+                          type: "string",
+                        },
+                        scope: {
+                          type: "string",
+                          enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+                        },
+                        removeAfterReply: {
+                          type: "boolean",
+                        },
+                        silent: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
                     },
                   },
                   additionalProperties: false,
@@ -15440,6 +15625,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               ackReaction: {
                 type: "string",
+              },
+              ackSticker: {
+                type: "object",
+                properties: {
+                  fileId: {
+                    type: "string",
+                  },
+                  scope: {
+                    type: "string",
+                    enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+                  },
+                  removeAfterReply: {
+                    type: "boolean",
+                  },
+                  silent: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               errorPolicy: {
                 type: "string",

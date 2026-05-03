@@ -2205,6 +2205,28 @@ describe("sendStickerTelegram", () => {
     });
   }
 
+  it("sends stickers silently when requested", async () => {
+    const chatId = "123";
+    const sendSticker = vi.fn().mockResolvedValue({
+      message_id: 108,
+      chat: { id: chatId },
+    });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    await sendStickerTelegram(chatId, "fileId123", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      silent: true,
+    });
+
+    expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", {
+      disable_notification: true,
+    });
+  });
+
   it("throws error when fileId is blank", async () => {
     for (const fileId of ["", "   "]) {
       await expect(

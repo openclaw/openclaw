@@ -1444,6 +1444,8 @@ type TelegramStickerOpts = {
   replyToMessageId?: number;
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
+  /** Send sticker silently (no notification). Defaults to false. */
+  silent?: boolean;
 };
 
 /**
@@ -1494,10 +1496,14 @@ export async function sendStickerTelegram(
     input: to,
   });
 
-  const stickerParams = hasThreadParams ? threadParams : undefined;
+  const stickerParams = {
+    ...(hasThreadParams ? threadParams : {}),
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  };
+  const effectiveStickerParams = Object.keys(stickerParams).length > 0 ? stickerParams : undefined;
 
   const result = await withTelegramThreadFallback(
-    stickerParams,
+    effectiveStickerParams,
     "sticker",
     opts.verbose,
     async (effectiveParams, label) =>

@@ -18,6 +18,7 @@ type BuildTelegramMessageContextForTestParams = {
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
   accountId?: string;
+  botApi?: Record<string, unknown>;
   runtime?: BuildTelegramMessageContextParams["runtime"];
   sessionRuntime?: BuildTelegramMessageContextParams["sessionRuntime"] | null;
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
@@ -67,6 +68,11 @@ export async function buildTelegramMessageContextForTest(
       api: {
         sendChatAction: vi.fn(),
         setMessageReaction: vi.fn(),
+        sendSticker: vi.fn(async (_chatId, _fileId, _params) => ({
+          message_id: 1001,
+          chat: { id: params.message.chat?.["id"] ?? 123 },
+        })),
+        ...params.botApi,
       },
     } as never,
     cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,

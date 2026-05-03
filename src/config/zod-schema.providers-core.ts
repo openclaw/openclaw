@@ -63,6 +63,34 @@ const DiscordSnowflakeStringSchema = z.string().regex(/^\d+$/, "Discord user ID 
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
+const AckReactionScopeSchema = z.enum([
+  "group-mentions",
+  "group-all",
+  "direct",
+  "all",
+  "off",
+  "none",
+]);
+const AckStickerSchema = z
+  .object({
+    fileId: z.string().optional(),
+    scope: AckReactionScopeSchema.optional(),
+    removeAfterReply: z.boolean().optional(),
+    silent: z.boolean().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.scope === "off" || value.scope === "none") {
+      return;
+    }
+    if (!value.fileId?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fileId"],
+        message: 'ackSticker.fileId is required unless scope is "off" or "none".',
+      });
+    }
+  });
 
 const TelegramCapabilitiesSchema = z.union([
   z.array(z.string()),
@@ -126,6 +154,7 @@ export const TelegramTopicSchema = z
     agentId: z.string().optional(),
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
+    ackSticker: AckStickerSchema.optional(),
   })
   .strict();
 
@@ -144,6 +173,7 @@ export const TelegramGroupSchema = z
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
+    ackSticker: AckStickerSchema.optional(),
   })
   .strict();
 
@@ -182,6 +212,7 @@ export const TelegramDirectSchema = z
     errorCooldownMs: z.number().int().nonnegative().optional(),
     requireTopic: z.boolean().optional(),
     autoTopicLabel: AutoTopicLabelSchema,
+    ackSticker: AckStickerSchema.optional(),
   })
   .strict();
 
@@ -338,6 +369,7 @@ export const TelegramAccountSchemaBase = z
     silentErrorReplies: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    ackSticker: AckStickerSchema.optional(),
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
     apiRoot: z.string().url().optional(),

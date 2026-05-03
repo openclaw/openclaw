@@ -688,6 +688,43 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
+  <Accordion title="Ack stickers">
+    `ackSticker` sends a Telegram sticker while OpenClaw is processing an inbound message.
+
+    Resolution order:
+
+    - topic config (`channels.telegram.groups.<chatId>.topics.<threadId>.ackSticker` or DM topic config)
+    - group/direct config (`channels.telegram.groups.<chatId>.ackSticker` or `channels.telegram.direct.<chatId>.ackSticker`)
+    - `channels.telegram.accounts.<accountId>.ackSticker`
+    - `channels.telegram.ackSticker`
+    - `messages.ackSticker`
+
+    Example:
+
+```json5
+{
+  channels: {
+    telegram: {
+      ackSticker: {
+        fileId: "CAACAgIAAxkBAAI...",
+        scope: "direct",
+        silent: true,
+        removeAfterReply: true,
+      },
+    },
+  },
+}
+```
+
+    Notes:
+
+    - `fileId` must be a sendable Telegram sticker `file_id`; `file_unique_id` cannot be used for sending.
+    - If `scope` is omitted, Telegram uses `messages.ackReactionScope` (default: `group-mentions`).
+    - `silent` defaults to `true` so ack stickers do not create an extra notification.
+    - Use `{ scope: "off" }` on a group, direct, or topic config to disable an inherited ack sticker.
+
+  </Accordion>
+
   <Accordion title="Config writes from Telegram events and commands">
     Channel config writes are enabled by default (`configWrites !== false`).
 
