@@ -14,6 +14,7 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   collectConfiguredSpeechProviderIds,
   normalizeConfiguredSpeechProviderIdForStartup,
@@ -218,6 +219,7 @@ function canStartConfiguredSpeechProviderPlugin(params: {
     rootConfig?: OpenClawConfig;
   };
   configuredSpeechProviderIds: ReadonlySet<string>;
+  platform?: NodeJS.Platform;
 }): boolean {
   if (
     !manifestOwnsConfiguredSpeechProvider({
@@ -247,7 +249,7 @@ function canStartConfiguredSpeechProviderPlugin(params: {
     origin: params.plugin.origin,
     config: params.pluginsConfig,
     rootConfig: params.config,
-    enabledByDefault: params.plugin.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
     activationSource: params.activationSource,
   });
   return activationState.enabled && activationState.explicitlyEnabled;
@@ -315,6 +317,7 @@ function canStartExplicitHookPlugin(params: {
     rootConfig?: OpenClawConfig;
   };
   activationSourcePlugins: NormalizedPluginsConfig;
+  platform?: NodeJS.Platform;
 }): boolean {
   const hasHookPolicyIntent = hasExplicitHookPolicyConfig(
     params.activationSourcePlugins.entries[params.plugin.pluginId],
@@ -348,7 +351,7 @@ function canStartExplicitHookPlugin(params: {
     origin: params.plugin.origin,
     config: params.pluginsConfig,
     rootConfig: params.config,
-    enabledByDefault: params.plugin.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
     activationSource: params.activationSource,
   });
   return activationState.enabled && (activationState.explicitlyEnabled || hasHookPolicyIntent);
@@ -363,6 +366,7 @@ function canStartConfiguredChannelPlugin(params: {
     rootConfig?: OpenClawConfig;
   };
   manifestLookup: ManifestRegistryLookup;
+  platform?: NodeJS.Platform;
 }): boolean {
   if (!params.pluginsConfig.enabled) {
     return false;
@@ -396,7 +400,7 @@ function canStartConfiguredChannelPlugin(params: {
     origin: params.plugin.origin,
     config: params.pluginsConfig,
     rootConfig: params.config,
-    enabledByDefault: params.plugin.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
     activationSource: params.activationSource,
   });
   return activationState.enabled && activationState.explicitlyEnabled;
@@ -471,6 +475,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   env: NodeJS.ProcessEnv;
   index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
+  platform?: NodeJS.Platform;
 }): GatewayStartupPluginPlan {
   const channelPluginIds = resolveChannelPluginIdsFromRegistry({
     manifestRegistry: params.manifestRegistry,
@@ -533,6 +538,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           pluginsConfig,
           activationSource,
           manifestLookup,
+          platform: params.platform,
         });
       }
       if (
@@ -543,7 +549,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           origin: plugin.origin,
           config: pluginsConfig,
           rootConfig: params.config,
-          enabledByDefault: plugin.enabledByDefault,
+          enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin, params.platform),
           activationSource,
         });
         return activationState.enabled;
@@ -567,6 +573,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           pluginsConfig,
           activationSource,
           configuredSpeechProviderIds,
+          platform: params.platform,
         })
       ) {
         return true;
@@ -579,6 +586,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           pluginsConfig,
           activationSource,
           activationSourcePlugins,
+          platform: params.platform,
         })
       ) {
         return true;
@@ -599,7 +607,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         origin: plugin.origin,
         config: pluginsConfig,
         rootConfig: params.config,
-        enabledByDefault: plugin.enabledByDefault,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin, params.platform),
         activationSource,
       });
       if (!activationState.enabled) {
@@ -624,6 +632,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
   env: NodeJS.ProcessEnv;
   index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
+  platform?: NodeJS.Platform;
 }): string[] {
   return [...resolveGatewayStartupPluginPlanFromRegistry(params).pluginIds];
 }
@@ -635,6 +644,7 @@ export function loadGatewayStartupPluginPlan(params: {
   env: NodeJS.ProcessEnv;
   index?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
+  platform?: NodeJS.Platform;
 }): GatewayStartupPluginPlan {
   const snapshotConfig = params.activationSourceConfig ?? params.config;
   const metadataSnapshot =
@@ -661,6 +671,7 @@ export function loadGatewayStartupPluginPlan(params: {
     env: params.env,
     index: metadataSnapshot.index,
     manifestRegistry: metadataSnapshot.manifestRegistry,
+    platform: params.platform,
   });
 }
 
@@ -669,6 +680,7 @@ export function resolveGatewayStartupPluginIds(params: {
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): string[] {
   return [...loadGatewayStartupPluginPlan(params).pluginIds];
 }

@@ -182,6 +182,8 @@ export type PluginManifestActivation = {
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
+export type PluginManifestDefaultPlatform = NodeJS.Platform;
+
 export type PluginManifestSetupProvider = {
   /** Provider id surfaced during setup/onboarding. */
   id: string;
@@ -290,6 +292,7 @@ export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
   enabledByDefault?: boolean;
+  enabledByDefaultOnPlatforms?: PluginManifestDefaultPlatform[];
   /** Legacy plugin ids that should normalize to this plugin id. */
   legacyPluginIds?: string[];
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
@@ -1156,6 +1159,27 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   return Object.keys(activation).length > 0 ? activation : undefined;
 }
 
+const MANIFEST_DEFAULT_ENABLEMENT_PLATFORMS = new Set<PluginManifestDefaultPlatform>([
+  "aix",
+  "android",
+  "darwin",
+  "freebsd",
+  "haiku",
+  "linux",
+  "openbsd",
+  "sunos",
+  "win32",
+  "cygwin",
+  "netbsd",
+]);
+
+function normalizeManifestDefaultPlatforms(value: unknown): PluginManifestDefaultPlatform[] {
+  return normalizeTrimmedStringList(value).filter(
+    (platform): platform is PluginManifestDefaultPlatform =>
+      MANIFEST_DEFAULT_ENABLEMENT_PLATFORMS.has(platform as PluginManifestDefaultPlatform),
+  );
+}
+
 function normalizeManifestSetupProviders(
   value: unknown,
 ): PluginManifestSetupProvider[] | undefined {
@@ -1520,6 +1544,9 @@ export function loadPluginManifest(
 
   const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
+  const enabledByDefaultOnPlatforms = normalizeManifestDefaultPlatforms(
+    raw.enabledByDefaultOnPlatforms,
+  );
   const legacyPluginIds = normalizeTrimmedStringList(raw.legacyPluginIds);
   const autoEnableWhenConfiguredProviders = normalizeTrimmedStringList(
     raw.autoEnableWhenConfiguredProviders,
@@ -1584,6 +1611,7 @@ export function loadPluginManifest(
       id,
       configSchema,
       ...(enabledByDefault ? { enabledByDefault } : {}),
+      ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
       ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
       ...(autoEnableWhenConfiguredProviders.length > 0
         ? { autoEnableWhenConfiguredProviders }
