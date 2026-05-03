@@ -1248,7 +1248,7 @@ describe("binding evaluation cache scalability", () => {
 
   describe("WhatsApp accountId-vs-peer.id misuse warning (#75211)", () => {
     // The reporter on #75211 authored a binding with
-    //   match: { channel: "whatsapp", accountId: "+51XXXXXXXXX" }
+    //   match: { channel: "whatsapp", accountId: "+51987654321" }
     // expecting that to filter inbound by sender phone. In OpenClaw's
     // routing model `match.accountId` selects which CONNECTED WhatsApp
     // account the binding applies to (the bot's own number/handle), not
@@ -1277,13 +1277,19 @@ describe("binding evaluation cache scalability", () => {
     }
 
     test("emits a warning for the reporter's exact config shape", () => {
+      // The reporter's bug body used `+51XXXXXXXXX` as a redacted-for-
+      // privacy phone. The phone-shape detector
+      // (`looksLikeWhatsAppSenderPhone`) correctly requires digits only,
+      // so we use a fake-but-valid Peruvian E.164 here that exercises
+      // the same code path the reporter's real (unredacted) phone hit
+      // in production.
       const cfg: OpenClawConfig = {
         agents: { list: [{ id: "main" }, { id: "relay" }] },
         bindings: [
           {
             type: "route",
             agentId: "relay",
-            match: { channel: "whatsapp", accountId: "+51XXXXXXXXX" },
+            match: { channel: "whatsapp", accountId: "+51987654321" },
           },
         ],
       } as unknown as OpenClawConfig;
@@ -1293,14 +1299,14 @@ describe("binding evaluation cache scalability", () => {
           cfg,
           channel: "whatsapp",
           accountId: "default",
-          peer: { kind: "direct", id: "+51XXXXXXXXX" },
+          peer: { kind: "direct", id: "+51987654321" },
         }),
       );
 
       const joined = warnings.join("");
       expect(joined).toMatch(/suspicious WhatsApp binding/i);
-      expect(joined).toContain('match.accountId="+51XXXXXXXXX"');
-      expect(joined).toContain('match.peer = { kind: "direct", id: "+51XXXXXXXXX" }');
+      expect(joined).toContain('match.accountId="+51987654321"');
+      expect(joined).toContain('match.peer = { kind: "direct", id: "+51987654321" }');
       expect(joined).toContain("#75211");
     });
 
@@ -1414,7 +1420,7 @@ describe("binding evaluation cache scalability", () => {
           {
             type: "route",
             agentId: "relay",
-            match: { channel: "whatsapp", accountId: "+51XXXXXXXXX" },
+            match: { channel: "whatsapp", accountId: "+51987654321" },
           },
         ],
       } as unknown as OpenClawConfig;
@@ -1424,7 +1430,7 @@ describe("binding evaluation cache scalability", () => {
           cfg,
           channel: "whatsapp",
           accountId: "default",
-          peer: { kind: "direct", id: "+51XXXXXXXXX" },
+          peer: { kind: "direct", id: "+51987654321" },
         }),
       );
 
