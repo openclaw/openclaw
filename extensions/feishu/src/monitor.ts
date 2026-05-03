@@ -15,10 +15,21 @@ export type MonitorFeishuOpts = {
   accountId?: string;
 };
 
-let monitorAccountRuntimePromise: Promise<typeof import("./monitor.account.js")> | undefined;
+// eslint-disable-next-line no-var
+var monitorAccountRuntimePromise: Promise<typeof import("./monitor.account.js")> | undefined = import("./monitor.account.js");
 
 async function loadMonitorAccountRuntime() {
-  monitorAccountRuntimePromise ??= import("./monitor.account.js");
+  // Retry up to 3 times with 2s delay — the dynamic import may
+  // not be ready on first call due to module graph initialization order.
+  for (let i = 0; i < 3; i++) {
+    try {
+      const mod = await monitorAccountRuntimePromise;
+      if (mod && typeof mod.monitorSingleAccount === "function") return mod;
+    } catch {
+      // import still loading, retry
+    }
+    if (i < 2) await new Promise((r) => setTimeout(r, 2000));
+  }
   return await monitorAccountRuntimePromise;
 }
 
