@@ -448,6 +448,18 @@ describe("model-selection", () => {
         model: "anthropic/claude-haiku-4.5",
       });
     });
+
+    it("ignores malformed persisted model metadata instead of throwing", () => {
+      expect(
+        resolvePersistedSelectedModelRef({
+          defaultProvider: "anthropic",
+          runtimeProvider: { provider: "openai" },
+          runtimeModel: false,
+          overrideProvider: ["openrouter"],
+          overrideModel: 123,
+        }),
+      ).toBeNull();
+    });
   });
 
   describe("inferUniqueProviderFromConfiguredModels", () => {

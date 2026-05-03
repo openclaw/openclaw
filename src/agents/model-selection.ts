@@ -4,7 +4,10 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
@@ -80,13 +83,13 @@ export { isCliProvider } from "./model-selection-cli.js";
 
 export function resolvePersistedOverrideModelRef(params: {
   defaultProvider: string;
-  overrideProvider?: string;
-  overrideModel?: string;
+  overrideProvider?: unknown;
+  overrideModel?: unknown;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const defaultProvider = params.defaultProvider.trim();
-  const overrideProvider = params.overrideProvider?.trim();
-  const overrideModel = params.overrideModel?.trim();
+  const overrideProvider = normalizeOptionalString(params.overrideProvider);
+  const overrideModel = normalizeOptionalString(params.overrideModel);
   if (!overrideModel) {
     return null;
   }
@@ -107,15 +110,15 @@ export function resolvePersistedOverrideModelRef(params: {
  */
 export function resolvePersistedModelRef(params: {
   defaultProvider: string;
-  runtimeProvider?: string;
-  runtimeModel?: string;
-  overrideProvider?: string;
-  overrideModel?: string;
+  runtimeProvider?: unknown;
+  runtimeModel?: unknown;
+  overrideProvider?: unknown;
+  overrideModel?: unknown;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const defaultProvider = params.defaultProvider.trim();
-  const runtimeProvider = params.runtimeProvider?.trim();
-  const runtimeModel = params.runtimeModel?.trim();
+  const runtimeProvider = normalizeOptionalString(params.runtimeProvider);
+  const runtimeModel = normalizeOptionalString(params.runtimeModel);
   if (runtimeModel) {
     if (runtimeProvider) {
       return { provider: runtimeProvider, model: runtimeModel };
@@ -144,10 +147,10 @@ export function resolvePersistedModelRef(params: {
  */
 export function resolvePersistedSelectedModelRef(params: {
   defaultProvider: string;
-  runtimeProvider?: string;
-  runtimeModel?: string;
-  overrideProvider?: string;
-  overrideModel?: string;
+  runtimeProvider?: unknown;
+  runtimeModel?: unknown;
+  overrideProvider?: unknown;
+  overrideModel?: unknown;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const override = resolvePersistedOverrideModelRef({

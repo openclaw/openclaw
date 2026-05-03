@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Status/sessions: ignore malformed non-string persisted session provider/model metadata instead of throwing while rendering status summaries. Thanks @vincentkoc.
 - CLI/config: remove only the targeted array element for `openclaw config unset array[index]` instead of replaying the unset during config write and deleting the shifted next element. Fixes #76290. Thanks @SymbolStar and @vincentkoc.
 - Agents/tools: stop treating `tools.deny: ["write"]` as an implicit `apply_patch` deny; operators who want to block patch writes should deny `apply_patch` or `group:fs` explicitly. Fixes #76749. (#76795) Thanks @Nek-12 and @hclsys.
 - Plugins/release: verify published plugin npm tarballs expose compiled runtime entries after publish, catching TS-only package artifacts before release closeout. Thanks @vincentkoc.
