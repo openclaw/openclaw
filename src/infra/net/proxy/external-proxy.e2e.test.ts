@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { withTempDir } from "../../../test-helpers/temp-dir.js";
 import { resolveSystemBin } from "../../resolve-system-bin.js";
+import { resolvePreferredOpenClawTmpDir } from "../../tmp-openclaw-dir.js";
 
 const CHILD_PROCESS_TIMEOUT_MS = process.env.CI ? 45_000 : 15_000;
 const PROBE_TIMEOUT_MS = process.env.CI ? 15_000 : 5_000;
@@ -100,9 +101,15 @@ function createDiscordTlsFixture(dir: string): DiscordTlsFixture {
 async function withDiscordTlsFixture<T>(
   run: (fixture: DiscordTlsFixture) => Promise<T>,
 ): Promise<T> {
-  return await withTempDir({ prefix: "openclaw-discord-tls-" }, async (dir) => {
-    return await run(createDiscordTlsFixture(dir));
-  });
+  return await withTempDir(
+    {
+      prefix: "openclaw-discord-tls-",
+      parentDir: resolvePreferredOpenClawTmpDir(),
+    },
+    async (dir) => {
+      return await run(createDiscordTlsFixture(dir));
+    },
+  );
 }
 
 async function listenOnLoopback(server: Server): Promise<number> {
