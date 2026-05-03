@@ -17,7 +17,7 @@ approval, and then turns that draft into the final answer when the channel can
 do that safely.
 
 ```text
-Shelling
+Shelling...
 - reading recent channel context
 - checking matching issues
 - preparing reply
@@ -52,7 +52,7 @@ A progress draft has two parts:
 
 | Part           | Purpose                                                           |
 | -------------- | ----------------------------------------------------------------- |
-| Label          | A short title such as `Thinking` or `Shelling`.                   |
+| Label          | A short title such as `Thinking...` or `Shelling...`.             |
 | Progress lines | Compact run updates such as tool calls, task steps, or approvals. |
 
 The label appears immediately when the agent starts replying. Progress lines are
@@ -85,30 +85,30 @@ normal block delivery. Use `streaming.block.enabled` or legacy
 
 Progress labels live under `channels.<channel>.streaming.progress`.
 
-The default label is `auto`, which chooses from OpenClaw's built-in single-word
-label pool:
+The default label is `auto`, which chooses from OpenClaw's built-in
+single-word-with-ellipsis label pool:
 
 ```text
-Thinking
-Shelling
-Scuttling
-Clawing
-Pinching
-Molting
-Bubbling
-Tiding
-Reefing
-Cracking
-Sifting
-Brining
-Nautiling
-Krilling
-Barnacling
-Lobstering
-Tidepooling
-Pearling
-Snapping
-Surfacing
+Thinking...
+Shelling...
+Scuttling...
+Clawing...
+Pinching...
+Molting...
+Bubbling...
+Tiding...
+Reefing...
+Cracking...
+Sifting...
+Brining...
+Nautiling...
+Krilling...
+Barnacling...
+Lobstering...
+Tidepooling...
+Pearling...
+Snapping...
+Surfacing...
 ```
 
 Use a fixed label:
