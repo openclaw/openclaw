@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { explainShellCommand } from "../command-explainer/index.js";
-import { summarizeCommandExplanation, summarizeCommandSegmentsForDisplay } from "./explain.js";
+import {
+  resolveCommandAnalysisSummaryForDisplay,
+  summarizeCommandExplanation,
+  summarizeCommandSegmentsForDisplay,
+} from "./explain.js";
 
 describe("command-analysis explanation summary", () => {
   it("summarizes commands and risk kinds", async () => {
@@ -25,5 +29,34 @@ describe("command-analysis explanation summary", () => {
     expect(summary.commandCount).toBe(1);
     expect(summary.riskKinds).toEqual(["inline-eval"]);
     expect(summary.warningLines).toEqual(["Contains inline-eval: python3 -c"]);
+  });
+
+  it("resolves display summaries from argv or shell commands", () => {
+    expect(
+      resolveCommandAnalysisSummaryForDisplay({
+        host: "gateway",
+        commandText: "echo ok",
+        commandArgv: ["python3", "-c", "print(1)"],
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        commandCount: 1,
+        riskKinds: ["inline-eval"],
+        warningLines: ["Contains inline-eval: python3 -c"],
+      }),
+    );
+    expect(
+      resolveCommandAnalysisSummaryForDisplay({
+        host: "node",
+        commandText: "python3 -c 'print(1)'",
+      }),
+    ).toBeNull();
+    expect(
+      resolveCommandAnalysisSummaryForDisplay({
+        host: "gateway",
+        commandText: "python3 -c 'print(1)'",
+        sanitizeText: (value) => value.replaceAll("python3", "python"),
+      })?.warningLines,
+    ).toEqual(["Contains inline-eval: python -c"]);
   });
 });

@@ -1,4 +1,5 @@
 import type { Node as TreeSitterNode } from "web-tree-sitter";
+import type { InterpreterInlineEvalHit } from "../command-analysis/inline-eval.js";
 import {
   detectCarriedShellBuiltinArgv,
   detectCommandCarrierArgv,
@@ -6,7 +7,6 @@ import {
   detectShellWrapperThroughCarrierArgv,
   SOURCE_EXECUTABLES,
 } from "../command-analysis/risks.js";
-import type { InterpreterInlineEvalHit } from "../exec-inline-eval.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 import {
   extractShellWrapperCommand,

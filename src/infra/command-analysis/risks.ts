@@ -1,15 +1,12 @@
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import { unwrapKnownDispatchWrapperInvocation } from "../dispatch-wrapper-resolution.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
-import {
-  detectInterpreterInlineEvalArgv,
-  type InterpreterInlineEvalHit,
-} from "../exec-inline-eval.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 import {
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
 } from "../shell-wrapper-resolution.js";
+import { detectInterpreterInlineEvalArgv, type InterpreterInlineEvalHit } from "./inline-eval.js";
 
 export const COMMAND_CARRIER_EXECUTABLES = new Set(["sudo", "doas", "env", "command", "builtin"]);
 
