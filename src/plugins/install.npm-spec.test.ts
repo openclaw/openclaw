@@ -530,7 +530,6 @@ describe("installPluginFromNpmSpec", () => {
       expectNpmInstallIntoRoot({
         calls: runCommandWithTimeoutMock.mock.calls,
         npmRoot,
-        spec,
       });
     },
   );
