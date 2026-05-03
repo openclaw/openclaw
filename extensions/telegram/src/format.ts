@@ -72,11 +72,50 @@ function renderTelegramHtml(ir: MarkdownIR): string {
   });
 }
 
+function leadingWhitespaceLength(line: string): number {
+  return line.match(/^[ \t]*/)?.[0]?.length ?? 0;
+}
+
+function isTelegramBulletLine(line: string): boolean {
+  return /^[ \t]*(?:[•*+-])[ \t]+\S/.test(line);
+}
+
+function isTelegramListBoundaryLine(line: string): boolean {
+  return /^[ \t]*(?:\d+\.|#{1,6})[ \t]+\S/.test(line);
+}
+
+function preserveTelegramListBoundarySpacing(markdown: string): string {
+  const lines = markdown.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+
+  for (const line of lines) {
+    const normalizedLine = line.replace(/\r$/, "");
+    const isFenceLine = /^[ \t]*(?:```|~~~)/.test(normalizedLine);
+    if (!inFence && out.length > 0) {
+      const previous = out[out.length - 1] ?? "";
+      if (
+        isTelegramBulletLine(previous) &&
+        isTelegramListBoundaryLine(normalizedLine) &&
+        leadingWhitespaceLength(normalizedLine) <= leadingWhitespaceLength(previous)
+      ) {
+        out.push("");
+      }
+    }
+    out.push(line);
+    if (isFenceLine) {
+      inFence = !inFence;
+    }
+  }
+
+  return out.join("\n");
+}
+
 export function markdownToTelegramHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
 ): string {
-  const ir = markdownToIR(markdown ?? "", {
+  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
@@ -458,7 +497,7 @@ export function markdownToTelegramChunks(
   limit: number,
   options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
-  const ir = markdownToIR(markdown ?? "", {
+  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
