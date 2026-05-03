@@ -159,9 +159,11 @@ describe("process supervisor", () => {
 
     const exitPromise = run.wait();
     await vi.advanceTimersByTimeAsync(5);
-    // Drain the setImmediate yield added in supervisor.ts for the
-    // post-settle I/O drain (#30711) — it is queued under fake timers.
-    await vi.advanceTimersByTimeAsync(0);
+    // Switch to real timers so the post-settle setImmediate I/O drain
+    // (supervisor.ts, #30711) can fire on the real platform; vitest fakes
+    // setImmediate by default and it lives on a separate queue from
+    // setTimeout, so advancing the fake clock does not flush it.
+    vi.useRealTimers();
 
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
@@ -227,8 +229,9 @@ describe("process supervisor", () => {
 
     const exitPromise = run.wait();
     await vi.advanceTimersByTimeAsync(1);
-    // Drain the post-settle setImmediate yield (#30711).
-    await vi.advanceTimersByTimeAsync(0);
+    // Real timers from here so the post-settle setImmediate drain
+    // (#30711) fires; see the no-output test above for context.
+    vi.useRealTimers();
 
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
