@@ -417,6 +417,7 @@ export type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  spawnDepth?: number;
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
