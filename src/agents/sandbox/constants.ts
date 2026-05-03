@@ -41,6 +41,19 @@ export const DEFAULT_SANDBOX_BROWSER_IMAGE = "openclaw-sandbox-browser:bookworm-
 export const DEFAULT_SANDBOX_COMMON_IMAGE = "openclaw-sandbox-common:bookworm-slim";
 export const SANDBOX_BROWSER_SECURITY_HASH_EPOCH = "2026-04-05-cdp-source-range";
 
+// Bump when buildSandboxCreateArgs adds, removes, or changes container creation
+// flags in a way that requires existing sandboxes to be recreated. Date-tag the
+// change so readers can trace which release introduced the bump.
+//
+// IMPORTANT: only bump this in the same PR (or follow-up PR) that ships the
+// actual create-args change. Bumping speculatively before a flag lands will
+// recreate containers under a hash that claims the new behaviour without it,
+// and a later same-string bump will then NOT recreate them again.
+//
+// History:
+//   2026-05-bootstrap  first value; mechanism only, no flag change yet
+export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-05-bootstrap";
+
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "openclaw-sbx-browser-";
 export const DEFAULT_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";
 export const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;
