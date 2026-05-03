@@ -3,8 +3,10 @@ import path from "node:path";
 import {
   ensureAuthProfileStore,
   loadAuthProfileStoreForSecretsRuntime,
+  resolveAuthProfileOrder,
   resolveProviderIdForAuth,
   resolveApiKeyForProfile,
+  resolveOpenClawAgentDir,
   resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
   type AuthProfileCredential,
@@ -28,6 +30,8 @@ const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 const CODEX_APP_SERVER_API_KEY_ENV_VARS = [CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR];
 const CODEX_APP_SERVER_ISOLATION_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
 
+type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
+
 export async function bridgeCodexAppServerStartOptions(params: {
   startOptions: CodexAppServerStartOptions;
   agentDir: string;
@@ -41,13 +45,47 @@ export async function bridgeCodexAppServerStartOptions(params: {
     params.agentDir,
   );
   const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const authProfileId = resolveCodexAppServerAuthProfileId({
+    authProfileId: params.authProfileId,
+    store,
+  });
   const shouldClearInheritedOpenAiApiKey = shouldClearOpenAiApiKeyForCodexAuthProfile({
     store,
-    authProfileId: params.authProfileId,
+    authProfileId,
   });
   return shouldClearInheritedOpenAiApiKey
     ? withClearedEnvironmentVariables(isolatedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
     : isolatedStartOptions;
+}
+
+export function resolveCodexAppServerAuthProfileId(params: {
+  authProfileId?: string;
+  store: ReturnType<typeof ensureAuthProfileStore>;
+  config?: AuthProfileOrderConfig;
+}): string | undefined {
+  const requested = params.authProfileId?.trim();
+  if (requested) {
+    return requested;
+  }
+  return resolveAuthProfileOrder({
+    cfg: params.config,
+    store: params.store,
+    provider: CODEX_APP_SERVER_AUTH_PROVIDER,
+  })[0]?.trim();
+}
+
+export function resolveCodexAppServerAuthProfileIdForAgent(params: {
+  authProfileId?: string;
+  agentDir?: string;
+  config?: AuthProfileOrderConfig;
+}): string | undefined {
+  const agentDir = params.agentDir?.trim() || resolveOpenClawAgentDir();
+  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  return resolveCodexAppServerAuthProfileId({
+    authProfileId: params.authProfileId,
+    store,
+    config: params.config,
+  });
 }
 
 export function resolveCodexAppServerHomeDir(agentDir: string): string {
@@ -153,11 +191,14 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   authProfileId?: string;
   forceOAuthRefresh?: boolean;
 }): Promise<LoginAccountParams | undefined> {
-  const profileId = params.authProfileId?.trim();
+  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const profileId = resolveCodexAppServerAuthProfileId({
+    authProfileId: params.authProfileId,
+    store,
+  });
   if (!profileId) {
     return undefined;
   }
-  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
   const credential = store.profiles[profileId];
   if (!credential) {
     throw new Error(`Codex app-server auth profile "${profileId}" was not found.`);

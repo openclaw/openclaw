@@ -1,5 +1,70 @@
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveReasoningEffort } from "./thread-lifecycle.js";
+import {
+  buildThreadResumeParams,
+  buildThreadStartParams,
+  resolveReasoningEffort,
+} from "./thread-lifecycle.js";
+
+function createAttemptParams(params: {
+  provider: string;
+  authProfileId?: string;
+}): EmbeddedRunAttemptParams {
+  return {
+    provider: params.provider,
+    modelId: "gpt-5.4",
+    authProfileId: params.authProfileId,
+  } as EmbeddedRunAttemptParams;
+}
+
+function createAppServerOptions() {
+  return {
+    approvalPolicy: "on-request",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+  } as const;
+}
+
+describe("Codex app-server model provider selection", () => {
+  it.each(["openai", "openai-codex"])(
+    "omits public %s modelProvider when forwarding native Codex auth on thread/start",
+    (provider) => {
+      const request = buildThreadStartParams(
+        createAttemptParams({ provider, authProfileId: "openai-codex:work" }),
+        {
+          cwd: "/repo",
+          dynamicTools: [],
+          appServer: createAppServerOptions() as never,
+          developerInstructions: "test instructions",
+        },
+      );
+
+      expect(request).not.toHaveProperty("modelProvider");
+    },
+  );
+
+  it("uses the bound native Codex auth profile when deciding thread/resume modelProvider", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      authProfileId: "openai-codex:bound",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request).not.toHaveProperty("modelProvider");
+  });
+
+  it("keeps public OpenAI modelProvider when no native Codex auth profile is selected", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request).toMatchObject({ modelProvider: "openai" });
+  });
+});
 
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {

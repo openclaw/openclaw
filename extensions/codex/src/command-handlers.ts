@@ -339,6 +339,7 @@ async function bindConversation(
   const authProfileId = existingBinding?.authProfileId;
   const startParams: Parameters<CodexCommandDeps["startCodexConversationThread"]>[0] = {
     pluginConfig,
+    config: ctx.config,
     sessionFile: ctx.sessionFile,
     workspaceDir,
     threadId: parsed.threadId,

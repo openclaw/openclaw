@@ -7,7 +7,19 @@ const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
 }));
 
+const agentRuntimeMocks = vi.hoisted(() => ({
+  ensureAuthProfileStore: vi.fn(),
+  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
+  resolveApiKeyForProfile: vi.fn(),
+  resolveAuthProfileOrder: vi.fn(),
+  resolveOpenClawAgentDir: vi.fn(() => "/agent"),
+  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
+  resolveProviderIdForAuth: vi.fn((provider: string) => provider),
+  saveAuthProfileStore: vi.fn(),
+}));
+
 vi.mock("./app-server/shared-client.js", () => sharedClientMocks);
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 
 import {
   handleCodexConversationBindingResolved,
@@ -24,7 +36,72 @@ describe("codex conversation binding", () => {
 
   afterEach(async () => {
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
+    agentRuntimeMocks.ensureAuthProfileStore.mockReset();
+    agentRuntimeMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
+    agentRuntimeMocks.resolveApiKeyForProfile.mockReset();
+    agentRuntimeMocks.resolveAuthProfileOrder.mockReset();
+    agentRuntimeMocks.resolveOpenClawAgentDir.mockClear();
+    agentRuntimeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockReset();
+    agentRuntimeMocks.resolveProviderIdForAuth.mockClear();
+    agentRuntimeMocks.saveAuthProfileStore.mockReset();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+    agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue([]);
+    agentRuntimeMocks.resolveOpenClawAgentDir.mockReturnValue("/agent");
+    agentRuntimeMocks.resolveProviderIdForAuth.mockImplementation((provider: string) => provider);
+  });
+
+  it("uses the default Codex auth profile and omits the public OpenAI provider for new binds", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const config = { auth: { order: { "openai-codex": ["openai-codex:default"] } } };
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+        },
+      },
+    });
+    agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue(["openai-codex:default"]);
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        return {
+          thread: { id: "thread-new", cwd: tempDir },
+          model: "gpt-5.4-mini",
+        };
+      }),
+    });
+
+    await startCodexConversationThread({
+      config: config as never,
+      sessionFile,
+      workspaceDir: tempDir,
+      model: "gpt-5.4-mini",
+      modelProvider: "openai",
+    });
+
+    expect(agentRuntimeMocks.resolveAuthProfileOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: config, provider: "openai-codex" }),
+    );
+    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: "openai-codex:default" }),
+    );
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      method: "thread/start",
+      params: expect.objectContaining({ model: "gpt-5.4-mini" }),
+    });
+    expect(requests[0]?.params).not.toHaveProperty("modelProvider");
+    await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
+      '"authProfileId": "openai-codex:default"',
+    );
   });
 
   it("preserves Codex auth and omits the public OpenAI provider for native bind threads", async () => {
