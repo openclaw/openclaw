@@ -128,12 +128,24 @@ export function createMemoryTool(params: {
 export function buildMemorySearchUnavailableResult(error: string | undefined) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
-  const warning = isQuotaError
-    ? "Memory search is unavailable because the embedding provider quota is exhausted."
-    : "Memory search is unavailable due to an embedding/provider error.";
-  const action = isQuotaError
-    ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+  const isSqliteMissing =
+    /node:sqlite|no such built-in module.*sqlite|missing node:sqlite/i.test(reason);
+  let warning: string;
+  let action: string;
+  if (isSqliteMissing) {
+    warning =
+      "Memory search is unavailable because node:sqlite is not available in this Node.js runtime. " +
+      "The built-in SQLite module requires Node.js 22.5+ compiled with SQLite support.";
+    action =
+      "Upgrade to Node.js 22.5+ (with SQLite support). " +
+      "See https://docs.openclaw.ai/memory for setup instructions.";
+  } else if (isQuotaError) {
+    warning = "Memory search is unavailable because the embedding provider quota is exhausted.";
+    action = "Top up or switch embedding provider, then retry memory_search.";
+  } else {
+    warning = "Memory search is unavailable due to an embedding/provider error.";
+    action = "Check embedding provider configuration and retry memory_search.";
+  }
   return {
     results: [],
     disabled: true,
