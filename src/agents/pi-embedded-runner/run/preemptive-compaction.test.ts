@@ -4,6 +4,7 @@ import "../../test-helpers/pi-coding-agent-token-mock.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
 let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
+let IRREDUCIBLE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").IRREDUCIBLE_OVERFLOW_ERROR_TEXT;
 let estimatePrePromptTokens: typeof import("./preemptive-compaction.js").estimatePrePromptTokens;
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
 
@@ -11,6 +12,7 @@ beforeAll(async () => {
   vi.resetModules();
   ({
     PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+    IRREDUCIBLE_OVERFLOW_ERROR_TEXT,
     estimatePrePromptTokens,
     shouldPreemptivelyCompactBeforePrompt,
   } = await import("./preemptive-compaction.js"));
@@ -66,11 +68,22 @@ describe("preemptive-compaction", () => {
   });
 
   it("requests preemptive compaction when the reserve-based prompt budget would be exceeded", () => {
+    // Use a budget that fits the system prompt + user prompt alone, but
+    // overflows once session history is included. This ensures the route
+    // is "compact_only" (compaction can help by removing history) rather
+    // than "irreducible_overflow" (where system prompt alone overflows).
+    const baselineTokens = estimatePrePromptTokens({
+      messages: [],
+      systemPrompt: verboseSystem,
+      prompt: verbosePrompt,
+    });
+    // Budget slightly above baseline so system+prompt fits, but history pushes over.
+    const contextTokenBudget = baselineTokens + 100;
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory(verboseHistory)],
       systemPrompt: verboseSystem,
       prompt: verbosePrompt,
-      contextTokenBudget: 500,
+      contextTokenBudget,
       reserveTokens: 50,
     });
 
@@ -227,5 +240,44 @@ describe("preemptive-compaction", () => {
     expect(potential.maxReducibleChars).toBeGreaterThan(desiredOverflowTokens * 4);
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);
+  });
+
+  it("exports a context-overflow-compatible irreducible overflow error text", () => {
+    expect(IRREDUCIBLE_OVERFLOW_ERROR_TEXT).toContain("Context overflow:");
+    expect(IRREDUCIBLE_OVERFLOW_ERROR_TEXT).toContain("system prompt");
+  });
+
+  it("returns irreducible_overflow when system prompt alone exceeds the context budget", () => {
+    // A massive system prompt that by itself overflows the budget.
+    const hugeSystemPrompt =
+      "detailed system instruction with many tokens and complex rules for agent behavior ".repeat(
+        500,
+      );
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: hugeSystemPrompt,
+      prompt: "hello",
+      contextTokenBudget: 500,
+      reserveTokens: 50,
+    });
+
+    expect(result.route).toBe("irreducible_overflow");
+    expect(result.shouldCompact).toBe(false);
+    expect(result.overflowTokens).toBeGreaterThan(0);
+  });
+
+  it("returns compact_only (not irreducible_overflow) when overflow is caused by history messages", () => {
+    // Small system prompt + large history = compaction can help.
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory(verboseHistory.repeat(10))],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 500,
+      reserveTokens: 50,
+    });
+
+    expect(result.route).toBe("compact_only");
+    expect(result.shouldCompact).toBe(true);
+    expect(result.overflowTokens).toBeGreaterThan(0);
   });
 });

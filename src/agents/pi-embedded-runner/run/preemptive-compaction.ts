@@ -11,6 +11,10 @@ import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js
 export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
   "Context overflow: prompt too large for the model (precheck).";
 
+export const IRREDUCIBLE_OVERFLOW_ERROR_TEXT =
+  "Context overflow: system prompt exceeds the model context window. " +
+  "Reduce the system prompt size or use a larger-context model.";
+
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
@@ -99,7 +103,20 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
 
   let route: PreemptiveCompactionRoute = "fits";
   if (overflowTokens > 0) {
-    if (toolResultReducibleChars <= 0) {
+    // Check if the overflow is irreducible — i.e., the system prompt + user
+    // prompt alone (without any session history messages) already exceeds the
+    // context budget. Compaction only removes history messages, so it cannot
+    // resolve this kind of overflow. Without this check, the run loop would
+    // spin through MAX_OVERFLOW_COMPACTION_ATTEMPTS cycles of no-op compaction,
+    // each burning ~20s of event loop time. See: context overflow DoS fix.
+    const baselineTokens = estimatePrePromptTokens({
+      messages: [],
+      systemPrompt: params.systemPrompt,
+      prompt: params.prompt,
+    });
+    if (baselineTokens > promptBudgetBeforeReserve) {
+      route = "irreducible_overflow";
+    } else if (toolResultReducibleChars <= 0) {
       route = "compact_only";
     } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
       route = "truncate_tool_results_only";
