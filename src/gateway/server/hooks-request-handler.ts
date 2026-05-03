@@ -48,7 +48,7 @@ type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
-  ) => Promise<{ runId: string; outputText?: string; agentError?: string }>;
+  ) => Promise<{ runId: string; sessionKey: string; outputText?: string; agentError?: string }>;
 };
 
 type HookReplayEntry = {
@@ -291,7 +291,7 @@ export function createHooksRequestHandler(
       }
       const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
       // Blocking requests bypass idempotency cache — caller handles retry deduplication
-      const replayKey = normalized.value.blocking
+      const replayKey = normalized.value.waitForResult
         ? undefined
         : buildHookReplayCacheKey({
             pathKey: "agent",
@@ -331,7 +331,7 @@ export function createHooksRequestHandler(
       }
       // Pre-allocate and cache before dispatch to close the idempotency async gap:
       // concurrent retries with the same key will hit the cache rather than
-      // starting a second agent run. For blocking requests replayKey is undefined
+      // starting a second agent run. For waitForResult requests replayKey is undefined
       // so rememberHookRunId is a no-op.
       const preRunId = randomUUID();
       rememberHookRunId(replayKey, preRunId, now);
@@ -351,15 +351,23 @@ export function createHooksRequestHandler(
         sendJson(res, 500, { ok: false, runId: preRunId, error: String(err) });
         return true;
       }
-      const { runId, outputText, agentError } = dispatchResult;
+      const { runId, sessionKey: dispatchedSessionKey, outputText, agentError } = dispatchResult;
       if (agentError) {
-        sendJson(res, 500, { ok: false, runId, error: agentError });
+        sendJson(res, 500, {
+          ok: false,
+          status: "error",
+          runId,
+          sessionKey: dispatchedSessionKey,
+          error: agentError,
+        });
         return true;
       }
       sendJson(res, 200, {
         ok: true,
+        status: normalized.value.waitForResult ? "completed" : "accepted",
         runId,
-        ...(outputText !== undefined && { text: outputText }),
+        sessionKey: dispatchedSessionKey,
+        ...(outputText !== undefined && { result: outputText }),
       });
       return true;
     }

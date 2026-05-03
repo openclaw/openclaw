@@ -224,7 +224,10 @@ type HookAgentPayload = {
    * Bypasses the idempotency cache — the caller handles retry deduplication.
    * Use `timeoutSeconds` to bound the wait.
    */
-  blocking?: boolean;
+  waitForResult?: boolean;
+  /** When false, suppresses the post-run summary event posted to the main session.
+   *  Useful for machine-callback flows that have no human observer. Default: true. */
+  announceToMain?: boolean;
   channel: HookMessageChannel;
   to?: string;
   model?: string;
@@ -445,7 +448,8 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
     typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) && timeoutRaw > 0
       ? Math.floor(timeoutRaw)
       : undefined;
-  const blocking = payload.blocking === true;
+  const waitForResult = payload.waitForResult === true;
+  const announceToMain = payload.announceToMain !== false;
   return {
     ok: true,
     value: {
@@ -456,7 +460,8 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       wakeMode,
       sessionKey,
       deliver,
-      blocking,
+      waitForResult,
+      announceToMain,
       channel,
       to,
       model,

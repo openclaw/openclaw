@@ -57,7 +57,7 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchAgentHook = async (
     value: HookAgentDispatchPayload,
-  ): Promise<{ runId: string; outputText?: string; agentError?: string }> => {
+  ): Promise<{ runId: string; sessionKey: string; outputText?: string; agentError?: string }> => {
     const sessionKey = value.sessionKey;
     const safeName = sanitizeInboundSystemTags(value.name);
     const jobId = randomUUID();
@@ -106,7 +106,9 @@ export function createGatewayHooksRequestHandler(params: {
         result.status;
       const prefix =
         result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
-      const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+      const shouldAnnounce =
+        value.announceToMain !== false &&
+        shouldAnnounceHookRunResult({ deliver: value.deliver, result });
       if (shouldAnnounce) {
         enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
           sessionKey: eventSessionKey,
@@ -144,7 +146,7 @@ export function createGatewayHooksRequestHandler(params: {
       }
     };
 
-    if (value.blocking) {
+    if (value.waitForResult) {
       try {
         const cfg = getRuntimeConfig();
         const eventSessionKey = resolveHookEventSessionKey({ cfg, agentId: value.agentId });
@@ -158,7 +160,7 @@ export function createGatewayHooksRequestHandler(params: {
           lane: "cron",
         });
         const { outputText, agentError } = handleRunResult(result, eventSessionKey);
-        return { runId, outputText, agentError };
+        return { runId, sessionKey, outputText, agentError };
       } catch (err) {
         let eventSessionKey: string;
         try {
@@ -170,7 +172,7 @@ export function createGatewayHooksRequestHandler(params: {
           eventSessionKey = resolveMainSessionKeyFromConfig();
         }
         handleRunError(err, eventSessionKey);
-        return { runId, agentError: String(err) };
+        return { runId, sessionKey, agentError: String(err) };
       }
     } else {
       let hookEventSessionKey: string | undefined;
@@ -196,7 +198,7 @@ export function createGatewayHooksRequestHandler(params: {
         }
       })();
 
-      return { runId };
+      return { runId, sessionKey };
     }
   };
 
