@@ -290,6 +290,7 @@ export async function schedulePluginSessionTurn(params: {
     );
     return undefined;
   }
+  const cronDeliveryMode = deliveryMode ?? "announce";
   if (params.shouldCommit && !params.shouldCommit()) {
     return undefined;
   }
@@ -317,14 +318,10 @@ export async function schedulePluginSessionTurn(params: {
         ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
         deleteAfterRun: params.schedule.deleteAfterRun ?? schedule.kind === "at",
         wakeMode: "now",
-        ...(deliveryMode
-          ? {
-              delivery: {
-                mode: deliveryMode,
-                ...(deliveryMode === "announce" ? { channel: "last" } : {}),
-              },
-            }
-          : {}),
+        delivery: {
+          mode: cronDeliveryMode,
+          ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),
+        },
       },
       { scopes: [ADMIN_SCOPE] },
     );
