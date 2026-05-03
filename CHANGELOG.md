@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/providers: exempt fake-IP DNS proxy ranges (RFC 2544 198.18.0.0/15 and IPv6 ULA fc00::/7) from the model provider transport SSRF guard so model API calls work behind sing-box / Clash / Surge fake-IP proxy setups, while keeping loopback, RFC1918, link-local, and cloud-metadata addresses blocked. Thanks @zqchris.
 - Plugins/onboarding: trust optional official plugin installs selected from the official catalog so npm security scanning treats them like other source-linked official install paths. Thanks @vincentkoc.
 - CLI/plugins: keep `plugins enable` and `plugins disable` from creating unconfigured channel config sections, so channel plugins with required setup fields no longer fail validation during lifecycle probes. Thanks @vincentkoc.
 - Agents/sessions: keep delayed `sessions_send` A2A replies alive after soft wait-window timeouts, while preserving terminal run timeouts and avoiding stale target replies in requester sessions. Fixes #76443. Thanks @ryswork1993 and @vincentkoc.

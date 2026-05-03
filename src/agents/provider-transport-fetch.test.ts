@@ -76,6 +76,49 @@ describe("buildGuardedModelFetch", () => {
     );
   });
 
+  it("exempts only fake-IP DNS ranges from the model transport SSRF guard", async () => {
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+    });
+    expect(policy?.allowedHostnames).toBeUndefined();
+    expect(policy?.dangerouslyAllowPrivateNetwork).toBeUndefined();
+    expect(policy?.allowPrivateNetwork).toBeUndefined();
+  });
+
+  it("merges allowPrivateNetwork into the fake-IP exemption when explicitly opted in", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({ allowPrivateNetwork: true });
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "qwen3:32b",
+      provider: "ollama",
+      api: "ollama",
+      baseUrl: "http://10.0.0.5:11434",
+    } as unknown as Model<"ollama">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://10.0.0.5:11434/api/chat", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      allowPrivateNetwork: true,
+    });
+  });
+
   it("threads explicit transport timeouts into the shared guarded fetch seam", async () => {
     const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
