@@ -117,7 +117,7 @@ function expectGatewayTermination(pid: number) {
     expect(killProcessTree).not.toHaveBeenCalled();
     return;
   }
-  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
+  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300, detached: false });
 }
 
 function addStartupFallbackMissingResponses(
