@@ -147,6 +147,24 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("stays silent when the gateway returns an intentional empty reply", async () => {
+    await withTempStore(async () => {
+      callGateway.mockResolvedValue({
+        runId: "idem-1",
+        status: "ok",
+        summary: "completed",
+        result: {
+          payloads: [],
+          meta: { stub: true },
+        },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(runtime.log).not.toHaveBeenCalled();
+    });
+  });
+
   it("passes model overrides through gateway requests", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
