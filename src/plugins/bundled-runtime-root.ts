@@ -119,7 +119,8 @@ function prepareBundledPluginRuntimeDistMirror(params: {
 }): string {
   const sourceExtensionsRoot = path.dirname(params.pluginRoot);
   const sourceDistRoot = path.dirname(sourceExtensionsRoot);
-  const mirrorDistRoot = path.join(params.installRoot, "dist");
+  const sourceDistRootName = path.basename(sourceDistRoot);
+  const mirrorDistRoot = path.join(params.installRoot, sourceDistRootName);
   const mirrorExtensionsRoot = path.join(mirrorDistRoot, "extensions");
   fs.mkdirSync(mirrorExtensionsRoot, { recursive: true, mode: 0o755 });
   ensureBundledRuntimeDistPackageJson(mirrorDistRoot);
@@ -142,8 +143,34 @@ function prepareBundledPluginRuntimeDistMirror(params: {
       }
     }
   }
+  if (sourceDistRootName === "dist-runtime") {
+    const sourceCanonicalDistRoot = path.join(path.dirname(sourceDistRoot), "dist");
+    const targetCanonicalDistRoot = path.join(params.installRoot, "dist");
+    if (fs.existsSync(sourceCanonicalDistRoot)) {
+      const targetMatchesSource =
+        fs.existsSync(targetCanonicalDistRoot) &&
+        safeRealpathOrResolve(targetCanonicalDistRoot) ===
+          safeRealpathOrResolve(sourceCanonicalDistRoot);
+      if (!targetMatchesSource) {
+        fs.rmSync(targetCanonicalDistRoot, { recursive: true, force: true });
+        try {
+          fs.symlinkSync(sourceCanonicalDistRoot, targetCanonicalDistRoot, "junction");
+        } catch {
+          copyBundledPluginRuntimeRoot(sourceCanonicalDistRoot, targetCanonicalDistRoot);
+        }
+      }
+    }
+  }
   ensureOpenClawPluginSdkAlias(mirrorDistRoot);
   return mirrorExtensionsRoot;
+}
+
+function safeRealpathOrResolve(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
 }
 
 function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
