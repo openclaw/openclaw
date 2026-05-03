@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import { getChannelPlugin } from "../../../channels/plugins/index.js";
+import type { ChannelMessageActionName } from "../../../channels/plugins/types.public.js";
 import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
 import { messageCommand } from "../../../commands/message.js";
 import { danger, setVerbose } from "../../../globals.js";
@@ -16,15 +18,6 @@ export type MessageCliHelpers = {
   runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
 };
 
-const TELEGRAM_GATEWAY_OWNED_CLI_ACTIONS = new Set([
-  "send",
-  "poll",
-  "react",
-  "delete",
-  "edit",
-  "topic-create",
-  "topic-edit",
-]);
 const GATEWAY_STOP_TIMEOUT_MS = 2500;
 const ACTIONS_WITHOUT_STOP_HOOKS = new Set(["read"]);
 
@@ -58,14 +51,18 @@ async function runPluginStopHooks(): Promise<void> {
   }
 }
 
-function resolveMessagePluginLoadOptions(
-  opts: Record<string, unknown>,
-): { scope: PluginRegistryScope; onlyChannelIds?: string[] } | undefined {
-  const scopedChannel = resolveMessageSecretScope({
+function resolveScopedMessageChannel(opts: Record<string, unknown>): string | undefined {
+  return resolveMessageSecretScope({
     channel: opts.channel,
     target: opts.target,
     targets: opts.targets,
   }).channel;
+}
+
+function resolveMessagePluginLoadOptions(
+  opts: Record<string, unknown>,
+): { scope: PluginRegistryScope; onlyChannelIds?: string[] } | undefined {
+  const scopedChannel = resolveScopedMessageChannel(opts);
   if (scopedChannel) {
     return { scope: "configured-channels", onlyChannelIds: [scopedChannel] };
   }
@@ -73,15 +70,18 @@ function resolveMessagePluginLoadOptions(
 }
 
 function shouldPreloadMessagePlugins(action: string, opts: Record<string, unknown>): boolean {
-  if (opts.dryRun === true || !TELEGRAM_GATEWAY_OWNED_CLI_ACTIONS.has(action)) {
+  if (opts.dryRun === true) {
     return true;
   }
-  const explicitChannel = resolveMessageSecretScope({
-    channel: opts.channel,
-    target: opts.target,
-    targets: opts.targets,
-  }).channel;
-  return explicitChannel !== "telegram";
+  const scopedChannel = resolveScopedMessageChannel(opts);
+  if (!scopedChannel) {
+    return true;
+  }
+  const plugin = getChannelPlugin(scopedChannel);
+  const executionMode = plugin?.actions?.resolveExecutionMode?.({
+    action: action as ChannelMessageActionName,
+  });
+  return executionMode !== "gateway";
 }
 
 export function createMessageCliHelpers(

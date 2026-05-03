@@ -5,6 +5,11 @@ vi.mock("../../../commands/message.js", () => ({
   messageCommand: messageCommandMock,
 }));
 
+const getChannelPluginMock = vi.fn();
+vi.mock("../../../channels/plugins/index.js", () => ({
+  getChannelPlugin: getChannelPluginMock,
+}));
+
 vi.mock("../../../globals.js", () => ({
   danger: (s: string) => s,
   setVerbose: vi.fn(),
@@ -70,6 +75,14 @@ async function runSendAction(opts: Record<string, unknown> = {}) {
   await expect(runMessageAction("send", { ...baseSendOptions, ...opts })).rejects.toThrow("exit");
 }
 
+function mockChannelExecutionModes(modes: Record<string, "gateway" | "local"> = {}) {
+  getChannelPluginMock.mockImplementation((id: string) => ({
+    actions: {
+      resolveExecutionMode: () => modes[id] ?? "local",
+    },
+  }));
+}
+
 function expectNoAccountFieldInPassedOptions() {
   const passedOpts = (
     messageCommandMock.mock.calls as unknown as Array<[Record<string, unknown>]>
@@ -84,6 +97,8 @@ function expectNoAccountFieldInPassedOptions() {
 describe("runMessageAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getChannelPluginMock.mockReset();
+    mockChannelExecutionModes({ telegram: "gateway" });
     messageCommandMock.mockClear().mockResolvedValue(undefined);
     hasHooksMock.mockClear().mockReturnValue(false);
     runGatewayStopMock.mockClear().mockResolvedValue(undefined);
@@ -119,6 +134,25 @@ describe("runMessageAction", () => {
       scope: "configured-channels",
       onlyChannelIds: ["discord"],
     });
+  });
+
+  it("skips local plugin preload for any gateway-owned scoped channel action", async () => {
+    mockChannelExecutionModes({ discord: "gateway" });
+
+    await runSendAction({ target: "channel:12345" });
+
+    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "send",
+        channel: "discord",
+        target: "channel:12345",
+        message: "hi",
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(exitMock).toHaveBeenCalledWith(0);
   });
 
   it("keeps target-prefixed Telegram sends from local plugin preload", async () => {
