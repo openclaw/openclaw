@@ -35,9 +35,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
           workspace: params.tmpDir,
           heartbeat: { every: "5m", target: "telegram" },
           ...(params.model ? { model: params.model } : {}),
-          ...(params.agentRuntimeId
-            ? { agentRuntime: { id: params.agentRuntimeId, fallback: "none" } }
-            : {}),
+          ...(params.agentRuntimeId ? { agentRuntime: { id: params.agentRuntimeId } } : {}),
         },
       },
       ...(params.visibleReplies ? { messages: { visibleReplies: params.visibleReplies } } : {}),
@@ -205,7 +203,6 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
   it("uses the heartbeat response tool prompt when the Codex runtime is env-forced", async () => {
     vi.stubEnv("OPENCLAW_AGENT_RUNTIME", "codex");
-    vi.stubEnv("OPENCLAW_AGENT_HARNESS_FALLBACK", "pi");
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath, model: "openai/gpt-5.5" });
       await seedMainSessionStore(storePath, cfg, {
