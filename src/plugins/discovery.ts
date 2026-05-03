@@ -247,6 +247,7 @@ function isUnsafePluginCandidate(params: {
   source: string;
   rootDir: string;
   origin: PluginOrigin;
+  pluginId?: string;
   diagnostics: PluginDiagnostic[];
   ownershipUid?: number | null;
   realpathCache: Map<string, string>;
@@ -263,6 +264,7 @@ function isUnsafePluginCandidate(params: {
   }
   params.diagnostics.push({
     level: "warn",
+    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
     source: issue.targetPath,
     message: formatCandidateBlockMessage(issue),
   });
@@ -356,6 +358,7 @@ function mergeDiscoveryResult(
   target: PluginDiscoveryResult,
   source: PluginDiscoveryResult,
   seenSources: Set<string>,
+  seenDiagnostics: Set<string>,
 ): void {
   for (const candidate of source.candidates) {
     const key = candidate.source;
@@ -365,7 +368,19 @@ function mergeDiscoveryResult(
     seenSources.add(key);
     target.candidates.push(candidate);
   }
-  target.diagnostics.push(...source.diagnostics);
+  for (const diagnostic of source.diagnostics) {
+    const key = [
+      diagnostic.level,
+      diagnostic.pluginId ?? "",
+      diagnostic.source ?? "",
+      diagnostic.message,
+    ].join("\0");
+    if (seenDiagnostics.has(key)) {
+      continue;
+    }
+    seenDiagnostics.add(key);
+    target.diagnostics.push(diagnostic);
+  }
 }
 
 function collectInstalledPluginRecordPaths(
@@ -491,11 +506,13 @@ function addCandidate(params: {
       source: resolved,
       rootDir: resolvedRoot,
       origin: params.origin,
+      pluginId: params.idHint,
       diagnostics: params.diagnostics,
       ownershipUid: params.ownershipUid,
       realpathCache: params.realpathCache,
     })
   ) {
+    params.seen.add(resolved);
     return;
   }
   params.seen.add(resolved);
@@ -716,7 +733,7 @@ function discoverInDirectory(params: {
         candidates: params.candidates,
         diagnostics: params.diagnostics,
         seen: params.seen,
-        idHint: entry.name,
+        idHint: manifestId ?? entry.name,
         source: indexFile,
         ...(setupSource ? { setupSource } : {}),
         rootDir: fullPath,
@@ -917,7 +934,7 @@ function discoverFromPath(params: {
         candidates: params.candidates,
         diagnostics: params.diagnostics,
         seen: params.seen,
-        idHint: path.basename(resolved),
+        idHint: manifestId ?? path.basename(resolved),
         source: indexFile,
         ...(setupSource ? { setupSource } : {}),
         rootDir: resolved,
@@ -1114,7 +1131,8 @@ export function discoverOpenClawPlugins(params: {
   );
   const result = createDiscoveryResult();
   const seenSources = new Set<string>();
-  mergeDiscoveryResult(result, scopedResult, seenSources);
-  mergeDiscoveryResult(result, sharedResult, seenSources);
+  const seenDiagnostics = new Set<string>();
+  mergeDiscoveryResult(result, scopedResult, seenSources, seenDiagnostics);
+  mergeDiscoveryResult(result, sharedResult, seenSources, seenDiagnostics);
   return result;
 }
