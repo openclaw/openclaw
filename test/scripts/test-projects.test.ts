@@ -545,6 +545,15 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/views/dreaming.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/dreaming.test.ts"],
+        watchMode: false,
+      },
+    ]);
   });
 
   it("routes changed unit ui tests to the unit ui lane", () => {
