@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
+import {
+  normalizeProviderModelIdWithManifest,
+  invalidateManifestModelIdNormalizationPoliciesCache,
+} from "./manifest-model-id-normalization.js";
 
 const ORIGINAL_ENV = {
   OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
@@ -94,6 +97,7 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("alpha/demo-model");
 
     writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "bravo" });
+    invalidateManifestModelIdNormalizationPoliciesCache();
     expect(normalizeDemoModel()).toBe("bravo/demo-model");
 
     const stateDirB = makeTempDir();
@@ -102,6 +106,7 @@ describe("manifest model id normalization", () => {
     writeNormalizerManifest({ pluginDir: pluginDirB, prefix: "charlie" });
 
     process.env.OPENCLAW_STATE_DIR = stateDirB;
+    invalidateManifestModelIdNormalizationPoliciesCache();
     expect(normalizeDemoModel()).toBe("charlie/demo-model");
   });
 });

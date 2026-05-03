@@ -106,11 +106,20 @@ function collectManifestModelIdNormalizationPolicies(): Map<
   return policies;
 }
 
+let cachedPolicies: Map<string, PluginManifestModelIdNormalizationProvider> | undefined;
+
 function loadManifestModelIdNormalizationPolicies(): Map<
   string,
   PluginManifestModelIdNormalizationProvider
 > {
-  return collectManifestModelIdNormalizationPolicies();
+  if (!cachedPolicies) {
+    cachedPolicies = collectManifestModelIdNormalizationPolicies();
+  }
+  return cachedPolicies;
+}
+
+export function invalidateManifestModelIdNormalizationPoliciesCache(): void {
+  cachedPolicies = undefined;
 }
 
 function resolveManifestModelIdNormalizationPolicy(
