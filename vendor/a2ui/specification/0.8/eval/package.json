@@ -32,5 +32,18 @@
     "@genkit-ai/vertexai": "^1.19.3",
     "genkit": "^1.19.2",
     "genkitx-anthropic": "^0.25.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "ajv": "8.18.0",
+      "fast-xml-parser": "5.5.7",
+      "handlebars": "4.7.9",
+      "@tootallnate/once": "3.0.1",
+      "jws": "3.2.3",
+      "path-to-regexp": "0.1.13",
+      "qs": "6.14.2",
+      "node-forge": "1.4.0",
+      "yaml": "2.8.3"
+    }
   }
 }
