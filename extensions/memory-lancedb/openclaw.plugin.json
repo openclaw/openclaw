@@ -5,7 +5,7 @@
   },
   "kind": "memory",
   "contracts": {
-    "tools": ["memory_forget", "memory_recall", "memory_store"]
+    "tools": ["memory_forget", "memory_recall", "memory_refresh", "memory_store"]
   },
   "uiHints": {
     "embedding.apiKey": {
