@@ -5,6 +5,7 @@ export type DraftStreamLoop = {
   resetPending: () => void;
   resetThrottleWindow: () => void;
   waitForInFlight: () => Promise<void>;
+  hasPending: () => boolean;
 };
 
 export function createDraftStreamLoop(params: {
@@ -105,5 +106,6 @@ export function createDraftStreamLoop(params: {
         await inFlightPromise;
       }
     },
+    hasPending: () => !!pendingText.trim(),
   };
 }

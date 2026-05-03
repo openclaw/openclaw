@@ -251,24 +251,16 @@ export function createTelegramDraftStream(params: {
     if (streamState.stopped && !streamState.final) {
       return false;
     }
-    // Wait out any active 429 backoff at the entry point so newer pending text
-    // (accumulated while the failing send was in-flight) is used for the retry
-    // rather than the stale text the loop snapshotted before the failed send.
+    // Non-blocking 429 check: return false immediately while rate-limited so
+    // the draft loop can coalesce update() calls and retry with the latest text
+    // once the backoff expires. No await — backpressure stays in the loop, not
+    // the transport.
     if (rateLimitedUntilMs > 0) {
-      if (streamState.final) {
-        rateLimitedUntilMs = 0;
-        pendingForceNewMessage = false;
-        return false;
-      }
       const remaining = rateLimitedUntilMs - Date.now();
       if (remaining > 0) {
-        await new Promise<void>((r) => setTimeout(r, remaining));
-      }
-      rateLimitedUntilMs = 0;
-      if (streamState.final) {
-        pendingForceNewMessage = false;
         return false;
       }
+      rateLimitedUntilMs = 0;
       if (pendingForceNewMessage) {
         pendingForceNewMessage = false;
         textBaseOffset = 0;
