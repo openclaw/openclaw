@@ -82,7 +82,10 @@ import {
 } from "./protocol.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import {
+  clearSharedCodexAppServerClientIfCurrent,
+  createIsolatedCodexAppServerClient,
+} from "./shared-client.js";
 import {
   buildDeveloperInstructions,
   buildTurnStartParams,
@@ -120,6 +123,13 @@ type OpenClawCodingToolsOptions = NonNullable<
 >;
 
 let clientFactory = defaultCodexAppServerClientFactory;
+
+function shouldUseIsolatedCodexAppServerClient(params: EmbeddedRunAttemptParams): boolean {
+  // Spawned/helper runs should not be able to poison the shared Codex client
+  // used by the main session. Keep their app-server startup isolated so auth
+  // failures only fail the child run.
+  return Boolean(params.spawnedBy?.trim());
+}
 
 function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
@@ -503,6 +513,16 @@ export async function runCodexAppServerAttempt(
   let thread: CodexAppServerThreadBinding;
   let trajectoryEndRecorded = false;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
+  const useIsolatedStartupClient = shouldUseIsolatedCodexAppServerClient(params);
+  const isolatedStartupAbortController = useIsolatedStartupClient
+    ? new AbortController()
+    : undefined;
+  let isolatedStartupClient: CodexAppServerClient | undefined;
+  const closeIsolatedStartupClient = () => {
+    const clientToClose = isolatedStartupClient;
+    isolatedStartupClient = undefined;
+    clientToClose?.close();
+  };
   let startupClientForCleanup: CodexAppServerClient | undefined;
   try {
     emitCodexAppServerEvent(params, {
@@ -537,13 +557,28 @@ export async function runCodexAppServerAttempt(
       operation: async () => {
         let attemptedClient: CodexAppServerClient | undefined;
         const startupAttempt = async () => {
-          const startupClient = await clientFactory(
-            appServer.start,
-            startupAuthProfileId,
-            agentDir,
-          );
+          const startupClient = useIsolatedStartupClient
+            ? await createIsolatedCodexAppServerClient({
+                startOptions: appServer.start,
+                timeoutMs: params.timeoutMs,
+                authProfileId: startupAuthProfileId,
+                agentDir,
+                signal: isolatedStartupAbortController?.signal,
+              })
+            : await clientFactory(appServer.start, startupAuthProfileId, agentDir);
           attemptedClient = startupClient;
-          startupClientForCleanup = startupClient;
+          if (useIsolatedStartupClient) {
+            isolatedStartupClient = startupClient;
+            if (
+              runAbortController.signal.aborted ||
+              isolatedStartupAbortController?.signal.aborted
+            ) {
+              closeIsolatedStartupClient();
+              throw new Error("codex app-server startup aborted");
+            }
+          } else {
+            startupClientForCleanup = startupClient;
+          }
           await ensureCodexComputerUse({
             client: startupClient,
             pluginConfig: options.pluginConfig,
@@ -576,9 +611,19 @@ export async function runCodexAppServerAttempt(
               throw error;
             }
             const failedClient = attemptedClient;
-            const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(failedClient);
-            if (startupClientForCleanup === failedClient) {
-              startupClientForCleanup = undefined;
+            let clearedSharedClient = false;
+            if (useIsolatedStartupClient) {
+              if (failedClient) {
+                failedClient.close();
+              }
+              if (isolatedStartupClient === failedClient) {
+                isolatedStartupClient = undefined;
+              }
+            } else {
+              clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(failedClient);
+              if (startupClientForCleanup === failedClient) {
+                startupClientForCleanup = undefined;
+              }
             }
             attemptedClient = undefined;
             if (attempt >= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS) {
@@ -615,7 +660,12 @@ export async function runCodexAppServerAttempt(
     });
   } catch (error) {
     nativeHookRelay?.unregister();
-    clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
+    if (useIsolatedStartupClient) {
+      isolatedStartupAbortController?.abort(error);
+      closeIsolatedStartupClient();
+    } else {
+      clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
+    }
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
@@ -1033,6 +1083,9 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     nativeHookRelay?.unregister();
+    if (useIsolatedStartupClient) {
+      closeIsolatedStartupClient();
+    }
     await runAgentCleanupStep({
       runId: params.runId,
       sessionId: params.sessionId,
@@ -1265,6 +1318,9 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     nativeHookRelay?.unregister();
+    if (useIsolatedStartupClient) {
+      closeIsolatedStartupClient();
+    }
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     steeringQueue?.cancel();

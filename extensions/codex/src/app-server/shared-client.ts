@@ -89,6 +89,7 @@ export async function createIsolatedCodexAppServerClient(options?: {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   authProfileId?: string;
+  signal?: AbortSignal;
   agentDir?: string;
 }): Promise<CodexAppServerClient> {
   const agentDir = options?.agentDir ?? resolveOpenClawAgentDir();
@@ -102,19 +103,57 @@ export async function createIsolatedCodexAppServerClient(options?: {
   });
   const client = CodexAppServerClient.start(startOptions);
   const initialize = client.initialize();
+  const abortMessage = "codex app-server initialize aborted";
   try {
-    await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
-    await applyCodexAppServerAuthProfile({
-      client,
-      agentDir,
-      authProfileId: options?.authProfileId,
-      startOptions,
-    });
+    const abortable = options?.signal
+      ? withAbortSignal(
+          withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out"),
+          options.signal,
+          abortMessage,
+        )
+      : withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
+    await abortable;
+    await withAbortSignal(
+      applyCodexAppServerAuthProfile({
+        client,
+        agentDir,
+        authProfileId: options?.authProfileId,
+        startOptions,
+      }),
+      options?.signal,
+      abortMessage,
+    );
     return client;
   } catch (error) {
     client.close();
     void initialize.catch(() => undefined);
     throw error;
+  }
+}
+
+async function withAbortSignal<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  abortMessage: string,
+): Promise<T> {
+  if (!signal) {
+    return await promise;
+  }
+  if (signal.aborted) {
+    throw new Error(abortMessage);
+  }
+  let cleanup: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        const abortListener = () => reject(new Error(abortMessage));
+        signal.addEventListener("abort", abortListener, { once: true });
+        cleanup = () => signal.removeEventListener("abort", abortListener);
+      }),
+    ]);
+  } finally {
+    cleanup?.();
   }
 }
 

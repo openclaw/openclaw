@@ -98,7 +98,9 @@ describe("refreshGatewayHealthSnapshot", () => {
     const sensitiveSummary = createHealthSummary();
     const safeSummary = createHealthSummary();
     const broadcast = vi.fn();
-    getHealthSnapshotMock.mockResolvedValueOnce(sensitiveSummary).mockResolvedValueOnce(safeSummary);
+    getHealthSnapshotMock
+      .mockResolvedValueOnce(sensitiveSummary)
+      .mockResolvedValueOnce(safeSummary);
     healthState.setBroadcastHealthUpdate(broadcast);
     const version = healthState.getHealthVersion();
 
