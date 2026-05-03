@@ -123,10 +123,6 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 20
     environment: qa-live-shared
-    env:
-      OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN: ${{ secrets.OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN }}
-      OPENCLAW_QA_DISCORD_GUILD_ID: ${{ secrets.OPENCLAW_QA_DISCORD_GUILD_ID }}
-      OPENCLAW_QA_DISCORD_CHANNEL_ID: ${{ secrets.OPENCLAW_QA_DISCORD_CHANNEL_ID }}
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v6
@@ -147,6 +143,10 @@ jobs:
 
       - name: Run Mantis Discord smoke
         shell: bash
+        env:
+          OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN: ${{ secrets.OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN }}
+          OPENCLAW_QA_DISCORD_GUILD_ID: ${{ secrets.OPENCLAW_QA_DISCORD_GUILD_ID }}
+          OPENCLAW_QA_DISCORD_CHANNEL_ID: ${{ secrets.OPENCLAW_QA_DISCORD_CHANNEL_ID }}
         run: |
           set -euo pipefail
           args=()

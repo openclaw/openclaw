@@ -38,6 +38,7 @@ type DiscordGuild = {
 };
 
 type DiscordChannel = {
+  guild_id?: string;
   id: string;
   name?: string;
   type?: number;
@@ -147,6 +148,24 @@ function resolveRequiredSnowflake(params: {
   }
   assertDiscordSnowflake(resolved, params.label);
   return resolved;
+}
+
+function assertMantisDiscordChannelInGuild(params: {
+  channel: DiscordChannel;
+  guildChannels: readonly DiscordChannel[];
+  guildId: string;
+  channelId: string;
+}) {
+  if (!params.guildChannels.some((channel) => channel.id === params.channelId)) {
+    throw new Error(
+      `OPENCLAW_QA_DISCORD_CHANNEL_ID ${params.channelId} is not in guild ${params.guildId}.`,
+    );
+  }
+  if (params.channel.guild_id && params.channel.guild_id !== params.guildId) {
+    throw new Error(
+      `OPENCLAW_QA_DISCORD_CHANNEL_ID ${params.channelId} belongs to guild ${params.channel.guild_id}, not ${params.guildId}.`,
+    );
+  }
 }
 
 function defaultMantisDiscordSmokeOutputDir(repoRoot: string, startedAt: Date) {
@@ -305,7 +324,7 @@ export async function runMantisDiscordSmoke(
       path: `/guilds/${guildId}`,
       token,
     });
-    await callDiscordApi<DiscordChannel[]>({
+    const guildChannels = await callDiscordApi<DiscordChannel[]>({
       apiCalls,
       label: "guild-channels",
       path: `/guilds/${guildId}/channels`,
@@ -316,6 +335,12 @@ export async function runMantisDiscordSmoke(
       label: "channel",
       path: `/channels/${channelId}`,
       token,
+    });
+    assertMantisDiscordChannelInGuild({
+      channel,
+      guildChannels,
+      guildId,
+      channelId,
     });
     summary.bot = { id: bot.id, username: bot.username };
     summary.guild = { id: guild.id, name: guild.name };

@@ -58,7 +58,12 @@ describe("mantis discord smoke runtime", () => {
         }
         if (pathname === "/api/v10/channels/1456744319972282449" && method === "GET") {
           return {
-            response: jsonResponse({ id: "1456744319972282449", name: "maintainers", type: 0 }),
+            response: jsonResponse({
+              guild_id: "1456350064065904867",
+              id: "1456744319972282449",
+              name: "maintainers",
+              type: 0,
+            }),
             release: vi.fn(),
           };
         }
@@ -148,6 +153,65 @@ describe("mantis discord smoke runtime", () => {
     expect(result.status).toBe("fail");
     await expect(fs.readFile(path.join(result.outputDir, "error.txt"), "utf8")).resolves.toContain(
       "Missing OPENCLAW_QA_DISCORD_GUILD_ID",
+    );
+  });
+
+  it("fails when the channel is not in the configured guild", async () => {
+    fetchWithSsrFGuard.mockImplementation(
+      async ({ url, init }: { url: string; init?: RequestInit }) => {
+        const pathname = new URL(url).pathname;
+        const method = init?.method ?? "GET";
+        if (pathname === "/api/v10/users/@me") {
+          return {
+            response: jsonResponse({ id: "1489650053747314748", username: "Mantis" }),
+            release: vi.fn(),
+          };
+        }
+        if (pathname === "/api/v10/guilds/1456350064065904867") {
+          return {
+            response: jsonResponse({ id: "1456350064065904867", name: "Friends" }),
+            release: vi.fn(),
+          };
+        }
+        if (pathname === "/api/v10/guilds/1456350064065904867/channels") {
+          return { response: jsonResponse([{ id: "1999999999999999999" }]), release: vi.fn() };
+        }
+        if (pathname === "/api/v10/channels/1456744319972282449" && method === "GET") {
+          return {
+            response: jsonResponse({
+              guild_id: "1999999999999999999",
+              id: "1456744319972282449",
+              name: "wrong-guild-channel",
+              type: 0,
+            }),
+            release: vi.fn(),
+          };
+        }
+        return {
+          response: jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404),
+          release: vi.fn(),
+        };
+      },
+    );
+
+    const result = await runMantisDiscordSmoke({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/mantis/wrong-guild",
+      tokenFile,
+      env: {
+        OPENCLAW_QA_DISCORD_GUILD_ID: "1456350064065904867",
+        OPENCLAW_QA_DISCORD_CHANNEL_ID: "1456744319972282449",
+      },
+    });
+
+    expect(result.status).toBe("fail");
+    await expect(fs.readFile(path.join(result.outputDir, "error.txt"), "utf8")).resolves.toContain(
+      "is not in guild",
+    );
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        init: expect.objectContaining({ method: "POST" }),
+      }),
     );
   });
 });
