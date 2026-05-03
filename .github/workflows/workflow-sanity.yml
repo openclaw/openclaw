@@ -78,6 +78,11 @@ jobs:
       - name: Disallow tracked merge conflict markers
         run: node scripts/check-no-conflict-markers.mjs
 
+      - name: Validate subagent automation guardrails
+        run: |
+          node scripts/subagent-roster-check.mjs --json
+          node scripts/subagent-delegation-plan.mjs --tracked-only --json
+
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
     runs-on: blacksmith-16vcpu-ubuntu-2404

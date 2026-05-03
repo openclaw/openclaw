@@ -267,6 +267,9 @@ pnpm subagents:check
 pnpm subagents:plan
 ```
 
+CI also runs these guardrails in `workflow-sanity.yml`, so unsafe specialist
+definitions or a broken delegation planner fail before merge.
+
 Use read-only subagents for codebase investigation, JiT tests, browser-flow
 debugging, security hardening review, and business-agent packaging. Use parallel
 subagents only when their scopes are independent or their write sets are
