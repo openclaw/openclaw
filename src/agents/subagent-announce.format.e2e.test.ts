@@ -723,7 +723,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.accountId).toBe("acct-bb");
   });
 
-  it("keeps direct completion announce delivery immediate even when sibling counters are non-zero", async () => {
+  it("queues completion announce delivery even when sibling counters are non-zero", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-self-pending",
@@ -756,7 +756,11 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      expectFinal?: boolean;
+      params?: Record<string, unknown>;
+    };
+    expect(call?.expectFinal).not.toBe(true);
     expect(call?.params?.deliver).toBe(true);
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
@@ -895,7 +899,7 @@ describe("subagent announce formatting", () => {
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
-  it("delivers completion-mode announces immediately even when sibling runs are still active", async () => {
+  it("queues completion-mode announces even when sibling runs are still active", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-coordinated",
@@ -924,14 +928,23 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      expectFinal?: boolean;
+      params?: Record<string, unknown>;
+    };
     const rawMessage = call?.params?.message;
     const msg = typeof rawMessage === "string" ? rawMessage : "";
+    expect(call?.expectFinal).not.toBe(true);
     expect(call?.params?.deliver).toBe(true);
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
     expect(msg).not.toContain("There are still");
     expect(msg).not.toContain("wait for the remaining results");
+    expect(embeddedRunMock.queueEmbeddedPiMessage).toHaveBeenCalledWith(
+      "requester-session-coordinated",
+      expect.not.stringContaining("There are still"),
+      expect.objectContaining({ steeringMode: "all" }),
+    );
   });
 
   it("keeps session-mode completion delivery on the bound destination when sibling runs are active", async () => {
@@ -1058,6 +1071,7 @@ describe("subagent announce formatting", () => {
       },
       "agent:main:main": {
         sessionId: "requester-session-main",
+        queueDebounceMs: 0,
       },
     };
 
@@ -1140,7 +1154,9 @@ describe("subagent announce formatting", () => {
     ]);
 
     expect(sendSpy).not.toHaveBeenCalled();
-    expect(agentSpy).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(agentSpy).toHaveBeenCalledTimes(2);
+    });
 
     const directTargets = agentSpy.mock.calls.map(
       (call) => (call?.[0] as { params?: { to?: string } })?.params?.to,
@@ -1774,7 +1790,7 @@ describe("subagent announce formatting", () => {
     expect(new Set(idempotencyKeys).size).toBe(2);
   });
 
-  it("falls back to queued follow-up delivery when an active completion wake cannot be injected", async () => {
+  it("queues completion delivery when an active completion wake cannot be injected", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
@@ -1799,7 +1815,7 @@ describe("subagent announce formatting", () => {
 
     expect(delivery.delivered).toBe(true);
     expect(delivery.path).toBe("queued");
-    expect(direct).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
   });
 
   it("falls back to internal requester-session injection when completion route is missing", async () => {
@@ -1871,7 +1887,7 @@ describe("subagent announce formatting", () => {
     });
   });
 
-  it("returns failure for completion-mode when direct delivery fails and queue fallback is unavailable", async () => {
+  it("queues completion-mode delivery instead of failing on a dormant requester direct send", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
@@ -1881,7 +1897,7 @@ describe("subagent announce formatting", () => {
         lastTo: "+1555",
       },
     };
-    agentSpy.mockRejectedValueOnce(new Error("direct delivery unavailable"));
+    agentSpy.mockResolvedValueOnce(visibleAgentResponse());
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:worker",
@@ -1892,9 +1908,11 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { expectFinal?: boolean };
+    expect(call?.expectFinal).not.toBe(true);
   });
 
   it("uses assistant output for completion-mode when latest assistant text exists", async () => {

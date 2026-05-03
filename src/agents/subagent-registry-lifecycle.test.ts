@@ -684,7 +684,7 @@ describe("subagent registry lifecycle hardening", () => {
           path: "direct";
           error: string;
           phases: Array<{
-            phase: "direct-primary" | "queue-fallback";
+            phase: "queue-primary" | "direct-fallback";
             delivered: boolean;
             path: "direct" | "none";
             error?: string;
@@ -697,15 +697,15 @@ describe("subagent registry lifecycle hardening", () => {
           error: "UNAVAILABLE: requester wake failed",
           phases: [
             {
-              phase: "direct-primary",
+              phase: "queue-primary",
+              delivered: false,
+              path: "none",
+            },
+            {
+              phase: "direct-fallback",
               delivered: false,
               path: "direct",
               error: "UNAVAILABLE: requester wake failed",
-            },
-            {
-              phase: "queue-fallback",
-              delivered: false,
-              path: "none",
             },
           ],
         });
@@ -736,11 +736,11 @@ describe("subagent registry lifecycle hardening", () => {
         sessionKey: entry.childSessionKey,
         deliveryStatus: "failed",
         error:
-          "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
+          "UNAVAILABLE: requester wake failed; direct-fallback: UNAVAILABLE: requester wake failed",
       }),
     );
     expect(entry.lastAnnounceDeliveryError).toBe(
-      "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
+      "UNAVAILABLE: requester wake failed; direct-fallback: UNAVAILABLE: requester wake failed",
     );
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
     expect(persist).toHaveBeenCalled();

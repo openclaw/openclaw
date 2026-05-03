@@ -226,6 +226,14 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
   return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
 }
 
+function isGatewayTimeoutAnnounceDeliveryError(error: unknown): boolean {
+  return /\bgateway timeout after \d+ms\b/i.test(summarizeDeliveryError(error));
+}
+
+function isRetryableDirectAnnounceAgentError(error: unknown): boolean {
+  return isTransientAnnounceDeliveryError(error) && !isGatewayTimeoutAnnounceDeliveryError(error);
+}
+
 function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
   return Boolean(
@@ -261,6 +269,7 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
 export async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
+  shouldRetryError?: (error: unknown) => boolean;
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
@@ -273,7 +282,8 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
       return await params.run();
     } catch (err) {
       const delayMs = retryDelaysMs[retryIndex];
-      if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
+      const shouldRetry = params.shouldRetryError?.(err) ?? isTransientAnnounceDeliveryError(err);
+      if (delayMs == null || !shouldRetry || params.signal?.aborted) {
         throw err;
       }
       const nextAttempt = retryIndex + 2;
@@ -464,6 +474,7 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceChannel?: string;
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
+  forceCompletionQueue?: boolean;
   signal?: AbortSignal;
 }): Promise<"steered" | "queued" | "none" | "dropped"> {
   if (params.signal?.aborted) {
@@ -482,13 +493,15 @@ async function maybeQueueSubagentAnnounce(params: {
     sessionEntry: entry,
   });
 
-  const shouldSteer = isSteeringQueueMode(queueSettings.mode);
+  const shouldSteer = params.forceCompletionQueue || isSteeringQueueMode(queueSettings.mode);
   if (shouldSteer) {
     const steered = subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
       sessionId,
       params.steerMessage,
       {
-        steeringMode: resolvePiSteeringModeForQueueMode(queueSettings.mode),
+        steeringMode: params.forceCompletionQueue
+          ? "all"
+          : resolvePiSteeringModeForQueueMode(queueSettings.mode),
         ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
       },
     );
@@ -503,10 +516,19 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
   if (
-    isActive &&
-    (shouldFollowup || queueSettings.mode === "steer" || queueSettings.mode === "queue")
+    params.forceCompletionQueue ||
+    (isActive &&
+      (shouldFollowup || queueSettings.mode === "steer" || queueSettings.mode === "queue"))
   ) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
+    const announceQueueSettings = params.forceCompletionQueue
+      ? {
+          mode: "queue" as const,
+          debounceMs: queueSettings.debounceMs ?? 0,
+          cap: Math.max(queueSettings.cap ?? 20, 100),
+          dropPolicy: "summarize" as const,
+        }
+      : queueSettings;
     const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
@@ -521,7 +543,7 @@ async function maybeQueueSubagentAnnounce(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
       },
-      settings: queueSettings,
+      settings: announceQueueSettings,
       send: sendAnnounce,
       shouldDefer: (item) => resolveRequesterSessionActivity(item.sessionKey).isActive,
     });
@@ -770,6 +792,7 @@ async function sendSubagentAnnounceDirectly(params: {
           ? "completion direct announce agent call"
           : "direct announce agent call",
         signal: params.signal,
+        shouldRetryError: isRetryableDirectAnnounceAgentError,
         run: async () =>
           await subagentAnnounceDeliveryDeps.callGateway({
             method: "agent",
@@ -910,6 +933,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         internalEvents: params.internalEvents,
+        forceCompletionQueue: params.expectsCompletionMessage,
         signal: params.signal,
       }),
     direct: async () =>

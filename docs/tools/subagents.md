@@ -80,8 +80,10 @@ requester chat when the run finishes.
 
   </Accordion>
   <Accordion title="Manual-spawn delivery resilience">
-    - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
-    - If direct delivery fails, it falls back to queue routing.
+    - OpenClaw steers completion events into an active requester run when possible.
+    - If the requester run cannot be steered but its session exists, OpenClaw queues an internal follow-up independent of the channel queue mode.
+    - Direct `agent` delivery is only a fallback when queue routing is unavailable, and uses a stable idempotency key.
+    - If fallback direct `agent` delivery times out, OpenClaw falls back to direct message delivery instead of starting another agent turn, because the timed-out turn may still be running server-side.
     - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
     - Completion delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available; if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
 
@@ -379,11 +381,15 @@ Delivery depends on requester depth:
 - Nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session.
 - If a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available.
 
-For top-level requester sessions, completion-mode direct delivery first
-resolves any bound conversation/thread route and hook override, then fills
-missing channel-target fields from the requester session's stored route.
-That keeps completions on the right chat/topic even when the completion
-origin only identifies the channel.
+For top-level requester sessions, completion-mode delivery first resolves any
+bound conversation/thread route and hook override, then steers the requester run
+or queues an internal follow-up with that route. This queue path is used even
+when the channel queue mode would otherwise run direct, so child completions do
+not start synchronous waiter turns behind busy requester sessions. If no
+requester session can be queued, direct fallback still fills missing
+channel-target fields from the requester session's stored route. That keeps
+completions on the right chat/topic even when the completion origin only
+identifies the channel.
 
 Child completion aggregation is scoped to the current requester run when
 building nested completion findings, preventing stale prior-run child

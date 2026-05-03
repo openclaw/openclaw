@@ -15,7 +15,7 @@ export type SubagentAnnounceDeliveryResult = {
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
-type SubagentAnnounceDispatchPhase = "queue-primary" | "direct-primary" | "queue-fallback";
+type SubagentAnnounceDispatchPhase = "queue-primary" | "direct-fallback";
 
 type SubagentAnnounceDispatchPhaseResult = {
   phase: SubagentAnnounceDispatchPhase;
@@ -75,38 +75,21 @@ export async function runSubagentAnnounceDispatch(params: {
     });
   }
 
-  if (!params.expectsCompletionMessage) {
-    const primaryQueueOutcome = await params.queue();
-    const primaryQueue = mapQueueOutcomeToDeliveryResult(primaryQueueOutcome);
-    appendPhase("queue-primary", primaryQueue);
-    if (primaryQueue.delivered) {
-      return withPhases(primaryQueue);
-    }
-    if (primaryQueueOutcome === "dropped") {
-      return withPhases(primaryQueue);
-    }
-
-    const primaryDirect = await params.direct();
-    appendPhase("direct-primary", primaryDirect);
-    return withPhases(primaryDirect);
+  const primaryQueueOutcome = await params.queue();
+  const primaryQueue = mapQueueOutcomeToDeliveryResult(primaryQueueOutcome);
+  appendPhase("queue-primary", primaryQueue);
+  if (primaryQueue.delivered) {
+    return withPhases(primaryQueue);
   }
-
-  const primaryDirect = await params.direct();
-  appendPhase("direct-primary", primaryDirect);
-  if (primaryDirect.delivered) {
-    return withPhases(primaryDirect);
+  if (primaryQueueOutcome === "dropped") {
+    return withPhases(primaryQueue);
   }
 
   if (params.signal?.aborted) {
-    return withPhases(primaryDirect);
+    return withPhases(primaryQueue);
   }
 
-  const fallbackQueueOutcome = await params.queue();
-  const fallbackQueue = mapQueueOutcomeToDeliveryResult(fallbackQueueOutcome);
-  appendPhase("queue-fallback", fallbackQueue);
-  if (fallbackQueue.delivered) {
-    return withPhases(fallbackQueue);
-  }
-
-  return withPhases(primaryDirect);
+  const fallbackDirect = await params.direct();
+  appendPhase("direct-fallback", fallbackDirect);
+  return withPhases(fallbackDirect);
 }

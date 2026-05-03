@@ -130,23 +130,14 @@ vi.mock("./subagent-announce-delivery.js", () => ({
             2_147_000_000,
           )
         : 120_000;
-    const retryDelaysMs =
-      process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
-    let retryIndex = 0;
-    for (;;) {
-      const request = buildRequest();
-      gatewayCalls.push(request);
-      try {
-        await callGatewayImpl(request);
-        return { delivered: true, path: "direct" };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const delayMs = retryDelaysMs[retryIndex];
-        if (!/gateway timeout/i.test(message) || delayMs == null) {
-          return { delivered: false, path: "direct", error: message };
-        }
-        retryIndex += 1;
-      }
+    const request = buildRequest();
+    gatewayCalls.push(request);
+    try {
+      await callGatewayImpl(request);
+      return { delivered: true, path: "direct" };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { delivered: false, path: "direct", error: message };
     }
   },
   loadRequesterSessionEntry: (sessionKey: string) => ({
@@ -313,7 +304,7 @@ describe("subagent announce timeout config", () => {
     expect(completionDirectAgentCall?.timeoutMs).toBe(120_000);
   });
 
-  it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
+  it("does not retry gateway timeout for externally delivered completion announces", async () => {
     try {
       vi.stubEnv("OPENCLAW_TEST_FAST", "1");
       callGatewayImpl = async (request) => {
@@ -335,7 +326,7 @@ describe("subagent announce timeout config", () => {
       const directAgentCalls = gatewayCalls.filter(
         (call) => call.method === "agent" && call.expectFinal === true,
       );
-      expect(directAgentCalls).toHaveLength(4);
+      expect(directAgentCalls).toHaveLength(1);
     } finally {
       vi.unstubAllEnvs();
     }
