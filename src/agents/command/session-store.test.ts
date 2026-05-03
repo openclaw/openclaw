@@ -1200,3 +1200,99 @@ describe("clearCliSessionInStore", () => {
     });
   });
 });
+
+describe("updateSessionStoreAfterAgentRun - sessionFile preservation", () => {
+  it("preserves sessionFile when updating session after agent run", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:preserve-session-file";
+      const sessionId = "openclaw-session-preserve-file";
+      const sessionFile = "/path/to/sessions/openclaw-session-preserve-file.jsonl";
+
+      // Create initial session entry with sessionFile
+      const initialEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now() - 10000,
+        sessionStartedAt: Date.now() - 10000,
+        sessionFile,
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: initialEntry };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+      const cfg = {} as OpenClawConfig;
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          agentMeta: {
+            usage: { input: 100, output: 50 },
+            model: "sonnet-4.6",
+            provider: "anthropic",
+          },
+        },
+      };
+
+      // Simulate agent run update (like after gateway restart)
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "sonnet-4.6",
+        result,
+      });
+
+      // Verify sessionFile is preserved in memory
+      expect(sessionStore[sessionKey]?.sessionFile).toBe(sessionFile);
+
+      // Verify sessionFile is preserved on disk
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.sessionFile).toBe(sessionFile);
+    });
+  });
+
+  it("does not add sessionFile when it was not present initially", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:no-session-file";
+      const sessionId = "openclaw-session-no-file";
+
+      // Create initial session entry without sessionFile
+      const initialEntry: SessionEntry = {
+        sessionId,
+        updatedAt: Date.now() - 10000,
+        sessionStartedAt: Date.now() - 10000,
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: initialEntry };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+      const cfg = {} as OpenClawConfig;
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          agentMeta: {
+            usage: { input: 100, output: 50 },
+            model: "sonnet-4.6",
+            provider: "anthropic",
+          },
+        },
+      };
+
+      // Simulate agent run update
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "sonnet-4.6",
+        result,
+      });
+
+      // Verify sessionFile is not added when it wasn't there
+      expect(sessionStore[sessionKey]?.sessionFile).toBeUndefined();
+
+      // Verify sessionFile is not added on disk
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.sessionFile).toBeUndefined();
+    });
+  });
+});

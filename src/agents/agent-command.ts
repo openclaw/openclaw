@@ -701,6 +701,8 @@ async function agentCommandInternal(
         updatedAt: now,
         sessionStartedAt: entry.sessionStartedAt ?? now,
         lastInteractionAt: now,
+        // Preserve sessionFile from existing entry to prevent orphaning transcripts
+        ...(entry.sessionFile ? { sessionFile: entry.sessionFile } : {}),
       };
       if (thinkOverride) {
         next.thinkingLevel = thinkOverride;

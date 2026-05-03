@@ -110,6 +110,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: now,
     sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
+    // Preserve sessionFile from existing entry to prevent orphaning transcripts after restart
+    ...(entry.sessionFile ? { sessionFile: entry.sessionFile } : {}),
     ...(preserveRuntimeModel
       ? {}
       : {
