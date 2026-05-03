@@ -19529,6 +19529,40 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
           },
+          ackSticker: {
+            type: "object",
+            properties: {
+              fileId: {
+                type: "string",
+                title: "Ack Sticker File ID",
+                description:
+                  'Telegram sticker file_id to send as an acknowledgment. This is required unless ackSticker.scope is "off" or "none".',
+              },
+              scope: {
+                type: "string",
+                enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+                title: "Ack Sticker Scope",
+                description:
+                  'When to send ack stickers ("group-mentions", "group-all", "direct", "all", "off", "none"). Defaults to messages.ackReactionScope.',
+              },
+              removeAfterReply: {
+                type: "boolean",
+                title: "Remove Ack Sticker After Reply",
+                description:
+                  "Deletes the ack sticker after final reply delivery when enabled. Leave false if the sticker should remain as visible feedback.",
+              },
+              silent: {
+                type: "boolean",
+                title: "Send Ack Sticker Silently",
+                description:
+                  "Sends the ack sticker without a Telegram notification when true. Defaults to true for ack stickers.",
+              },
+            },
+            additionalProperties: false,
+            title: "Ack Sticker",
+            description:
+              "Telegram sticker acknowledgment used before the agent reply is ready. Set fileId to a sendable Telegram sticker file_id; unset disables sticker acknowledgments.",
+          },
           removeAckAfterReply: {
             type: "boolean",
             title: "Remove Ack Reaction After Reply",
@@ -28586,6 +28620,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "messages.ackReactionScope": {
       label: "Ack Reaction Scope",
       help: 'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
+      tags: ["advanced"],
+    },
+    "messages.ackSticker": {
+      label: "Ack Sticker",
+      help: "Telegram sticker acknowledgment used before the agent reply is ready. Set fileId to a sendable Telegram sticker file_id; unset disables sticker acknowledgments.",
+      tags: ["advanced"],
+    },
+    "messages.ackSticker.fileId": {
+      label: "Ack Sticker File ID",
+      help: 'Telegram sticker file_id to send as an acknowledgment. This is required unless ackSticker.scope is "off" or "none".',
+      tags: ["storage"],
+    },
+    "messages.ackSticker.scope": {
+      label: "Ack Sticker Scope",
+      help: 'When to send ack stickers ("group-mentions", "group-all", "direct", "all", "off", "none"). Defaults to messages.ackReactionScope.',
+      tags: ["advanced"],
+    },
+    "messages.ackSticker.removeAfterReply": {
+      label: "Remove Ack Sticker After Reply",
+      help: "Deletes the ack sticker after final reply delivery when enabled. Leave false if the sticker should remain as visible feedback.",
+      tags: ["advanced"],
+    },
+    "messages.ackSticker.silent": {
+      label: "Send Ack Sticker Silently",
+      help: "Sends the ack sticker without a Telegram notification when true. Defaults to true for ack stickers.",
       tags: ["advanced"],
     },
     "messages.removeAckAfterReply": {

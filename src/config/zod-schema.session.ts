@@ -161,6 +161,27 @@ export const MessagesSchema = z
     ackReactionScope: z
       .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
       .optional(),
+    ackSticker: z
+      .object({
+        fileId: z.string().optional(),
+        scope: z.enum(["group-mentions", "group-all", "direct", "all", "off", "none"]).optional(),
+        removeAfterReply: z.boolean().optional(),
+        silent: z.boolean().optional(),
+      })
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.scope === "off" || value.scope === "none") {
+          return;
+        }
+        if (!value.fileId?.trim()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["fileId"],
+            message: 'ackSticker.fileId is required unless scope is "off" or "none".',
+          });
+        }
+      })
+      .optional(),
     removeAckAfterReply: z.boolean().optional(),
     statusReactions: z
       .object({

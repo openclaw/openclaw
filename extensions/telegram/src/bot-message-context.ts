@@ -1,10 +1,15 @@
 import type { ReactionTypeEmoji } from "@grammyjs/types";
 import {
   resolveAckReaction,
+  resolveAckSticker,
   shouldAckReaction as shouldAckReactionGate,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
-import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-types";
+import type {
+  AckStickerConfig,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+} from "openclaw/plugin-sdk/config-types";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -31,6 +36,7 @@ import {
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import { sendStickerTelegram, type TelegramApiOverride } from "./send.js";
 import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
@@ -72,6 +78,20 @@ type TelegramStatusReactionController = {
   restoreInitial: () => void | Promise<void>;
 };
 
+export type TelegramAckStickerHandle = {
+  ackStickerPromise: Promise<{ messageId: string; chatId: string } | null>;
+  removeAfterReply: boolean;
+};
+
+function isAckStickerDisabled(config: AckStickerConfig | undefined): boolean {
+  return config?.scope === "off" || config?.scope === "none";
+}
+
+function resolveAckStickerFileId(config: AckStickerConfig | undefined): string | undefined {
+  const fileId = config?.fileId?.trim();
+  return fileId ? fileId : undefined;
+}
+
 export type TelegramMessageContext = {
   ctxPayload: TelegramMessageContextPayload["ctxPayload"];
   turn: TelegramMessageContextPayload["turn"];
@@ -97,6 +117,7 @@ export type TelegramMessageContext = {
   sendTyping: () => Promise<void>;
   sendRecordVoice: () => Promise<void>;
   ackReactionPromise: Promise<boolean> | null;
+  ackSticker: TelegramAckStickerHandle | null;
   reactionApi: TelegramReactionApi | null;
   removeAckAfterReply: boolean;
   statusReactionController: TelegramStatusReactionController | null;
@@ -563,6 +584,54 @@ export const buildTelegramMessageContext = async ({
         )
       : null;
 
+  const ackStickerConfig = resolveAckSticker(cfg, route.agentId, {
+    channel: "telegram",
+    accountId: account.accountId,
+    scopedConfigs: [
+      topicConfig as Record<string, unknown> | undefined,
+      groupConfig as Record<string, unknown> | undefined,
+    ],
+  });
+  const ackStickerFileId = resolveAckStickerFileId(ackStickerConfig);
+  const shouldAckSticker = () =>
+    Boolean(
+      ackStickerFileId &&
+      !isAckStickerDisabled(ackStickerConfig) &&
+      shouldAckReactionGate({
+        scope: ackStickerConfig?.scope ?? ackReactionScope,
+        isDirect: !isGroup,
+        isGroup,
+        isMentionableGroup: isGroup,
+        requireMention: Boolean(requireMention),
+        canDetectMention: bodyResult.canDetectMention,
+        effectiveWasMentioned: bodyResult.effectiveWasMentioned,
+        shouldBypassMention: bodyResult.shouldBypassMention,
+      }),
+    );
+  const ackSticker: TelegramAckStickerHandle | null =
+    shouldAckSticker() && ackStickerFileId
+      ? {
+          removeAfterReply: ackStickerConfig?.removeAfterReply === true,
+          ackStickerPromise: withTelegramApiErrorLogging({
+            operation: "sendSticker",
+            fn: () =>
+              sendStickerTelegram(String(chatId), ackStickerFileId, {
+                cfg,
+                accountId: account.accountId,
+                api: bot.api as TelegramApiOverride,
+                messageThreadId: replyThreadId,
+                silent: ackStickerConfig?.silent !== false,
+              }),
+          }).then(
+            (result) => ({ messageId: result.messageId, chatId: result.chatId }),
+            (err) => {
+              logVerbose(`telegram ack sticker failed for chat ${chatId}: ${String(err)}`);
+              return null;
+            },
+          ),
+        }
+      : null;
+
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     cfg,
     primaryCtx,
@@ -620,6 +689,7 @@ export const buildTelegramMessageContext = async ({
     sendTyping,
     sendRecordVoice,
     ackReactionPromise,
+    ackSticker,
     reactionApi,
     removeAckAfterReply,
     statusReactionController,

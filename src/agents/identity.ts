@@ -1,4 +1,5 @@
 import type { HumanDelayConfig, IdentityConfig } from "../config/types.base.js";
+import type { AckStickerConfig } from "../config/types.messages.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
@@ -46,6 +47,41 @@ export function resolveAckReaction(
   return emoji || DEFAULT_ACK_REACTION;
 }
 
+export function resolveAckSticker(
+  cfg: OpenClawConfig,
+  _agentId: string,
+  opts?: {
+    channel?: string;
+    accountId?: string;
+    scopedConfigs?: Array<Record<string, unknown> | undefined>;
+  },
+): AckStickerConfig | undefined {
+  for (const scopedConfig of opts?.scopedConfigs ?? []) {
+    const scopedSticker = readAckSticker(scopedConfig);
+    if (scopedSticker !== undefined) {
+      return scopedSticker;
+    }
+  }
+
+  if (opts?.channel && opts?.accountId) {
+    const channelCfg = getChannelConfig(cfg, opts.channel);
+    const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
+    const accountSticker = readAckSticker(accounts?.[opts.accountId]);
+    if (accountSticker !== undefined) {
+      return accountSticker;
+    }
+  }
+
+  if (opts?.channel) {
+    const channelSticker = readAckSticker(getChannelConfig(cfg, opts.channel));
+    if (channelSticker !== undefined) {
+      return channelSticker;
+    }
+  }
+
+  return normalizeAckSticker(cfg.messages?.ackSticker);
+}
+
 export function resolveIdentityNamePrefix(
   cfg: OpenClawConfig,
   agentId: string,
@@ -85,6 +121,21 @@ function getChannelConfig(
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function readAckSticker(value: Record<string, unknown> | undefined): AckStickerConfig | undefined {
+  return normalizeAckSticker(value?.ackSticker);
+}
+
+function normalizeAckSticker(value: unknown): AckStickerConfig | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const config = value as AckStickerConfig;
+  return {
+    ...config,
+    ...(typeof config.fileId === "string" ? { fileId: config.fileId.trim() } : {}),
+  };
 }
 
 export function resolveResponsePrefix(

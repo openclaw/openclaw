@@ -1718,6 +1718,16 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
+  "messages.ackSticker":
+    "Telegram sticker acknowledgment used before the agent reply is ready. Set fileId to a sendable Telegram sticker file_id; unset disables sticker acknowledgments.",
+  "messages.ackSticker.fileId":
+    'Telegram sticker file_id to send as an acknowledgment. This is required unless ackSticker.scope is "off" or "none".',
+  "messages.ackSticker.scope":
+    'When to send ack stickers ("group-mentions", "group-all", "direct", "all", "off", "none"). Defaults to messages.ackReactionScope.',
+  "messages.ackSticker.removeAfterReply":
+    "Deletes the ack sticker after final reply delivery when enabled. Leave false if the sticker should remain as visible feedback.",
+  "messages.ackSticker.silent":
+    "Sends the ack sticker without a Telegram notification when true. Defaults to true for ack stickers.",
   "messages.statusReactions":
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":

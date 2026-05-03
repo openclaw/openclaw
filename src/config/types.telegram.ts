@@ -12,7 +12,7 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channels.js";
-import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { AckStickerConfig, DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
@@ -212,6 +212,8 @@ export type TelegramAccountConfig = {
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
    */
   ackReaction?: string;
+  /** Per-channel Telegram sticker acknowledgment override. */
+  ackSticker?: AckStickerConfig;
   /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server), not a /bot<TOKEN> endpoint. */
   apiRoot?: string;
   /** Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. */
@@ -249,6 +251,8 @@ export type TelegramTopicConfig = {
   errorPolicy?: "always" | "once" | "silent";
   /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
   errorCooldownMs?: number;
+  /** Per-topic Telegram sticker acknowledgment override. */
+  ackSticker?: AckStickerConfig;
 };
 
 export type TelegramGroupConfig = {
@@ -276,6 +280,8 @@ export type TelegramGroupConfig = {
   errorPolicy?: "always" | "once" | "silent";
   /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
   errorCooldownMs?: number;
+  /** Per-group Telegram sticker acknowledgment override. */
+  ackSticker?: AckStickerConfig;
 };
 
 /** Config for LLM-based auto-topic labeling. */
@@ -313,6 +319,8 @@ export type TelegramDirectConfig = {
   errorCooldownMs?: number;
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
+  /** Per-DM Telegram sticker acknowledgment override. */
+  ackSticker?: AckStickerConfig;
 };
 
 export type TelegramConfig = {

@@ -1,4 +1,4 @@
-export { resolveAckReaction } from "../agents/identity.js";
+export { resolveAckReaction, resolveAckSticker } from "../agents/identity.js";
 export {
   createAckReactionHandle,
   removeAckReactionHandleAfterReply,

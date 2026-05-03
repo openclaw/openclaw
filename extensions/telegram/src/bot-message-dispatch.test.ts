@@ -287,8 +287,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       sendTyping: vi.fn(),
       sendRecordVoice: vi.fn(),
       ackReactionPromise: null,
+      ackSticker: null,
       reactionApi: null,
       removeAckAfterReply: false,
+      accountId: "default",
     } as unknown as TelegramMessageContext;
     base.turn = {
       storePath: "/tmp/openclaw/telegram-sessions.json",
@@ -397,6 +399,35 @@ describe("dispatchTelegramMessage draft streaming", () => {
       ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
     });
   }
+
+  it("deletes ack stickers after final reply delivery when configured", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    const ackStickerPromise = Promise.resolve({ messageId: "777", chatId: "123" });
+    vi.useFakeTimers();
+    try {
+      await dispatchWithContext({
+        context: createContext({
+          ackSticker: {
+            removeAfterReply: true,
+            ackStickerPromise,
+          },
+        }),
+        cfg: { channels: { telegram: { botToken: "tok" } } },
+      });
+
+      await vi.advanceTimersByTimeAsync(1500);
+
+      expect(deleteMessageTelegram).toHaveBeenCalledWith(
+        "123",
+        "777",
+        expect.objectContaining({
+          accountId: "default",
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("streams drafts in private threads and forwards thread id", async () => {
     const draftStream = createDraftStream();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAckReaction } from "./identity.js";
+import { resolveAckReaction, resolveAckSticker } from "./identity.js";
 
 describe("resolveAckReaction", () => {
   it("prefers account-level overrides", () => {
@@ -75,5 +75,66 @@ describe("resolveAckReaction", () => {
     };
 
     expect(resolveAckReaction(cfg, "main", { channel: "telegram" })).toBe("");
+  });
+});
+
+describe("resolveAckSticker", () => {
+  it("prefers scoped topic/group overrides", () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackSticker: { fileId: "global" } },
+      channels: {
+        telegram: {
+          ackSticker: { fileId: "channel" },
+          accounts: {
+            main: { ackSticker: { fileId: "account" } },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveAckSticker(cfg, "main", {
+        channel: "telegram",
+        accountId: "main",
+        scopedConfigs: [{ ackSticker: { fileId: "topic" } }],
+      }),
+    ).toEqual({ fileId: "topic" });
+  });
+
+  it("falls back from account to channel to global without identity fallback", () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackSticker: { fileId: "global" } },
+      channels: {
+        telegram: {
+          ackSticker: { fileId: " channel " },
+          accounts: {
+            other: { ackSticker: { fileId: "account" } },
+          },
+        },
+      },
+    };
+
+    expect(resolveAckSticker(cfg, "main", { channel: "telegram", accountId: "missing" })).toEqual({
+      fileId: "channel",
+    });
+    expect(resolveAckSticker({ messages: { ackSticker: { fileId: " global " } } }, "main")).toEqual(
+      {
+        fileId: "global",
+      },
+    );
+    expect(resolveAckSticker({}, "main")).toBeUndefined();
+  });
+
+  it("preserves disabled overrides without requiring a file id", () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackSticker: { fileId: "global" } },
+      channels: {
+        telegram: {
+          ackSticker: { scope: "off" },
+        },
+      },
+    };
+
+    expect(resolveAckSticker(cfg, "main", { channel: "telegram" })).toEqual({ scope: "off" });
   });
 });
