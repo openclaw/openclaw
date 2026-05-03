@@ -16,6 +16,16 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "./server-cron.js"');
     expect(serverImpl).toContain('from "./server-cron-lazy.js"');
     expect(serverImpl).not.toContain('from "./server-methods.js"');
+    expect(serverImpl).not.toContain('from "./config-reload.js"');
+    expect(readSource("src/gateway/server-shared-auth-generation.ts")).not.toContain(
+      'from "./config-reload.js"',
+    );
+    expect(readSource("src/gateway/server-aux-handlers.ts")).not.toContain(
+      'from "./config-reload.js"',
+    );
+    expect(readSource("src/gateway/server-runtime-state.ts")).not.toContain(
+      'createCanvasHostHandler } from "../canvas-host/server.js"',
+    );
     expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
     expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
