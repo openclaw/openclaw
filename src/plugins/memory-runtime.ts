@@ -1,7 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import { resolveRuntimePluginRegistry } from "./loader.js";
 import { getMemoryRuntime } from "./memory-state.js";
+import {
+  buildPluginRuntimeLoadOptions,
+  resolvePluginRuntimeLoadContext,
+} from "./runtime/load-context.js";
 
 function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   const memorySlot = normalizePluginsConfig(config.plugins).slots.memory;
@@ -17,7 +22,12 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   if (onlyPluginIds.length === 0) {
     return getMemoryRuntime();
   }
-  getLoadedRuntimePluginRegistry({ requiredPluginIds: onlyPluginIds });
+  // Fast path: reuse the active registry if the memory plugin is already loaded.
+  // Falls back to a full load (e.g. doctor CLI, where no registry is active yet).
+  if (!getLoadedRuntimePluginRegistry({ requiredPluginIds: onlyPluginIds })) {
+    const context = resolvePluginRuntimeLoadContext({ config: cfg });
+    resolveRuntimePluginRegistry(buildPluginRuntimeLoadOptions(context, { onlyPluginIds }));
+  }
   return getMemoryRuntime();
 }
 
