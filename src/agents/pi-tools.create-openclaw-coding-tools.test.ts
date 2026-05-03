@@ -180,6 +180,21 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("passes explicit denylist entries to OpenClaw tool factory planning", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { deny: ["pdf"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginToolDenylist: expect.arrayContaining(["pdf"]),
+      }),
+    );
+  });
+
   it("records core tool-prep stages for hot-path diagnostics", () => {
     const stages: string[] = [];
 
