@@ -26,6 +26,11 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
    * (#67486)
    */
   sendTimeoutMs?: number;
+  /**
+   * Resolved value of `channels.bluebubbles.textFormatting.enabled` (or the
+   * matching per-account override). Default `false` — opt-in only.
+   */
+  textFormattingEnabled: boolean;
 } {
   const account = resolveBlueBubblesAccount({
     cfg: params.cfg ?? {},
@@ -73,5 +78,6 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
     }),
     allowPrivateNetworkConfig: resolveBlueBubblesPrivateNetworkConfigValue(account.config),
     sendTimeoutMs,
+    textFormattingEnabled: account.config.textFormatting?.enabled === true,
   };
 }

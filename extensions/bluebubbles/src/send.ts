@@ -11,12 +11,14 @@ import {
   fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
+  isMacOS15OrHigher,
   isMacOS26OrHigher,
 } from "./probe.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
+import { extractTextFormatting } from "./text-formatting.js";
 import { DEFAULT_SEND_TIMEOUT_MS, type BlueBubblesSendTarget } from "./types.js";
 
 export type BlueBubblesSendOpts = {
@@ -497,13 +499,19 @@ export async function sendMessageBlueBubbles(
     throw new Error("BlueBubbles send requires text (message was empty after markdown removal)");
   }
 
-  const { baseUrl, password, accountId, allowPrivateNetwork, sendTimeoutMs } =
-    resolveBlueBubblesServerAccount({
-      cfg: opts.cfg ?? {},
-      accountId: opts.accountId,
-      serverUrl: opts.serverUrl,
-      password: opts.password,
-    });
+  const {
+    baseUrl,
+    password,
+    accountId,
+    allowPrivateNetwork,
+    sendTimeoutMs,
+    textFormattingEnabled,
+  } = resolveBlueBubblesServerAccount({
+    cfg: opts.cfg ?? {},
+    accountId: opts.accountId,
+    serverUrl: opts.serverUrl,
+    password: opts.password,
+  });
   // Send-path timeout: explicit caller override > per-account config > 30s default.
   // Kept separate from the default 10s client timeout so chat lookups, probes,
   // and health checks stay snappy while actual sends can ride out macOS 26
@@ -576,6 +584,26 @@ export async function sendMessageBlueBubbles(
   if (privateApiDecision.warningMessage) {
     warnBlueBubbles(privateApiDecision.warningMessage);
   }
+  // Optional text-formatting payload (BlueBubbles Server PR #766). Only
+  // attempted when (a) the operator opted in, (b) Private API is in play
+  // (PR #766's validator forces method=private-api when textFormatting is
+  // present, and rejects the combination on AppleScript), and (c) the BB
+  // host reports macOS Sequoia (15) or higher (PR #766 returns 400 on
+  // pre-Sequoia). Stock pre-PR servers silently drop the unknown field.
+  let messageBody = strippedText;
+  let textFormatting: ReturnType<typeof extractTextFormatting>["formatting"] | undefined;
+  if (
+    textFormattingEnabled &&
+    privateApiDecision.canUsePrivateApi &&
+    isMacOS15OrHigher(accountId)
+  ) {
+    const extracted = extractTextFormatting(trimmedText);
+    if (extracted.plain.trim() && extracted.formatting.length > 0) {
+      messageBody = extracted.plain;
+      textFormatting = extracted.formatting;
+    }
+  }
+
   // Always set `method` explicitly. BB Server's behavior on an omitted
   // `method` is version-dependent and silently drops on some setups (e.g.
   // macOS without Private API — message lands in Messages.app locally but
@@ -583,7 +611,7 @@ export async function sendMessageBlueBubbles(
   const payload: Record<string, unknown> = {
     chatGuid,
     tempGuid: crypto.randomUUID(),
-    message: strippedText,
+    message: messageBody,
     method: privateApiDecision.canUsePrivateApi ? "private-api" : "apple-script",
   };
 
@@ -596,6 +624,10 @@ export async function sendMessageBlueBubbles(
   // Add message effects support
   if (effectId && privateApiDecision.canUsePrivateApi) {
     payload.effectId = effectId;
+  }
+
+  if (textFormatting) {
+    payload.textFormatting = textFormatting;
   }
 
   const client = createBlueBubblesClient({

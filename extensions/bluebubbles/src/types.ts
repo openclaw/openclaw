@@ -121,6 +121,16 @@ export type BlueBubblesAccountConfig = {
    * `associatedMessageGuid`. Default: false.
    */
   coalesceSameSenderDms?: boolean;
+  /**
+   * Translate inline markdown (`**bold**`, `*italic*`, `~~strike~~`, etc.)
+   * into BlueBubbles `textFormatting` ranges on outbound sends. Requires
+   * BlueBubbles Server with PR #766 and macOS Sequoia (15) or newer; a
+   * runtime probe gates on the BB host's reported `os_version`, and stock
+   * servers silently ignore the unknown payload field. Default: false.
+   */
+  textFormatting?: {
+    enabled?: boolean;
+  };
 };
 
 export type BlueBubblesSendTarget =

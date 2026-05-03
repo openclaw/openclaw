@@ -110,6 +110,17 @@ const bluebubblesAccountSchema = z
     replyContextApiFallback: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
     coalesceSameSenderDms: z.boolean().optional(),
+    textFormatting: z
+      .object({
+        /**
+         * Translate inline markdown into BlueBubbles `textFormatting`
+         * ranges on outbound sends. Requires BlueBubbles Server PR #766
+         * and macOS Sequoia (15) or newer. Default: false.
+         */
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .superRefine((value, ctx) => {
     const serverUrl = value.serverUrl?.trim() ?? "";

@@ -133,6 +133,22 @@ export function isMacOS26OrHigher(accountId?: string): boolean {
   return major !== null && major >= 26;
 }
 
+/**
+ * Check if the cached server info indicates macOS Sequoia (15) or higher.
+ * Used by the optional textFormatting send path: BlueBubbles Server PR #766
+ * returns a 400 when textFormatting is sent against a pre-Sequoia host.
+ * Returns false on no cached info (fail closed: skip the optional payload
+ * rather than risk a hard send failure).
+ */
+export function isMacOS15OrHigher(accountId?: string): boolean {
+  const info = getCachedBlueBubblesServerInfo(accountId);
+  if (!info?.os_version) {
+    return false;
+  }
+  const major = parseMacOSMajorVersion(info.os_version);
+  return major !== null && major >= 15;
+}
+
 export async function probeBlueBubbles(params: {
   baseUrl?: string | null;
   password?: string | null;
