@@ -2614,8 +2614,20 @@ export async function runEmbeddedAttempt(
           trigger: params.trigger,
           ...buildAgentHookContextChannelFields(params),
         };
+        // Idempotent cleanup: prune old image blocks to limit context
+        // growth. Only mutates turns older than a few assistant replies;
+        // the delay also reduces prompt-cache churn.
+        //
+        // When the current prompt already carries fresh images, prune
+        // aggressively (preserveRecentCompletedTurns: 0) so that stale
+        // image data cannot contaminate the new analysis.
+        const currentTurnHasImages =
+          (params.images?.length ?? 0) > 0 || (params.imageOrder?.length ?? 0) > 0;
         const promptBuildMessages =
-          pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
+          pruneProcessedHistoryImages(
+            activeSession.messages,
+            currentTurnHasImages ? { preserveRecentCompletedTurns: 0 } : undefined,
+          ) ?? activeSession.messages;
         const hookResult = isRawModelRun
           ? undefined
           : await resolvePromptBuildHookResult({

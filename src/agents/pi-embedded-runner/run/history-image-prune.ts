@@ -22,7 +22,14 @@ type PrunableContextAgent = {
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
 
-function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
+interface HistoryImagePruneOptions {
+  preserveRecentCompletedTurns?: number;
+}
+
+function resolvePruneBeforeIndex(
+  messages: AgentMessage[],
+  options?: HistoryImagePruneOptions,
+): number {
   const completedTurnStarts: number[] = [];
   let currentTurnStart = -1;
   let currentTurnHasAssistantReply = false;
@@ -52,10 +59,17 @@ function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
     completedTurnStarts.push(currentTurnStart);
   }
 
-  if (completedTurnStarts.length <= PRESERVE_RECENT_COMPLETED_TURNS) {
+  const preserveRecentCompletedTurns =
+    options?.preserveRecentCompletedTurns ?? PRESERVE_RECENT_COMPLETED_TURNS;
+
+  if (preserveRecentCompletedTurns <= 0) {
+    return completedTurnStarts.length > 0 ? messages.length : -1;
+  }
+
+  if (completedTurnStarts.length <= preserveRecentCompletedTurns) {
     return -1;
   }
-  return completedTurnStarts[completedTurnStarts.length - PRESERVE_RECENT_COMPLETED_TURNS];
+  return completedTurnStarts[completedTurnStarts.length - preserveRecentCompletedTurns];
 }
 
 function pruneHistoryMediaReferenceText(text: string): string {
@@ -80,8 +94,11 @@ function cloneMessageWithContent(
  * same boundary because detectAndLoadPromptImages treats them as fresh prompt
  * image references when old history is replayed into a later prompt.
  */
-export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMessage[] | null {
-  const pruneBeforeIndex = resolvePruneBeforeIndex(messages);
+export function pruneProcessedHistoryImages(
+  messages: AgentMessage[],
+  options?: HistoryImagePruneOptions,
+): AgentMessage[] | null {
+  const pruneBeforeIndex = resolvePruneBeforeIndex(messages, options);
   if (pruneBeforeIndex < 0) {
     return null;
   }
