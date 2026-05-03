@@ -279,10 +279,21 @@ function stableComparableObject(value: unknown, path: string[] = []): unknown {
       .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([key, entry]) => [
         key,
-        key === "description" && typeof entry === "string"
+        shouldNormalizeDescriptionValue(path, key, entry)
           ? normalizeDescriptionForComparison(entry)
           : stableComparableObject(entry, [...path, key]),
       ]),
+  );
+}
+
+function shouldNormalizeDescriptionValue(
+  path: string[],
+  key: string,
+  entry: unknown,
+): entry is string {
+  return (
+    typeof entry === "string" &&
+    (key === "description" || path.at(-1) === "description_localizations")
   );
 }
 

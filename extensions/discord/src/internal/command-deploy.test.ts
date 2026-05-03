@@ -103,6 +103,62 @@ describe("commandsEqual", () => {
     expect(commandsEqual(current, desired)).toBe(true);
   });
 
+  test("treats localized descriptions with CJK whitespace as equal to Discord's collapsed form", () => {
+    const current = currentFromDiscord({
+      description_localizations: {
+        "zh-CN": "第一行说明。第二行说明。",
+      },
+    });
+    const desired = desiredFromLocal({
+      description_localizations: {
+        "zh-CN": "第一行说明。\n第二行说明。",
+      },
+    });
+    expect(commandsEqual(current, desired)).toBe(true);
+  });
+
+  test("treats option localized descriptions with CJK whitespace as equal to Discord's collapsed form", () => {
+    const current = currentFromDiscord({
+      name: "skill",
+      description: "Run a skill.",
+      options: [
+        {
+          type: 3,
+          name: "name",
+          description: "Skill name",
+          description_localizations: { "zh-CN": "技能名称。直接输入。" },
+        } as any,
+      ],
+    });
+    const desired = desiredFromLocal({
+      name: "skill",
+      description: "Run a skill.",
+      options: [
+        {
+          name: "name",
+          description: "Skill name",
+          description_localizations: { "zh-CN": "技能名称。\n直接输入。" },
+          type: 3,
+        },
+      ],
+    });
+    expect(commandsEqual(current, desired)).toBe(true);
+  });
+
+  test("keeps localized substantive description differences meaningful", () => {
+    const current = currentFromDiscord({
+      description_localizations: {
+        "zh-CN": "旧说明",
+      },
+    });
+    const desired = desiredFromLocal({
+      description_localizations: {
+        "zh-CN": "新说明",
+      },
+    });
+    expect(commandsEqual(current, desired)).toBe(false);
+  });
+
   test("keeps substantive description differences meaningful", () => {
     const current = currentFromDiscord({ description: "old text" });
     const desired = desiredFromLocal({ description: "new text" });
