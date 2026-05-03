@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Channels/QQ Bot: resolve structured `clientSecret` SecretRefs before QQ token exchange, expose the QQ Bot secret contract to secrets tooling, and reject legacy `secretref:/...` marker strings. (#74772) Thanks @xialonglee.
 - Plugins/externalization: keep official ACPX, Google Chat, and LINE install specs on production package names, leaving beta-tag probing to the explicit OpenClaw beta update channel. Thanks @vincentkoc.
 - CLI/doctor: keep missing-plugin repair from overriding official catalog metadata with runtime fallbacks, so ACPX repairs preserve the official npm spec during the externalization rollout. Thanks @vincentkoc.
+- CLI/doctor: match stale bundled-plugin install records by exact parsed package name so doctor does not remove external npm or ClawHub records that only share an OpenClaw package-name prefix.
 - Plugins/catalog: preserve ClawHub install specs when generating the packaged channel catalog so future storepack-first channel plugins keep their remote source instead of becoming npm-only. Thanks @vincentkoc.
 - Plugins/catalog: pin bare npm specs from prerelease external channel catalog entries to the catalog entry version, so beta catalogs do not silently install the latest stable package.
 - Plugins/update: treat catalog-matched official npm updates and OpenClaw-authored externalized-bundled npm bridges as trusted official installs so launch-code plugins can update or migrate out of the bundled tree without scanner false positives. Thanks @vincentkoc.
