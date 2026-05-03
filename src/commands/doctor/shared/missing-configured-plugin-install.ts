@@ -7,6 +7,8 @@ import {
 import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
+import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
 import { resolveDefaultPluginExtensionsDir } from "../../../plugins/install-paths.js";
@@ -36,6 +38,7 @@ type DownloadableInstallCandidate = {
   npmSpec?: string;
   clawhubSpec?: string;
   expectedIntegrity?: string;
+  trustedSourceLinkedOfficialInstall?: boolean;
   defaultChoice?: PluginPackageInstall["defaultChoice"];
 };
 
@@ -44,12 +47,14 @@ const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[]
     pluginId: "acpx",
     label: "ACPX Runtime",
     npmSpec: "@openclaw/acpx",
+    trustedSourceLinkedOfficialInstall: true,
   },
   // Runtime-only configs do not have a provider/channel integration catalog entry.
   {
     pluginId: "codex",
     label: "Codex",
     npmSpec: "@openclaw/codex",
+    trustedSourceLinkedOfficialInstall: true,
   },
 ];
 
@@ -201,6 +206,9 @@ function collectDownloadableInstallCandidates(params: {
       ...(entry.install.expectedIntegrity
         ? { expectedIntegrity: entry.install.expectedIntegrity }
         : {}),
+      ...(entry.trustedSourceLinkedOfficialInstall
+        ? { trustedSourceLinkedOfficialInstall: true }
+        : {}),
       ...(entry.install.defaultChoice ? { defaultChoice: entry.install.defaultChoice } : {}),
     });
   }
@@ -229,6 +237,7 @@ function collectDownloadableInstallCandidates(params: {
       ...(entry.install.expectedIntegrity
         ? { expectedIntegrity: entry.install.expectedIntegrity }
         : {}),
+      ...(entry.origin === "bundled" ? { trustedSourceLinkedOfficialInstall: true } : {}),
       ...(entry.install.defaultChoice ? { defaultChoice: entry.install.defaultChoice } : {}),
     });
   }
@@ -256,6 +265,7 @@ function collectDownloadableInstallCandidates(params: {
       ...(npmSpec ? { npmSpec } : {}),
       ...(clawhubSpec ? { clawhubSpec } : {}),
       ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
+      trustedSourceLinkedOfficialInstall: true,
       ...(install.defaultChoice ? { defaultChoice: install.defaultChoice } : {}),
     });
   }
@@ -267,12 +277,35 @@ function collectDownloadableInstallCandidates(params: {
     if (params.blockedPluginIds?.has(entry.pluginId)) {
       continue;
     }
-    candidates.set(entry.pluginId, entry);
+    if (!candidates.has(entry.pluginId)) {
+      candidates.set(entry.pluginId, entry);
+    }
   }
 
   return [...candidates.values()].toSorted((left, right) =>
     left.pluginId.localeCompare(right.pluginId),
   );
+}
+
+function collectUpdateDeferredPluginIds(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  configuredPluginIds: ReadonlySet<string>;
+  configuredChannelIds: ReadonlySet<string>;
+  blockedPluginIds?: ReadonlySet<string>;
+}): Set<string> {
+  const pluginIds = new Set(params.configuredPluginIds);
+  for (const candidate of collectDownloadableInstallCandidates({
+    cfg: params.cfg,
+    env: params.env,
+    missingPluginIds: new Set(),
+    configuredPluginIds: params.configuredPluginIds,
+    configuredChannelIds: params.configuredChannelIds,
+    blockedPluginIds: params.blockedPluginIds,
+  })) {
+    pluginIds.add(candidate.pluginId);
+  }
+  return pluginIds;
 }
 
 function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
@@ -323,16 +356,29 @@ function recordMatchesBundledPackage(
     return false;
   }
   if (record.source === "npm") {
-    return [record.spec, record.resolvedName, record.resolvedSpec].some((value) =>
-      value?.trim().startsWith(packageName),
+    return [record.spec, record.resolvedName, record.resolvedSpec].some(
+      (value) => recordNpmPackageName(value) === packageName,
     );
   }
   if (record.source === "clawhub") {
-    return [record.clawhubPackage, record.spec].some((value) =>
-      value?.trim().includes(packageName),
+    return [record.clawhubPackage, record.spec].some(
+      (value) => recordClawHubPackageName(value) === packageName,
     );
   }
   return false;
+}
+
+function recordNpmPackageName(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? parseRegistryNpmSpec(trimmed)?.name : undefined;
+}
+
+function recordClawHubPackageName(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return parseClawHubPluginSpec(trimmed)?.name ?? trimmed;
 }
 
 async function installCandidate(params: {
@@ -398,6 +444,9 @@ async function installCandidate(params: {
     extensionsDir,
     expectedPluginId: candidate.pluginId,
     expectedIntegrity: candidate.expectedIntegrity,
+    ...(candidate.trustedSourceLinkedOfficialInstall
+      ? { trustedSourceLinkedOfficialInstall: true }
+      : {}),
     mode: "install",
   });
   if (!result.ok) {
@@ -515,7 +564,15 @@ async function repairMissingPluginInstalls(params: {
   }
 
   if (isUpdatePackageDoctorPass(env)) {
-    for (const pluginId of params.pluginIds) {
+    const updateDeferredPluginIds = collectUpdateDeferredPluginIds({
+      cfg: params.cfg,
+      env,
+      configuredPluginIds: params.pluginIds,
+      configuredChannelIds: params.channelIds,
+      blockedPluginIds: params.blockedPluginIds,
+    });
+    for (const pluginId of updateDeferredPluginIds) {
+      deferredPluginIds.add(pluginId);
       const record = nextRecords[pluginId];
       if (!record || !isInstalledRecordMissingOnDisk(record, env)) {
         continue;
@@ -524,7 +581,6 @@ async function repairMissingPluginInstalls(params: {
         nextRecords = { ...records };
       }
       delete nextRecords[pluginId];
-      deferredPluginIds.add(pluginId);
       changes.push(
         `Deferred missing configured plugin "${pluginId}" install repair until post-update doctor.`,
       );

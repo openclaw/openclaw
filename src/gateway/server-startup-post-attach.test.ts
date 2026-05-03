@@ -253,6 +253,34 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
+  it("refreshes the restart sentinel after sidecars without blocking post-attach", async () => {
+    const events: string[] = [];
+    const refreshLatestUpdateRestartSentinel = vi.fn(async () => {
+      events.push("sentinel");
+      return null;
+    });
+    const startGatewaySidecars = vi.fn(async () => {
+      events.push("sidecars");
+      return { pluginServices: null };
+    });
+
+    await startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps({
+        refreshLatestUpdateRestartSentinel,
+        startGatewaySidecars,
+      }),
+    );
+
+    events.push("returned");
+    expect(refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => {
+      expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledTimes(1);
+    });
+    expect(events).toEqual(["sidecars", "returned", "sentinel"]);
+  });
+
   it("loads deferred startup plugins before channel sidecars", async () => {
     const events: string[] = [];
     const loadedPluginRegistry = {

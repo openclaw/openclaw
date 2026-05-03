@@ -967,6 +967,31 @@ export async function runAgentTurnWithFallback(params: {
       logVerbose(`compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`);
     }
   };
+  const readCompactionHookMessages = (value: unknown): string[] => {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  };
+  const sendCompactionHookMessages = async (messages: string[]) => {
+    if (!params.opts?.onBlockReply || messages.length === 0) {
+      return;
+    }
+    const noticePayload = params.applyReplyToMode({
+      text: messages.join("\n\n"),
+      replyToId: currentMessageId,
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    try {
+      await params.opts.onBlockReply(noticePayload);
+    } catch (err) {
+      logVerbose(`compaction hook notice delivery failed (non-fatal): ${String(err)}`);
+    }
+  };
   const shouldSurfaceToControlUi = isInternalMessageChannel(
     params.followupRun.run.messageProvider ??
       params.sessionCtx.Surface ??
@@ -1424,6 +1449,7 @@ export async function runAgentTurnWithFallback(params: {
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
+                currentTurnContext: params.followupRun.currentTurnContext,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                 forceMessageTool:
@@ -1591,12 +1617,19 @@ export async function runAgentTurnWithFallback(params: {
                   // Track auto-compaction and notify higher layers.
                   if (evt.stream === "compaction") {
                     const phase = readStringValue(evt.data.phase) ?? "";
+                    const hookMessages = readCompactionHookMessages(evt.data.messages);
                     if (phase === "start") {
                       // Keep custom compaction callbacks active, but gate the
                       // fallback user-facing notice behind explicit opt-in.
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
-                      } else if (shouldNotifyUserAboutCompaction) {
+                      }
+                      if (hookMessages.length > 0) {
+                        await sendCompactionHookMessages(hookMessages);
+                      } else if (
+                        !params.opts?.onCompactionStart &&
+                        shouldNotifyUserAboutCompaction
+                      ) {
                         // Send directly via opts.onBlockReply (bypassing the
                         // pipeline) so the notice does not cause final payloads
                         // to be discarded on non-streaming model paths.
@@ -1609,9 +1642,17 @@ export async function runAgentTurnWithFallback(params: {
                         attemptCompactionCount += 1;
                         if (params.opts?.onCompactionEnd) {
                           await params.opts.onCompactionEnd();
-                        } else if (shouldNotifyUserAboutCompaction) {
+                        }
+                        if (hookMessages.length > 0) {
+                          await sendCompactionHookMessages(hookMessages);
+                        } else if (
+                          !params.opts?.onCompactionEnd &&
+                          shouldNotifyUserAboutCompaction
+                        ) {
                           await sendCompactionNotice("end");
                         }
+                      } else if (hookMessages.length > 0) {
+                        await sendCompactionHookMessages(hookMessages);
                       } else if (shouldNotifyUserAboutCompaction) {
                         await sendCompactionNotice("incomplete");
                       }

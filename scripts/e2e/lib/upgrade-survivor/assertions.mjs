@@ -337,10 +337,12 @@ function assertStateSurvived() {
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
   const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
   if (stage === "baseline") {
-    assert(
-      fs.existsSync(path.join(legacyRuntimeRoot, "discord")),
-      "legacy plugin runtime deps root missing before doctor cleanup",
-    );
+    if (fs.existsSync(legacyRuntimeRoot)) {
+      assert(
+        fs.existsSync(path.join(legacyRuntimeRoot, "discord")),
+        "legacy plugin runtime deps root exists but discord debris is missing before doctor cleanup",
+      );
+    }
   } else {
     assert(
       !fs.existsSync(legacyRuntimeRoot),

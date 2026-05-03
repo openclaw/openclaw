@@ -113,6 +113,7 @@ export {
   resolveSessionWriteLockAcquireTimeoutMs,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
+export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   isToolWrappedWithBeforeToolCallHook,

@@ -6,6 +6,10 @@
       "source": "external",
       "kind": "channel",
       "openclaw": {
+        "plugin": {
+          "id": "wecom-openclaw-plugin",
+          "label": "WeCom"
+        },
         "channel": {
           "id": "wecom",
           "label": "WeCom",
@@ -30,6 +34,10 @@
       "source": "external",
       "kind": "channel",
       "openclaw": {
+        "plugin": {
+          "id": "openclaw-plugin-yuanbao",
+          "label": "Yuanbao"
+        },
         "channel": {
           "id": "yuanbao",
           "label": "Yuanbao",

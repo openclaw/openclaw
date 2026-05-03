@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { collectRootPackageExcludedExtensionDirs } from "./lib/bundled-plugin-build-entries.mjs";
 import { parsePackageRootArg } from "./lib/package-root-args.mjs";
 import { installProcessWarningFilter } from "./process-warning-filter.mjs";
 
@@ -16,6 +17,7 @@ const { packageRoot } = parsePackageRootArg(
   "OPENCLAW_BUNDLED_CHANNEL_SMOKE_ROOT",
 );
 const distExtensionsRoot = path.join(packageRoot, "dist", "extensions");
+const excludedPackageExtensionDirs = collectRootPackageExcludedExtensionDirs({ cwd: packageRoot });
 const installedLayoutEnv = "OPENCLAW_BUNDLED_CHANNEL_SMOKE_INSTALLED_LAYOUT";
 
 function packageRootLooksInstalled(root) {
@@ -80,6 +82,9 @@ function collectBundledChannelEntryFiles() {
     }
     const packageJson = readJson(packageJsonPath);
     if (!packageJson.openclaw?.channel) {
+      continue;
+    }
+    if (excludedPackageExtensionDirs.has(dirent.name)) {
       continue;
     }
 

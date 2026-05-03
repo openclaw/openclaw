@@ -9,6 +9,7 @@ import {
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
+import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
@@ -30,6 +31,7 @@ export type OnboardingPluginInstallEntry = {
   pluginId: string;
   label: string;
   install: PluginPackageInstall;
+  trustedSourceLinkedOfficialInstall?: boolean;
 };
 
 export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
@@ -40,6 +42,13 @@ export type OnboardingPluginInstallResult = {
   pluginId: string;
   status: OnboardingPluginInstallStatus;
 };
+
+function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
+  return (
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
+  );
+}
 
 function resolveRealDirectory(dir: string): string | null {
   try {
@@ -273,11 +282,21 @@ function resolveInstallDefaultChoice(params: {
 }): InstallChoice {
   const { cfg, entry, localPath, bundledLocalPath, hasClawHubSpec, hasNpmSpec } = params;
   const hasRemoteSpec = hasClawHubSpec || hasNpmSpec;
+  const entryDefault = entry.install.defaultChoice;
+  const remoteDefault = (): InstallChoice => {
+    if (entryDefault === "clawhub" && hasClawHubSpec) {
+      return "clawhub";
+    }
+    if (entryDefault === "npm" && hasNpmSpec) {
+      return "npm";
+    }
+    return hasNpmSpec ? "npm" : "clawhub";
+  };
   if (!hasRemoteSpec) {
     return localPath ? "local" : "skip";
   }
   if (!localPath) {
-    return hasClawHubSpec ? "clawhub" : "npm";
+    return remoteDefault();
   }
   if (bundledLocalPath) {
     return "local";
@@ -287,19 +306,12 @@ function resolveInstallDefaultChoice(params: {
     return "local";
   }
   if (updateChannel === "stable" || updateChannel === "beta") {
-    return hasClawHubSpec ? "clawhub" : "npm";
-  }
-  const entryDefault = entry.install.defaultChoice;
-  if (entryDefault === "clawhub" && hasClawHubSpec) {
-    return "clawhub";
+    return remoteDefault();
   }
   if (entryDefault === "local") {
     return "local";
   }
-  if (entryDefault === "npm") {
-    return "npm";
-  }
-  return hasClawHubSpec ? "clawhub" : "local";
+  return remoteDefault();
 }
 
 async function promptInstallChoice(params: {
@@ -582,7 +594,11 @@ async function installPluginFromNpmSpecWithProgress(params: {
       installPluginFromNpmSpec({
         spec: params.npmSpec,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
+        expectedPluginId: params.entry.pluginId,
         expectedIntegrity: params.entry.install.expectedIntegrity,
+        ...(params.entry.trustedSourceLinkedOfficialInstall
+          ? { trustedSourceLinkedOfficialInstall: true }
+          : {}),
         extensionsDir: resolveDefaultPluginExtensionsDir(),
         logger: {
           info: updateProgress,
@@ -844,7 +860,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       "Plugin install",
     );
 
-    if (!npmSpec) {
+    if (!npmSpec || !shouldFallbackClawHubToNpm(result)) {
       runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
       return {
         cfg: next,

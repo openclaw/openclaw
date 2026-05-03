@@ -147,13 +147,19 @@ describe("tsdown config", () => {
 
     if (typeof neverBundle === "function") {
       expect(neverBundle("@lancedb/lancedb")).toBe(true);
+      expect(neverBundle("@larksuiteoapi/node-sdk")).toBe(true);
       expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
       expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
       expect(neverBundle).toEqual(
-        expect.arrayContaining(["@lancedb/lancedb", "matrix-js-sdk", "qrcode-terminal"]),
+        expect.arrayContaining([
+          "@lancedb/lancedb",
+          "@larksuiteoapi/node-sdk",
+          "matrix-js-sdk",
+          "qrcode-terminal",
+        ]),
       );
     }
     expect(typeof external).toBe("function");
