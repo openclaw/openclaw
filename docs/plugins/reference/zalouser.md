@@ -12,7 +12,7 @@ Adds the Zalo Personal channel surface for sending and receiving OpenClaw messag
 ## Distribution
 
 - Package: `@openclaw/zalouser`
-- Install route: ClawHub + npm
+- Install route: npm; ClawHub
 
 ## Surface
 

@@ -42,6 +42,7 @@ const transcriptMessageCountCache = new Map<
 >();
 const MAX_TRANSCRIPT_MESSAGE_COUNT_CACHE_ENTRIES = 5000;
 const TRANSCRIPT_ASYNC_READ_CHUNK_BYTES = 64 * 1024;
+type TranscriptFileHandle = Awaited<ReturnType<typeof fs.promises.open>>;
 
 function readSessionTitleFieldsCacheKey(
   filePath: string,
@@ -813,43 +814,47 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   if (cached) {
     return cached;
   }
-  const index = await readSessionTranscriptIndex(filePath);
-  if (!index) {
+
+  if (stat.size === 0) {
+    const empty = { firstUserMessage: null, lastMessagePreview: null };
+    setCachedSessionTitleFields(cacheKey, stat, empty);
+    return empty;
+  }
+
+  let handle: TranscriptFileHandle | null = null;
+  try {
+    handle = await fs.promises.open(filePath, "r");
+
+    let firstUserMessage: string | null = null;
+    try {
+      const chunk = await readTranscriptHeadChunkAsync(handle);
+      if (chunk) {
+        firstUserMessage = extractFirstUserMessageFromTranscriptChunk(chunk, opts);
+      }
+    } catch {
+      // ignore head read errors
+    }
+
+    let lastMessagePreview: string | null = null;
+    try {
+      lastMessagePreview = await readLastMessagePreviewFromOpenTranscriptAsync({
+        handle,
+        size: stat.size,
+      });
+    } catch {
+      // ignore tail read errors
+    }
+
+    const result = { firstUserMessage, lastMessagePreview };
+    setCachedSessionTitleFields(cacheKey, stat, result);
+    return result;
+  } catch {
     return { firstUserMessage: null, lastMessagePreview: null };
-  }
-
-  let firstUserMessage: string | null = null;
-  for (const entry of index.entries) {
-    const msg = entry.record.message as TranscriptMessage | undefined;
-    if (msg?.role !== "user") {
-      continue;
-    }
-    if (opts?.includeInterSession !== true && hasInterSessionUserProvenance(msg)) {
-      continue;
-    }
-    const text = extractTextFromContent(msg.content);
-    if (text) {
-      firstUserMessage = text;
-      break;
+  } finally {
+    if (handle) {
+      await handle.close().catch(() => undefined);
     }
   }
-
-  let lastMessagePreview: string | null = null;
-  for (const entry of index.entries.toReversed()) {
-    const msg = entry.record.message as TranscriptMessage | undefined;
-    if (!msg || (msg.role !== "user" && msg.role !== "assistant")) {
-      continue;
-    }
-    const text = extractTextFromContent(msg.content);
-    if (text) {
-      lastMessagePreview = text;
-      break;
-    }
-  }
-
-  const result = { firstUserMessage, lastMessagePreview };
-  setCachedSessionTitleFields(cacheKey, stat, result);
-  return result;
 }
 
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
@@ -881,6 +886,18 @@ function readTranscriptHeadChunk(fd: number, maxBytes = 8192): string | null {
     return null;
   }
   return buf.toString("utf-8", 0, bytesRead);
+}
+
+async function readTranscriptHeadChunkAsync(
+  handle: TranscriptFileHandle,
+  maxBytes = 8192,
+): Promise<string | null> {
+  const buffer = Buffer.alloc(maxBytes);
+  const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+  if (bytesRead <= 0) {
+    return null;
+  }
+  return buffer.toString("utf-8", 0, bytesRead);
 }
 
 function extractFirstUserMessageFromTranscriptChunk(
@@ -972,6 +989,41 @@ function readLastMessagePreviewFromOpenTranscript(params: {
 
   const chunk = buf.toString("utf-8");
   const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+  const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
+
+  for (let i = tailLines.length - 1; i >= 0; i--) {
+    const line = tailLines[i];
+    try {
+      const parsed = JSON.parse(line);
+      const msg = parsed?.message as TranscriptMessage | undefined;
+      if (msg?.role !== "user" && msg?.role !== "assistant") {
+        continue;
+      }
+      const text = extractTextFromContent(msg.content);
+      if (text) {
+        return text;
+      }
+    } catch {
+      // skip malformed
+    }
+  }
+  return null;
+}
+
+async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
+  handle: TranscriptFileHandle;
+  size: number;
+}): Promise<string | null> {
+  const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
+  const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
+  const buffer = Buffer.alloc(readLen);
+  const { bytesRead } = await params.handle.read(buffer, 0, readLen, readStart);
+  if (bytesRead <= 0) {
+    return null;
+  }
+
+  const chunk = buffer.toString("utf-8", 0, bytesRead);
+  const lines = chunk.split(/\r?\n/).filter((line) => line.trim());
   const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
 
   for (let i = tailLines.length - 1; i >= 0; i--) {

@@ -64,3 +64,22 @@ export async function upsertManagedNpmRootDependency(params: {
   };
   await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
 }
+
+export async function removeManagedNpmRootDependency(params: {
+  npmRoot: string;
+  packageName: string;
+}): Promise<void> {
+  const manifestPath = path.join(params.npmRoot, "package.json");
+  const manifest = await readManagedNpmRootManifest(manifestPath);
+  const dependencies = readDependencyRecord(manifest.dependencies);
+  if (!(params.packageName in dependencies)) {
+    return;
+  }
+  const { [params.packageName]: _removed, ...nextDependencies } = dependencies;
+  const next: ManagedNpmRootManifest = {
+    ...manifest,
+    private: true,
+    dependencies: nextDependencies,
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+}
