@@ -9,17 +9,17 @@ import {
   isValidFileSecretRefId,
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-let secretResolvePromise: Promise<typeof import("../secrets/resolve.js")> | undefined;
+const secretResolveLoader = createLazyImportLoader(() => import("../secrets/resolve.js"));
 
 function loadSecretResolve() {
-  secretResolvePromise ??= import("../secrets/resolve.js");
-  return secretResolvePromise;
+  return secretResolveLoader.load();
 }
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
@@ -42,8 +42,14 @@ export function extractEnvVarFromSourceLabel(source: string): string | undefined
   return match?.[1];
 }
 
-function resolveDefaultProviderEnvVar(provider: string): string | undefined {
-  const envVars = getProviderEnvVars(provider);
+function resolveDefaultProviderEnvVar(
+  provider: string,
+  config?: OpenClawConfig,
+): string | undefined {
+  const envVars = getProviderEnvVars(provider, {
+    ...(config ? { config } : {}),
+    includeUntrustedWorkspacePlugins: false,
+  });
   return envVars?.find((candidate) => normalizeOptionalString(candidate) !== undefined);
 }
 
@@ -57,7 +63,12 @@ export function resolveRefFallbackInput(params: {
   preferredEnvVar?: string;
   env?: NodeJS.ProcessEnv;
 }): { ref: SecretRef; resolvedValue: string } {
-  const fallbackEnvVar = params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider);
+  const fallbackEnvVar =
+    params.preferredEnvVar ??
+    getProviderEnvVars(params.provider, {
+      config: params.config,
+      includeUntrustedWorkspacePlugins: false,
+    }).find((candidate) => normalizeOptionalString(candidate) !== undefined);
   if (!fallbackEnvVar) {
     throw new Error(
       `No default environment variable mapping found for provider "${params.provider}". Set a provider-specific env var, or re-run setup in an interactive terminal to configure a ref.`,
@@ -262,7 +273,7 @@ export async function promptSecretRefForSetup(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<{ ref: SecretRef; resolvedValue: string }> {
   const defaultEnvVar =
-    params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider) ?? "";
+    params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider, params.config) ?? "";
   const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
   let sourceChoice: SecretRefChoice = "env"; // pragma: allowlist secret
 

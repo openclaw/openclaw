@@ -1,39 +1,25 @@
-export type {
-  AgentToAgentPolicy,
-  SessionAccessAction,
-  SessionAccessResult,
-  SessionToolsVisibility,
-} from "./sessions-access.js";
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
-  resolveSandboxSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
-  resolveSessionToolsVisibility,
 } from "./sessions-access.js";
 import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
-export type { SessionReferenceResolution } from "./sessions-resolution.js";
 export {
-  isRequesterSpawnedSessionVisible,
-  isResolvedSessionVisibleToRequester,
-  listSpawnedSessionKeys,
-  looksLikeSessionId,
-  looksLikeSessionKey,
+  resolveCurrentSessionClientAlias,
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   resolveSessionReference,
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
-  shouldVerifyRequesterSpawnedSessionVisibility,
 } from "./sessions-resolution.js";
 export {
   extractAssistantText,
   sanitizeTextContent,
   stripToolMessages,
 } from "./chat-history-text.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
@@ -50,6 +36,7 @@ export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeo
 
 export type SessionListRow = {
   key: string;
+  agentId?: string;
   kind: SessionKind;
   channel: string;
   origin?: {
@@ -59,6 +46,8 @@ export type SessionListRow = {
   spawnedBy?: string;
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
   parentSessionKey?: string;
   deliveryContext?: SessionListDeliveryContext;
   updatedAt?: number | null;
@@ -94,7 +83,7 @@ export function resolveSessionToolContext(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
-  const cfg = opts?.config ?? loadConfig();
+  const cfg = opts?.config ?? getRuntimeConfig();
   return {
     cfg,
     ...resolveSandboxedSessionToolContext({

@@ -16,7 +16,8 @@ export type PluginInstallRequestKind =
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
 
 export type SkillInstallSpecMetadata = {
   id?: string;
@@ -72,6 +73,7 @@ export async function scanPackageInstallSource(
 }
 
 export async function scanInstalledPackageDependencyTree(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   logger: InstallScanLogger;
   packageDir: string;
   pluginId: string;

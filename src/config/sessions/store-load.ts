@@ -1,18 +1,32 @@
 import fs from "node:fs";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
+  cloneSessionStoreRecord,
   isSessionStoreCacheEnabled,
   readSessionStoreCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
+import {
+  capEntryCount,
+  pruneStaleEntries,
+  shouldRunSessionEntryMaintenance,
+  type ResolvedSessionMaintenanceConfig,
+} from "./store-maintenance.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  runMaintenance?: boolean;
+  clone?: boolean;
 };
+
+const log = createSubsystemLogger("sessions/store");
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -51,16 +65,36 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   };
 }
 
-export function normalizeSessionStore(store: Record<string, SessionEntry>): void {
+// resolvedSkills carries the full parsed Skill[] (including each SKILL.md body)
+// and is only used as an in-turn cache by the runtime — see
+// src/agents/pi-embedded-runner/skills-runtime.ts. Persisting it bloats
+// sessions.json by orders of magnitude when many sessions are active. Strip
+// it from every entry that flows through normalize, so neither the in-memory
+// store reloaded from disk nor the JSON serialized back to disk carries it.
+function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
+  const snapshot = entry.skillsSnapshot;
+  if (!snapshot || snapshot.resolvedSkills === undefined) {
+    return entry;
+  }
+  const { resolvedSkills: _drop, ...rest } = snapshot;
+  return { ...entry, skillsSnapshot: rest };
+}
+
+export function normalizeSessionStore(store: Record<string, SessionEntry>): boolean {
+  let changed = false;
   for (const [key, entry] of Object.entries(store)) {
     if (!entry) {
       continue;
     }
-    const normalized = normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry));
+    const normalized = stripPersistedSkillsCache(
+      normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry)),
+    );
     if (normalized !== entry) {
       store[key] = normalized;
+      changed = true;
     }
   }
+  return changed;
 }
 
 export function loadSessionStore(
@@ -73,6 +107,7 @@ export function loadSessionStore(
       storePath,
       mtimeMs: currentFileStat?.mtimeMs,
       sizeBytes: currentFileStat?.sizeBytes,
+      clone: opts.clone,
     });
     if (cached) {
       return cached;
@@ -110,14 +145,39 @@ export function loadSessionStore(
     }
   }
 
-  if (serializedFromDisk !== undefined) {
-    setSerializedSessionStore(storePath, serializedFromDisk);
-  } else {
-    setSerializedSessionStore(storePath, undefined);
+  const migrated = applySessionStoreMigrations(store);
+  const normalized = normalizeSessionStore(store);
+  if (migrated || normalized) {
+    serializedFromDisk = undefined;
+  }
+  if (opts.runMaintenance) {
+    const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
+    const beforeCount = Object.keys(store).length;
+    if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+      const countAfterPrune = Object.keys(store).length;
+      const capped = shouldRunSessionEntryMaintenance({
+        entryCount: countAfterPrune,
+        maxEntries: maintenance.maxEntries,
+      })
+        ? capEntryCount(store, maintenance.maxEntries, { log: false })
+        : 0;
+      const afterCount = Object.keys(store).length;
+      if (pruned > 0 || capped > 0) {
+        serializedFromDisk = undefined;
+        log.info("applied load-time maintenance to oversized session store", {
+          storePath,
+          before: beforeCount,
+          after: afterCount,
+          pruned,
+          capped,
+          maxEntries: maintenance.maxEntries,
+        });
+      }
+    }
   }
 
-  applySessionStoreMigrations(store);
-  normalizeSessionStore(store);
+  setSerializedSessionStore(storePath, serializedFromDisk);
 
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({
@@ -129,5 +189,5 @@ export function loadSessionStore(
     });
   }
 
-  return structuredClone(store);
+  return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
 }

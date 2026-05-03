@@ -1,14 +1,15 @@
+import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./detect-binary.js";
 import { isWSL } from "./wsl.js";
 
-export type BrowserOpenCommand = {
+type BrowserOpenCommand = {
   argv: string[] | null;
   reason?: string;
   command?: string;
 };
 
-export type BrowserOpenSupport = {
+type BrowserOpenSupport = {
   ok: boolean;
   reason?: string;
   command?: string;
@@ -19,6 +20,23 @@ function shouldSkipBrowserOpenInTests(): boolean {
     return true;
   }
   return process.env.NODE_ENV === "test";
+}
+
+function resolveWindowsRundll32Path(): string {
+  const systemRoot = process.env.SystemRoot?.trim() || process.env.windir?.trim() || "C:\\Windows";
+  return path.win32.join(systemRoot, "System32", "rundll32.exe");
+}
+
+function normalizeBrowserOpenUrl(raw: string): string | null {
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
@@ -34,9 +52,10 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   }
 
   if (platform === "win32") {
+    const rundll32 = resolveWindowsRundll32Path();
     return {
-      argv: ["explorer.exe"],
-      command: "explorer.exe",
+      argv: [rundll32, "url.dll,FileProtocolHandler"],
+      command: rundll32,
     };
   }
 
@@ -80,33 +99,18 @@ export async function openUrl(url: string): Promise<boolean> {
   if (shouldSkipBrowserOpenInTests()) {
     return false;
   }
+  const normalizedUrl = normalizeBrowserOpenUrl(url);
+  if (!normalizedUrl) {
+    return false;
+  }
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv) {
     return false;
   }
   const command = [...resolved.argv];
-  command.push(url);
+  command.push(normalizedUrl);
   try {
     await runCommandWithTimeout(command, { timeoutMs: 5_000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function openUrlInBackground(url: string): Promise<boolean> {
-  if (shouldSkipBrowserOpenInTests()) {
-    return false;
-  }
-  if (process.platform !== "darwin") {
-    return false;
-  }
-  const resolved = await resolveBrowserOpenCommand();
-  if (!resolved.argv || resolved.command !== "open") {
-    return false;
-  }
-  try {
-    await runCommandWithTimeout(["open", "-g", url], { timeoutMs: 5_000 });
     return true;
   } catch {
     return false;

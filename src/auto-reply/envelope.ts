@@ -13,7 +13,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 
-export type AgentEnvelopeParams = {
+type AgentEnvelopeParams = {
   channel: string;
   from?: string;
   timestamp?: number | Date;
@@ -248,20 +248,4 @@ export function formatInboundFromLabel(params: {
     return directLabel;
   }
   return `${directLabel} id:${directId}`;
-}
-
-export function formatThreadStarterEnvelope(params: {
-  channel: string;
-  author?: string;
-  timestamp?: number | Date;
-  body: string;
-  envelope?: EnvelopeFormatOptions;
-}): string {
-  return formatAgentEnvelope({
-    channel: params.channel,
-    from: params.author,
-    timestamp: params.timestamp,
-    envelope: params.envelope,
-    body: params.body,
-  });
 }

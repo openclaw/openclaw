@@ -30,6 +30,16 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     waitForGatewayHealthy: fn,
     waitForTransportReady: fn,
     waitForQaChannelReady: fn,
+    browserRequest: fn,
+    waitForBrowserReady: fn,
+    browserOpenTab: fn,
+    browserSnapshot: fn,
+    browserAct: fn,
+    webOpenPage: fn,
+    webWait: fn,
+    webType: fn,
+    webSnapshot: fn,
+    webEvaluate: fn,
     waitForConfigRestartSettle: fn,
     patchConfig: fn,
     applyConfig: fn,
@@ -45,6 +55,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     waitForAgentRun: fn,
     listCronJobs: fn,
     waitForCronRunCompletion: fn,
+    findManagedDreamingCronJob: fn,
     readDoctorMemoryStatus: fn,
     forceMemoryIndex: fn,
     findSkill: fn,
@@ -130,23 +141,33 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
+    expect(api.browserRequest).toBeDefined();
+    expect(api.waitForBrowserReady).toBeDefined();
+    expect(api.browserOpenTab).toBeDefined();
+    expect(api.browserSnapshot).toBeDefined();
+    expect(api.browserAct).toBeDefined();
+    expect(api.webOpenPage).toBeDefined();
+    expect(api.webWait).toBeDefined();
+    expect(api.webType).toBeDefined();
+    expect(api.webSnapshot).toBeDefined();
+    expect(api.webEvaluate).toBeDefined();
     expect(api.getTransportSnapshot()).toEqual(state.getSnapshot());
     expect(api.imageUnderstandingPngBase64).toBe("png-small");
 
-    const inbound = await api.injectInboundMessage({
+    const inbound = api.injectInboundMessage({
       accountId: "qa-channel",
       conversation: { id: "qa-operator", kind: "direct" },
       senderId: "qa-operator",
       text: "hello",
     });
-    const outbound = await api.injectOutboundMessage({
+    const outbound = api.injectOutboundMessage({
       accountId: "qa-channel",
       to: "dm:qa-operator",
       text: "hi",
     });
     expect(inbound.id).toBeTruthy();
     expect(outbound.id).toBeTruthy();
-    await api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
+    api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
     await api.reset();
     await api.resetBus();
     await api.resetTransport();

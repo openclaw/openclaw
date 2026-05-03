@@ -42,6 +42,16 @@ export type QaScenarioRuntimeDeps = {
   waitForGatewayHealthy: QaScenarioRuntimeFunction;
   waitForTransportReady: QaScenarioRuntimeFunction;
   waitForQaChannelReady: QaScenarioRuntimeFunction;
+  browserRequest: QaScenarioRuntimeFunction;
+  waitForBrowserReady: QaScenarioRuntimeFunction;
+  browserOpenTab: QaScenarioRuntimeFunction;
+  browserSnapshot: QaScenarioRuntimeFunction;
+  browserAct: QaScenarioRuntimeFunction;
+  webOpenPage: QaScenarioRuntimeFunction;
+  webWait: QaScenarioRuntimeFunction;
+  webType: QaScenarioRuntimeFunction;
+  webSnapshot: QaScenarioRuntimeFunction;
+  webEvaluate: QaScenarioRuntimeFunction;
   waitForConfigRestartSettle: QaScenarioRuntimeFunction;
   patchConfig: QaScenarioRuntimeFunction;
   applyConfig: QaScenarioRuntimeFunction;
@@ -56,6 +66,7 @@ export type QaScenarioRuntimeDeps = {
   startAgentRun: QaScenarioRuntimeFunction;
   waitForAgentRun: QaScenarioRuntimeFunction;
   listCronJobs: QaScenarioRuntimeFunction;
+  findManagedDreamingCronJob: QaScenarioRuntimeFunction;
   waitForCronRunCompletion: QaScenarioRuntimeFunction;
   readDoctorMemoryStatus: QaScenarioRuntimeFunction;
   forceMemoryIndex: QaScenarioRuntimeFunction;
@@ -87,7 +98,7 @@ export type QaScenarioRuntimeConstants = {
   imageUnderstandingValidPngBase64: string;
 };
 
-export type QaScenarioRuntimeApi<
+type QaScenarioRuntimeApi<
   TEnv extends QaScenarioRuntimeEnv = QaScenarioRuntimeEnv,
   TDeps extends QaScenarioRuntimeDeps = QaScenarioRuntimeDeps,
 > = {
@@ -116,6 +127,16 @@ export type QaScenarioRuntimeApi<
   waitForTransportReady: TDeps["waitForTransportReady"];
   waitForChannelReady: TDeps["waitForTransportReady"];
   waitForQaChannelReady: TDeps["waitForQaChannelReady"];
+  browserRequest: TDeps["browserRequest"];
+  waitForBrowserReady: TDeps["waitForBrowserReady"];
+  browserOpenTab: TDeps["browserOpenTab"];
+  browserSnapshot: TDeps["browserSnapshot"];
+  browserAct: TDeps["browserAct"];
+  webOpenPage: TDeps["webOpenPage"];
+  webWait: TDeps["webWait"];
+  webType: TDeps["webType"];
+  webSnapshot: TDeps["webSnapshot"];
+  webEvaluate: TDeps["webEvaluate"];
   waitForConfigRestartSettle: TDeps["waitForConfigRestartSettle"];
   patchConfig: TDeps["patchConfig"];
   applyConfig: TDeps["applyConfig"];
@@ -130,6 +151,7 @@ export type QaScenarioRuntimeApi<
   startAgentRun: TDeps["startAgentRun"];
   waitForAgentRun: TDeps["waitForAgentRun"];
   listCronJobs: TDeps["listCronJobs"];
+  findManagedDreamingCronJob: TDeps["findManagedDreamingCronJob"];
   waitForCronRunCompletion: TDeps["waitForCronRunCompletion"];
   readDoctorMemoryStatus: TDeps["readDoctorMemoryStatus"];
   forceMemoryIndex: TDeps["forceMemoryIndex"];
@@ -205,6 +227,16 @@ export function createQaScenarioRuntimeApi<
     waitForTransportReady: params.deps.waitForTransportReady,
     waitForChannelReady: params.deps.waitForTransportReady,
     waitForQaChannelReady: params.deps.waitForQaChannelReady,
+    browserRequest: params.deps.browserRequest,
+    waitForBrowserReady: params.deps.waitForBrowserReady,
+    browserOpenTab: params.deps.browserOpenTab,
+    browserSnapshot: params.deps.browserSnapshot,
+    browserAct: params.deps.browserAct,
+    webOpenPage: params.deps.webOpenPage,
+    webWait: params.deps.webWait,
+    webType: params.deps.webType,
+    webSnapshot: params.deps.webSnapshot,
+    webEvaluate: params.deps.webEvaluate,
     waitForConfigRestartSettle: params.deps.waitForConfigRestartSettle,
     patchConfig: params.deps.patchConfig,
     applyConfig: params.deps.applyConfig,
@@ -219,6 +251,7 @@ export function createQaScenarioRuntimeApi<
     startAgentRun: params.deps.startAgentRun,
     waitForAgentRun: params.deps.waitForAgentRun,
     listCronJobs: params.deps.listCronJobs,
+    findManagedDreamingCronJob: params.deps.findManagedDreamingCronJob,
     waitForCronRunCompletion: params.deps.waitForCronRunCompletion,
     readDoctorMemoryStatus: params.deps.readDoctorMemoryStatus,
     forceMemoryIndex: params.deps.forceMemoryIndex,

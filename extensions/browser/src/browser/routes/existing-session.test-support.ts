@@ -7,6 +7,12 @@ export const existingSessionRouteState = {
       driver: "existing-session" as const,
       name: "chrome-live",
     },
+    listTabs: vi.fn(async () => [
+      {
+        targetId: "7",
+        url: "https://example.com",
+      },
+    ]),
     ensureTabAvailable: vi.fn(async () => ({
       targetId: "7",
       url: "https://example.com",
@@ -36,7 +42,12 @@ export function createExistingSessionAgentSharedModule() {
         profileCtx: existingSessionRouteState.profileCtx,
         cdpUrl: "http://127.0.0.1:18800",
         tab: existingSessionRouteState.tab,
+        resolveTabUrl: vi.fn(async (fallbackUrl?: string) => fallbackUrl ?? routeStateUrl()),
       });
     }),
   };
+}
+
+function routeStateUrl() {
+  return existingSessionRouteState.tab.url;
 }

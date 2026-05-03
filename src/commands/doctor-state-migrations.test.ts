@@ -12,11 +12,177 @@ import {
   runLegacyStateMigrations,
 } from "./doctor-state-migrations.js";
 
-let tempRoot: string | null = null;
+let tempRoots: string[] = [];
+
+vi.mock("../channels/plugins/bundled.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
+    "../channels/plugins/bundled.js",
+  );
+  function fileExists(filePath: string): boolean {
+    try {
+      return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  function resolveTelegramAccountId(cfg: OpenClawConfig): string {
+    const defaultAgentId = cfg.agents?.list?.find((agent) => agent.default)?.id ?? "main";
+    const boundAccountId = cfg.bindings?.find(
+      (binding) =>
+        binding.agentId === defaultAgentId &&
+        binding.match?.channel === "telegram" &&
+        typeof binding.match.accountId === "string",
+    )?.match.accountId;
+    return boundAccountId ?? cfg.channels?.telegram?.defaultAccount ?? "default";
+  }
+
+  function detectTelegramAllowFromMigration(params: {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+  }) {
+    const root = params.env.OPENCLAW_STATE_DIR;
+    if (!root) {
+      return [];
+    }
+    const legacyPath = path.join(root, "credentials", "telegram-allowFrom.json");
+    if (!fileExists(legacyPath)) {
+      return [];
+    }
+    const targetPath = path.join(
+      root,
+      "credentials",
+      `telegram-${resolveTelegramAccountId(params.cfg)}-allowFrom.json`,
+    );
+    return fileExists(targetPath)
+      ? []
+      : [
+          {
+            kind: "copy" as const,
+            label: "Telegram pairing allowFrom",
+            sourcePath: legacyPath,
+            targetPath,
+          },
+        ];
+  }
+
+  function detectWhatsAppLegacyStateMigrations(params: { oauthDir: string }) {
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(params.oauthDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    return entries.flatMap((entry) => {
+      const isLegacyAuthFile =
+        entry.name === "creds.json" ||
+        entry.name === "creds.json.bak" ||
+        (/^(app-state-sync|session|sender-key|pre-key)-/.test(entry.name) &&
+          entry.name.endsWith(".json"));
+      if (!entry.isFile() || entry.name === "oauth.json" || !isLegacyAuthFile) {
+        return [];
+      }
+      const sourcePath = path.join(params.oauthDir, entry.name);
+      const targetPath = path.join(params.oauthDir, "whatsapp", "default", entry.name);
+      return fileExists(targetPath)
+        ? []
+        : [{ kind: "move" as const, label: `WhatsApp auth ${entry.name}`, sourcePath, targetPath }];
+    });
+  }
+
+  return {
+    ...actual,
+    listBundledChannelLegacySessionSurfaces: vi.fn(() => [
+      {
+        isLegacyGroupSessionKey: (key: string) => /^group:.+@g\.us$/i.test(key.trim()),
+        canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) =>
+          /^group:.+@g\.us$/i.test(key.trim())
+            ? `agent:${agentId}:whatsapp:${key.trim().toLowerCase()}`
+            : null,
+      },
+    ]),
+    listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
+      ({ oauthDir }: { oauthDir: string }) => detectWhatsAppLegacyStateMigrations({ oauthDir }),
+      ({ cfg, env }: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
+        detectTelegramAllowFromMigration({ cfg, env }),
+    ]),
+    listBundledChannelSetupPluginsByFeature: vi.fn((feature: string) => {
+      if (feature === "legacySessionSurfaces") {
+        return [
+          {
+            id: "whatsapp",
+            messaging: {
+              isLegacyGroupSessionKey: (key: string) => /^group:.+@g\.us$/i.test(key.trim()),
+              canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) =>
+                /^group:.+@g\.us$/i.test(key.trim())
+                  ? `agent:${agentId}:whatsapp:${key.trim().toLowerCase()}`
+                  : null,
+            },
+          },
+        ];
+      }
+      if (feature === "legacyStateMigrations") {
+        return [
+          {
+            id: "whatsapp",
+            lifecycle: {
+              detectLegacyStateMigrations: ({ oauthDir }: { oauthDir: string }) =>
+                detectWhatsAppLegacyStateMigrations({ oauthDir }),
+            },
+          },
+          {
+            id: "telegram",
+            lifecycle: {
+              detectLegacyStateMigrations: ({
+                cfg,
+                env,
+              }: {
+                cfg: OpenClawConfig;
+                env: NodeJS.ProcessEnv;
+              }) => detectTelegramAllowFromMigration({ cfg, env }),
+            },
+          },
+        ];
+      }
+      return [];
+    }),
+  };
+});
+
+vi.mock("../config/sessions.js", () => ({
+  saveSessionStore: async (storePath: string, store: Record<string, unknown>) => {
+    await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.promises.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+  },
+}));
+
+vi.mock("../infra/json-files.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/json-files.js")>("../infra/json-files.js");
+  return {
+    ...actual,
+    writeTextAtomic: async (
+      filePath: string,
+      content: string,
+      options?: { mode?: number; ensureDirMode?: number; appendTrailingNewline?: boolean },
+    ) => {
+      const payload =
+        options?.appendTrailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
+      await fs.promises.mkdir(path.dirname(filePath), {
+        recursive: true,
+        ...(typeof options?.ensureDirMode === "number" ? { mode: options.ensureDirMode } : {}),
+      });
+      await fs.promises.writeFile(filePath, payload, {
+        encoding: "utf8",
+        mode: options?.mode ?? 0o600,
+      });
+    },
+  };
+});
 
 async function makeTempRoot() {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-"));
-  tempRoot = root;
+  tempRoots.push(root);
   return root;
 }
 
@@ -55,11 +221,10 @@ async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenCl
 afterEach(async () => {
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
-  if (!tempRoot) {
-    return;
-  }
-  await fs.promises.rm(tempRoot, { recursive: true, force: true });
-  tempRoot = null;
+  await Promise.all(
+    tempRoots.map((root) => fs.promises.rm(root, { recursive: true, force: true })),
+  );
+  tempRoots = [];
 });
 
 function writeJson5(filePath: string, value: unknown) {
@@ -137,6 +302,11 @@ async function runStateDirMigration(root: string, env = {} as NodeJS.ProcessEnv)
     env,
     homedir: () => root,
   });
+}
+
+async function runFreshStateDirMigration(root: string, env = {} as NodeJS.ProcessEnv) {
+  resetAutoMigrateLegacyStateDirForTest();
+  return runStateDirMigration(root, env);
 }
 
 async function runAutoMigrateLegacyStateWithLog(params: {
@@ -560,93 +730,74 @@ describe("doctor legacy state migrations", () => {
     expect(result.migrated).toBe(false);
   });
 
-  it("does not warn when legacy state dir is an already-migrated symlink mirror", async () => {
-    const root = await makeTempRoot();
-    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
-    fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
-    fs.mkdirSync(path.join(targetDir, "agent"), { recursive: true });
-
+  it("classifies already-migrated symlink mirrors without warnings", async () => {
+    const flatRoot = await makeTempRoot();
+    const flat = ensureLegacyAndTargetStateDirs(flatRoot);
+    fs.mkdirSync(path.join(flat.targetDir, "sessions"), { recursive: true });
+    fs.mkdirSync(path.join(flat.targetDir, "agent"), { recursive: true });
     fs.symlinkSync(
-      path.join(targetDir, "sessions"),
-      path.join(legacyDir, "sessions"),
+      path.join(flat.targetDir, "sessions"),
+      path.join(flat.legacyDir, "sessions"),
       DIR_LINK_TYPE,
     );
-    fs.symlinkSync(path.join(targetDir, "agent"), path.join(legacyDir, "agent"), DIR_LINK_TYPE);
-
-    const result = await runStateDirMigration(root);
-    expectUnmigratedWithoutWarnings(result);
-  });
-
-  it("warns when legacy state dir is empty and target already exists", async () => {
-    const root = await makeTempRoot();
-    const { targetDir } = ensureLegacyAndTargetStateDirs(root);
-
-    const result = await runStateDirMigration(root);
-    expectTargetAlreadyExistsWarning(result, targetDir);
-  });
-
-  it("warns when legacy state dir contains non-symlink entries and target already exists", async () => {
-    const root = await makeTempRoot();
-    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
-    fs.writeFileSync(path.join(legacyDir, "sessions.json"), "{}", "utf-8");
-
-    const result = await runStateDirMigration(root);
-    expectTargetAlreadyExistsWarning(result, targetDir);
-  });
-
-  it("does not warn when legacy state dir contains nested symlink mirrors", async () => {
-    const root = await makeTempRoot();
-    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
-    fs.mkdirSync(path.join(targetDir, "agents", "main"), { recursive: true });
-    fs.mkdirSync(path.join(legacyDir, "agents"), { recursive: true });
-
     fs.symlinkSync(
-      path.join(targetDir, "agents", "main"),
-      path.join(legacyDir, "agents", "main"),
+      path.join(flat.targetDir, "agent"),
+      path.join(flat.legacyDir, "agent"),
       DIR_LINK_TYPE,
     );
+    expectUnmigratedWithoutWarnings(await runFreshStateDirMigration(flatRoot));
 
-    const result = await runStateDirMigration(root);
-    expectUnmigratedWithoutWarnings(result);
+    const nestedRoot = await makeTempRoot();
+    const nested = ensureLegacyAndTargetStateDirs(nestedRoot);
+    fs.mkdirSync(path.join(nested.targetDir, "agents", "main"), { recursive: true });
+    fs.mkdirSync(path.join(nested.legacyDir, "agents"), { recursive: true });
+    fs.symlinkSync(
+      path.join(nested.targetDir, "agents", "main"),
+      path.join(nested.legacyDir, "agents", "main"),
+      DIR_LINK_TYPE,
+    );
+    expectUnmigratedWithoutWarnings(await runFreshStateDirMigration(nestedRoot));
   });
 
-  it("warns when legacy state dir symlink points outside the target tree", async () => {
-    const root = await makeTempRoot();
-    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
-    const outsideDir = path.join(root, ".outside-state");
-    fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
+  it("warns when target exists and legacy state is not a safe mirror", async () => {
+    const emptyRoot = await makeTempRoot();
+    const empty = ensureLegacyAndTargetStateDirs(emptyRoot);
+    expectTargetAlreadyExistsWarning(await runFreshStateDirMigration(emptyRoot), empty.targetDir);
+
+    const fileRoot = await makeTempRoot();
+    const file = ensureLegacyAndTargetStateDirs(fileRoot);
+    fs.writeFileSync(path.join(file.legacyDir, "sessions.json"), "{}", "utf-8");
+    expectTargetAlreadyExistsWarning(await runFreshStateDirMigration(fileRoot), file.targetDir);
+
+    const outsideRoot = await makeTempRoot();
+    const outside = ensureLegacyAndTargetStateDirs(outsideRoot);
+    const outsideDir = path.join(outsideRoot, ".outside-state");
+    fs.mkdirSync(path.join(outside.targetDir, "sessions"), { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
+    fs.symlinkSync(outsideDir, path.join(outside.legacyDir, "sessions"), DIR_LINK_TYPE);
+    expectTargetAlreadyExistsWarning(
+      await runFreshStateDirMigration(outsideRoot),
+      outside.targetDir,
+    );
 
-    fs.symlinkSync(path.join(outsideDir), path.join(legacyDir, "sessions"), DIR_LINK_TYPE);
-
-    const result = await runStateDirMigration(root);
-    expectTargetAlreadyExistsWarning(result, targetDir);
-  });
-
-  it("warns when legacy state dir contains a broken symlink target", async () => {
-    const root = await makeTempRoot();
-    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
-    fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
-
-    const targetSessionDir = path.join(targetDir, "sessions");
-    fs.symlinkSync(targetSessionDir, path.join(legacyDir, "sessions"), DIR_LINK_TYPE);
+    const brokenRoot = await makeTempRoot();
+    const broken = ensureLegacyAndTargetStateDirs(brokenRoot);
+    const targetSessionDir = path.join(broken.targetDir, "sessions");
+    fs.mkdirSync(targetSessionDir, { recursive: true });
+    fs.symlinkSync(targetSessionDir, path.join(broken.legacyDir, "sessions"), DIR_LINK_TYPE);
     fs.rmSync(targetSessionDir, { recursive: true, force: true });
+    expectTargetAlreadyExistsWarning(await runFreshStateDirMigration(brokenRoot), broken.targetDir);
 
-    const result = await runStateDirMigration(root);
-    expectTargetAlreadyExistsWarning(result, targetDir);
-  });
-
-  it("warns when legacy symlink escapes target tree through second-hop symlink", async () => {
-    const root = await makeTempRoot();
-    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
-    const outsideDir = path.join(root, ".outside-state");
-    fs.mkdirSync(outsideDir, { recursive: true });
-
-    const targetHop = path.join(targetDir, "hop");
-    fs.symlinkSync(outsideDir, targetHop, DIR_LINK_TYPE);
-    fs.symlinkSync(targetHop, path.join(legacyDir, "sessions"), DIR_LINK_TYPE);
-
-    const result = await runStateDirMigration(root);
-    expectTargetAlreadyExistsWarning(result, targetDir);
+    const secondHopRoot = await makeTempRoot();
+    const secondHop = ensureLegacyAndTargetStateDirs(secondHopRoot);
+    const secondHopOutsideDir = path.join(secondHopRoot, ".outside-state");
+    fs.mkdirSync(secondHopOutsideDir, { recursive: true });
+    const targetHop = path.join(secondHop.targetDir, "hop");
+    fs.symlinkSync(secondHopOutsideDir, targetHop, DIR_LINK_TYPE);
+    fs.symlinkSync(targetHop, path.join(secondHop.legacyDir, "sessions"), DIR_LINK_TYPE);
+    expectTargetAlreadyExistsWarning(
+      await runFreshStateDirMigration(secondHopRoot),
+      secondHop.targetDir,
+    );
   });
 });

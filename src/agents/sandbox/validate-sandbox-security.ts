@@ -18,8 +18,7 @@ import {
 import { getBlockedNetworkModeReason } from "./network-mode.js";
 
 // Targeted denylist: host paths that should never be exposed inside sandbox containers.
-// Exported for reuse in security audit collectors.
-export const BLOCKED_HOST_PATHS = [
+const BLOCKED_HOST_PATHS = [
   "/etc",
   "/private/etc",
   "/proc",
@@ -50,6 +49,12 @@ const BLOCKED_HOME_SUBPATHS = [
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
 const RESERVED_CONTAINER_TARGET_PATHS = ["/workspace", SANDBOX_AGENT_WORKSPACE_MOUNT];
+let blockedHostPathsCache:
+  | {
+      key: string;
+      paths: string[];
+    }
+  | undefined;
 
 export type ValidateBindMountsOptions = {
   allowedSourceRoots?: string[];
@@ -86,18 +91,18 @@ function parseBindSpec(bind: string): ParsedBindSpec {
  * Parse the host/source path from a Docker bind mount string.
  * Format: `source:target[:mode]`
  */
-export function parseBindSourcePath(bind: string): string {
+function parseBindSourcePath(bind: string): string {
   return parseBindSpec(bind).source.trim();
 }
 
-export function parseBindTargetPath(bind: string): string {
+function parseBindTargetPath(bind: string): string {
   return parseBindSpec(bind).target.trim();
 }
 
 /**
  * Normalize a POSIX path: resolve `.`, `..`, collapse `//`, strip trailing `/`.
  */
-export function normalizeHostPath(raw: string): string {
+function normalizeHostPath(raw: string): string {
   return normalizeSandboxHostPath(raw);
 }
 
@@ -129,7 +134,7 @@ export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   return null;
 }
 
-export function getBlockedReasonForSourcePath(
+function getBlockedReasonForSourcePath(
   sourceNormalized: string,
   blockedHostPaths: string[],
 ): BlockedBindReason | null {
@@ -146,13 +151,22 @@ export function getBlockedReasonForSourcePath(
 }
 
 function getBlockedHostPaths(): string[] {
+  const cacheKey = JSON.stringify({
+    home: process.env.HOME,
+    openclawHome: process.env.OPENCLAW_HOME,
+    osHome: os.homedir(),
+  });
+  if (blockedHostPathsCache?.key === cacheKey) {
+    return blockedHostPathsCache.paths;
+  }
   const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeHostPath));
   for (const home of getBlockedHomeRoots()) {
     for (const suffix of BLOCKED_HOME_SUBPATHS) {
       blocked.add(normalizeHostPath(path.posix.join(home, suffix)));
     }
   }
-  return [...blocked];
+  blockedHostPathsCache = { key: cacheKey, paths: [...blocked] };
+  return blockedHostPathsCache.paths;
 }
 
 function getBlockedHomeRoots(): string[] {

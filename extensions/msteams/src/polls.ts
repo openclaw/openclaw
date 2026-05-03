@@ -1,9 +1,8 @@
 import crypto from "node:crypto";
-import { isRecord, readNestedString } from "./attachments/shared.js";
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
-export type MSTeamsPollVote = {
+type MSTeamsPollVote = {
   pollId: string;
   selections: string[];
 };
@@ -30,7 +29,7 @@ export type MSTeamsPollStore = {
   }) => Promise<MSTeamsPoll | null>;
 };
 
-export type MSTeamsPollCard = {
+type MSTeamsPollCard = {
   pollId: string;
   question: string;
   options: string[];
@@ -47,6 +46,18 @@ type PollStoreData = {
 const STORE_FILENAME = "msteams-polls.json";
 const MAX_POLLS = 1000;
 const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 function normalizeChoiceValue(value: unknown): string | null {
   if (typeof value === "string") {
@@ -85,6 +96,10 @@ function readNestedValue(value: unknown, keys: Array<string | number>): unknown 
     current = current[key as keyof typeof current];
   }
   return current;
+}
+
+function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
+  return normalizeOptionalString(readNestedValue(value, keys));
 }
 
 export function extractMSTeamsPollVote(
@@ -206,7 +221,7 @@ export function buildMSTeamsPollCard(params: {
   };
 }
 
-export type MSTeamsPollStoreFsOptions = {
+type MSTeamsPollStoreFsOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;

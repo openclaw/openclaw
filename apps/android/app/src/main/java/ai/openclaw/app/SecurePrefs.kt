@@ -37,6 +37,7 @@ class SecurePrefs(
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
+    private const val voiceMicEnabledKey = "voice.micEnabled"
   }
 
   private val appContext = context.applicationContext
@@ -45,7 +46,8 @@ class SecurePrefs(
     appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
 
   private val masterKey by lazy {
-    MasterKey.Builder(appContext)
+    MasterKey
+      .Builder(appContext)
       .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
       .build()
   }
@@ -162,8 +164,8 @@ class SecurePrefs(
   private val _voiceWakeMode = MutableStateFlow(loadVoiceWakeMode())
   val voiceWakeMode: StateFlow<VoiceWakeMode> = _voiceWakeMode
 
-  private val _talkEnabled = MutableStateFlow(plainPrefs.getBoolean("talk.enabled", false))
-  val talkEnabled: StateFlow<Boolean> = _talkEnabled
+  private val _voiceMicEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceMicEnabledKey, false))
+  val voiceMicEnabled: StateFlow<Boolean> = _voiceMicEnabled
 
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
@@ -419,16 +421,20 @@ class SecurePrefs(
     return plainPrefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
   }
 
-  fun saveGatewayTlsFingerprint(stableId: String, fingerprint: String) {
+  fun saveGatewayTlsFingerprint(
+    stableId: String,
+    fingerprint: String,
+  ) {
     val key = "gateway.tls.$stableId"
     plainPrefs.edit { putString(key, fingerprint.trim()) }
   }
 
-  fun getString(key: String): String? {
-    return securePrefs.getString(key, null)
-  }
+  fun getString(key: String): String? = securePrefs.getString(key, null)
 
-  fun putString(key: String, value: String) {
+  fun putString(
+    key: String,
+    value: String,
+  ) {
     securePrefs.edit { putString(key, value) }
   }
 
@@ -436,15 +442,17 @@ class SecurePrefs(
     securePrefs.edit { remove(key) }
   }
 
-  private fun createSecurePrefs(context: Context, name: String): SharedPreferences {
-    return EncryptedSharedPreferences.create(
+  private fun createSecurePrefs(
+    context: Context,
+    name: String,
+  ): SharedPreferences =
+    EncryptedSharedPreferences.create(
       context,
       name,
       masterKey,
       EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
       EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
-  }
 
   private fun loadOrCreateInstanceId(): String {
     val existing = plainPrefs.getString("node.instanceId", null)?.trim()
@@ -478,9 +486,9 @@ class SecurePrefs(
     _voiceWakeMode.value = mode
   }
 
-  fun setTalkEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("talk.enabled", value) }
-    _talkEnabled.value = value
+  fun setVoiceMicEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(voiceMicEnabledKey, value) }
+    _voiceMicEnabled.value = value
   }
 
   fun setSpeakerEnabled(value: Boolean) {
@@ -503,8 +511,7 @@ class SecurePrefs(
             is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }
             else -> null
           }
-        }
-        .toSet()
+        }.toSet()
     } catch (_: Throwable) {
       emptySet()
     }

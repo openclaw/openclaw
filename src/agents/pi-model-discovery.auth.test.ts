@@ -1,12 +1,47 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 import {
   addEnvBackedPiCredentials,
   scrubLegacyStaticAuthJsonEntriesForDiscovery,
-} from "./pi-model-discovery.js";
+} from "./pi-auth-discovery-core.js";
+
+vi.mock("./model-auth-env-vars.js", () => ({
+  listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
+  resolveProviderEnvApiKeyCandidates: () => ({
+    mistral: ["MISTRAL_API_KEY"],
+  }),
+  resolveProviderEnvAuthEvidence: () => ({
+    "workspace-cloud": [
+      {
+        type: "local-file-with-env",
+        credentialMarker: "workspace-cloud-local-credentials",
+        source: "workspace cloud credentials",
+      },
+    ],
+  }),
+}));
+
+vi.mock("./model-auth-env.js", () => ({
+  resolveEnvApiKey: (
+    provider: string,
+    env: NodeJS.ProcessEnv,
+    options?: { workspaceDir?: string },
+  ) => {
+    if (provider === "mistral" && env.MISTRAL_API_KEY?.trim()) {
+      return { apiKey: env.MISTRAL_API_KEY, source: "env: MISTRAL_API_KEY" };
+    }
+    if (provider === "workspace-cloud" && options?.workspaceDir === "/tmp/workspace") {
+      return {
+        apiKey: "workspace-cloud-local-credentials",
+        source: "workspace cloud credentials",
+      };
+    }
+    return null;
+  },
+}));
 
 async function createAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-auth-storage-"));
@@ -129,7 +164,7 @@ describe("discoverAuthStorage", () => {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     try {
-      const credentials = addEnvBackedPiCredentials({}, process.env);
+      const credentials = addEnvBackedPiCredentials({}, { env: process.env });
 
       expect(credentials.mistral).toEqual({
         type: "api_key",
@@ -152,5 +187,20 @@ describe("discoverAuthStorage", () => {
         process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
       }
     }
+  });
+
+  it("includes workspace-scoped auth evidence in pi discovery credentials", () => {
+    const credentials = addEnvBackedPiCredentials(
+      {},
+      {
+        env: {},
+        workspaceDir: "/tmp/workspace",
+      },
+    );
+
+    expect(credentials["workspace-cloud"]).toEqual({
+      type: "api_key",
+      key: "workspace-cloud-local-credentials",
+    });
   });
 });

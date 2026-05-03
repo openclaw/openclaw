@@ -6,6 +6,10 @@ export type ContentPart =
   | {
       type: "input_image";
       source: { type: "url"; url: string } | { type: "base64"; media_type: string; data: string };
+    }
+  | {
+      type: "image_url";
+      image_url: { url: string };
     };
 
 export type InputItem =
@@ -20,9 +24,9 @@ export type InputItem =
   | {
       type: "reasoning";
       id?: string;
-      content?: string;
+      content?: unknown;
       encrypted_content?: string;
-      summary?: string;
+      summary?: unknown;
     }
   | { type: "item_reference"; id: string };
 
@@ -55,7 +59,11 @@ export interface ResponseCreateEvent {
   temperature?: number;
   top_p?: number;
   metadata?: Record<string, string>;
-  reasoning?: { effort?: "low" | "medium" | "high"; summary?: "auto" | "concise" | "detailed" };
+  include?: string[];
+  reasoning?: {
+    effort?: "none" | "low" | "medium" | "high" | "xhigh";
+    summary?: "auto" | "concise" | "detailed";
+  };
   text?: { verbosity?: "low" | "medium" | "high"; [key: string]: unknown };
   truncation?: "auto" | "disabled";
   [key: string]: unknown;

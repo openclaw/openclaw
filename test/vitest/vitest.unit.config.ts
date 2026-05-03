@@ -1,4 +1,4 @@
-import { defineProject } from "vitest/config";
+import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import {
@@ -6,7 +6,7 @@ import {
   resolveRepoRootPath,
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
-import { unitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
+import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 import {
   isBundledPluginDependentUnitTestFile,
   unitTestAdditionalExcludePatterns,
@@ -35,9 +35,11 @@ export function createUnitVitestConfigWithOptions(
     extraExcludePatterns?: string[];
     name?: string;
     argv?: string[];
+    passWithNoTests?: boolean;
   } = {},
 ) {
   const isolate = resolveVitestIsolation(env);
+  const unitFastTestFiles = getUnitFastTestFiles();
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
   const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, options.argv);
   const protectedIncludeFiles = new Set(
@@ -49,7 +51,8 @@ export function createUnitVitestConfigWithOptions(
     }
     return ![...protectedIncludeFiles].some((file) => pattern === file || pattern.endsWith("/**"));
   });
-  return defineProject({
+  const extraExcludePatterns = options.extraExcludePatterns ?? [];
+  return defineConfig({
     ...sharedVitestConfig,
     test: {
       ...sharedTest,
@@ -69,11 +72,21 @@ export function createUnitVitestConfigWithOptions(
           ...exclude,
           ...baseExcludePatterns,
           ...unitFastTestFiles,
-          ...(options.extraExcludePatterns ?? []),
+          ...extraExcludePatterns,
           ...loadExtraExcludePatternsFromEnv(env),
         ]),
       ],
-      ...(cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
+      coverage: {
+        ...sharedTest.coverage,
+        exclude: [
+          ...new Set([
+            ...(sharedTest.coverage?.exclude ?? []),
+            ...baseExcludePatterns,
+            ...extraExcludePatterns,
+          ]),
+        ],
+      },
+      ...(options.passWithNoTests || cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
     },
   });
 }

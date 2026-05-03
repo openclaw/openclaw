@@ -1,11 +1,24 @@
 import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
+import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
+
+function invalidateStaleNextRunOnScheduleChange(params: {
+  previousJobsById: ReadonlyMap<string, CronJob>;
+  hydrated: CronJob;
+}) {
+  const previousJob = params.previousJobsById.get(params.hydrated.id);
+  if (!previousJob || cronSchedulingInputsEqual(previousJob, params.hydrated)) {
+    return;
+  }
+  params.hydrated.state ??= {};
+  params.hydrated.state.nextRunAtMs = undefined;
+}
 
 async function getFileMtimeMs(path: string): Promise<number | null> {
   try {
@@ -29,6 +42,10 @@ export async function ensureLoaded(
   // trust the in-memory copy to avoid a stat syscall on every operation.
   if (state.store && !opts?.forceReload) {
     return;
+  }
+  const previousJobsById = new Map<string, CronJob>();
+  for (const job of state.store?.jobs ?? []) {
+    previousJobsById.set(job.id, job);
   }
   // Force reload always re-reads the file to avoid missing cross-service
   // edits on filesystems with coarse mtime resolution.
@@ -67,6 +84,44 @@ export async function ensureLoaded(
     if (typeof hydrated.enabled !== "boolean") {
       hydrated.enabled = true;
     }
+    invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
+    // Same shape: persisted jobs missing `sessionTarget` crash downstream
+    // on any code path that dereferences `.startsWith` (e.g.
+    // `runIsolatedAgentJob` in `src/gateway/server-cron.ts`). Mirror the
+    // defaulter applied at create time: systemEvent payloads -> "main",
+    // agentTurn -> "isolated". Use `Object.hasOwn` rather than `in` so a
+    // poisoned prototype cannot feed a crafted `kind` into the defaulter.
+    if (typeof hydrated.sessionTarget !== "string") {
+      const payload = hydrated.payload as unknown;
+      const payloadKind =
+        payload &&
+        typeof payload === "object" &&
+        !Array.isArray(payload) &&
+        Object.hasOwn(payload, "kind")
+          ? (payload as { kind?: unknown }).kind
+          : undefined;
+      let defaulted: "main" | "isolated" | undefined;
+      if (payloadKind === "systemEvent") {
+        defaulted = "main";
+      } else if (payloadKind === "agentTurn") {
+        defaulted = "isolated";
+      }
+      if (defaulted) {
+        hydrated.sessionTarget = defaulted;
+        // `ensureLoaded` is called with `forceReload: true` on every tick;
+        // warn once per jobId per process to avoid log spam on repeated
+        // loads of the same still-broken store file.
+        const jobId = typeof hydrated.id === "string" ? hydrated.id : undefined;
+        const dedupeKey = jobId ?? "<unknown>";
+        if (!state.warnedMissingSessionTargetJobIds.has(dedupeKey)) {
+          state.warnedMissingSessionTargetJobIds.add(dedupeKey);
+          state.deps.log.warn(
+            { storePath: state.deps.storePath, jobId, defaulted },
+            "cron: job missing sessionTarget; defaulted in memory (edit jobs.json to persist canonical shape)",
+          );
+        }
+      }
+    }
   }
   state.store = {
     version: 1,
@@ -94,7 +149,10 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(state: CronServiceState, opts?: { skipBackup?: boolean }) {
+export async function persist(
+  state: CronServiceState,
+  opts?: { skipBackup?: boolean; stateOnly?: boolean },
+) {
   if (!state.store) {
     return;
   }

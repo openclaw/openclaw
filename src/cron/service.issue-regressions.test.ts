@@ -8,6 +8,7 @@ import {
   writeCronStoreSnapshot,
 } from "./service.issue-regressions.test-helpers.js";
 import { CronService } from "./service.js";
+import { loadCronStore } from "./store.js";
 import type { CronJob, CronJobState } from "./types.js";
 
 describe("Cron issue regressions", () => {
@@ -81,7 +82,7 @@ describe("Cron issue regressions", () => {
       storePath: store.storePath,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
     });
     await cron.start();
@@ -92,9 +93,7 @@ describe("Cron issue regressions", () => {
     expect(Number.isFinite(isolated?.state.nextRunAtMs)).toBe(true);
     expect(Number.isFinite(status.nextWakeAtMs)).toBe(true);
 
-    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
-      jobs: Array<{ id: string; state?: { nextRunAtMs?: number | null } }>;
-    };
+    const persisted = await loadCronStore(store.storePath);
     const persistedIsolated = persisted.jobs.find((job) => job.id === "legacy-isolated");
     expect(typeof persistedIsolated?.state?.nextRunAtMs).toBe("number");
     expect(Number.isFinite(persistedIsolated?.state?.nextRunAtMs)).toBe(true);
@@ -187,9 +186,7 @@ describe("Cron issue regressions", () => {
       payload: { kind: "systemEvent", text: "other-updated" },
     });
 
-    const storeData = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
-      jobs: Array<{ id: string; state?: { nextRunAtMs?: number } }>;
-    };
+    const storeData = await loadCronStore(store.storePath);
     const persistedDueJob = storeData.jobs.find((job) => job.id === dueJob.id);
     expect(persistedDueJob?.state?.nextRunAtMs).toBe(originalDueNextRunAtMs);
 
@@ -263,6 +260,61 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("rejects invalid cron schedule updates without mutating disabled jobs", async () => {
+    const store = cronIssueRegressionFixtures.makeStorePath();
+    const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+
+    const disabledJob = await cron.add({
+      name: "disabled-cron",
+      enabled: false,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    await expect(
+      cron.update(disabledJob.id, {
+        schedule: { kind: "cron", expr: "* * * 13 *", tz: "UTC" },
+      }),
+    ).rejects.toThrow("CronPattern");
+
+    let persisted = await loadCronStore(store.storePath);
+    let storedJob = persisted.jobs.find((job) => job.id === disabledJob.id);
+    expect(storedJob?.enabled).toBe(false);
+    expect(storedJob?.schedule).toEqual(
+      expect.objectContaining({ kind: "cron", expr: "0 * * * *", tz: "UTC" }),
+    );
+
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "invalid-disabled-job",
+        name: "invalid disabled job",
+        createdAtMs: Date.parse("2026-02-06T10:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-06T10:00:00.000Z"),
+        enabled: false,
+        schedule: { kind: "cron", expr: "* * * 13 *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+    ]);
+
+    const invalidCron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+    await expect(invalidCron.update("invalid-disabled-job", { enabled: true })).rejects.toThrow(
+      "CronPattern",
+    );
+
+    persisted = await loadCronStore(store.storePath);
+    storedJob = persisted.jobs.find((job) => job.id === "invalid-disabled-job");
+    expect(storedJob?.enabled).toBe(false);
+    expect(storedJob?.state.nextRunAtMs).toBeUndefined();
+
+    invalidCron.stop();
+    cron.stop();
+  });
+
   it("keeps telegram delivery target writeback after manual cron.run", async () => {
     const store = cronIssueRegressionFixtures.makeStorePath();
     const originalTarget = "https://t.me/obviyus";
@@ -300,9 +352,7 @@ describe("Cron issue regressions", () => {
     const result = await cron.run(job.id, "force");
     expect(result).toEqual({ ok: true, ran: true });
 
-    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
-      jobs: CronJob[];
-    };
+    const persisted = await loadCronStore(store.storePath);
     const persistedJob = persisted.jobs.find((entry) => entry.id === job.id);
     expect(persistedJob?.delivery?.to).toBe(rewrittenTarget);
     expect(persistedJob?.state.lastStatus).toBe("ok");

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
 
@@ -7,6 +7,10 @@ vi.mock("../channels/plugins/index.js", () => ({
 }));
 
 describe("resolveAgentScopedOutboundMediaAccess", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("preserves caller-provided workspaceDir from mediaAccess", () => {
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg: {} as OpenClawConfig,
@@ -32,7 +36,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         allow: ["read"],
       },
       channels: {
-        whatsapp: {
+        requestchat: {
           groups: {
             ops: {
               toolsBySender: {
@@ -48,13 +52,15 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg,
-      sessionKey: "agent:main:whatsapp:group:ops",
+      sessionKey: "agent:main:requestchat:group:ops",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
       // Production call sites set messageProvider: undefined when sessionKey is present;
       // resolveGroupToolPolicy derives channel from the session key instead.
       requesterSenderId: "attacker",
     });
 
     expect(result.readFile).toBeUndefined();
+    expect(result.localRoots).not.toContain("/Users/peter/Pictures");
   });
 
   it("keeps host reads enabled when sender group policy allows read", () => {
@@ -63,7 +69,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         allow: ["read"],
       },
       channels: {
-        whatsapp: {
+        requestchat: {
           groups: {
             ops: {
               toolsBySender: {
@@ -79,11 +85,13 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg,
-      sessionKey: "agent:main:whatsapp:group:ops",
+      sessionKey: "agent:main:requestchat:group:ops",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
       requesterSenderId: "trusted-user",
     });
 
     expect(result.readFile).toBeTypeOf("function");
+    expect(result.localRoots).toContain("/Users/peter/Pictures");
   });
 
   it("keeps host reads enabled when no group policy applies", () => {
@@ -93,7 +101,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
           allow: ["read"],
         },
       } as OpenClawConfig,
-      messageProvider: "whatsapp",
+      messageProvider: "requestchat",
       requesterSenderId: "trusted-user",
     });
 
@@ -107,7 +115,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
           allow: ["read"],
         },
         channels: {
-          whatsapp: {
+          requestchat: {
             groups: {
               ops: {
                 toolsBySender: {
@@ -120,7 +128,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
           },
         },
       } as OpenClawConfig,
-      messageProvider: "whatsapp",
+      messageProvider: "requestchat",
       requesterSenderId: "dm-sender",
     });
 

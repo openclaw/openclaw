@@ -19,6 +19,96 @@ function migrateLegacyConfigForTest(raw: unknown): {
     : { config: next as OpenClawConfig, changes };
 }
 
+describe("legacy session maintenance migrate", () => {
+  it("removes deprecated session.maintenance.rotateBytes", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 500,
+          rotateBytes: "10mb",
+        },
+      },
+    });
+
+    expect(res.config?.session?.maintenance).toEqual({
+      mode: "enforce",
+      pruneAfter: "30d",
+      maxEntries: 500,
+    });
+    expect(res.changes).toContain("Removed deprecated session.maintenance.rotateBytes.");
+  });
+});
+
+describe("legacy session parent fork migrate", () => {
+  it("removes legacy session.parentForkMaxTokens", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        store: "sessions.json",
+        parentForkMaxTokens: 200_000,
+      },
+    });
+
+    expect(res.config?.session).toEqual({
+      store: "sessions.json",
+    });
+    expect(res.changes).toContain(
+      "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
+    );
+  });
+});
+
+describe("legacy thread binding spawn migrate", () => {
+  it("moves matching split spawn flags to unified spawnSessions", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        discord: {
+          threadBindings: {
+            enabled: true,
+            spawnSubagentSessions: true,
+            spawnAcpSessions: true,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.channels?.discord?.threadBindings).toEqual({
+      enabled: true,
+      spawnSessions: true,
+    });
+    expect(res.changes).toContain(
+      "Moved channels.discord.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.threadBindings.spawnSessions (true).",
+    );
+  });
+
+  it("collapses conflicting split spawn flags conservatively", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              threadBindings: {
+                spawnSubagentSessions: true,
+                spawnAcpSessions: false,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      res.config?.channels?.discord?.accounts?.work?.threadBindings as Record<string, unknown>,
+    ).toEqual({
+      spawnSessions: false,
+    });
+    expect(res.changes).toContain(
+      "Collapsed conflicting channels.discord.accounts.work.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.accounts.work.threadBindings.spawnSessions (false).",
+    );
+  });
+});
+
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
     const res = migrateLegacyConfigForTest({
@@ -67,6 +157,28 @@ describe("legacy migrate audio transcription", () => {
     expect(res.config?.audio).toBeUndefined();
     expect(res.config?.tools?.media?.audio).toBeUndefined();
   });
+
+  it("rewrites legacy audio {input} placeholders to media templates", () => {
+    const res = migrateLegacyConfigForTest({
+      audio: {
+        transcription: {
+          command: ["whisper-cli", "--model", "small", "{input}", "--input={input}"],
+          timeoutSeconds: 30,
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Moved audio.transcription → tools.media.audio.models.");
+    expect(res.config?.audio).toBeUndefined();
+    expect(res.config?.tools?.media?.audio?.models).toEqual([
+      {
+        type: "cli",
+        command: "whisper-cli",
+        args: ["--model", "small", "{{MediaPath}}", "--input={{MediaPath}}"],
+        timeoutSeconds: 30,
+      },
+    ]);
+  });
 });
 
 describe("legacy migrate mention routing", () => {
@@ -98,6 +210,67 @@ describe("legacy migrate mention routing", () => {
 });
 
 describe("legacy migrate sandbox scope aliases", () => {
+  it("removes legacy agents.defaults.llm timeout config", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          llm: {
+            idleTimeoutSeconds: 120,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+    );
+    expect(res.config?.agents?.defaults).toEqual({
+      model: { primary: "openai/gpt-5.4" },
+    });
+  });
+
+  it("moves legacy embeddedHarness runtime policy into agentRuntime", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          embeddedHarness: {
+            runtime: "claude-cli",
+            fallback: "none",
+          },
+        },
+        list: [
+          {
+            id: "reviewer",
+            agentRuntime: { fallback: "pi" },
+            embeddedHarness: {
+              runtime: "codex",
+              fallback: "none",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved agents.defaults.embeddedHarness → agents.defaults.agentRuntime.",
+        "Moved agents.list.0.embeddedHarness → agents.list.0.agentRuntime.",
+      ]),
+    );
+    expect(res.config?.agents?.defaults).toEqual({
+      agentRuntime: {
+        id: "claude-cli",
+      },
+    });
+    expect(res.config?.agents?.list?.[0]).toEqual({
+      id: "reviewer",
+      agentRuntime: {
+        id: "codex",
+      },
+    });
+  });
+
   it("moves agents.defaults.sandbox.perSession into scope", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
@@ -177,308 +350,54 @@ describe("legacy migrate sandbox scope aliases", () => {
   });
 });
 
-describe("legacy migrate channel streaming aliases", () => {
-  it("migrates Telegram and Slack preview-channel legacy streaming fields without rewriting Discord", () => {
+describe("legacy migrate MCP server type aliases", () => {
+  it("moves CLI-native http type to OpenClaw streamable HTTP transport", () => {
     const res = migrateLegacyConfigForTest({
-      channels: {
-        telegram: {
-          streamMode: "block",
-          chunkMode: "newline",
-          blockStreaming: true,
-          draftChunk: {
-            minChars: 120,
+      mcp: {
+        servers: {
+          silo: {
+            type: "http",
+            url: "https://example.com/mcp",
           },
-          blockStreamingCoalesce: {
-            idleMs: 250,
+          legacySse: {
+            type: "sse",
+            url: "https://example.com/sse",
           },
-        },
-        discord: {
-          streaming: false,
-          chunkMode: "newline",
-          blockStreaming: true,
-          draftChunk: {
-            maxChars: 900,
-          },
-        },
-        slack: {
-          streamMode: "status_final",
-          blockStreaming: true,
-          blockStreamingCoalesce: {
-            minChars: 100,
-          },
-          nativeStreaming: false,
         },
       },
     });
 
     expect(res.changes).toContain(
-      "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
+      'Moved mcp.servers.silo.type "http" → transport "streamable-http".',
     );
-    expect(res.changes).toContain(
-      "Moved channels.telegram.chunkMode → channels.telegram.streaming.chunkMode.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.telegram.blockStreaming → channels.telegram.streaming.block.enabled.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.telegram.draftChunk → channels.telegram.streaming.preview.chunk.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.telegram.blockStreamingCoalesce → channels.telegram.streaming.block.coalesce.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.slack.streamMode → channels.slack.streaming.mode (progress).",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.slack.nativeStreaming → channels.slack.streaming.nativeTransport.",
-    );
-    expect(res.config?.channels?.telegram).toMatchObject({
-      streaming: {
-        mode: "block",
-        chunkMode: "newline",
-        block: {
-          enabled: true,
-          coalesce: {
-            idleMs: 250,
-          },
-        },
-        preview: {
-          chunk: {
-            minChars: 120,
-          },
-        },
-      },
+    expect(res.changes).toContain('Moved mcp.servers.legacySse.type "sse" → transport "sse".');
+    expect(res.config?.mcp?.servers?.silo).toEqual({
+      url: "https://example.com/mcp",
+      transport: "streamable-http",
     });
-    expect(res.config?.channels?.discord).toMatchObject({
-      streaming: false,
-      chunkMode: "newline",
-      blockStreaming: true,
-      draftChunk: {
-        maxChars: 900,
-      },
-    });
-    expect(res.config?.channels?.slack).toMatchObject({
-      streaming: {
-        mode: "progress",
-        block: {
-          enabled: true,
-          coalesce: {
-            minChars: 100,
-          },
-        },
-        nativeTransport: false,
-      },
+    expect(res.config?.mcp?.servers?.legacySse).toEqual({
+      url: "https://example.com/sse",
+      transport: "sse",
     });
   });
 
-  it("preserves slack streaming=false when deriving nativeTransport during migration", () => {
-    const raw = {
-      channels: {
-        slack: {
-          botToken: "xoxb-test",
-          streaming: false,
-        },
-      },
-    };
-    const res = migrateLegacyConfigForTest(raw);
-    const migrated = migrateLegacyConfigForTest(raw);
-
-    expect(res.changes).toContain(
-      "Moved channels.slack.streaming (boolean) → channels.slack.streaming.mode (off).",
-    );
-    expect(migrated.config?.channels?.slack).toMatchObject({
-      streaming: {
-        mode: "off",
-        nativeTransport: false,
-      },
-    });
-  });
-
-  it("rejects legacy googlechat streamMode aliases during validation and removes them in migration", () => {
-    const raw = {
-      channels: {
-        googlechat: {
-          streamMode: "append",
-          accounts: {
-            work: {
-              streamMode: "replace",
-            },
-          },
-        },
-      },
-    };
-
-    const res = migrateLegacyConfigForTest(raw);
-    expect(res.changes).toContain(
-      "Removed channels.googlechat.streamMode (legacy key no longer used).",
-    );
-    expect(res.changes).toContain(
-      "Removed channels.googlechat.accounts.work.streamMode (legacy key no longer used).",
-    );
-    expect(
-      (res.config?.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
-    expect(
-      (res.config?.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
-        ?.streamMode,
-    ).toBeUndefined();
-  });
-});
-
-describe("legacy migrate nested channel enabled aliases", () => {
-  it("rejects legacy allow aliases during validation and normalizes them in migration", () => {
-    const raw = {
-      channels: {
-        slack: {
-          channels: {
-            ops: {
-              allow: false,
-            },
-          },
-        },
-        googlechat: {
-          groups: {
-            "spaces/aaa": {
-              allow: true,
-            },
-          },
-        },
-        discord: {
-          guilds: {
-            "100": {
-              channels: {
-                general: {
-                  allow: false,
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-
-    const migrated = migrateLegacyConfigForTest(raw);
-    expect(migrated.config?.channels?.slack?.channels?.ops).toEqual({
-      enabled: false,
-    });
-    expect(migrated.config?.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
-      enabled: true,
-    });
-    expect(migrated.config?.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
-      enabled: false,
-    });
-  });
-
-  it("moves legacy allow toggles into enabled for slack, googlechat, and discord", () => {
+  it("removes CLI-native type when canonical transport is already set", () => {
     const res = migrateLegacyConfigForTest({
-      channels: {
-        slack: {
-          channels: {
-            ops: {
-              allow: false,
-            },
-          },
-          accounts: {
-            work: {
-              channels: {
-                general: {
-                  allow: true,
-                },
-              },
-            },
-          },
-        },
-        googlechat: {
-          groups: {
-            "spaces/aaa": {
-              allow: false,
-            },
-          },
-          accounts: {
-            work: {
-              groups: {
-                "spaces/bbb": {
-                  allow: true,
-                },
-              },
-            },
-          },
-        },
-        discord: {
-          guilds: {
-            "100": {
-              channels: {
-                general: {
-                  allow: false,
-                },
-              },
-            },
-          },
-          accounts: {
-            work: {
-              guilds: {
-                "200": {
-                  channels: {
-                    help: {
-                      allow: true,
-                    },
-                  },
-                },
-              },
-            },
+      mcp: {
+        servers: {
+          mixed: {
+            type: "http",
+            transport: "sse",
+            url: "https://example.com/mcp",
           },
         },
       },
     });
 
-    expect(res.changes).toContain(
-      "Moved channels.slack.channels.ops.allow → channels.slack.channels.ops.enabled.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.slack.accounts.work.channels.general.allow → channels.slack.accounts.work.channels.general.enabled.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.googlechat.groups.spaces/aaa.allow → channels.googlechat.groups.spaces/aaa.enabled.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.googlechat.accounts.work.groups.spaces/bbb.allow → channels.googlechat.accounts.work.groups.spaces/bbb.enabled.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.discord.guilds.100.channels.general.allow → channels.discord.guilds.100.channels.general.enabled.",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.discord.accounts.work.guilds.200.channels.help.allow → channels.discord.accounts.work.guilds.200.channels.help.enabled.",
-    );
-    expect(res.config?.channels?.slack?.channels?.ops).toEqual({
-      enabled: false,
-    });
-    expect(res.config?.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
-      enabled: false,
-    });
-    expect(res.config?.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
-      enabled: false,
-    });
-  });
-
-  it("drops legacy allow when enabled is already set", () => {
-    const res = migrateLegacyConfigForTest({
-      channels: {
-        slack: {
-          channels: {
-            ops: {
-              allow: true,
-              enabled: false,
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Removed channels.slack.channels.ops.allow (channels.slack.channels.ops.enabled already set).",
-    );
-    expect(res.config?.channels?.slack?.channels?.ops).toEqual({
-      enabled: false,
+    expect(res.changes).toContain('Removed mcp.servers.mixed.type (transport "sse" already set).');
+    expect(res.config?.mcp?.servers?.mixed).toEqual({
+      url: "https://example.com/mcp",
+      transport: "sse",
     });
   });
 });

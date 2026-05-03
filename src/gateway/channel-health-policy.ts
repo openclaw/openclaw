@@ -1,6 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.public.js";
 
-export type ChannelHealthSnapshot = {
+type ChannelHealthSnapshot = {
   running?: boolean;
   connected?: boolean;
   enabled?: boolean;
@@ -10,12 +10,14 @@ export type ChannelHealthSnapshot = {
   activeRuns?: number;
   lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
+  lastConnectedAt?: number | null;
+  lastTransportActivityAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
 };
 
-export type ChannelHealthEvaluationReason =
+type ChannelHealthEvaluationReason =
   | "healthy"
   | "unmanaged"
   | "not-running"
@@ -35,15 +37,9 @@ export type ChannelHealthPolicy = {
   now: number;
   staleEventThresholdMs: number;
   channelConnectGraceMs: number;
-  skipStaleSocketCheck?: boolean;
 };
 
-export type ChannelRestartReason =
-  | "gave-up"
-  | "stopped"
-  | "stale-socket"
-  | "stuck"
-  | "disconnected";
+type ChannelRestartReason = "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected";
 
 function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
   return snapshot.enabled !== false && snapshot.configured !== false;
@@ -78,6 +74,11 @@ export function evaluateChannelHealth(
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
       : null;
+  const lastTransportActivityAt =
+    typeof snapshot.lastTransportActivityAt === "number" &&
+    Number.isFinite(snapshot.lastTransportActivityAt)
+      ? snapshot.lastTransportActivityAt
+      : null;
   const busyStateInitializedForLifecycle =
     lastStartAt == null || (lastRunActivityAt != null && lastRunActivityAt >= lastStartAt);
 
@@ -107,24 +108,18 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  // Skip stale-socket checks for channels that declare this health policy and
-  // any channel explicitly operating in webhook mode. In these cases, there is
-  // no persistent outgoing socket that can go half-dead, so the lack of
-  // incoming events does not necessarily indicate a connection failure.
-  if (
-    policy.skipStaleSocketCheck !== true &&
-    snapshot.mode !== "webhook" &&
-    snapshot.connected === true &&
-    snapshot.lastEventAt != null
-  ) {
-    if (lastStartAt != null && snapshot.lastEventAt < lastStartAt) {
+  // App-level events are not socket liveness: quiet Slack/Discord workspaces can
+  // go idle while their upstream clients maintain heartbeats internally.
+  const shouldCheckStaleSocket = snapshot.connected === true && lastTransportActivityAt != null;
+  if (shouldCheckStaleSocket) {
+    if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
       const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);
       if (lifecycleEventGap <= policy.staleEventThresholdMs) {
         return { healthy: true, reason: "healthy" };
       }
       return { healthy: false, reason: "stale-socket" };
     }
-    const eventAge = policy.now - snapshot.lastEventAt;
+    const eventAge = policy.now - lastTransportActivityAt;
     if (eventAge > policy.staleEventThresholdMs) {
       return { healthy: false, reason: "stale-socket" };
     }

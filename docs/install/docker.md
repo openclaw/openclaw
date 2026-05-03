@@ -6,15 +6,13 @@ read_when:
 title: "Docker"
 ---
 
-# Docker (optional)
-
 Docker is **optional**. Use it only if you want a containerized gateway or to validate the Docker flow.
 
 ## Is Docker right for me?
 
 - **Yes**: you want an isolated, throwaway gateway environment or to run OpenClaw on a host without local installs.
 - **No**: you are running on your own machine and just want the fastest dev loop. Use the normal install flow instead.
-- **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. See [Sandboxing](/gateway/sandboxing).
+- **Sandboxing note**: the default sandbox backend uses Docker when sandboxing is enabled, but sandboxing is off by default and does **not** require the full gateway to run in Docker. SSH and OpenShell sandbox backends are also available. See [Sandboxing](/gateway/sandboxing).
 
 ## Prerequisites
 
@@ -25,7 +23,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
   [Security hardening for network exposure](/gateway/security),
   especially Docker `DOCKER-USER` firewall policy.
 
-## Containerized Gateway
+## Containerized gateway
 
 <Steps>
   <Step title="Build the image">
@@ -124,15 +122,65 @@ and setup-time config writes through `openclaw-gateway` with
 
 The setup script accepts these optional environment variables:
 
-| Variable                       | Purpose                                                          |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`               | Use a remote image instead of building locally                   |
-| `OPENCLAW_DOCKER_APT_PACKAGES` | Install extra apt packages during build (space-separated)        |
-| `OPENCLAW_EXTENSIONS`          | Pre-install extension deps at build time (space-separated names) |
-| `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`)  |
-| `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                    |
-| `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
-| `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                      |
+| Variable                                   | Purpose                                                         |
+| ------------------------------------------ | --------------------------------------------------------------- |
+| `OPENCLAW_IMAGE`                           | Use a remote image instead of building locally                  |
+| `OPENCLAW_DOCKER_APT_PACKAGES`             | Install extra apt packages during build (space-separated)       |
+| `OPENCLAW_EXTENSIONS`                      | Include selected bundled plugin helpers at build time           |
+| `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`) |
+| `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                   |
+| `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
+| `OPENCLAW_SKIP_ONBOARDING`                 | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`) |
+| `OPENCLAW_DOCKER_SOCKET`                   | Override Docker socket path                                     |
+| `OPENCLAW_DISABLE_BONJOUR`                 | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)   |
+| `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS` | Disable bundled plugin source bind-mount overlays               |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`              | Shared OTLP/HTTP collector endpoint for OpenTelemetry export    |
+| `OTEL_EXPORTER_OTLP_*_ENDPOINT`            | Signal-specific OTLP endpoints for traces, metrics, or logs     |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`              | OTLP protocol override. Only `http/protobuf` is supported today |
+| `OTEL_SERVICE_NAME`                        | Service name used for OpenTelemetry resources                   |
+| `OTEL_SEMCONV_STABILITY_OPT_IN`            | Opt in to latest experimental GenAI semantic attributes         |
+| `OPENCLAW_OTEL_PRELOADED`                  | Skip starting a second OpenTelemetry SDK when one is preloaded  |
+
+Maintainers can test bundled plugin source against a packaged image by mounting
+one plugin source directory over its packaged source path, for example
+`OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`.
+That mounted source directory overrides the matching compiled
+`/app/dist/extensions/synology-chat` bundle for the same plugin id.
+
+### Observability
+
+OpenTelemetry export is outbound from the Gateway container to your OTLP
+collector. It does not require a published Docker port. If you build the image
+locally and want the bundled OpenTelemetry exporter available inside the image,
+include its runtime dependencies:
+
+```bash
+export OPENCLAW_EXTENSIONS="diagnostics-otel"
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://otel-collector:4318"
+export OTEL_SERVICE_NAME="openclaw-gateway"
+./scripts/docker/setup.sh
+```
+
+Install the official `@openclaw/diagnostics-otel` plugin from ClawHub in
+packaged Docker installs before enabling export. Custom source-built images can
+still include the local plugin source with
+`OPENCLAW_EXTENSIONS=diagnostics-otel`. To enable export, allow and enable the
+`diagnostics-otel` plugin in config, then set
+`diagnostics.otel.enabled=true` or use the config example in [OpenTelemetry
+export](/gateway/opentelemetry). Collector auth headers are configured through
+`diagnostics.otel.headers`, not through Docker environment variables.
+
+Prometheus metrics use the already-published Gateway port. Install
+`clawhub:@openclaw/diagnostics-prometheus`, enable the
+`diagnostics-prometheus` plugin, then scrape:
+
+```text
+http://<gateway-host>:18789/api/diagnostics/prometheus
+```
+
+The route is protected by Gateway authentication. Do not expose a separate
+public `/metrics` port or unauthenticated reverse-proxy path. See
+[Prometheus metrics](/gateway/prometheus).
 
 ### Health checks
 
@@ -167,11 +215,55 @@ Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` /
 `tailnet` / `auto`), not host aliases like `0.0.0.0` or `127.0.0.1`.
 </Note>
 
+### Host Local Providers
+
+When OpenClaw runs in Docker, `127.0.0.1` inside the container is the container
+itself, not your host machine. Use `host.docker.internal` for AI providers that
+run on the host:
+
+| Provider  | Host default URL         | Docker setup URL                    |
+| --------- | ------------------------ | ----------------------------------- |
+| LM Studio | `http://127.0.0.1:1234`  | `http://host.docker.internal:1234`  |
+| Ollama    | `http://127.0.0.1:11434` | `http://host.docker.internal:11434` |
+
+The bundled Docker setup uses those host URLs as the LM Studio and Ollama
+onboarding defaults, and `docker-compose.yml` maps `host.docker.internal` to
+Docker's host gateway for Linux Docker Engine. Docker Desktop already provides
+the same hostname on macOS and Windows.
+
+Host services must also listen on an address reachable from Docker:
+
+```bash
+lms server start --port 1234 --bind 0.0.0.0
+OLLAMA_HOST=0.0.0.0:11434 ollama serve
+```
+
+If you use your own Compose file or `docker run` command, add the same host
+mapping yourself, for example
+`--add-host=host.docker.internal:host-gateway`.
+
+### Bonjour / mDNS
+
+Docker bridge networking usually does not forward Bonjour/mDNS multicast
+(`224.0.0.251:5353`) reliably. The bundled Compose setup therefore defaults
+`OPENCLAW_DISABLE_BONJOUR=1` so the Gateway does not crash-loop or repeatedly
+restart advertising when the bridge drops multicast traffic.
+
+Use the published Gateway URL, Tailscale, or wide-area DNS-SD for Docker hosts.
+Set `OPENCLAW_DISABLE_BONJOUR=0` only when running with host networking, macvlan,
+or another network where mDNS multicast is known to work.
+
+For gotchas and troubleshooting, see [Bonjour discovery](/gateway/bonjour).
+
 ### Storage and persistence
 
 Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
 `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths
-survive container replacement.
+survive container replacement. When either variable is unset, the bundled
+`docker-compose.yml` falls back to `${HOME}/.openclaw` (and
+`${HOME}/.openclaw/workspace` for the workspace mount), or `/tmp/.openclaw`
+when `HOME` itself is also missing. That keeps `docker compose up` from
+emitting an empty-source volume spec on bare environments.
 
 That mounted config directory is where OpenClaw keeps:
 
@@ -179,11 +271,16 @@ That mounted config directory is where OpenClaw keeps:
 - `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
+Installed downloadable plugins store their package state under the mounted
+OpenClaw home, so plugin install records and package roots survive container
+replacement. Gateway startup does not generate bundled-plugin dependency trees.
+
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
-**Disk growth hotspots:** watch `media/`, session JSONL files, `cron/runs/*.jsonl`,
-and rolling file logs under `/tmp/openclaw/`.
+**Disk growth hotspots:** watch `media/`, session JSONL files,
+`cron/runs/*.jsonl`, installed plugin package roots, and rolling file logs
+under `/tmp/openclaw/`.
 
 ### Shell helpers (optional)
 
@@ -296,9 +393,11 @@ See [ClawDock](/install/clawdock) for the full helper guide.
   </Accordion>
 
   <Accordion title="Base image metadata">
-    The main Docker image uses `node:24-bookworm` and publishes OCI base-image
-    annotations including `org.opencontainers.image.base.name`,
-    `org.opencontainers.image.source`, and others. See
+    The main Docker runtime image uses `node:24-bookworm-slim` and publishes OCI
+    base-image annotations including `org.opencontainers.image.base.name`,
+    `org.opencontainers.image.source`, and others. The Node base digest is
+    refreshed through Dependabot Docker base-image PRs; release builds do not run
+    a distro upgrade layer. See
     [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
   </Accordion>
 </AccordionGroup>
@@ -309,12 +408,13 @@ See [Hetzner (Docker VPS)](/install/hetzner) and
 [Docker VM Runtime](/install/docker-vm-runtime) for shared VM deployment steps
 including binary baking, persistence, and updates.
 
-## Agent Sandbox
+## Agent sandbox
 
-When `agents.defaults.sandbox` is enabled, the gateway runs agent tool execution
-(shell, file read/write, etc.) inside isolated Docker containers while the
-gateway itself stays on the host. This gives you a hard wall around untrusted or
-multi-tenant agent sessions without containerizing the entire gateway.
+When `agents.defaults.sandbox` is enabled with the Docker backend, the gateway
+runs agent tool execution (shell, file read/write, etc.) inside isolated Docker
+containers while the gateway itself stays on the host. This gives you a hard wall
+around untrusted or multi-tenant agent sessions without containerizing the entire
+gateway.
 
 Sandbox scope can be per-agent (default), per-session, or shared. Each scope
 gets its own workspace mounted at `/workspace`. You can also configure
@@ -342,11 +442,13 @@ For full configuration, images, security notes, and multi-agent profiles, see:
 }
 ```
 
-Build the default sandbox image:
+Build the default sandbox image (from a source checkout):
 
 ```bash
 scripts/sandbox-setup.sh
 ```
+
+For npm installs without a source checkout, see [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for inline `docker build` commands.
 
 ## Troubleshooting
 
@@ -354,6 +456,7 @@ scripts/sandbox-setup.sh
   <Accordion title="Image missing or sandbox container not starting">
     Build the sandbox image with
     [`scripts/sandbox-setup.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/sandbox-setup.sh)
+    (source checkout) or the inline `docker build` command from [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) (npm install),
     or set `agents.defaults.sandbox.docker.image` to your custom image.
     Containers are auto-created per session on demand.
   </Accordion>

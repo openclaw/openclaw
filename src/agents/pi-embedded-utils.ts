@@ -147,7 +147,13 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
       }
       const record = block as unknown as Record<string, unknown>;
       if (record.type === "thinking" && typeof record.thinking === "string") {
-        return record.thinking.trim();
+        const thinking = record.thinking.trim();
+        if (thinking) {
+          return thinking;
+        }
+        if (typeof record.thinkingSignature === "string" && record.thinkingSignature.trim()) {
+          return "Native reasoning was produced; no summary text was returned.";
+        }
       }
       return "";
     })
@@ -175,6 +181,25 @@ type ThinkTaggedSplitBlock =
   | { type: "thinking"; thinking: string }
   | { type: "text"; text: string };
 
+const THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)`;
+const THINKING_TAG_OPEN_RE = new RegExp(String.raw`<\s*${THINKING_TAG_NAME_PATTERN}\s*>`, "i");
+const THINKING_TAG_CLOSE_RE = new RegExp(
+  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  "i",
+);
+const THINKING_TAG_OPEN_GLOBAL_RE = new RegExp(
+  String.raw`<\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  "gi",
+);
+const THINKING_TAG_CLOSE_GLOBAL_RE = new RegExp(
+  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  "gi",
+);
+export const THINKING_TAG_SCAN_RE = new RegExp(
+  String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  "gi",
+);
+
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
   // Avoid false positives: only treat it as structured thinking when it begins
@@ -183,16 +208,13 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   if (!trimmedStart.startsWith("<")) {
     return null;
   }
-  const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
-  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
-  if (!openRe.test(trimmedStart)) {
+  if (!THINKING_TAG_OPEN_RE.test(trimmedStart)) {
     return null;
   }
-  if (!closeRe.test(text)) {
+  if (!THINKING_TAG_CLOSE_RE.test(text)) {
     return null;
   }
 
-  const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   let inThinking = false;
   let cursor = 0;
   let thinkingStart = 0;
@@ -212,7 +234,7 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     blocks.push({ type: "thinking", thinking: cleaned });
   };
 
-  for (const match of text.matchAll(scanRe)) {
+  for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
     const index = match.index ?? 0;
     const isClose = match[1]?.includes("/") ?? false;
 
@@ -293,11 +315,10 @@ export function extractThinkingFromTaggedText(text: string): string {
   if (!text) {
     return "";
   }
-  const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
-  for (const match of text.matchAll(scanRe)) {
+  for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
     const idx = match.index ?? 0;
     if (inThinking) {
       result += text.slice(lastIndex, idx);
@@ -318,13 +339,11 @@ export function extractThinkingFromTaggedStream(text: string): string {
     return closed;
   }
 
-  const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
-  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
-  const openMatches = [...text.matchAll(openRe)];
+  const openMatches = [...text.matchAll(THINKING_TAG_OPEN_GLOBAL_RE)];
   if (openMatches.length === 0) {
     return "";
   }
-  const closeMatches = [...text.matchAll(closeRe)];
+  const closeMatches = [...text.matchAll(THINKING_TAG_CLOSE_GLOBAL_RE)];
   const lastOpen = openMatches[openMatches.length - 1];
   const lastClose = closeMatches[closeMatches.length - 1];
   if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {

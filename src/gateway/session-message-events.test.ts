@@ -19,21 +19,26 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
+const SETUP_RPC_TIMEOUT_MS = 30_000;
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
-let previousMinimalGateway: string | undefined;
+let subscribedOperatorWs:
+  | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
+  | undefined;
 
 beforeAll(async () => {
-  previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-  delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
   harness = await createGatewaySuiteHarness();
-});
+  subscribedOperatorWs = await harness.openWs();
+  await connectOk(subscribedOperatorWs, {
+    scopes: ["operator.read"],
+    timeoutMs: SETUP_RPC_TIMEOUT_MS,
+  });
+  await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
+}, 60_000);
 
 afterAll(async () => {
-  await harness.close();
-  if (previousMinimalGateway === undefined) {
-    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-  } else {
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
+  subscribedOperatorWs?.close();
+  if (harness) {
+    await harness.close();
   }
 });
 
@@ -52,17 +57,12 @@ async function createSessionStoreFile(): Promise<string> {
 }
 
 async function withOperatorSessionSubscriber<T>(
-  harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>,
-  run: (ws: Awaited<ReturnType<typeof harness.openWs>>) => Promise<T>,
+  run: (ws: NonNullable<typeof subscribedOperatorWs>) => Promise<T>,
 ) {
-  const ws = await harness.openWs();
-  try {
-    await connectOk(ws, { scopes: ["operator.read"] });
-    await rpcReq(ws, "sessions.subscribe");
-    return await run(ws);
-  } finally {
-    ws.close();
+  if (!subscribedOperatorWs) {
+    throw new Error("subscribed operator websocket is not ready");
   }
+  return await run(subscribedOperatorWs);
 }
 
 function waitForSessionMessageEvent(
@@ -123,18 +123,17 @@ async function expectNoMessageWithin(params: {
   timeoutMs?: number;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 300;
-  vi.useFakeTimers();
-  try {
-    const outcome = params
-      .watch()
-      .then(() => "received")
-      .catch(() => "timeout");
-    await params.action?.();
-    await vi.advanceTimersByTimeAsync(timeoutMs);
-    await expect(outcome).resolves.toBe("timeout");
-  } finally {
-    vi.useRealTimers();
-  }
+  let received = false;
+  const watch = params
+    .watch()
+    .then(() => {
+      received = true;
+    })
+    .catch(() => undefined);
+  await params.action?.();
+  await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+  expect(received).toBe(false);
+  await watch;
 }
 
 describe("session.message websocket events", () => {
@@ -157,7 +156,7 @@ describe("session.message websocket events", () => {
       storePath,
     });
 
-    await withOperatorSessionSubscriber(harness, async (ws) => {
+    await withOperatorSessionSubscriber(async (ws) => {
       const changedEvent = onceMessage(
         ws,
         (message) =>
@@ -327,7 +326,7 @@ describe("session.message websocket events", () => {
       "utf-8",
     );
 
-    await withOperatorSessionSubscriber(harness, async (ws) => {
+    await withOperatorSessionSubscriber(async (ws) => {
       const { messageEvent, changedEvent } = await emitTranscriptUpdateAndCollectEvents({
         ws,
         sessionKey: "agent:main:main",
@@ -487,7 +486,7 @@ describe("session.message websocket events", () => {
       "utf-8",
     );
 
-    await withOperatorSessionSubscriber(harness, async (ws) => {
+    await withOperatorSessionSubscriber(async (ws) => {
       const { messageEvent, changedEvent } = await emitTranscriptUpdateAndCollectEvents({
         ws,
         sessionKey: "agent:main:main",
@@ -636,7 +635,7 @@ describe("session.message websocket events", () => {
       "utf-8",
     );
 
-    await withOperatorSessionSubscriber(harness, async (ws) => {
+    await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({

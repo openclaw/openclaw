@@ -8,7 +8,7 @@ const profileAction = "set-profile" as const;
 
 const runtimeStub = {
   config: {
-    loadConfig: () => ({}),
+    current: () => ({}),
   },
   media: {
     loadWebMedia: async () => {
@@ -92,6 +92,9 @@ describe("matrixMessageActions", () => {
 
     expect(actions).toContain(profileAction);
     expect(supportsAction({ action: profileAction } as never)).toBe(true);
+    expect(discovery.mediaSourceParams).toEqual({
+      "set-profile": ["avatarUrl", "avatarPath"],
+    });
     expect(properties.displayName).toBeDefined();
     expect(properties.avatarUrl).toBeDefined();
     expect(properties.avatarPath).toBeDefined();

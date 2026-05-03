@@ -4,7 +4,7 @@ import {
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
 
-const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.4";
+const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
 
 export function buildOpenAICodexCliBackend(): CliBackendPlugin {
   return {
@@ -14,12 +14,13 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       defaultImageProbe: true,
       defaultMcpProbe: true,
       docker: {
-        npmPackage: "@openai/codex",
+        npmPackage: "@openai/codex@0.128.0",
         binaryName: "codex",
       },
     },
     bundleMcp: true,
     bundleMcpMode: "codex-config-overrides",
+    nativeToolMode: "always-on",
     config: {
       command: "codex",
       args: [
@@ -29,9 +30,20 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "never",
         "--sandbox",
         "workspace-write",
+        "-c",
+        'service_tier="fast"',
         "--skip-git-repo-check",
       ],
-      resumeArgs: ["exec", "resume", "{sessionId}", "--dangerously-bypass-approvals-and-sandbox"],
+      resumeArgs: [
+        "exec",
+        "resume",
+        "{sessionId}",
+        "-c",
+        'sandbox_mode="workspace-write"',
+        "-c",
+        'service_tier="fast"',
+        "--skip-git-repo-check",
+      ],
       output: "jsonl",
       resumeOutput: "text",
       input: "arg",
@@ -43,6 +55,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       systemPromptWhen: "first",
       imageArg: "--image",
       imageMode: "repeat",
+      imagePathScope: "workspace",
       reliability: {
         watchdog: {
           fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },

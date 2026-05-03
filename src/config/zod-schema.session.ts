@@ -53,9 +53,14 @@ export const SessionSchema = z
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
-    parentForkMaxTokens: z.number().int().nonnegative().optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
+    writeLock: z
+      .object({
+        acquireTimeoutMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),
@@ -67,6 +72,8 @@ export const SessionSchema = z
         enabled: z.boolean().optional(),
         idleHours: z.number().nonnegative().optional(),
         maxAgeHours: z.number().nonnegative().optional(),
+        spawnSessions: z.boolean().optional(),
+        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
       })
       .strict()
       .optional(),
@@ -94,19 +101,6 @@ export const SessionSchema = z
               code: z.ZodIssueCode.custom,
               path: ["pruneAfter"],
               message: "invalid duration (use ms, s, m, h, d)",
-            });
-          }
-        }
-        if (val.rotateBytes !== undefined) {
-          try {
-            parseByteSize(normalizeStringifiedOptionalString(val.rotateBytes) ?? "", {
-              defaultUnit: "b",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["rotateBytes"],
-              message: "invalid size (use b, kb, mb, gb, tb)",
             });
           }
         }
@@ -158,6 +152,7 @@ export const SessionSchema = z
 export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
+    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
     responsePrefix: z.string().optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,
@@ -224,5 +219,11 @@ export const CommandsSchema = z
   .strict()
   .optional()
   .default(
-    () => ({ native: "auto", nativeSkills: "auto", restart: true, ownerDisplay: "raw" }) as const,
+    () =>
+      ({
+        native: "auto",
+        nativeSkills: "auto",
+        restart: true,
+        ownerDisplay: "raw",
+      }) as const,
   );

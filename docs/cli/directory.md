@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw directory` (self, peers, groups)"
 read_when:
   - You want to look up contacts/groups/self ids for a channel
   - You are developing a channel directory adapter
-title: "directory"
+title: "Directory"
 ---
 
 # `openclaw directory`
@@ -20,6 +20,7 @@ Directory lookups for channels that support it (contacts/peers, groups, and “m
 
 - `directory` is meant to help you find IDs you can paste into other commands (especially `openclaw message send --target ...`).
 - For many channels, results are config-backed (allowlists / configured groups) rather than a live provider directory.
+- Installed channel plugins can still omit directory support; in that case the command reports the unsupported directory operation instead of reinstalling the plugin.
 - Default output is `id` (and sometimes `name`) separated by a tab; use `--json` for scripting.
 
 ## Using results with `message send`
@@ -31,7 +32,7 @@ openclaw message send --channel slack --target user:U012ABCDEF --message "hello"
 
 ## ID formats (by channel)
 
-- WhatsApp: `+15551234567` (DM), `1234567890-1234567890@g.us` (group)
+- WhatsApp: `+15551234567` (DM), `1234567890-1234567890@g.us` (group), `120363123456789@newsletter` (Channel/Newsletter outbound target)
 - Telegram: `@username` or numeric chat id; groups are numeric ids
 - Slack: `user:U…` and `channel:C…`
 - Discord: `user:<id>` and `channel:<id>`
@@ -61,3 +62,7 @@ openclaw directory groups list --channel zalouser
 openclaw directory groups list --channel zalouser --query "work"
 openclaw directory groups members --channel zalouser --group-id <id>
 ```
+
+## Related
+
+- [CLI reference](/cli)

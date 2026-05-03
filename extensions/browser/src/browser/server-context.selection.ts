@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
-import { closeChromeMcpTab, focusChromeMcpTab } from "./chrome-mcp.js";
+import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -14,8 +14,8 @@ import { resolveTargetIdFromTabs } from "./target-id.js";
 type SelectionDeps = {
   profile: ResolvedBrowserProfile;
   getProfileState: () => ProfileRuntimeState;
-  getSsrFPolicy: () => SsrFPolicy | undefined;
-  ensureBrowserAvailable: () => Promise<void>;
+  getCdpControlPolicy: () => SsrFPolicy | undefined;
+  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
   listTabs: () => Promise<BrowserTab[]>;
   openTab: (url: string) => Promise<BrowserTab>;
 };
@@ -29,7 +29,7 @@ type SelectionOps = {
 export function createProfileSelectionOps({
   profile,
   getProfileState,
-  getSsrFPolicy,
+  getCdpControlPolicy,
   ensureBrowserAvailable,
   listTabs,
   openTab,
@@ -76,7 +76,7 @@ export function createProfileSelectionOps({
       throw new BrowserTargetAmbiguousError();
     }
     if (!chosen) {
-      throw new BrowserTabNotFoundError();
+      throw new BrowserTabNotFoundError(targetId ? { input: targetId } : undefined);
     }
     profileState.lastTargetId = chosen.targetId;
     return chosen;
@@ -89,7 +89,7 @@ export function createProfileSelectionOps({
       if (resolved.reason === "ambiguous") {
         throw new BrowserTargetAmbiguousError();
       }
-      throw new BrowserTabNotFoundError();
+      throw new BrowserTabNotFoundError({ input: targetId });
     }
     return resolved.targetId;
   };
@@ -98,7 +98,8 @@ export function createProfileSelectionOps({
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
     if (capabilities.usesChromeMcp) {
-      await focusChromeMcpTab(profile.name, resolvedTargetId, profile.userDataDir);
+      const { focusChromeMcpTab } = await getChromeMcpModule();
+      await focusChromeMcpTab(profile.name, resolvedTargetId, profile);
       const profileState = getProfileState();
       profileState.lastTargetId = resolvedTargetId;
       return;
@@ -112,7 +113,7 @@ export function createProfileSelectionOps({
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
-          ssrfPolicy: getSsrFPolicy(),
+          ssrfPolicy: getCdpControlPolicy(),
         });
         const profileState = getProfileState();
         profileState.lastTargetId = resolvedTargetId;
@@ -124,7 +125,7 @@ export function createProfileSelectionOps({
       appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`),
       undefined,
       undefined,
-      getSsrFPolicy(),
+      getCdpControlPolicy(),
     );
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
@@ -134,7 +135,8 @@ export function createProfileSelectionOps({
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
     if (capabilities.usesChromeMcp) {
-      await closeChromeMcpTab(profile.name, resolvedTargetId, profile.userDataDir);
+      const { closeChromeMcpTab } = await getChromeMcpModule();
+      await closeChromeMcpTab(profile.name, resolvedTargetId, profile);
       return;
     }
 
@@ -147,7 +149,7 @@ export function createProfileSelectionOps({
         await closePageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
-          ssrfPolicy: getSsrFPolicy(),
+          ssrfPolicy: getCdpControlPolicy(),
         });
         return;
       }
@@ -157,7 +159,7 @@ export function createProfileSelectionOps({
       appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
       undefined,
       undefined,
-      getSsrFPolicy(),
+      getCdpControlPolicy(),
     );
   };
 

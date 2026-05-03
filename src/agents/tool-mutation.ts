@@ -12,6 +12,7 @@ const MUTATING_TOOL_NAMES = new Set([
   "bash",
   "process",
   "message",
+  "sessions_spawn",
   "sessions_send",
   "cron",
   "gateway",
@@ -51,12 +52,12 @@ const MESSAGE_MUTATING_ACTIONS = new Set([
   "unpin",
 ]);
 
-export type ToolMutationState = {
+type ToolMutationState = {
   mutatingAction: boolean;
   actionFingerprint?: string;
 };
 
-export type ToolActionRef = {
+type ToolActionRef = {
   toolName: string;
   meta?: string;
   actionFingerprint?: string;
@@ -129,6 +130,8 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
         typeof record?.content === "string" ||
         typeof record?.message === "string"
       );
+    case "subagents":
+      return action === "kill" || action === "steer";
     case "session_status":
       return typeof record?.model === "string" && record.model.trim().length > 0;
     default: {

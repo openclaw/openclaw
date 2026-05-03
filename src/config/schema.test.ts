@@ -3,6 +3,7 @@ import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -133,6 +134,7 @@ describe("config schema", () => {
         }
       | undefined;
     expect(serversNode?.additionalProperties?.properties?.headers).toBeTruthy();
+    expect(serversNode?.additionalProperties?.properties?.transport).toBeTruthy();
   });
 
   it("merges plugin ui hints", () => {
@@ -175,6 +177,63 @@ describe("config schema", () => {
     expect(channelProps?.accessToken).toBeTruthy();
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
+  });
+
+  it("omits a single oversized plugin schema from the full schema response", () => {
+    const res = buildConfigSchema({
+      cache: false,
+      plugins: [
+        {
+          id: "huge",
+          name: "Huge",
+          configSchema: {
+            type: "object",
+            properties: {
+              huge: {
+                type: "string",
+                description: `oversized-marker-${"x".repeat(300_000)}`,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const serialized = JSON.stringify(res);
+    expect(serialized).not.toContain("oversized-marker");
+    const lookup = lookupConfigSchema(res, "plugins.entries.huge.config");
+    expect(lookup?.schema).toMatchObject({
+      type: "object",
+      additionalProperties: true,
+      description: expect.stringContaining("omitted"),
+    });
+  });
+
+  it("omits later plugin schemas after the aggregate extension schema budget is exhausted", () => {
+    const res = buildConfigSchema({
+      cache: false,
+      plugins: Array.from({ length: 40 }, (_, index) => ({
+        id: `plugin-${index}`,
+        configSchema: {
+          type: "object",
+          properties: {
+            value: {
+              type: "string",
+              description: `schema-${index}-${"x".repeat(60_000)}`,
+            },
+          },
+        },
+      })),
+    });
+
+    const first = lookupConfigSchema(res, "plugins.entries.plugin-0.config.value");
+    const last = lookupConfigSchema(res, "plugins.entries.plugin-39.config");
+    expect(first?.schema).toMatchObject({ type: "string" });
+    expect(last?.schema).toMatchObject({
+      type: "object",
+      additionalProperties: true,
+      description: expect.stringContaining("omitted"),
+    });
   });
 
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
@@ -289,12 +348,31 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
   });
 
+  it("accepts WhatsApp Web Baileys socket timing in the runtime zod schema", () => {
+    const parsed = OpenClawSchema.parse({
+      web: {
+        whatsapp: {
+          keepAliveIntervalMs: 15_000,
+          connectTimeoutMs: 60_000,
+          defaultQueryTimeoutMs: 90_000,
+        },
+      },
+    });
+
+    expect(parsed.web?.whatsapp).toEqual({
+      keepAliveIntervalMs: 15_000,
+      connectTimeoutMs: 60_000,
+      defaultQueryTimeoutMs: 90_000,
+    });
+  });
+
   it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {
         fetch: {
           ssrfPolicy: {
             allowRfc2544BenchmarkRange: true,
+            allowIpv6UniqueLocalRange: true,
           },
         },
       },
@@ -302,6 +380,7 @@ describe("config schema", () => {
 
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
     });
   });
 

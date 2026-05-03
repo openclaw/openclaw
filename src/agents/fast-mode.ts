@@ -2,40 +2,21 @@ import { normalizeFastMode } from "../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+import { modelKey } from "./model-ref-shared.js";
 
-export type FastModeState = {
+type FastModeState = {
   enabled: boolean;
   source: "session" | "agent" | "config" | "default";
 };
-
-export function resolveFastModeParam(
-  extraParams: Record<string, unknown> | undefined,
-): boolean | undefined {
-  return normalizeFastMode(
-    (extraParams?.fastMode ?? extraParams?.fast_mode) as string | boolean | null | undefined,
-  );
-}
 
 function resolveConfiguredFastModeRaw(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   model: string;
 }): unknown {
-  const modelKey = `${params.provider}/${params.model}`;
-  const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
+  const modelConfig =
+    params.cfg?.agents?.defaults?.models?.[modelKey(params.provider, params.model)];
   return modelConfig?.params?.fastMode ?? modelConfig?.params?.fast_mode;
-}
-
-export function resolveConfiguredFastMode(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  model: string;
-}): boolean {
-  return (
-    normalizeFastMode(
-      resolveConfiguredFastModeRaw(params) as string | boolean | null | undefined,
-    ) ?? false
-  );
 }
 
 export function resolveFastModeState(params: {

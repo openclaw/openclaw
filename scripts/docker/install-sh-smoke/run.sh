@@ -9,11 +9,12 @@ DEFAULT_PACKAGE="openclaw"
 PACKAGE_NAME="${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
 FRESH_VERSION="${OPENCLAW_INSTALL_FRESH_VERSION:-}"
 FRESH_TAG_URL="${OPENCLAW_INSTALL_FRESH_TAG_URL:-}"
-UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-2026.4.10}"
+UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-latest}"
 UPDATE_BASELINE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION:-}"
 UPDATE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_TAG_URL:-}"
 HEARTBEAT_INTERVAL="${OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL:-60}"
+INSTALL_COMMAND_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT:-900}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck source=../install-sh-common/cli-verify.sh
@@ -108,17 +109,60 @@ run_with_heartbeat() {
   return "$status"
 }
 
+is_self_swapped_package_process_exit() {
+  local stderr="$1"
+  [[ "$stderr" == *"[openclaw] Failed to start CLI:"* ]] &&
+    [[ "$stderr" == *"ERR_MODULE_NOT_FOUND"* ]] &&
+    [[ "$stderr" == *"/node_modules/openclaw/dist/"* ]]
+}
+
+npm_install_global() {
+  local label="$1"
+  shift
+  run_with_heartbeat "$label" \
+    timeout --foreground "${INSTALL_COMMAND_TIMEOUT}s" \
+      npm \
+      --loglevel=error \
+      --logs-max=0 \
+      --no-update-notifier \
+      --no-fund \
+      --no-audit \
+      --no-progress \
+      install -g "$@"
+}
+
+resolve_update_baseline_version() {
+  if [[ -n "$UPDATE_BASELINE_TAG_URL" ]]; then
+    return
+  fi
+
+  local resolved_version
+  resolved_version="$(quiet_npm view "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" version 2>/dev/null || true)"
+  if [[ -z "$resolved_version" ]]; then
+    echo "ERROR: failed to resolve ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" >&2
+    return 1
+  fi
+  UPDATE_BASELINE_VERSION="$resolved_version"
+}
+
 run_install_smoke() {
   if [[ -n "$FRESH_VERSION" && -n "$FRESH_TAG_URL" ]]; then
     echo "package=$PACKAGE_NAME latest=$FRESH_VERSION source=$FRESH_TAG_URL"
     echo "==> Install latest release tarball"
-    run_with_heartbeat "install latest release tarball" \
-      quiet_npm install -g --omit=optional "$FRESH_TAG_URL"
+    npm_install_global "install latest release tarball" --omit=optional "$FRESH_TAG_URL"
     print_install_audit "fresh install"
 
     echo "==> Verify installed version"
     if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
-      printf "%s" "$FRESH_VERSION" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
+      # Non-root installer smoke uses the public install script path, which
+      # resolves npm "latest" rather than this host-served candidate tarball.
+      local latest_npm_version
+      latest_npm_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
+      if [[ -n "$latest_npm_version" ]]; then
+        printf "%s" "$latest_npm_version" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
+      else
+        printf "%s" "$FRESH_VERSION" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
+      fi
     fi
     verify_installed_cli "$PACKAGE_NAME" "$FRESH_VERSION"
 
@@ -167,8 +211,7 @@ NODE
     echo "==> Skip preinstall previous (OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
   else
     echo "==> Preinstall previous (forces installer upgrade path)"
-    run_with_heartbeat "preinstall previous release" \
-      quiet_npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
+    npm_install_global "preinstall previous release" "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
     print_install_audit "previous install"
   fi
 
@@ -194,14 +237,14 @@ run_update_smoke() {
     return 1
   fi
 
+  resolve_update_baseline_version
+
   echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
   echo "==> Install baseline release"
   if [[ -n "$UPDATE_BASELINE_TAG_URL" ]]; then
-    run_with_heartbeat "install baseline release" \
-      quiet_npm install -g --omit=optional "$UPDATE_BASELINE_TAG_URL"
+    npm_install_global "install baseline release" --omit=optional "$UPDATE_BASELINE_TAG_URL"
   else
-    run_with_heartbeat "install baseline release" \
-      quiet_npm install -g --omit=optional "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
+    npm_install_global "install baseline release" --omit=optional "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
   fi
   print_install_audit "baseline install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
@@ -226,8 +269,12 @@ run_update_smoke() {
     printf "%s\n" "$update_stderr" >&2
   fi
   if [[ "$update_status" -ne 0 ]]; then
-    echo "ERROR: openclaw update failed with exit code $update_status" >&2
-    return "$update_status"
+    if is_self_swapped_package_process_exit "$update_stderr"; then
+      echo "WARN: legacy updater process exited after self-swap; validating update JSON and installed CLI" >&2
+    else
+      echo "ERROR: openclaw update failed with exit code $update_status" >&2
+      return "$update_status"
+    fi
   fi
 
   UPDATE_JSON="$UPDATE_JSON" \
@@ -235,7 +282,41 @@ run_update_smoke() {
     UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
     UPDATE_TAG_URL="$UPDATE_TAG_URL" \
     node - <<'NODE'
-const payload = JSON.parse(process.env.UPDATE_JSON || "{}");
+function parseFirstJsonObject(raw) {
+  const start = raw.indexOf("{");
+  if (start < 0) {
+    throw new Error("missing update JSON object");
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return JSON.parse(raw.slice(start, index + 1));
+      }
+    }
+  }
+  throw new Error("unterminated update JSON object");
+}
+
+const payload = parseFirstJsonObject(process.env.UPDATE_JSON || "{}");
 const expectedVersion = String(process.env.UPDATE_EXPECT_VERSION || "");
 const baselineVersion = String(process.env.UPDATE_BASELINE_VERSION || "");
 const expectedUrl = String(process.env.UPDATE_TAG_URL || "");
@@ -275,12 +356,50 @@ NODE
   echo "OK"
 }
 
+run_npm_global_smoke() {
+  if [[ -z "$UPDATE_EXPECT_VERSION" ]]; then
+    echo "ERROR: OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION is required for npm-global mode" >&2
+    return 1
+  fi
+  if [[ -z "$UPDATE_TAG_URL" ]]; then
+    echo "ERROR: OPENCLAW_INSTALL_UPDATE_TAG_URL is required for npm-global mode" >&2
+    return 1
+  fi
+
+  resolve_update_baseline_version
+
+  echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
+  echo "==> Direct npm global install candidate"
+  npm_install_global "direct npm global install candidate" "$UPDATE_TAG_URL"
+  print_install_audit "direct npm fresh install"
+  verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
+
+  echo "==> Direct npm global install baseline"
+  if [[ -n "$UPDATE_BASELINE_TAG_URL" ]]; then
+    npm_install_global "direct npm global install baseline" "$UPDATE_BASELINE_TAG_URL"
+  else
+    npm_install_global "direct npm global install baseline" "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
+  fi
+  print_install_audit "direct npm baseline install"
+  verify_installed_cli "$PACKAGE_NAME" "$UPDATE_BASELINE_VERSION"
+
+  echo "==> Direct npm global update candidate"
+  npm_install_global "direct npm global update candidate" "$UPDATE_TAG_URL"
+  print_install_audit "direct npm updated install"
+  verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
+
+  echo "OK"
+}
+
 case "$SMOKE_MODE" in
   install)
     run_install_smoke
     ;;
   update)
     run_update_smoke
+    ;;
+  npm-global)
+    run_npm_global_smoke
     ;;
   *)
     echo "ERROR: unsupported OPENCLAW_INSTALL_SMOKE_MODE=$SMOKE_MODE" >&2

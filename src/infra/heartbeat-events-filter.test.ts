@@ -4,6 +4,7 @@ import {
   buildExecEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 
 describe("heartbeat event prompts", () => {
@@ -47,24 +48,83 @@ describe("heartbeat event prompts", () => {
   it.each([
     {
       name: "builds user-relay exec prompt by default",
+      events: ["Exec finished (node=abc id=123, code 0)\nUploaded file"],
       opts: undefined,
-      expected: ["Please relay the command output to the user", "If it failed"],
-      unexpected: ["Handle the result internally"],
+      expected: [
+        "Exec finished",
+        "Uploaded file",
+        "Please relay the command output to the user",
+        "If it failed",
+      ],
+      unexpected: ["system messages above", "Handle the result internally"],
     },
     {
       name: "builds internal-only exec prompt when delivery is disabled",
+      events: ["Exec failed (node=abc id=123, code 1)\nUpload failed"],
       opts: { deliverToUser: false },
-      expected: ["Handle the result internally"],
+      expected: ["user delivery is disabled", "Handle the result internally", "HEARTBEAT_OK only"],
+      unexpected: [
+        "Upload failed",
+        "system messages above",
+        "Please relay the command output to the user",
+      ],
+    },
+    {
+      name: "suppresses empty exec completion prompts",
+      events: ["", "   "],
+      opts: undefined,
+      expected: ["no command output was found", "Reply HEARTBEAT_OK only"],
+      unexpected: ["Please relay the command output to the user", "system messages above"],
+    },
+    {
+      name: "suppresses metadata-only successful exec completions",
+      events: ["Exec completed (abc12345, code 0)"],
+      opts: undefined,
+      expected: ["no command output was found", "Reply HEARTBEAT_OK only"],
+      unexpected: ["Please relay the command output to the user", "abc12345"],
+    },
+    {
+      name: "reports metadata-only failed exec completions without asking for logs",
+      events: ["Exec failed (abc12345, code 1)"],
+      opts: undefined,
+      expected: [
+        "without captured stdout/stderr",
+        "include the exit status or signal",
+        "Do not ask the user to provide missing logs",
+      ],
       unexpected: ["Please relay the command output to the user"],
     },
-  ])("$name", ({ opts, expected, unexpected }) => {
-    const prompt = buildExecEventPrompt(opts);
+  ])("$name", ({ events, opts, expected, unexpected }) => {
+    const prompt = buildExecEventPrompt(events, opts);
     for (const part of expected) {
       expect(prompt).toContain(part);
     }
     for (const part of unexpected) {
       expect(prompt).not.toContain(part);
     }
+  });
+
+  it("truncates oversized user-relay exec prompt output", () => {
+    const prompt = buildExecEventPrompt([`Exec finished: ${"x".repeat(8_100)}`]);
+
+    expect(prompt).toContain("[truncated]");
+    expect(prompt.length).toBeLessThan(8_500);
+  });
+
+  it("uses heartbeat_respond for empty cron events in response-tool mode", () => {
+    const prompt = buildCronEventPrompt([""], { useHeartbeatResponseTool: true });
+
+    expect(prompt).toContain("heartbeat_respond");
+    expect(prompt).toContain("notify=false");
+    expect(prompt).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("uses heartbeat_respond for quiet exec completion events in response-tool mode", () => {
+    const prompt = buildExecEventPrompt([""], { useHeartbeatResponseTool: true });
+
+    expect(prompt).toContain("heartbeat_respond");
+    expect(prompt).toContain("notify=false");
+    expect(prompt).not.toContain("HEARTBEAT_OK");
   });
 });
 
@@ -73,7 +133,9 @@ describe("heartbeat event classification", () => {
     { value: "exec finished: ok", expected: true },
     { value: "Exec finished (node=abc, code 0)", expected: true },
     { value: "Exec Finished (node=abc, code 1)", expected: true },
+    { value: "Exec completed (abc12345, code 0)", expected: true },
     { value: "Exec completed (abc12345, code 0) :: some output", expected: true },
+    { value: "Exec failed (abc12345, code 1)", expected: true },
     { value: "Exec failed (abc12345, signal SIGTERM) :: error output", expected: true },
     { value: "Exec completed (rotate api keys)", expected: false },
     { value: "Exec failed: notify me if this happens", expected: false },
@@ -94,11 +156,23 @@ describe("heartbeat event classification", () => {
     { value: "heartbeat wake: noop", expected: false },
     { value: "exec finished: ok", expected: false },
     { value: "Exec finished (node=abc, code 0)", expected: false },
+    { value: "Exec completed (abc12345, code 0)", expected: false },
     { value: "Exec completed (abc12345, code 0) :: some output", expected: false },
+    { value: "Exec failed (abc12345, code 1)", expected: false },
     { value: "Exec failed (abc12345, signal SIGTERM) :: error output", expected: false },
     { value: "Exec completed (rotate api keys)", expected: true },
     { value: "Reminder: if exec failed, notify me", expected: true },
   ])("classifies cron system events for %j", ({ value, expected }) => {
     expect(isCronSystemEvent(value)).toBe(expected);
+  });
+
+  it.each([
+    { value: "Exec completed (abc12345, code 0)", expected: false },
+    { value: "Exec completed (abc12345, code 0) :: some output", expected: true },
+    { value: "Exec failed (abc12345, code 1)", expected: true },
+    { value: "Exec failed (abc12345, signal SIGTERM)", expected: true },
+    { value: "exec finished: ok", expected: true },
+  ])("classifies relayable exec completion events for %j", ({ value, expected }) => {
+    expect(isRelayableExecCompletionEvent(value)).toBe(expected);
   });
 });

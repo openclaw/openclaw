@@ -148,16 +148,16 @@ function resolveBundledSessionConversationFallback(params: {
     return null;
   }
   const dirName = normalizeResolvedChannel(params.channel);
-  let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"];
+  let loaded: BundledSessionKeyModule | null = null;
   try {
-    resolveSessionConversation =
-      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
-        dirName,
-        artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-      })?.resolveSessionConversation;
+    loaded = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
+      dirName,
+      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
+    });
   } catch {
     return null;
   }
+  const resolveSessionConversation = loaded?.resolveSessionConversation;
   if (typeof resolveSessionConversation !== "function") {
     return null;
   }
@@ -182,6 +182,10 @@ function isBundledSessionConversationFallbackDisabled(channel: string): boolean 
   return !!entry && typeof entry === "object" && entry.enabled === false;
 }
 
+function shouldProbeBundledSessionConversationFallback(rawId: string): boolean {
+  return rawId.includes(":");
+}
+
 function resolveSessionConversationResolution(params: {
   channel: string;
   kind: "group" | "channel";
@@ -200,7 +204,10 @@ function resolveSessionConversationResolution(params: {
       rawId,
     }),
   );
-  const shouldTryBundledFallback = params.bundledFallback !== false && !messaging;
+  const shouldTryBundledFallback =
+    params.bundledFallback !== false &&
+    !messaging &&
+    shouldProbeBundledSessionConversationFallback(rawId);
   const resolved =
     pluginResolved ??
     (shouldTryBundledFallback

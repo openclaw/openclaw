@@ -173,6 +173,7 @@ export function createAcpReplyProjector(params: {
     payload: ReplyPayload,
     meta?: AcpProjectedDeliveryMeta,
   ) => Promise<boolean>;
+  onProgress?: () => void;
   provider?: string;
   accountId?: string;
 }): AcpReplyProjector {
@@ -279,7 +280,7 @@ export function createAcpReplyProjector(params: {
     if (!(settings.deliveryMode === "final_only" && force)) {
       return;
     }
-    for (const entry of pendingToolDeliveries.splice(0, pendingToolDeliveries.length)) {
+    for (const entry of pendingToolDeliveries.splice(0)) {
       await params.deliver("tool", entry.payload, entry.meta);
     }
   };
@@ -403,6 +404,7 @@ export function createAcpReplyProjector(params: {
   };
 
   const onEvent = async (event: AcpRuntimeEvent): Promise<void> => {
+    params.onProgress?.();
     if (event.type === "text_delta") {
       if (event.stream && event.stream !== "output") {
         return;

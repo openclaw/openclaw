@@ -1,9 +1,11 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
+import { isPluginEnabledInConfigSnapshot } from "../plugin-activation.ts";
 import type { ConfigSnapshot } from "../types.ts";
 
 export type DreamingPhaseId = "light" | "deep" | "rem";
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
 const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";
+const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 
 type DreamingPhaseStatusBase = {
   enabled: boolean;
@@ -199,6 +201,7 @@ type WikiMemoryPalacePayload = {
 export type DreamingState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  hello: GatewayHelloOk | null;
   configSnapshot: ConfigSnapshot | null;
   applySessionKey: string;
   dreamingStatusLoading: boolean;
@@ -226,6 +229,28 @@ function confirmDreamingAction(message: string): boolean {
     return true;
   }
   return globalThis.confirm(message);
+}
+
+function isMemoryWikiEnabled(state: DreamingState): boolean {
+  return isPluginEnabledInConfigSnapshot(state.configSnapshot, MEMORY_WIKI_PLUGIN_ID, {
+    enabledByDefault: false,
+  });
+}
+
+function hasGatewayMethod(state: DreamingState, method: string): boolean | null {
+  const methods = state.hello?.features?.methods;
+  if (!Array.isArray(methods)) {
+    return null;
+  }
+  return methods.includes(method);
+}
+
+function canCallMemoryWikiMethod(state: DreamingState, method: string): boolean {
+  const available = hasGatewayMethod(state, method);
+  if (available !== null) {
+    return available;
+  }
+  return isMemoryWikiEnabled(state);
 }
 
 function buildDreamDiaryActionSuccessMessage(
@@ -740,6 +765,11 @@ export async function loadWikiImportInsights(state: DreamingState): Promise<void
   if (!state.client || !state.connected || state.wikiImportInsightsLoading) {
     return;
   }
+  if (!canCallMemoryWikiMethod(state, "wiki.importInsights")) {
+    state.wikiImportInsights = null;
+    state.wikiImportInsightsError = null;
+    return;
+  }
   state.wikiImportInsightsLoading = true;
   state.wikiImportInsightsError = null;
   try {
@@ -757,6 +787,11 @@ export async function loadWikiImportInsights(state: DreamingState): Promise<void
 
 export async function loadWikiMemoryPalace(state: DreamingState): Promise<void> {
   if (!state.client || !state.connected || state.wikiMemoryPalaceLoading) {
+    return;
+  }
+  if (!canCallMemoryWikiMethod(state, "wiki.palace")) {
+    state.wikiMemoryPalace = null;
+    state.wikiMemoryPalaceError = null;
     return;
   }
   state.wikiMemoryPalaceLoading = true;

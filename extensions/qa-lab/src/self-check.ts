@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { QaBusState } from "./bus-state.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
 import { renderQaMarkdownReport } from "./report.js";
@@ -81,7 +81,7 @@ export async function runQaSelfCheckAgainstState(params: {
     timeline,
     notes: params.notes ?? [
       "Vertical slice: qa-channel + qa-lab bus + private debugger surface.",
-      "Docker orchestration, matrix runs, and auto-fix loops remain follow-up work.",
+      "Docker orchestration, additional QA runners, and auto-fix loops remain follow-up work.",
     ],
   });
 

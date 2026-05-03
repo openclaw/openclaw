@@ -30,15 +30,15 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
@@ -50,7 +50,7 @@ jobs:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           sync-labels: true
       - name: Apply PR size label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -92,7 +92,7 @@ jobs:
             const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
             const totalChangedLines = files.reduce((total, file) => {
               const path = file.filename ?? "";
-              if (path === "docs.acp.md" || path.startsWith("docs/") || excludedLockfiles.has(path)) {
+              if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
                 return total;
               }
               return total + (file.additions ?? 0) + (file.deletions ?? 0);
@@ -139,7 +139,7 @@ jobs:
               labels: [targetSizeLabel],
             });
       - name: Apply maintainer or trusted-contributor label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -210,7 +210,7 @@ jobs:
             //   });
             // }
       - name: Apply beta-blocker title label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -263,7 +263,7 @@ jobs:
               });
             }
       - name: Apply too-many-prs label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -278,6 +278,7 @@ jobs:
             const labelColor = "B60205";
             const labelDescription = `Author has more than ${activePrLimit} active PRs in this repo`;
             const authorLogin = pullRequest.user?.login;
+            const headRefName = pullRequest.head?.ref ?? "";
             if (!authorLogin) {
               return;
             }
@@ -294,6 +295,25 @@ jobs:
                 .map((label) => (typeof label === "string" ? label : label?.name))
                 .filter((name) => typeof name === "string"),
             );
+
+            if (pullRequest.user?.type === "Bot" || /\[bot\]$/i.test(authorLogin) || authorLogin.startsWith("app/")) {
+              if (labelNames.has(activePrLimitLabel)) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pullRequest.number,
+                    name: activePrLimitLabel,
+                  });
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                }
+              }
+              core.info(`Skipping active PR limit for GitHub App author ${authorLogin}.`);
+              return;
+            }
 
             if (labelNames.has(activePrLimitOverrideLabel)) {
               if (labelNames.has(activePrLimitLabel)) {
@@ -374,7 +394,12 @@ jobs:
               return false;
             };
 
-            if (await isPrivilegedAuthor()) {
+            const automationPrHeadPrefixes = ["clawsweeper/", "clownfish/"];
+            const isAutomationPullRequest =
+              typeof headRefName === "string" &&
+              automationPrHeadPrefixes.some((prefix) => headRefName.startsWith(prefix));
+
+            if ((await isPrivilegedAuthor()) || isAutomationPullRequest) {
               if (labelNames.has(activePrLimitLabel)) {
                 try {
                   await github.rest.issues.removeLabel({
@@ -439,22 +464,22 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Backfill PR labels
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -581,7 +606,7 @@ jobs:
               const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
               const totalChangedLines = files.reduce((total, file) => {
                 const path = file.filename ?? "";
-                if (path === "docs.acp.md" || path.startsWith("docs/") || excludedLockfiles.has(path)) {
+                if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
                   return total;
                 }
                 return total + (file.additions ?? 0) + (file.deletions ?? 0);
@@ -737,22 +762,22 @@ jobs:
   label-issues:
     permissions:
       issues: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Apply maintainer or trusted-contributor label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -823,7 +848,7 @@ jobs:
             //   });
             // }
       - name: Apply beta-blocker title label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |

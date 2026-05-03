@@ -1,19 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  drainSessionStoreLockQueuesForTest,
-  resetSessionStoreLockRuntimeForTests,
-  setSessionWriteLockAcquirerForTests,
-} from "../config/sessions.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { drainSessionStoreWriterQueuesForTest } from "../config/sessions.js";
 import {
   readCompactionCount,
   seedSessionStore,
   waitForCompactionCount,
 } from "./pi-embedded-subscribe.compaction-test-helpers.js";
 import {
-  handleAutoCompactionEnd,
+  handleCompactionEnd,
   reconcileSessionStoreCompactionCountAfterSuccess,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -52,18 +48,13 @@ function createCompactionContext(params: {
       compactionCount += 1;
     },
     getCompactionCount: () => compactionCount,
+    noteCompactionTokensAfter: vi.fn(),
+    getLastCompactionTokensAfter: vi.fn(() => undefined),
   } as unknown as EmbeddedPiSubscribeContext;
 }
 
-beforeEach(() => {
-  setSessionWriteLockAcquirerForTests(async () => ({
-    release: async () => {},
-  }));
-});
-
 afterEach(async () => {
-  resetSessionStoreLockRuntimeForTests();
-  await drainSessionStoreLockQueuesForTest();
+  await drainSessionStoreWriterQueuesForTest();
 });
 
 describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
@@ -112,7 +103,7 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
   });
 });
 
-describe("handleAutoCompactionEnd", () => {
+describe("handleCompactionEnd", () => {
   it("reconciles the session store after a successful compaction end event", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -129,8 +120,8 @@ describe("handleAutoCompactionEnd", () => {
       initialCount: 1,
     });
 
-    handleAutoCompactionEnd(ctx, {
-      type: "auto_compaction_end",
+    handleCompactionEnd(ctx, {
+      type: "compaction_end",
       result: { kept: 12 },
       willRetry: false,
       aborted: false,
@@ -143,5 +134,6 @@ describe("handleAutoCompactionEnd", () => {
     });
 
     expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
+    expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(undefined);
   });
 });

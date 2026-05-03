@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 import { getPath } from "./path-utils.js";
 import { getCoreSecretTargetRegistry, getSecretTargetRegistry } from "./target-registry-data.js";
 import {
@@ -30,6 +31,8 @@ let compiledCoreOpenClawTargetState: {
   openClawTargetsById: Map<string, CompiledTargetRegistryEntry[]>;
   targetsByType: Map<string, CompiledTargetRegistryEntry[]>;
 } | null = null;
+
+const compiledChannelOpenClawTargets = new Map<string, CompiledTargetRegistryEntry[] | null>();
 
 function buildTargetTypeIndex(
   compiledSecretTargetRegistry: CompiledTargetRegistryEntry[],
@@ -104,6 +107,28 @@ function getCompiledCoreOpenClawTargetState() {
     targetsByType: buildTargetTypeIndex(openClawCompiledSecretTargets),
   };
   return compiledCoreOpenClawTargetState;
+}
+
+function getCompiledChannelOpenClawTargets(
+  channelId: string,
+): CompiledTargetRegistryEntry[] | null {
+  const normalizedChannelId = channelId.trim();
+  if (!normalizedChannelId) {
+    return null;
+  }
+  if (compiledChannelOpenClawTargets.has(normalizedChannelId)) {
+    return compiledChannelOpenClawTargets.get(normalizedChannelId) ?? null;
+  }
+  const compiledEntries =
+    loadChannelSecretContractApi({
+      channelId: normalizedChannelId,
+      config: {} as OpenClawConfig,
+      env: process.env,
+    })
+      ?.secretTargetRegistryEntries?.filter((entry) => entry.configFile === "openclaw.json")
+      .map(compileTargetRegistryEntry) ?? null;
+  compiledChannelOpenClawTargets.set(normalizedChannelId, compiledEntries);
+  return compiledEntries;
 }
 
 function normalizeAllowedTargetIds(targetIds?: Iterable<string>): Set<string> | null {
@@ -202,32 +227,28 @@ function toResolvedPlanTarget(
 }
 
 export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
-  return getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry.map((entry) => ({
-    id: entry.id,
-    targetType: entry.targetType,
-    ...(entry.targetTypeAliases ? { targetTypeAliases: [...entry.targetTypeAliases] } : {}),
-    configFile: entry.configFile,
-    pathPattern: entry.pathPattern,
-    ...(entry.refPathPattern ? { refPathPattern: entry.refPathPattern } : {}),
-    secretShape: entry.secretShape,
-    expectedResolvedValue: entry.expectedResolvedValue,
-    includeInPlan: entry.includeInPlan,
-    includeInConfigure: entry.includeInConfigure,
-    includeInAudit: entry.includeInAudit,
-    ...(entry.providerIdPathSegmentIndex !== undefined
-      ? { providerIdPathSegmentIndex: entry.providerIdPathSegmentIndex }
-      : {}),
-    ...(entry.accountIdPathSegmentIndex !== undefined
-      ? { accountIdPathSegmentIndex: entry.accountIdPathSegmentIndex }
-      : {}),
-    ...(entry.authProfileType ? { authProfileType: entry.authProfileType } : {}),
-    ...(entry.trackProviderShadowing ? { trackProviderShadowing: true } : {}),
-  }));
-}
-
-export function isKnownSecretTargetType(value: unknown): value is string {
-  return (
-    typeof value === "string" && getCompiledSecretTargetRegistryState().targetsByType.has(value)
+  return getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry.map((entry) =>
+    Object.assign(
+      { id: entry.id, targetType: entry.targetType },
+      entry.targetTypeAliases ? { targetTypeAliases: [...entry.targetTypeAliases] } : {},
+      { configFile: entry.configFile, pathPattern: entry.pathPattern },
+      entry.refPathPattern ? { refPathPattern: entry.refPathPattern } : {},
+      {
+        secretShape: entry.secretShape,
+        expectedResolvedValue: entry.expectedResolvedValue,
+        includeInPlan: entry.includeInPlan,
+        includeInConfigure: entry.includeInConfigure,
+        includeInAudit: entry.includeInAudit,
+      },
+      entry.providerIdPathSegmentIndex !== undefined
+        ? { providerIdPathSegmentIndex: entry.providerIdPathSegmentIndex }
+        : {},
+      entry.accountIdPathSegmentIndex !== undefined
+        ? { accountIdPathSegmentIndex: entry.accountIdPathSegmentIndex }
+        : {},
+      entry.authProfileType ? { authProfileType: entry.authProfileType } : {},
+      entry.trackProviderShadowing ? { trackProviderShadowing: true } : {},
+    ),
   );
 }
 
@@ -292,6 +313,40 @@ function resolvePlanTargetAgainstEntries(
 }
 
 export function resolveConfigSecretTargetByPath(pathSegments: string[]): ResolvedPlanTarget | null {
+  for (const entry of getCompiledCoreOpenClawTargetState().openClawCompiledSecretTargets) {
+    if (!entry.includeInPlan) {
+      continue;
+    }
+    const matched = matchPathTokens(pathSegments, entry.pathTokens);
+    if (!matched) {
+      continue;
+    }
+    const resolved = toResolvedPlanTarget(entry, pathSegments, matched.captures);
+    if (!resolved) {
+      continue;
+    }
+    return resolved;
+  }
+
+  const explicitChannelId = pathSegments[0] === "channels" ? (pathSegments[1]?.trim() ?? "") : "";
+  const explicitChannelEntries = explicitChannelId
+    ? getCompiledChannelOpenClawTargets(explicitChannelId)
+    : null;
+  for (const entry of explicitChannelEntries ?? []) {
+    if (!entry.includeInPlan) {
+      continue;
+    }
+    const matched = matchPathTokens(pathSegments, entry.pathTokens);
+    if (!matched) {
+      continue;
+    }
+    const resolved = toResolvedPlanTarget(entry, pathSegments, matched.captures);
+    if (!resolved) {
+      continue;
+    }
+    return resolved;
+  }
+
   for (const entry of getCompiledSecretTargetRegistryState().openClawCompiledSecretTargets) {
     if (!entry.includeInPlan) {
       continue;
@@ -335,11 +390,7 @@ export function discoverConfigSecretTargetsByIds(
   return discoverSecretTargetsFromEntries(config, discoveryEntries);
 }
 
-export function discoverAuthProfileSecretTargets(store: unknown): DiscoveredConfigSecretTarget[] {
-  return discoverAuthProfileSecretTargetsByIds(store);
-}
-
-export function discoverAuthProfileSecretTargetsByIds(
+export function discoverAuthProfileSecretTargets(
   store: unknown,
   targetIds?: Iterable<string>,
 ): DiscoveredConfigSecretTarget[] {

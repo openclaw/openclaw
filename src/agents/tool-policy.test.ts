@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { TOOL_POLICY_CONFORMANCE } from "./tool-policy.conformance.js";
 import {
   applyOwnerOnlyToolPolicy,
@@ -33,7 +34,8 @@ function createOwnerPolicyTools() {
       execute: async () => ({ content: [], details: {} }) as any,
     },
     {
-      name: "whatsapp_login",
+      name: "nodes",
+      ownerOnly: true,
       execute: async () => ({ content: [], details: {} }) as any,
     },
   ] as unknown as AnyAgentTool[];
@@ -76,7 +78,6 @@ describe("tool-policy", () => {
   });
 
   it("identifies owner-only tools", () => {
-    expect(isOwnerOnlyToolName("whatsapp_login")).toBe(true);
     expect(isOwnerOnlyToolName("cron")).toBe(true);
     expect(isOwnerOnlyToolName("gateway")).toBe(true);
     expect(isOwnerOnlyToolName("nodes")).toBe(true);
@@ -84,7 +85,6 @@ describe("tool-policy", () => {
   });
 
   it("exposes stable approval classes for shared owner-only fallbacks", () => {
-    expect(resolveOwnerOnlyToolApprovalClass("whatsapp_login")).toBe("interactive");
     expect(resolveOwnerOnlyToolApprovalClass("cron")).toBe("control_plane");
     expect(resolveOwnerOnlyToolApprovalClass("gateway")).toBe("control_plane");
     expect(resolveOwnerOnlyToolApprovalClass("nodes")).toBe("exec_capable");
@@ -101,7 +101,6 @@ describe("tool-policy", () => {
       cron: "control_plane",
       gateway: "control_plane",
       nodes: "exec_capable",
-      whatsapp_login: "interactive",
     });
   });
 
@@ -114,7 +113,20 @@ describe("tool-policy", () => {
   it("keeps owner-only tools for the owner sender", async () => {
     const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);
-    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "whatsapp_login"]);
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "nodes"]);
+  });
+
+  it("keeps only explicitly authorized owner-only tools for non-owner senders", async () => {
+    const tools = createOwnerPolicyTools();
+    const filtered = applyOwnerOnlyToolPolicy(tools, false, ["cron"]);
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron"]);
+
+    await expect(
+      filtered.find((tool) => tool.name === "cron")?.execute?.("call_1", {}),
+    ).resolves.toEqual({
+      content: [],
+      details: {},
+    });
   });
 
   it("honors ownerOnly metadata for custom tool names", async () => {
@@ -251,5 +263,25 @@ describe("resolveSandboxToolPolicyForAgent", () => {
     const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
     expect(resolved.allow).toEqual(["read"]);
     expect(resolved.deny).toEqual(["image"]);
+  });
+});
+
+describe("isToolAllowedByPolicyName — apply_patch / write deny decoupling (#76749)", () => {
+  it("does not deny apply_patch when write is denied", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(true);
+  });
+
+  it("still denies apply_patch when apply_patch is explicitly denied", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["apply_patch"] })).toBe(false);
+  });
+
+  it("still allows apply_patch via write in the allow list", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"], deny: [] })).toBe(true);
+  });
+
+  it("denies apply_patch when both write and apply_patch are denied", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write", "apply_patch"] })).toBe(
+      false,
+    );
   });
 });

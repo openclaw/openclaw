@@ -40,6 +40,8 @@ export type OutboundSendContext = {
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
+  senderIsOwner?: boolean;
+  sessionId?: string;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
   deps?: OutboundSendDeps;
@@ -100,6 +102,11 @@ async function tryHandleWithPluginAction(params: {
     mediaLocalRoots: mediaAccess.localRoots,
     mediaReadFile: mediaAccess.readFile,
     accountId: params.ctx.accountId ?? undefined,
+    requesterSenderId: params.ctx.requesterSenderId,
+    senderIsOwner: params.ctx.senderIsOwner,
+    sessionKey: params.ctx.sessionKey,
+    sessionId: params.ctx.sessionId,
+    agentId: params.ctx.agentId,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
     dryRun: params.ctx.dryRun,
@@ -121,6 +128,7 @@ export async function executeSendAction(params: {
   message: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
   bestEffort?: boolean;
@@ -151,6 +159,7 @@ export async function executeSendAction(params: {
         text: mirrorText,
         mediaUrls: mirrorMediaUrls,
         idempotencyKey: params.ctx.mirror.idempotencyKey,
+        config: params.ctx.cfg,
       });
     },
   });
@@ -172,6 +181,7 @@ export async function executeSendAction(params: {
     requesterSenderE164: params.ctx.requesterSenderE164,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
+    asVoice: params.asVoice,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
     replyToId: params.replyToId,

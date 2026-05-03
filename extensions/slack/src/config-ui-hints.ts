@@ -29,6 +29,22 @@ export const slackChannelConfigUiHints = {
     label: "Slack Allow Bot Messages",
     help: "Allow bot-authored messages to trigger Slack replies (default: false).",
   },
+  socketMode: {
+    label: "Slack Socket Mode Transport",
+    help: "Slack Socket Mode transport tuning passed to the Slack SDK. Use only when investigating ping/pong timeout or stale websocket behavior.",
+  },
+  "socketMode.clientPingTimeout": {
+    label: "Slack Socket Mode Pong Timeout",
+    help: "Milliseconds the Slack SDK waits for a pong after its client ping before treating the websocket as stale (OpenClaw default: 15000). Increase on hosts with event-loop starvation or slow network scheduling.",
+  },
+  "socketMode.serverPingTimeout": {
+    label: "Slack Socket Mode Server Ping Timeout",
+    help: "Milliseconds the Slack SDK waits for Slack server pings before treating the websocket as stale.",
+  },
+  "socketMode.pingPongLoggingEnabled": {
+    label: "Slack Socket Mode Ping/Pong Logging",
+    help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
+  },
   botToken: {
     label: "Slack Bot Token",
     help: "Slack bot token used for standard chat actions in the configured workspace. Keep this credential scoped and rotate if workspace app permissions change.",
@@ -95,7 +111,11 @@ export const slackChannelConfigUiHints = {
   },
   "streaming.nativeTransport": {
     label: "Slack Native Streaming",
-    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Requires a reply thread target; top-level DMs stay on the non-thread fallback path.",
+    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Native streaming and Slack assistant thread status require a reply thread target; top-level DMs can still use draft post-and-edit preview streaming.",
+  },
+  "streaming.preview.toolProgress": {
+    label: "Slack Draft Tool Progress",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",

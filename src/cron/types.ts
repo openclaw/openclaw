@@ -46,6 +46,34 @@ export type CronDeliveryPatch = Partial<CronDelivery>;
 export type CronRunStatus = "ok" | "error" | "skipped";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
+export type CronDeliveryTraceTarget = {
+  channel?: string;
+  to?: string | null;
+  accountId?: string;
+  threadId?: string | number;
+  source?: "explicit" | "last";
+};
+
+export type CronDeliveryTraceMessageTarget = {
+  channel: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+};
+
+export type CronDeliveryTrace = {
+  intended?: CronDeliveryTraceTarget;
+  resolved?: CronDeliveryTraceTarget & { ok: boolean; error?: string };
+  messageToolSentTo?: CronDeliveryTraceMessageTarget[];
+  fallbackUsed?: boolean;
+  delivered?: boolean;
+};
+
+export type CronDeliveryPreview = {
+  label: string;
+  detail: string;
+};
+
 export type CronUsageSummary = {
   input_tokens?: number;
   output_tokens?: number;
@@ -70,11 +98,20 @@ export type CronRunOutcome = {
   sessionKey?: string;
 };
 
+export type CronAgentExecutionStarted = {
+  jobId: string;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
 export type CronFailureAlert = {
   after?: number;
   channel?: CronMessageChannel;
   to?: string;
   cooldownMs?: number;
+  /** When true, consecutive skipped runs count toward the alert threshold. */
+  includeSkipped?: boolean;
   /** Delivery mode: announce (via messaging channels) or webhook (HTTP POST). */
   mode?: "announce" | "webhook";
   /** Account ID for multi-account channel configurations. */
@@ -117,7 +154,7 @@ export type CronJobState = {
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
-  /** Back-compat alias for lastRunStatus. */
+  /** @deprecated Use lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   /** Classified reason for the last error (when available). */
@@ -125,6 +162,8 @@ export type CronJobState = {
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
+  /** Number of consecutive skipped executions (reset on success or error). */
+  consecutiveSkipped?: number;
   /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
   lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */

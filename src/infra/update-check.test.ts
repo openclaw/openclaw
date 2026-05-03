@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   checkDepsStatus,
@@ -8,6 +9,7 @@ import {
   compareSemverStrings,
   fetchNpmLatestVersion,
   fetchNpmPackageTargetStatus,
+  fetchNpmRegistryVersionForChannel,
   fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveNpmChannelTag,
@@ -115,8 +117,20 @@ describe("resolveNpmChannelTag", () => {
       latestVersion: "1.0.4",
       error: undefined,
     });
+    versionByTag.beta = "1.0.5-beta.1";
+    await expect(
+      fetchNpmRegistryVersionForChannel({ channel: "beta", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      latestVersion: "1.0.5-beta.1",
+      tag: "beta",
+    });
     await expect(fetchNpmTagVersion({ tag: "beta", timeoutMs: 1000 })).resolves.toEqual({
       tag: "beta",
+      version: "1.0.5-beta.1",
+      error: undefined,
+    });
+    await expect(fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000 })).resolves.toEqual({
+      tag: "missing",
       version: null,
       error: "HTTP 404",
     });
@@ -247,6 +261,36 @@ describe("checkUpdateStatus", () => {
         registry: undefined,
         deps: {
           manager: "npm",
+        },
+      });
+    });
+  });
+
+  it("treats symlinked git installs as git roots", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-git-" }, async (base) => {
+      const repoRoot = path.join(base, "repo");
+      const linkedRoot = path.join(base, "linked-openclaw");
+      await fs.mkdir(repoRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(repoRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+        "utf8",
+      );
+      await runCommandWithTimeout(["git", "init"], { cwd: repoRoot, timeoutMs: 1000 });
+      await fs.symlink(repoRoot, linkedRoot);
+
+      await expect(
+        checkUpdateStatus({
+          root: linkedRoot,
+          includeRegistry: false,
+          fetchGit: false,
+          timeoutMs: 1000,
+        }),
+      ).resolves.toMatchObject({
+        root: linkedRoot,
+        installKind: "git",
+        git: {
+          root: linkedRoot,
         },
       });
     });

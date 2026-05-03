@@ -5,6 +5,7 @@ import {
   parseCliJson,
   parseCliJsonl,
 } from "./cli-output.js";
+import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
 describe("parseCliJson", () => {
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
@@ -120,6 +121,95 @@ describe("parseCliJson", () => {
         cacheRead: 8,
         cacheWrite: undefined,
         total: 21,
+      },
+    });
+  });
+
+  it("unwraps nested Claude result JSON from JSON output", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "session-nested-json",
+        result: JSON.stringify({
+          type: "result",
+          result: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            result: "actual response text",
+          }),
+        }),
+      }),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "actual response text",
+      sessionId: "session-nested-json",
+      usage: undefined,
+    });
+  });
+
+  it("does not unwrap nested result-shaped JSON for non-claude json backends", () => {
+    const nestedResult = JSON.stringify({
+      type: "result",
+      result: JSON.stringify({
+        type: "result",
+        result: "actual response text",
+      }),
+    });
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "gemini-session-nested-json",
+        result: nestedResult,
+      }),
+      {
+        command: "gemini",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "gemini",
+    );
+
+    expect(result).toEqual({
+      text: nestedResult,
+      sessionId: "gemini-session-nested-json",
+      usage: undefined,
+    });
+  });
+
+  it("parses nested OpenAI-style cached token details from CLI json payloads", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "openai-session-123",
+        response: "OpenAI says hello",
+        usage: {
+          input_tokens: 15,
+          output_tokens: 4,
+          input_tokens_details: {
+            cached_tokens: 6,
+          },
+        },
+      }),
+      {
+        command: "codex",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "OpenAI says hello",
+      sessionId: "openai-session-123",
+      usage: {
+        input: 9,
+        output: 4,
+        cacheRead: 6,
+        cacheWrite: undefined,
+        total: undefined,
       },
     });
   });
@@ -261,6 +351,38 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("unwraps nested Claude agent result JSON from stream-json output", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-nested-jsonl" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-nested-jsonl",
+          result: JSON.stringify({
+            type: "result",
+            result: JSON.stringify({
+              type: "result",
+              subtype: "success",
+              result: "actual response text",
+            }),
+          }),
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "actual response text",
+      sessionId: "session-nested-jsonl",
+      usage: undefined,
+    });
+  });
+
   it("parses multiple JSON objects embedded on the same line", () => {
     const result = parseCliJsonl(
       '{"type":"init","session_id":"session-999"} {"type":"result","session_id":"session-999","result":"done"}',
@@ -280,38 +402,8 @@ describe("parseCliJsonl", () => {
   });
 
   it("extracts nested Claude API errors from failed stream-json output", () => {
-    const message =
-      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
-    const apiError = `API Error: 400 ${JSON.stringify({
-      type: "error",
-      error: {
-        type: "invalid_request_error",
-        message,
-      },
-      request_id: "req_011CZqHuXhFetYCnr8325DQc",
-    })}`;
-    const result = extractCliErrorMessage(
-      [
-        JSON.stringify({ type: "system", subtype: "init", session_id: "session-api-error" }),
-        JSON.stringify({
-          type: "assistant",
-          message: {
-            model: "<synthetic>",
-            role: "assistant",
-            content: [{ type: "text", text: apiError }],
-          },
-          session_id: "session-api-error",
-          error: "unknown",
-        }),
-        JSON.stringify({
-          type: "result",
-          subtype: "success",
-          is_error: true,
-          result: apiError,
-          session_id: "session-api-error",
-        }),
-      ].join("\n"),
-    );
+    const { message, jsonl } = createClaudeApiErrorFixture();
+    const result = extractCliErrorMessage(jsonl);
 
     expect(result).toBe(message);
   });

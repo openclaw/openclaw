@@ -3,14 +3,14 @@ summary: "Zalo personal account support via native zca-js (QR login), capabiliti
 read_when:
   - Setting up Zalo Personal for OpenClaw
   - Debugging Zalo Personal login or message flow
-title: "Zalo Personal"
+title: "Zalo personal"
 ---
-
-# Zalo Personal (unofficial)
 
 Status: experimental. This integration automates a **personal Zalo account** via native `zca-js` inside OpenClaw.
 
-> **Warning:** This is an unofficial integration and may result in account suspension/ban. Use at your own risk.
+<Warning>
+This is an unofficial integration and may result in account suspension or ban. Use at your own risk.
+</Warning>
 
 ## Bundled plugin
 
@@ -18,9 +18,10 @@ Zalo Personal ships as a bundled plugin in current OpenClaw releases, so normal
 packaged builds do not need a separate install.
 
 If you are on an older build or a custom install that excludes Zalo Personal,
-install it manually:
+install the npm package directly:
 
 - Install via CLI: `openclaw plugins install @openclaw/zalouser`
+- Pinned version: `openclaw plugins install @openclaw/zalouser@2026.5.2`
 - Or from a source checkout: `openclaw plugins install ./path/to/local/zalouser-plugin`
 - Details: [Plugins](/tools/plugin)
 

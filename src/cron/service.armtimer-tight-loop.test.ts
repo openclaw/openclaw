@@ -57,7 +57,7 @@ describe("CronService - armTimer tight loop prevention", () => {
       log: noopLogger,
       nowMs: () => params.now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob:
         params.runIsolatedAgentJob ?? vi.fn().mockResolvedValue({ status: "ok" }),
     });
@@ -137,6 +137,43 @@ describe("CronService - armTimer tight loop prevention", () => {
 
     // The natural delay (10 s) should be used, not the floor.
     expect(delays).toContain(10_000);
+
+    timeoutSpy.mockRestore();
+  });
+
+  it("keeps a maintenance wake armed when enabled jobs have no nextRunAtMs", () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const now = Date.parse("2026-02-28T12:32:00.000Z");
+
+    const state = createTimerState({
+      storePath: "/tmp/test-cron/jobs.json",
+      now,
+    });
+    state.store = {
+      version: 1,
+      jobs: [
+        {
+          id: "missing-next-run",
+          name: "missing-next-run",
+          enabled: true,
+          deleteAfterRun: false,
+          createdAtMs: now - 60_000,
+          updatedAtMs: now - 60_000,
+          schedule: { kind: "cron", expr: "*/15 * * * *" },
+          sessionTarget: "isolated" as const,
+          wakeMode: "next-heartbeat" as const,
+          payload: { kind: "agentTurn" as const, message: "test" },
+          delivery: { mode: "none" as const },
+          state: {},
+        },
+      ],
+    };
+
+    armTimer(state);
+
+    expect(state.timer).not.toBeNull();
+    const delays = extractTimeoutDelays(timeoutSpy);
+    expect(delays).toContain(60_000);
 
     timeoutSpy.mockRestore();
   });
