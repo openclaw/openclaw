@@ -944,10 +944,19 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // draftStream.update() calls in the same turn are silently ignored.
   // This direct delete + forceNewMessage approach keeps the stream
   // reusable for the next phase (narrative or another bullet burst).
+  //
+  // Critical: draftStream.flush() is awaited FIRST to drain any in-flight
+  // send/edit. Without that, an in-flight `Working…` send could complete
+  // AFTER we forceNewMessage and capture undefined IDs — leaving an
+  // orphan preview message in the channel that nothing will ever delete.
+  // flush() commits any pending text and waits for in-flight, so when we
+  // read channelId/messageId next, they point to the message that
+  // actually exists in Slack.
   const deleteBulletPreview = async (): Promise<void> => {
     if (!draftStream) {
       return;
     }
+    await draftStream.flush();
     const channelId = draftStream.channelId();
     const messageId = draftStream.messageId();
     draftStream.forceNewMessage();
