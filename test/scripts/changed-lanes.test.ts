@@ -321,7 +321,14 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("routes root hygiene config changes to tooling instead of all lanes", () => {
-    const result = detectChangedLanes([".dockerignore", ".pre-commit-config.yaml", ".swiftformat"]);
+    const result = detectChangedLanes([
+      ".dockerignore",
+      ".jscpd.json",
+      ".pre-commit-config.yaml",
+      ".swiftformat",
+      "Makefile",
+      "openclaw.podman.env",
+    ]);
     const plan = createChangedCheckPlan(result);
 
     expect(result.lanes).toMatchObject({
