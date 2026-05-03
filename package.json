@@ -25,7 +25,6 @@
     "LICENSE",
     "openclaw.mjs",
     "README.md",
-    "assets/",
     "dist/",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",

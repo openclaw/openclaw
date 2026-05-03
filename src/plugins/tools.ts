@@ -804,15 +804,55 @@ export function resolvePluginTools(params: {
     onlyPluginIds: runtimePluginIds,
     runtimeOptions,
   });
-  const registry = resolvePluginToolRegistry({
+  let registry = resolvePluginToolRegistry({
     loadOptions,
     onlyPluginIds: runtimePluginIds,
   });
   if (!registry) {
-    return tools;
+    // Cold registry: path-based plugins (origin "config") registered via plugins.load.paths
+    // are not pinned to any active channel/surface registry until explicitly loaded.
+    // Trigger a standalone load so their tool factories become available, then retry.
+    try {
+      ensureStandaloneRuntimePluginRegistryLoaded({
+        surface: "channel",
+        requiredPluginIds: runtimePluginIds,
+        loadOptions,
+      });
+    } catch (error) {
+      context.logger.error(
+        `failed to cold-load plugin tool registry for plugin ids [${runtimePluginIds.join(", ")}]: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      throw error;
+    }
+    registry = resolvePluginToolRegistry({
+      loadOptions,
+      onlyPluginIds: runtimePluginIds,
+    });
+    if (!registry) {
+      context.logger.warn(
+        `plugin tool registry still unavailable after cold load for plugin ids [${runtimePluginIds.join(
+          ", ",
+        )}]`,
+      );
+      return tools;
+    }
   }
 
   const scopedPluginIds = new Set(runtimePluginIds);
+  const registryToolPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
+  const missingRegistryToolPluginIds = runtimePluginIds.filter(
+    (pluginId) => !registryToolPluginIds.has(pluginId),
+  );
+  for (const pluginId of missingRegistryToolPluginIds) {
+    registry.diagnostics.push({
+      level: "warn",
+      pluginId,
+      source: "plugin-tools",
+      message: `plugin tool registry did not include selected plugin tools after cold load (${pluginId})`,
+    });
+  }
   const blockedPlugins = new Set<string>();
   const factoryTimingStartedAt = Date.now();
   const factoryTimings: PluginToolFactoryTiming[] = [];

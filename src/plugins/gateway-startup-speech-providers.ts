@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { resolveEffectiveTtsConfig } from "../tts/tts-config.js";
 
 const TTS_PROVIDER_CONFIG_RESERVED_KEYS = new Set([
   "auto",
@@ -141,33 +142,43 @@ function addConfiguredTtsProviderIds(target: Set<string>, value: unknown): void 
 
 export function collectConfiguredSpeechProviderIds(config: OpenClawConfig): ReadonlySet<string> {
   const configured = new Set<string>();
-  addConfiguredTtsProviderIds(configured, config.messages?.tts);
+  addConfiguredTtsProviderIds(configured, resolveEffectiveTtsConfig(config));
 
   const agents = config.agents;
   if (isRecord(agents) && Array.isArray(agents.list)) {
     for (const agent of agents.list) {
       if (isRecord(agent)) {
-        addConfiguredTtsProviderIds(configured, agent.tts);
+        if (typeof agent.id === "string") {
+          addConfiguredTtsProviderIds(
+            configured,
+            resolveEffectiveTtsConfig(config, { agentId: agent.id }),
+          );
+        } else {
+          addConfiguredTtsProviderIds(configured, agent.tts);
+        }
       }
     }
   }
 
   const channels = config.channels;
   if (isRecord(channels)) {
-    for (const channelConfig of Object.values(channels)) {
+    for (const [channelId, channelConfig] of Object.entries(channels)) {
       if (!isRecord(channelConfig)) {
         continue;
       }
-      addConfiguredTtsProviderIds(configured, channelConfig.tts);
+      addConfiguredTtsProviderIds(configured, resolveEffectiveTtsConfig(config, { channelId }));
       if (isRecord(channelConfig.voice)) {
         addConfiguredTtsProviderIds(configured, channelConfig.voice.tts);
       }
       if (isRecord(channelConfig.accounts)) {
-        for (const accountConfig of Object.values(channelConfig.accounts)) {
+        for (const [accountId, accountConfig] of Object.entries(channelConfig.accounts)) {
           if (!isRecord(accountConfig)) {
             continue;
           }
-          addConfiguredTtsProviderIds(configured, accountConfig.tts);
+          addConfiguredTtsProviderIds(
+            configured,
+            resolveEffectiveTtsConfig(config, { channelId, accountId }),
+          );
           if (isRecord(accountConfig.voice)) {
             addConfiguredTtsProviderIds(configured, accountConfig.voice.tts);
           }

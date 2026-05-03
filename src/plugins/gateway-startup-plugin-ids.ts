@@ -99,13 +99,41 @@ function resolveMemorySlotStartupPluginId(params: {
   return normalizePluginId(configuredSlot);
 }
 
+function resolveContextEngineSlotStartupPluginId(params: {
+  activationSourceConfig: OpenClawConfig;
+  activationSourcePlugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  normalizePluginId: (pluginId: string) => string;
+}): string | undefined {
+  const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
+  const configuredSlot = activationSourceConfig.plugins?.slots?.contextEngine?.trim();
+  if (!configuredSlot) {
+    return undefined;
+  }
+  const normalized = normalizePluginId(configuredSlot);
+  // "legacy" is the built-in default engine — no plugin startup needed.
+  if (normalized === "legacy") {
+    return undefined;
+  }
+  if (activationSourcePlugins.deny.includes(normalized)) {
+    return undefined;
+  }
+  if (activationSourcePlugins.entries[normalized]?.enabled === false) {
+    return undefined;
+  }
+  return normalized;
+}
+
 function shouldConsiderForGatewayStartup(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
   startupDreamingPluginIds: ReadonlySet<string>;
   memorySlotStartupPluginId?: string;
+  contextEngineSlotStartupPluginId?: string;
 }): boolean {
   if (params.manifest?.activation?.onStartup === true) {
+    return true;
+  }
+  if (params.contextEngineSlotStartupPluginId === params.plugin.pluginId) {
     return true;
   }
   if (!isGatewayStartupMemoryPlugin(params.plugin)) {
@@ -404,12 +432,18 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
+  const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
+    manifestRegistry: params.manifestRegistry,
+  });
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
-    normalizePluginId: createPluginRegistryIdNormalizer(params.index, {
-      manifestRegistry: params.manifestRegistry,
-    }),
+    normalizePluginId,
+  });
+  const contextEngineSlotStartupPluginId = resolveContextEngineSlotStartupPluginId({
+    activationSourceConfig,
+    activationSourcePlugins,
+    normalizePluginId,
   });
   const pluginIds = params.index.plugins
     .filter((plugin) => {
@@ -471,6 +505,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           manifest,
           startupDreamingPluginIds,
           memorySlotStartupPluginId,
+          contextEngineSlotStartupPluginId,
         })
       ) {
         return false;

@@ -1597,10 +1597,8 @@ describe("config cli", () => {
       fs.writeFileSync(
         pathname,
         JSON.stringify({
-          channels: {
-            discord: {
-              typo: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-            },
+          gateway: {
+            typo: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
           },
         }),
         "utf8",
@@ -1618,7 +1616,7 @@ describe("config cli", () => {
       expect(mockError).toHaveBeenCalledWith(
         expect.stringContaining("Dry run failed: config schema validation failed."),
       );
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("channels.discord"));
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("gateway"));
       expect(mockError).toHaveBeenCalledWith(expect.stringContaining('"typo"'));
     });
 

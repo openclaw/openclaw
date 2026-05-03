@@ -321,7 +321,15 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("routes root hygiene config changes to tooling instead of all lanes", () => {
-    const result = detectChangedLanes([".dockerignore", ".pre-commit-config.yaml", ".swiftformat"]);
+    const result = detectChangedLanes([
+      ".dockerignore",
+      ".jscpd.json",
+      ".npmignore",
+      ".pre-commit-config.yaml",
+      ".swiftformat",
+      "Makefile",
+      "openclaw.podman.env",
+    ]);
     const plan = createChangedCheckPlan(result);
 
     expect(result.lanes).toMatchObject({
@@ -778,6 +786,21 @@ describe("scripts/changed-lanes", () => {
       apps: true,
       all: false,
     });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
+  it("routes legacy root asset deletions as tooling during root cleanup", () => {
+    const result = detectChangedLanes([
+      "assets/avatar-placeholder.svg",
+      "assets/chrome-extension/icons/icon128.png",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
