@@ -265,6 +265,7 @@ export async function runPluginHostCleanup(params: {
   runId?: string;
   preserveSchedulerJobIds?: ReadonlySet<string>;
   shouldCleanup?: () => boolean;
+  restartPromotedSessionEntrySlotKeys?: ReadonlySet<string>;
 }): Promise<PluginHostCleanupResult> {
   const failures: PluginHostCleanupFailure[] = [];
   const shouldCleanup = params.shouldCleanup ?? (() => true);
@@ -276,6 +277,8 @@ export async function runPluginHostCleanup(params: {
     registry ?? getActivePluginRegistry(),
     params.pluginId,
   );
+  const restartPromotedSessionEntrySlotKeys =
+    params.restartPromotedSessionEntrySlotKeys ?? sessionEntrySlotKeys;
   let persistentCleanupCount = 0;
   if (shouldCleanup()) {
     try {
@@ -285,7 +288,7 @@ export async function runPluginHostCleanup(params: {
               cfg: params.cfg ?? getRuntimeConfig(),
               pluginId: params.pluginId,
               sessionKey: params.sessionKey,
-              sessionEntrySlotKeys,
+              sessionEntrySlotKeys: restartPromotedSessionEntrySlotKeys,
             })
           : await clearPluginOwnedSessionStores({
               cfg: params.cfg ?? getRuntimeConfig(),
@@ -442,6 +445,19 @@ function collectSchedulerJobIds(
   );
 }
 
+function collectRestartPromotedSessionEntrySlotKeys(
+  previousRegistry: PluginRegistry,
+  nextRegistry: PluginRegistry | null | undefined,
+  pluginId: string,
+): Set<string> {
+  const staleSlotKeys = collectSessionEntrySlotKeys(previousRegistry, pluginId);
+  const preservedSlotKeys = collectSessionEntrySlotKeys(nextRegistry, pluginId);
+  for (const slotKey of preservedSlotKeys) {
+    staleSlotKeys.delete(slotKey);
+  }
+  return staleSlotKeys;
+}
+
 export async function cleanupReplacedPluginHostRegistry(params: {
   cfg: OpenClawConfig;
   previousRegistry?: PluginRegistry | null;
@@ -476,6 +492,13 @@ export async function cleanupReplacedPluginHostRegistry(params: {
         ? collectSchedulerJobIds(params.nextRegistry, pluginId)
         : undefined,
       shouldCleanup,
+      restartPromotedSessionEntrySlotKeys: restarted
+        ? collectRestartPromotedSessionEntrySlotKeys(
+            previousRegistry,
+            params.nextRegistry,
+            pluginId,
+          )
+        : undefined,
     });
     cleanupCount += result.cleanupCount;
     failures.push(...result.failures);
