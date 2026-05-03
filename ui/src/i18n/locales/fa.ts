@@ -163,6 +163,7 @@ export const fa: TranslationMap = {
     limit: "حد",
     global: "سراسری",
     unknown: "نامشخص",
+    showArchived: "Show archived",
     minutesPlaceholder: "دقیقه",
     searchPlaceholder: "فیلتر بر اساس کلید، عامل، برچسب، نوع…",
     selected: "{count} انتخاب‌شده",

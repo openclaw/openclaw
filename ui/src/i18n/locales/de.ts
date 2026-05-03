@@ -165,6 +165,7 @@ export const de: TranslationMap = {
     limit: "Limit",
     global: "Global",
     unknown: "Unbekannt",
+    showArchived: "Show archived",
     minutesPlaceholder: "Min.",
     searchPlaceholder: "Nach Schlüssel, Agent, Label, Art filtern…",
     selected: "{count} ausgewählt",

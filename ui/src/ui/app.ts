@@ -375,6 +375,7 @@ export class OpenClawApp extends LitElement {
   @state() sessionsFilterLimit = "50";
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
+  @state() sessionsShowArchived = false;
   @state() sessionsHideCron = true;
   @state() sessionsSearchQuery = "";
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";

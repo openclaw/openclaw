@@ -22,6 +22,7 @@ export type SessionsProps = {
   limit: string;
   includeGlobal: boolean;
   includeUnknown: boolean;
+  showArchived: boolean;
   basePath: string;
   searchQuery: string;
   agentIdentityById: Record<string, AgentIdentityResult>;
@@ -40,6 +41,7 @@ export type SessionsProps = {
     limit: string;
     includeGlobal: boolean;
     includeUnknown: boolean;
+    showArchived: boolean;
   }) => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
@@ -299,26 +301,28 @@ export function renderSessions(props: SessionsProps) {
         </button>
       </div>
 
-      <div class="filters" style="margin-bottom: 12px;">
-        <label class="field-inline">
-          <span>${t("sessionsView.active")}</span>
+      <div class="sessions-filter-bar" aria-label="Session filters">
+        <label class="session-filter-field">
+          <span class="session-filter-label">${t("sessionsView.active")}</span>
           <input
-            style="width: 72px;"
+            class="session-filter-input session-filter-input--minutes"
             placeholder=${t("sessionsView.minutesPlaceholder")}
             .value=${props.activeMinutes}
+            ?disabled=${props.showArchived}
             @input=${(e: Event) =>
               props.onFiltersChange({
                 activeMinutes: (e.target as HTMLInputElement).value,
                 limit: props.limit,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: props.includeUnknown,
+                showArchived: props.showArchived,
               })}
           />
         </label>
-        <label class="field-inline">
-          <span>${t("sessionsView.limit")}</span>
+        <label class="session-filter-field">
+          <span class="session-filter-label">${t("sessionsView.limit")}</span>
           <input
-            style="width: 64px;"
+            class="session-filter-input session-filter-input--limit"
             .value=${props.limit}
             @input=${(e: Event) =>
               props.onFiltersChange({
@@ -326,11 +330,13 @@ export function renderSessions(props: SessionsProps) {
                 limit: (e.target as HTMLInputElement).value,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: props.includeUnknown,
+                showArchived: props.showArchived,
               })}
           />
         </label>
-        <label class="field-inline checkbox">
+        <label class="session-filter-check">
           <input
+            class="session-filter-check__input"
             type="checkbox"
             .checked=${props.includeGlobal}
             @change=${(e: Event) =>
@@ -339,12 +345,15 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: (e.target as HTMLInputElement).checked,
                 includeUnknown: props.includeUnknown,
+                showArchived: props.showArchived,
               })}
           />
-          <span>${t("sessionsView.global")}</span>
+          <span class="session-filter-check__box" aria-hidden="true">${icons.check}</span>
+          <span class="session-filter-check__label">${t("sessionsView.global")}</span>
         </label>
-        <label class="field-inline checkbox">
+        <label class="session-filter-check">
           <input
+            class="session-filter-check__input"
             type="checkbox"
             .checked=${props.includeUnknown}
             @change=${(e: Event) =>
@@ -353,9 +362,28 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: (e.target as HTMLInputElement).checked,
+                showArchived: props.showArchived,
               })}
           />
-          <span>${t("sessionsView.unknown")}</span>
+          <span class="session-filter-check__box" aria-hidden="true">${icons.check}</span>
+          <span class="session-filter-check__label">${t("sessionsView.unknown")}</span>
+        </label>
+        <label class="session-filter-check session-archive-toggle">
+          <input
+            class="session-filter-check__input"
+            type="checkbox"
+            .checked=${props.showArchived}
+            @change=${(e: Event) =>
+              props.onFiltersChange({
+                activeMinutes: props.activeMinutes,
+                limit: props.limit,
+                includeGlobal: props.includeGlobal,
+                includeUnknown: props.includeUnknown,
+                showArchived: (e.target as HTMLInputElement).checked,
+              })}
+          />
+          <span class="session-filter-check__box" aria-hidden="true">${icons.check}</span>
+          <span class="session-filter-check__label">${t("sessionsView.showArchived")}</span>
         </label>
       </div>
 

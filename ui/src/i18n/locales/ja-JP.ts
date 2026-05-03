@@ -165,6 +165,7 @@ export const ja_JP: TranslationMap = {
     limit: "制限",
     global: "グローバル",
     unknown: "不明",
+    showArchived: "Show archived",
     minutesPlaceholder: "分",
     searchPlaceholder: "キー、エージェント、ラベル、種類で絞り込み…",
     selected: "{count} 件選択中",

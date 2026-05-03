@@ -164,6 +164,7 @@ export const tr: TranslationMap = {
     limit: "Sınır",
     global: "Genel",
     unknown: "Bilinmiyor",
+    showArchived: "Show archived",
     minutesPlaceholder: "dk",
     searchPlaceholder: "Anahtara, ajana, etikete, türe göre filtrele…",
     selected: "{count} seçildi",

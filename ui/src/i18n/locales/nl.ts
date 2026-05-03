@@ -164,6 +164,7 @@ export const nl: TranslationMap = {
     limit: "Limiet",
     global: "Globaal",
     unknown: "Onbekend",
+    showArchived: "Show archived",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter op sleutel, agent, label, type…",
     selected: "{count} geselecteerd",

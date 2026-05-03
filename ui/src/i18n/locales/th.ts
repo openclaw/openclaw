@@ -160,6 +160,7 @@ export const th: TranslationMap = {
     limit: "ขีดจำกัด",
     global: "ส่วนกลาง",
     unknown: "ไม่ทราบ",
+    showArchived: "Show archived",
     minutesPlaceholder: "นาที",
     searchPlaceholder: "กรองตามคีย์, agent, ป้ายกำกับ, ชนิด…",
     selected: "เลือกแล้ว {count} รายการ",
