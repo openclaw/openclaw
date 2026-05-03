@@ -32,6 +32,7 @@ import { locked } from "./locked.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
+  DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
   applyJobResult,
   armTimer,
   emit,
@@ -43,7 +44,6 @@ import {
 } from "./timer.js";
 
 const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
-
 type InterruptedStartupRun = {
   jobId: string;
   runAtMs: number;
@@ -89,6 +89,36 @@ function markInterruptedStartupRun(params: {
     runAtMs: runningAtMs,
     durationMs: job.state.lastDurationMs,
   };
+}
+
+function shouldRescheduleInterruptedStartupRun(job: CronJob): boolean {
+  return job.sessionTarget === "isolated" && job.payload.kind === "agentTurn";
+}
+
+function rescheduleInterruptedStartupRun(params: {
+  state: CronServiceState;
+  job: CronJob;
+  runningAtMs: number;
+  nowMs: number;
+}) {
+  const { job, runningAtMs, nowMs } = params;
+  const delayMs = Math.max(
+    0,
+    params.state.deps.startupDeferredMissedAgentJobDelayMs ??
+      DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
+  );
+  const nextRunAtMs = nowMs + delayMs;
+
+  params.state.deps.log.warn(
+    { jobId: job.id, runningAtMs, nextRunAtMs, delayMs },
+    "cron: rescheduling interrupted isolated agent job after startup",
+  );
+
+  job.state.runningAtMs = undefined;
+  job.state.nextRunAtMs = nextRunAtMs;
+  job.state.lastError = undefined;
+  job.state.lastDeliveryError = undefined;
+  job.updatedAtMs = nowMs;
 }
 
 function mergeManualRunSnapshotAfterReload(params: {
@@ -149,14 +179,24 @@ export async function start(state: CronServiceState) {
       job.state ??= {};
       if (typeof job.state.runningAtMs === "number") {
         const nowMs = state.deps.nowMs();
-        const interrupted = markInterruptedStartupRun({
-          state,
-          job,
-          runningAtMs: job.state.runningAtMs,
-          nowMs,
-        });
+        const runningAtMs = job.state.runningAtMs;
+        if (shouldRescheduleInterruptedStartupRun(job)) {
+          rescheduleInterruptedStartupRun({
+            state,
+            job,
+            runningAtMs,
+            nowMs,
+          });
+        } else {
+          const interrupted = markInterruptedStartupRun({
+            state,
+            job,
+            runningAtMs,
+            nowMs,
+          });
+          interruptedRuns.push(interrupted);
+        }
         interruptedJobIds.add(job.id);
-        interruptedRuns.push(interrupted);
         markedAnyInterruptedRun = true;
       }
     }
