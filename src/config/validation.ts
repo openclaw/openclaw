@@ -29,7 +29,7 @@ import {
 } from "../shared/avatar-policy.js";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { isRecord } from "../utils.js";
+import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
@@ -40,6 +40,7 @@ import { coerceSecretRef } from "./types.secrets.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -1382,6 +1383,96 @@ function validateConfigObjectWithPluginsBase(
   const knownIds = ensureKnownIds();
   const normalizedPlugins = ensureNormalizedPlugins();
   const effectiveConfig = ensureCompatConfig();
+  const blockedPluginDiagnostics = new Map<string, { message: string; source?: string }>();
+  const blockedPluginDiagnosticsWithSource: Array<{ message: string; source: string }> = [];
+  const normalizeBlockedDiagnosticPath = (value: string | undefined): string => {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return "";
+    }
+    try {
+      return path.resolve(resolveUserPath(trimmed, opts.env ?? process.env));
+    } catch {
+      return path.resolve(trimmed);
+    }
+  };
+  for (const diag of registry.diagnostics) {
+    if (!diag.message.startsWith(BLOCKED_PLUGIN_CANDIDATE_PREFIX)) {
+      continue;
+    }
+    if (!diag.pluginId && diag.source) {
+      blockedPluginDiagnosticsWithSource.push({
+        message: diag.message,
+        source: diag.source,
+      });
+    }
+    if (diag.pluginId) {
+      const normalizedPluginId = normalizePluginId(diag.pluginId);
+      for (const key of [diag.pluginId, normalizedPluginId]) {
+        if (!key || blockedPluginDiagnostics.has(key)) {
+          continue;
+        }
+        blockedPluginDiagnostics.set(key, {
+          message: diag.message,
+          ...(diag.source ? { source: diag.source } : {}),
+        });
+      }
+    }
+  }
+  const blockedDiagnosticSourceMatchesPluginId = (
+    diagnostic: { message: string; source: string },
+    pluginId: string,
+  ): boolean => {
+    const normalizedPluginId = normalizePluginId(pluginId);
+    if (!normalizedPluginId) {
+      return false;
+    }
+    const sourcePath = normalizeBlockedDiagnosticPath(diagnostic.source);
+    if (!sourcePath) {
+      return false;
+    }
+    if (
+      normalizePluginId(path.basename(sourcePath)) === normalizedPluginId ||
+      normalizePluginId(path.basename(path.dirname(sourcePath))) === normalizedPluginId
+    ) {
+      return true;
+    }
+    const loadPaths = config.plugins?.load?.paths;
+    if (!Array.isArray(loadPaths)) {
+      return false;
+    }
+    for (const loadPath of loadPaths) {
+      if (typeof loadPath !== "string") {
+        continue;
+      }
+      const resolvedLoadPath = normalizeBlockedDiagnosticPath(loadPath);
+      if (!resolvedLoadPath) {
+        continue;
+      }
+      if (normalizePluginId(path.basename(resolvedLoadPath)) !== normalizedPluginId) {
+        continue;
+      }
+      if (
+        sourcePath === resolvedLoadPath ||
+        sourcePath.startsWith(`${resolvedLoadPath}${path.sep}`) ||
+        resolvedLoadPath.startsWith(`${sourcePath}${path.sep}`)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const findBlockedPluginDiagnostic = (pluginId: string) => {
+    const direct =
+      blockedPluginDiagnostics.get(pluginId) ??
+      blockedPluginDiagnostics.get(normalizePluginId(pluginId));
+    if (direct) {
+      return direct;
+    }
+    return blockedPluginDiagnosticsWithSource.find((diagnostic) =>
+      blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
+    );
+  };
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
@@ -1392,6 +1483,17 @@ function validateConfigObjectWithPluginsBase(
         path,
         message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
       });
+      return;
+    }
+    const blockedDiagnostic = findBlockedPluginDiagnostic(pluginId);
+    if (blockedDiagnostic) {
+      const source = blockedDiagnostic.source ? `; source: ${blockedDiagnostic.source}` : "";
+      const message = `plugin present but blocked: ${pluginId} (see preceding plugin warning${source}; fix the blocked plugin path instead of removing config)`;
+      if (opts?.warnOnly) {
+        warnings.push({ path, message });
+      } else {
+        issues.push({ path, message });
+      }
       return;
     }
     if (opts?.warnOnly) {

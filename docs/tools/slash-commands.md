@@ -65,7 +65,7 @@ There are two related systems:
   Enables parsing `/...` in chat messages. On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/Google Chat/Microsoft Teams), text commands still work even if you set this to `false`.
 </ParamField>
 <ParamField path="commands.native" type='boolean | "auto"' default='"auto"'>
-  Registers native commands. Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support. Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
+  Registers native commands. Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support. Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`). On Discord, `false` skips slash-command registration and cleanup during startup; previously registered commands may remain visible until you remove them from the Discord app. Slack commands are managed in the Slack app and are not removed automatically.
 </ParamField>
 On Discord, native command specs may include `descriptionLocalizations`, which OpenClaw publishes as Discord `description_localizations` and includes in reconcile comparisons.
 <ParamField path="commands.nativeSkills" type='boolean | "auto"' default='"auto"'>
@@ -164,7 +164,7 @@ Current source-of-truth:
     - `/skill <name> [input]` runs a skill by name.
     - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
     - `/approve <id> <decision>` resolves exec approval prompts.
-    - `/btw <question>` asks a side question without changing future session context. See [BTW](/tools/btw).
+    - `/btw <question>` asks a side question without changing future session context. Alias: `/side`. See [BTW](/tools/btw).
 
   </Accordion>
   <Accordion title="Subagents and ACP">
@@ -457,7 +457,7 @@ Examples:
 
 ## BTW side questions
 
-`/btw` is a quick **side question** about the current session.
+`/btw` is a quick **side question** about the current session. `/side` is an alias.
 
 Unlike normal chat:
 
@@ -473,6 +473,7 @@ Example:
 
 ```text
 /btw what are we doing right now?
+/side what changed while the main run continued?
 ```
 
 See [BTW Side Questions](/tools/btw) for the full behavior and client UX details.

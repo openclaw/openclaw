@@ -62,7 +62,7 @@ export function buildCurrentTurnPromptContextSuffix(
   };
   return [
     "",
-    "Replied message (untrusted, for context):",
+    "Reply target of current user message (untrusted, for context):",
     "```json",
     JSON.stringify(payload, null, 2),
     "```",

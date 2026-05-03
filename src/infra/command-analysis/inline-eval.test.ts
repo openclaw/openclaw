@@ -3,7 +3,7 @@ import {
   describeInterpreterInlineEval,
   detectInterpreterInlineEvalArgv,
   isInterpreterLikeAllowlistPattern,
-} from "./exec-inline-eval.js";
+} from "./inline-eval.js";
 
 describe("exec inline eval detection", () => {
   it.each([

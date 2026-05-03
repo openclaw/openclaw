@@ -345,20 +345,40 @@ after the new secret has been stored.
 
 ## GitHub Artifacts And PR Comments
 
-The first GitHub version should upload screenshots as Actions artifacts and link
-them from the PR comment. Inline images can come later once redaction, retention,
-and public/private repo behavior are settled.
+Mantis workflows should upload the full evidence bundle as a short-lived Actions
+artifact. When the workflow is run for a bug report or fix PR, it should also
+publish the redacted PNG screenshots to the `qa-artifacts` branch and upsert a
+comment on that bug or fix PR with inline before/after screenshots. Do not post
+the primary proof only on a generic QA automation PR. Raw logs, observed
+messages, and other bulky evidence stay in the Actions artifact.
 
-The PR comment should be short:
+Production workflows should post those comments with the Mantis GitHub App, not
+with `github-actions[bot]`. Store the app id and private key as
+`MANTIS_GITHUB_APP_ID` and `MANTIS_GITHUB_APP_PRIVATE_KEY` GitHub Actions
+secrets. If the app is renamed, set `MANTIS_GITHUB_APP_BOT_LOGIN` as a GitHub
+Actions variable to the new bot login, for example `openclaw-mantis[bot]`. The
+workflow should update an existing Mantis-owned comment when one exists; if only
+an older `github-actions[bot]` comment exists, it should create a new
+Mantis-owned comment instead of rewriting the legacy bot comment.
+
+The PR comment should be short and visual:
 
 ```md
-Mantis Discord verification: pass
+Mantis Discord Status Reactions QA
+
+Summary: Mantis reran the reported Discord status-reaction bug against the known
+bad baseline and the candidate fix. The baseline reproduced the bug, while the
+candidate showed the expected queued -> thinking -> done sequence.
 
 - Scenario: `discord-status-reactions-tool-only`
-- Baseline: reproduced on `<sha>`
-- Candidate: fixed on `<sha>`
-- Evidence: <artifact link>
-- Screenshots: baseline and candidate message-row captures in the artifact
+- Run: <workflow run link>
+- Artifact: <artifact link>
+- Baseline: `<status>` at `<sha>`
+- Candidate: `<status>` at `<sha>`
+
+| Baseline            | Candidate           |
+| ------------------- | ------------------- |
+| <inline screenshot> | <inline screenshot> |
 ```
 
 When the run fails because the harness failed, the comment must say that instead

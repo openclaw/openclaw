@@ -5,6 +5,7 @@ export type SessionState = {
   sessionKey?: string;
   lastActivity: number;
   lastStuckWarnAgeMs?: number;
+  lastLongRunningWarnAgeMs?: number;
   state: SessionStateValue;
   queueDepth: number;
   toolCallHistory?: ToolCallRecord[];
@@ -105,6 +106,10 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
     target.lastStuckWarnAgeMs === undefined || source.lastStuckWarnAgeMs === undefined
       ? undefined
       : Math.max(target.lastStuckWarnAgeMs, source.lastStuckWarnAgeMs);
+  target.lastLongRunningWarnAgeMs =
+    target.lastLongRunningWarnAgeMs === undefined || source.lastLongRunningWarnAgeMs === undefined
+      ? undefined
+      : Math.max(target.lastLongRunningWarnAgeMs, source.lastLongRunningWarnAgeMs);
   if (source.toolCallHistory?.length) {
     target.toolCallHistory = [...(target.toolCallHistory ?? []), ...source.toolCallHistory];
   }

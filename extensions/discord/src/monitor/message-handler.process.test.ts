@@ -1,4 +1,4 @@
-import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
+import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
@@ -66,6 +66,17 @@ vi.mock("../send.js", () => ({
   },
 }));
 
+const discordTargetMocks = vi.hoisted(() => ({
+  resolveDiscordTargetChannelId: vi.fn(async (target: string, _opts?: unknown) => ({
+    channelId: target === "user:u1" ? "dm-u1" : target,
+  })),
+}));
+
+vi.mock("../send.shared.js", () => ({
+  resolveDiscordTargetChannelId: (target: string, opts: unknown) =>
+    discordTargetMocks.resolveDiscordTargetChannelId(target, opts),
+}));
+
 vi.mock("../send.messages.js", () => ({
   editMessageDiscord: (channelId: string, messageId: string, payload: unknown, opts?: unknown) =>
     deliveryMocks.editMessageDiscord(channelId, messageId, payload, opts),
@@ -87,7 +98,11 @@ type DispatchInboundParams = {
   replyOptions?: {
     onReasoningStream?: () => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
-    onToolStart?: (payload: { name?: string }) => Promise<void> | void;
+    onToolStart?: (payload: {
+      name?: string;
+      phase?: string;
+      args?: Record<string, unknown>;
+    }) => Promise<void> | void;
     onItemEvent?: (payload: {
       progressText?: string;
       summary?: string;
@@ -311,6 +326,7 @@ beforeEach(() => {
   vi.useRealTimers();
   sendMocks.reactMessageDiscord.mockClear();
   sendMocks.removeReactionDiscord.mockClear();
+  discordTargetMocks.resolveDiscordTargetChannelId.mockClear();
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
@@ -585,7 +601,7 @@ describe("processDiscordMessage ack reactions", () => {
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReasoningStream?.();
-      await params?.replyOptions?.onToolStart?.({ name: "exec" });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       return createNoQueuedDispatchResult();
     });
 
@@ -598,6 +614,76 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.thinking);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.coding);
+  });
+
+  it("can bind status reactions to an explicitly tracked reaction target", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "message",
+        phase: "start",
+        args: {
+          action: "react",
+          channelId: "c1",
+          messageId: "m1",
+          emoji: "📈",
+          trackToolCalls: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: { messages: { ackReaction: "👀" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+    await vi.runAllTimersAsync();
+
+    const calls = sendMocks.reactMessageDiscord.mock.calls as unknown as Array<
+      [string, string, string]
+    >;
+    expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", "📈"]));
+    expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", "✉️"]));
+    expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", DEFAULT_EMOJIS.done]));
+  });
+
+  it("resolves tracked reaction to targets like the Discord reaction action", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "message",
+        phase: "start",
+        args: {
+          action: "react",
+          to: "user:u1",
+          messageId: "m1",
+          emoji: "📈",
+          trackToolCalls: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: { messages: { ackReaction: "👀" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+    await vi.runAllTimersAsync();
+
+    expect(discordTargetMocks.resolveDiscordTargetChannelId).toHaveBeenCalledWith(
+      "user:u1",
+      expect.objectContaining({ accountId: "default" }),
+    );
+    const calls = sendMocks.reactMessageDiscord.mock.calls as unknown as Array<
+      [string, string, string]
+    >;
+    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", "📈"]));
+    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", "✉️"]));
+    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", DEFAULT_EMOJIS.done]));
   });
 
   it("shows stall emojis for long no-progress runs", async () => {

@@ -11,12 +11,10 @@ import {
   getRuntimeConfig,
   promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshot,
-  recoverConfigFromLastKnownGood,
   registerConfigWriteListener,
   setRuntimeConfigSnapshot,
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
-import { replaceConfigFile } from "../config/mutate.js";
 import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
@@ -75,15 +73,6 @@ import {
   getRequiredSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import {
-  createRuntimeSecretsActivator,
-  loadGatewayStartupConfigSnapshot,
-  prepareGatewayStartupConfig,
-} from "./server-startup-config.js";
-import {
-  loadGatewayStartupPluginRuntime,
-  prepareGatewayPluginBootstrap,
-} from "./server-startup-plugins.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import {
   startGatewayEarlyRuntime,
@@ -504,6 +493,14 @@ export async function startGatewayServer(
     description: "raw stream log path override",
   });
   const startupTrace = createGatewayStartupTrace();
+  const startupConfigModulePromise = import("./server-startup-config.js");
+  let startupPluginsModulePromise: Promise<typeof import("./server-startup-plugins.js")> | null =
+    null;
+  const loadStartupPluginsModule = () => {
+    startupPluginsModulePromise ??= import("./server-startup-plugins.js");
+    return startupPluginsModulePromise;
+  };
+  const { loadGatewayStartupConfigSnapshot } = await startupConfigModulePromise;
 
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
@@ -528,6 +525,7 @@ export async function startGatewayServer(
       trusted: false,
     });
   };
+  const { createRuntimeSecretsActivator } = await startupConfigModulePromise;
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
@@ -539,13 +537,14 @@ export async function startGatewayServer(
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
   startupTrace.setConfig(startupRuntimeConfig);
+  const { prepareGatewayStartupConfig } = await startupConfigModulePromise;
   const authBootstrap = await startupTrace.measure("config.auth", () =>
     prepareGatewayStartupConfig({
       configSnapshot,
       authOverride: opts.auth,
       tailscaleOverride: opts.tailscale,
       activateRuntimeSecrets,
-      persistStartupAuth: startupConfigLoad.degradedProviderApi !== true,
+      persistStartupAuth: true,
     }),
   );
   cfgAtStart = authBootstrap.cfg;
@@ -583,6 +582,7 @@ export async function startGatewayServer(
         maybeSeedControlUiAllowedOriginsAtStartup({
           config: cfgAtStart,
           writeConfig: async (nextConfig) => {
+            const { replaceConfigFile } = await import("../config/mutate.js");
             await replaceConfigFile({
               nextConfig,
               afterWrite: { mode: "auto" },
@@ -609,6 +609,7 @@ export async function startGatewayServer(
     startupLastGoodSnapshot = startupSnapshot;
   }
   setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
       cfgAtStart,
@@ -1364,8 +1365,9 @@ export async function startGatewayServer(
         unavailableGatewayMethods,
         loadStartupPlugins: runtimePluginsLoaded
           ? undefined
-          : () =>
-              loadGatewayStartupPluginRuntime({
+          : async () => {
+              const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
+              return loadGatewayStartupPluginRuntime({
                 cfg: gatewayPluginConfigAtStart,
                 activationSourceConfig: startupActivationSourceConfig,
                 workspaceDir: defaultWorkspaceDir,
@@ -1374,7 +1376,8 @@ export async function startGatewayServer(
                 startupPluginIds,
                 pluginLookUpTable,
                 startupTrace,
-              }),
+              });
+            },
         onStartupPluginsLoading: () => {
           startupPendingReason = "startup-sidecars";
         },
@@ -1409,7 +1412,6 @@ export async function startGatewayServer(
       initialInternalWriteHash: startupInternalWriteHash,
       watchPath: configSnapshot.path,
       readSnapshot: readConfigFileSnapshot,
-      recoverSnapshot: recoverConfigFromLastKnownGood,
       promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
       subscribeToWrites: registerConfigWriteListener,
       deps,
