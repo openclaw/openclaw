@@ -39,6 +39,12 @@ state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit 
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
 
+Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
+`sessions_list` tool as a channel socket-health signal. Those surfaces report
+stored conversation rows, not provider runtime state. After a Discord provider
+restart, a connected but quiet account may be healthy while no Discord session
+row appears until the next inbound or outbound conversation event.
+
 ## Add / remove accounts
 
 ```bash
@@ -50,6 +56,9 @@ openclaw channels remove --channel telegram --delete
 <Tip>
 `openclaw channels add --help` shows per-channel flags (token, private key, app token, signal-cli paths, etc).
 </Tip>
+
+`channels remove` only operates on installed/configured channel plugins. Use `channels add` first for installable catalog channels.
+For runtime-backed channel plugins, `channels remove` also asks the running Gateway to stop the selected account before it updates config, so disabling or deleting an account does not leave the old listener active until restart.
 
 Common non-interactive add surfaces include:
 
@@ -92,6 +101,7 @@ openclaw channels logout --channel whatsapp
 
 - `channels login` supports `--verbose`.
 - `channels login` and `logout` can infer the channel when only one supported login target is configured.
+- `channels logout` prefers the live Gateway path when reachable, so logout stops any active listener before clearing channel auth state. If a local Gateway is not reachable, it falls back to local auth cleanup.
 - Run `channels login` from a terminal on the gateway host. Agent `exec` blocks this interactive login flow; channel-native agent login tools, such as `whatsapp_login`, should be used from chat when available.
 
 ## Troubleshooting
@@ -132,6 +142,7 @@ Notes:
 - Use `--kind user|group|auto` to force the target type.
 - Resolution prefers active matches when multiple entries share the same name.
 - `channels resolve` is read-only. If a selected account is configured via SecretRef but that credential is unavailable in the current command path, the command returns degraded unresolved results with notes instead of aborting the entire run.
+- `channels resolve` does not install channel plugins. Use `channels add --channel <name>` before resolving names for an installable catalog channel.
 
 ## Related
 

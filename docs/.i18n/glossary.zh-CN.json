@@ -4,6 +4,10 @@
     "target": "OpenClaw"
   },
   {
+    "source": "ClawHub",
+    "target": "ClawHub"
+  },
+  {
     "source": "OpenAI",
     "target": "OpenAI"
   },
@@ -26,6 +30,10 @@
   {
     "source": "Azure Speech provider",
     "target": "Azure Speech provider"
+  },
+  {
+    "source": "Web tools",
+    "target": "Web 工具"
   },
   {
     "source": "Status",
@@ -468,6 +476,14 @@
     "target": "插件"
   },
   {
+    "source": "Manage plugins",
+    "target": "管理插件"
+  },
+  {
+    "source": "Plugin manifest",
+    "target": "插件清单"
+  },
+  {
     "source": "Building plugins",
     "target": "构建插件"
   },
@@ -578,6 +594,18 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Update and plugin tests",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Testing updates and plugins",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Testing: updates and plugins",
+    "target": "更新和插件测试"
   },
   {
     "source": "Async Exec Duplicate Completion Investigation",

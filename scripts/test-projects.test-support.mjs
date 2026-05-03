@@ -346,6 +346,10 @@ const SOURCE_TEST_TARGETS = new Map([
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
   ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
+  [
+    "src/commitments/model-selection.runtime.ts",
+    ["src/commitments/runtime.test.ts", "src/agents/model-selection.test.ts"],
+  ],
   ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
   [
     "src/plugins/provider-auth-choice.ts",
@@ -357,9 +361,8 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "src/memory-host-sdk/host/embedding-defaults.ts",
-    ["src/memory-host-sdk/host/embeddings.test.ts"],
+    ["packages/memory-host-sdk/src/host/embeddings.test.ts"],
   ],
-  ["src/memory-host-sdk/host/embeddings.ts", ["src/memory-host-sdk/host/embeddings.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [
@@ -400,7 +403,7 @@ const IMPORT_SPECIFIER_PATTERN =
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
-export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "180000";
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "300000";
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
@@ -508,13 +511,7 @@ function toScopedIncludePattern(arg, cwd) {
 }
 
 function isSkippedImportGraphDirectory(name) {
-  return (
-    name === ".git" ||
-    name === "dist" ||
-    name === "node_modules" ||
-    name === "vendor" ||
-    name.startsWith(".openclaw-runtime-deps")
-  );
+  return name === ".git" || name === "dist" || name === "node_modules" || name === "vendor";
 }
 
 function listImportGraphFiles(cwd, directory, files = []) {

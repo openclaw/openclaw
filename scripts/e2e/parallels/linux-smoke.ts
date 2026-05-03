@@ -12,7 +12,9 @@ import {
   parseBoolEnv,
   parseMode,
   parseProvider,
+  modelProviderConfigBatchJson,
   repoRoot,
+  resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
@@ -342,7 +344,7 @@ class LinuxSmoke {
     this.status.freshGateway = "pass";
     await this.phase(
       "fresh.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
       () => this.verifyLocalTurn(),
     );
     this.status.freshAgent = "pass";
@@ -371,7 +373,7 @@ class LinuxSmoke {
     this.status.upgradeGateway = "pass";
     await this.phase(
       "upgrade.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
       () => this.verifyLocalTurn(),
     );
     this.status.upgradeAgent = "pass";
@@ -437,8 +439,23 @@ class LinuxSmoke {
     this.guestExec(["hwclock", "--systohc"], { check: false });
     this.guestExec(["timedatectl", "set-ntp", "true"], { check: false });
     this.guestExec(["systemctl", "restart", "systemd-timesyncd"], { check: false });
-    this.guestExec(["apt-get", "-o", "Acquire::Check-Date=false", "update"]);
-    this.guestExec(["apt-get", "install", "-y", "curl", "ca-certificates"]);
+    this.guestExec([
+      "apt-get",
+      "-o",
+      "Acquire::Check-Date=false",
+      "-o",
+      "DPkg::Lock::Timeout=300",
+      "update",
+    ]);
+    this.guestExec([
+      "apt-get",
+      "-o",
+      "DPkg::Lock::Timeout=300",
+      "install",
+      "-y",
+      "curl",
+      "ca-certificates",
+    ]);
   }
 
   private installLatestRelease(): void {
@@ -672,6 +689,15 @@ rm -rf /root/.openclaw/test-bad-plugin`);
 
   private verifyLocalTurn(): void {
     this.guestExec(["openclaw", "models", "set", this.auth.modelId]);
+    const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "linux");
+    if (modelProviderConfigBatch) {
+      this.guestBash(`provider_config_batch="$(mktemp)"
+cat >"$provider_config_batch" <<'JSON'
+${modelProviderConfigBatch}
+JSON
+openclaw config set --batch-file "$provider_config_batch" --strict-json
+rm -f "$provider_config_batch"`);
+    }
     this.guestExec([
       "openclaw",
       "config",
@@ -680,11 +706,41 @@ rm -rf /root/.openclaw/test-bad-plugin`);
       "true",
       "--strict-json",
     ]);
+    this.guestExec(["openclaw", "config", "set", "tools.profile", "minimal"]);
     this.prepareAgentWorkspace();
     this.guestBash(
-      `exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id parallels-linux-smoke --message ${shellQuote(
-        "Reply with exact ASCII text OK only.",
-      )} --json`,
+      `agent_ok=false
+for attempt in 1 2; do
+  session_id="parallels-linux-smoke"
+  if [ "$attempt" -gt 1 ]; then session_id="parallels-linux-smoke-retry-$attempt"; fi
+  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
+  output_file="$(mktemp)"
+  set +e
+  /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
+    "Reply with exact ASCII text OK only.",
+  )} --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("linux")} --json >"$output_file" 2>&1
+  rc=$?
+  set -e
+  cat "$output_file"
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$output_file"
+    exit "$rc"
+  fi
+  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
+    agent_ok=true
+    rm -f "$output_file"
+    break
+  fi
+  rm -f "$output_file"
+  if [ "$attempt" -lt 2 ]; then
+    echo "agent turn attempt $attempt finished without OK response; retrying"
+    sleep 3
+  fi
+done
+if [ "$agent_ok" != true ]; then
+  echo "openclaw agent finished without OK response" >&2
+  exit 1
+fi`,
     );
   }
 

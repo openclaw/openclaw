@@ -26,10 +26,18 @@ type TsdownOnLog = (
 ) => void;
 
 type TsdownInputOptions = (
-  options: { onLog?: TsdownOnLog },
+  options: { external?: TsdownExternalOption; onLog?: TsdownOnLog },
   format?: unknown,
   context?: unknown,
-) => { onLog?: TsdownOnLog } | undefined;
+) => { external?: TsdownExternalOption; onLog?: TsdownOnLog } | undefined;
+
+type TsdownExternalOption = string | RegExp | Array<string | RegExp> | TsdownExternalFunction;
+
+type TsdownExternalFunction = (
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+) => boolean | null | undefined;
 
 function asConfigArray(config: unknown): TsdownConfigEntry[] {
   return Array.isArray(config) ? (config as TsdownConfigEntry[]) : [config as TsdownConfigEntry];
@@ -47,11 +55,6 @@ function entrySources(config: TsdownConfigEntry): Record<string, string> {
     return {};
   }
   return config.entry;
-}
-
-function hasBundledPluginRuntimeEntry(config: TsdownConfigEntry): boolean {
-  const keys = entryKeys(config);
-  return keys.includes("index") || keys.includes("runtime-api");
 }
 
 function bundledEntry(pluginId: string): string {
@@ -92,7 +95,7 @@ describe("tsdown config", () => {
         "plugins/runtime/index",
         "plugin-sdk/compat",
         "plugin-sdk/index",
-        bundledEntry("openai"),
+        bundledEntry("active-memory"),
         "bundled/boot-md/handler",
       ]),
     );
@@ -116,25 +119,12 @@ describe("tsdown config", () => {
     expect(new Set(importSpecifiers)).toEqual(new Set(["./lifecycle.runtime.js"]));
   });
 
-  it("emits staged bundled plugins as separate extension graphs", () => {
-    const stagedGraphs = asConfigArray(tsdownConfig).filter(
+  it("keeps bundled plugins out of separate dependency-staging graphs", () => {
+    const extensionGraphs = asConfigArray(tsdownConfig).filter(
       (config) => typeof config.outDir === "string" && config.outDir.startsWith("dist/extensions/"),
     );
 
-    expect(stagedGraphs.length).toBeGreaterThan(0);
-    expect(stagedGraphs.every(hasBundledPluginRuntimeEntry)).toBe(true);
-    expect(stagedGraphs.every((config) => !entryKeys(config).includes("plugin-sdk/index"))).toBe(
-      true,
-    );
-    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/discord")).toBe(true);
-    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/msteams")).toBe(true);
-    expect(
-      stagedGraphs.some(
-        (config) =>
-          config.outDir === "dist/extensions/media-understanding-core" &&
-          entryKeys(config).includes("image-ops"),
-      ),
-    ).toBe(true);
+    expect(extensionGraphs).toEqual([]);
   });
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {
@@ -150,18 +140,25 @@ describe("tsdown config", () => {
     ).toBe(false);
   });
 
-  it("externalizes staged bundled plugin runtime dependencies", () => {
+  it("externalizes known heavy native dependencies", () => {
     const unifiedGraph = unifiedDistGraph();
     const neverBundle = unifiedGraph?.deps?.neverBundle;
+    const external = unifiedGraph?.inputOptions?.({})?.external;
 
     if (typeof neverBundle === "function") {
-      expect(neverBundle("silk-wasm")).toBe(true);
-      expect(neverBundle("ws")).toBe(true);
-      expect(neverBundle("ws/lib/websocket.js")).toBe(true);
+      expect(neverBundle("@lancedb/lancedb")).toBe(true);
+      expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
+      expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
+      expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
-      expect(neverBundle).toEqual(expect.arrayContaining(["silk-wasm", "ws"]));
+      expect(neverBundle).toEqual(
+        expect.arrayContaining(["@lancedb/lancedb", "matrix-js-sdk", "qrcode-terminal"]),
+      );
     }
+    expect(typeof external).toBe("function");
+    const externalize = external as TsdownExternalFunction;
+    expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
   });
 
   it("suppresses unresolved imports from extension source", () => {

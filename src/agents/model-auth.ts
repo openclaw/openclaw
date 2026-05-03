@@ -21,7 +21,9 @@ import {
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
   type AuthProfileStore,
+  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
@@ -42,7 +44,11 @@ import {
 } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+export {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
@@ -324,6 +330,9 @@ export function hasRuntimeAvailableProviderAuth(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
+  if (authOverride === undefined && provider === "amazon-bedrock") {
+    return true;
+  }
   if (
     resolveEnvApiKey(provider, params.env, {
       config: params.cfg,
@@ -335,10 +344,10 @@ export function hasRuntimeAvailableProviderAuth(params: {
   if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
     return true;
   }
-  if (resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })) {
+  if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
     return true;
   }
-  if (authOverride === undefined && provider === "amazon-bedrock") {
+  if (resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })) {
     return true;
   }
   return false;
@@ -496,14 +505,8 @@ function resolveScopedAuthProfileStore(params: {
   profileId?: string;
   preferredProfile?: string;
 }): AuthProfileStore {
-  const profileIds = [params.profileId, params.preferredProfile]
-    .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value));
   return ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    config: params.cfg,
-    externalCliProviderIds: [params.provider],
-    ...(profileIds.length > 0 ? { externalCliProfileIds: profileIds } : {}),
+    externalCli: externalCliDiscoveryForProviderAuth(params),
   });
 }
 

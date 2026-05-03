@@ -1,9 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { ResolvedSynologyChatAccount } from "./types.js";
 
-export type RegisteredRoute = {
+type RegisteredRoute = {
   path: string;
   accountId: string;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
@@ -175,25 +174,3 @@ vi.mock("./runtime.js", () => ({
   })),
   setSynologyRuntime: vi.fn(),
 }));
-
-export function makeSecurityAccount(
-  overrides: Partial<ResolvedSynologyChatAccount> = {},
-): ResolvedSynologyChatAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    token: "t",
-    incomingUrl: "https://nas/incoming",
-    nasHost: "h",
-    webhookPath: "/w",
-    webhookPathSource: "default",
-    dangerouslyAllowNameMatching: false,
-    dangerouslyAllowInheritedWebhookPath: false,
-    dmPolicy: "allowlist" as const,
-    allowedUserIds: [],
-    rateLimitPerMinute: 30,
-    botName: "Bot",
-    allowInsecureSsl: false,
-    ...overrides,
-  };
-}

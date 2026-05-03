@@ -44,6 +44,7 @@ let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
 let pendingRestartEmitHooks: RestartEmitHooks | undefined;
+let pendingRestartSkipDeferral = false;
 let pendingRestartPreparing = false;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
@@ -63,6 +64,7 @@ function clearPendingScheduledRestart(): void {
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
   pendingRestartEmitHooks = undefined;
+  pendingRestartSkipDeferral = false;
   pendingRestartPreparing = false;
 }
 
@@ -89,6 +91,13 @@ type GatewayRestartIntentPayload = {
   kind: "gateway-restart";
   pid: number;
   createdAt: number;
+  force?: boolean;
+  waitMs?: number;
+};
+
+export type GatewayRestartIntent = {
+  force?: boolean;
+  waitMs?: number;
 };
 
 function resolveGatewayRestartIntentPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -115,6 +124,7 @@ function normalizeRestartIntentPid(pid: number | undefined): number | null {
 export function writeGatewayRestartIntentSync(opts: {
   env?: NodeJS.ProcessEnv;
   targetPid?: number;
+  intent?: GatewayRestartIntent;
 }): boolean {
   const targetPid = normalizeRestartIntentPid(opts.targetPid);
   if (targetPid === null) {
@@ -129,6 +139,12 @@ export function writeGatewayRestartIntentSync(opts: {
       kind: "gateway-restart",
       pid: targetPid,
       createdAt: Date.now(),
+      ...(opts.intent?.force ? { force: true } : {}),
+      ...(typeof opts.intent?.waitMs === "number" &&
+      Number.isFinite(opts.intent.waitMs) &&
+      opts.intent.waitMs >= 0
+        ? { waitMs: Math.floor(opts.intent.waitMs) }
+        : {}),
     };
     tmpPath = path.join(
       path.dirname(intentPath),
@@ -166,9 +182,18 @@ function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | n
       typeof parsed.pid === "number" &&
       Number.isFinite(parsed.pid) &&
       typeof parsed.createdAt === "number" &&
-      Number.isFinite(parsed.createdAt)
+      Number.isFinite(parsed.createdAt) &&
+      (parsed.force === undefined || typeof parsed.force === "boolean") &&
+      (parsed.waitMs === undefined ||
+        (typeof parsed.waitMs === "number" && Number.isFinite(parsed.waitMs) && parsed.waitMs >= 0))
     ) {
-      return parsed as GatewayRestartIntentPayload;
+      return {
+        kind: "gateway-restart",
+        pid: parsed.pid,
+        createdAt: parsed.createdAt,
+        ...(parsed.force ? { force: true } : {}),
+        ...(typeof parsed.waitMs === "number" ? { waitMs: Math.floor(parsed.waitMs) } : {}),
+      };
     }
   } catch {
     return null;
@@ -176,32 +201,45 @@ function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | n
   return null;
 }
 
-export function consumeGatewayRestartIntentSync(
+export function consumeGatewayRestartIntentPayloadSync(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
-): boolean {
+): GatewayRestartIntent | null {
   const intentPath = resolveGatewayRestartIntentPath(env);
   let raw: string;
   try {
     const stat = fs.lstatSync(intentPath);
     if (!stat.isFile() || stat.size > GATEWAY_RESTART_INTENT_MAX_BYTES) {
-      return false;
+      return null;
     }
     raw = fs.readFileSync(intentPath, "utf8");
   } catch {
-    return false;
+    return null;
   } finally {
     clearGatewayRestartIntentSync(env);
   }
   const payload = parseGatewayRestartIntent(raw);
   if (!payload) {
-    return false;
+    return null;
   }
   if (payload.pid !== process.pid) {
-    return false;
+    return null;
   }
   const ageMs = now - payload.createdAt;
-  return ageMs >= 0 && ageMs <= GATEWAY_RESTART_INTENT_TTL_MS;
+  if (ageMs < 0 || ageMs > GATEWAY_RESTART_INTENT_TTL_MS) {
+    return null;
+  }
+  return {
+    ...(payload.force ? { force: true } : {}),
+    ...(typeof payload.waitMs === "number" ? { waitMs: payload.waitMs } : {}),
+  };
+}
+
+export function consumeGatewayRestartIntentSync(
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): boolean {
+  return consumeGatewayRestartIntentPayloadSync(env, now) !== null;
 }
 
 function summarizeChangedPaths(paths: string[] | undefined, maxPaths = 6): string | null {
@@ -658,6 +696,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   reason?: string;
   audit?: RestartAuditInfo;
   emitHooks?: RestartEmitHooks;
+  skipDeferral?: boolean;
+  skipCooldown?: boolean;
 }): ScheduledRestart {
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
@@ -671,8 +711,12 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const mode = hasSigusr1Listener ? "emit" : process.platform === "win32" ? "supervisor" : "signal";
   const nowMs = Date.now();
-  const cooldownMsApplied = Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
+  const skipCooldown = opts?.skipCooldown === true;
+  const cooldownMsApplied = skipCooldown
+    ? 0
+    : Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
   const requestedDueAt = nowMs + delayMs + cooldownMsApplied;
+  const skipDeferral = opts?.skipDeferral === true;
 
   if (hasUnconsumedRestartSignal()) {
     if (shouldPreferRestartReason(reason, emittedRestartReason)) {
@@ -695,7 +739,29 @@ export function scheduleGatewaySigusr1Restart(opts?: {
 
   if (pendingRestartTimer || pendingRestartPreparing) {
     const remainingMs = pendingRestartPreparing ? 0 : Math.max(0, pendingRestartDueAt - nowMs);
-    const shouldPullEarlier = !pendingRestartPreparing && requestedDueAt < pendingRestartDueAt;
+    if (pendingRestartPreparing && skipDeferral && activeDeferralPolls.size > 0) {
+      restartLog.warn(
+        `restart request bypassed active deferral reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
+      );
+      clearActiveDeferralPolls();
+      pendingRestartReason = reason;
+      pendingRestartEmitHooks = opts?.emitHooks;
+      void emitPreparedGatewayRestart(undefined, reason);
+      return {
+        ok: true,
+        pid: process.pid,
+        signal: "SIGUSR1",
+        delayMs: 0,
+        reason,
+        mode,
+        coalesced: false,
+        cooldownMsApplied,
+      };
+    }
+    const shouldUpgradeToSkipDeferral = skipDeferral && !pendingRestartSkipDeferral;
+    const shouldPullEarlier =
+      !pendingRestartPreparing &&
+      (requestedDueAt < pendingRestartDueAt || shouldUpgradeToSkipDeferral);
     if (shouldPullEarlier) {
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
@@ -705,6 +771,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       if (shouldPreferRestartReason(reason, pendingRestartReason)) {
         pendingRestartReason = reason;
       }
+      pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
       restartLog.warn(
         `restart request coalesced (already scheduled) reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} delayMs=${remainingMs} ${formatRestartAudit(opts?.audit)}`,
       );
@@ -725,15 +792,18 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = reason;
   pendingRestartEmitHooks = opts?.emitHooks;
+  pendingRestartSkipDeferral = skipDeferral;
   pendingRestartTimer = setTimeout(
     () => {
       const scheduledReason = pendingRestartReason;
+      const scheduledSkipDeferral = pendingRestartSkipDeferral;
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
+      pendingRestartSkipDeferral = false;
       pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
-      if (!pendingCheck) {
+      if (scheduledSkipDeferral || !pendingCheck) {
         void emitPreparedGatewayRestart(undefined, scheduledReason);
         return;
       }
