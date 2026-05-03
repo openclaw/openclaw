@@ -938,15 +938,24 @@ describe("installPluginFromNpmSpec", () => {
     runCommandWithTimeoutMock.mockReset();
     const prereleaseOnlyNpmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const prereleaseOnlyWarnings: string[] = [];
-    mockNpmViewAndInstall({
-      spec: "@openclaw/voice-call",
-      packageName: "@openclaw/voice-call",
-      version: "0.0.2-beta.1",
-      pluginId: "voice-call",
-      npmRoot: prereleaseOnlyNpmRoot,
-      versions: ["0.0.2-beta.1"],
-      expectedDependencySpec: "0.0.2-beta.1",
-    });
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/voice-call",
+        packageName: "@openclaw/voice-call",
+        version: "0.0.1-beta.1",
+        pluginId: "voice-call",
+        npmRoot: prereleaseOnlyNpmRoot,
+        versions: ["0.0.1-beta.1", "0.0.2-beta.1"],
+      },
+      {
+        spec: "@openclaw/voice-call@0.0.2-beta.1",
+        packageName: "@openclaw/voice-call",
+        version: "0.0.2-beta.1",
+        pluginId: "voice-call",
+        npmRoot: prereleaseOnlyNpmRoot,
+        expectedDependencySpec: "0.0.2-beta.1",
+      },
+    ]);
 
     const prereleaseOnly = await installPluginFromNpmSpec({
       spec: "@openclaw/voice-call",
@@ -963,7 +972,11 @@ describe("installPluginFromNpmSpec", () => {
       return;
     }
     expect(prereleaseOnly.npmResolution?.version).toBe("0.0.2-beta.1");
+    expect(prereleaseOnly.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
     expect(prereleaseOnlyWarnings.join("\n")).toContain("has no stable npm versions yet");
+    expect(prereleaseOnlyWarnings.join("\n")).toContain(
+      "using newest prerelease @openclaw/voice-call@0.0.2-beta.1",
+    );
 
     runCommandWithTimeoutMock.mockReset();
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");

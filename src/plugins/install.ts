@@ -26,6 +26,7 @@ import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
+import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -160,18 +161,13 @@ function isNpmPackageNotFoundMessage(error: string): boolean {
   return /E404|404 not found|not in this registry/i.test(normalized);
 }
 
-function compareStableSemver(a: string, b: string): number {
-  const parse = (value: string): [number, number, number] => {
-    const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(value.trim());
-    return [Number(match?.[1] ?? 0), Number(match?.[2] ?? 0), Number(match?.[3] ?? 0)];
-  };
-  const left = parse(a);
-  const right = parse(b);
-  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+function compareNpmSemver(a: string, b: string): number {
+  return compareComparableSemver(parseComparableSemver(a), parseComparableSemver(b)) ?? 0;
 }
 
 type TrustedOfficialPrereleaseResolution =
   | { kind: "stable"; resolution: NpmSpecResolution }
+  | { kind: "prerelease-only"; resolution: NpmSpecResolution }
   | { kind: "allow-prerelease-only" };
 
 async function resolveTrustedOfficialPrereleaseResolution(params: {
@@ -208,10 +204,28 @@ async function resolveTrustedOfficialPrereleaseResolution(params: {
   );
   const stableVersion = semverVersions
     .filter((value) => !isPrereleaseSemverVersion(value))
-    .toSorted(compareStableSemver)
+    .toSorted(compareNpmSemver)
     .at(-1);
   if (!stableVersion) {
-    if (semverVersions.length > 0 && semverVersions.every(isPrereleaseSemverVersion)) {
+    const prereleaseVersion = semverVersions
+      .filter(isPrereleaseSemverVersion)
+      .toSorted(compareNpmSemver)
+      .at(-1);
+    if (prereleaseVersion && semverVersions.every(isPrereleaseSemverVersion)) {
+      if (prereleaseVersion !== params.resolvedPrereleaseVersion) {
+        const prereleaseSpec = `${params.spec.name}@${prereleaseVersion}`;
+        const metadataResult = await resolveNpmSpecMetadata({
+          spec: prereleaseSpec,
+          timeoutMs: params.timeoutMs,
+        });
+        if (!metadataResult.ok) {
+          return null;
+        }
+        params.logger.warn?.(
+          `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; using newest prerelease ${prereleaseSpec} because this trusted official OpenClaw package has no stable npm versions yet.`,
+        );
+        return { kind: "prerelease-only", resolution: metadataResult.metadata };
+      }
       params.logger.warn?.(
         `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; allowing it because this trusted official OpenClaw package has no stable npm versions yet.`,
       );
@@ -1265,7 +1279,7 @@ export async function installPluginFromNpmSpec(
           logger,
         })
       : null;
-    if (trustedResolution?.kind === "stable") {
+    if (trustedResolution?.kind === "stable" || trustedResolution?.kind === "prerelease-only") {
       Object.assign(npmResolution, trustedResolution.resolution, {
         resolvedAt: npmResolution.resolvedAt,
       });
