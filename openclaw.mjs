@@ -174,11 +174,20 @@ const isDirectModuleNotFoundError = (err, specifier) => {
     return true;
   }
 
+  // Bun exposes the original import specifier in err.specifier
+  // and uses relative paths in its error message instead of resolved URLs.
+  if ("specifier" in err && err.specifier === specifier) {
+    return true;
+  }
+
   const message = "message" in err && typeof err.message === "string" ? err.message : "";
   const expectedPath = fileURLToPath(expectedUrl);
   return (
     message.includes(`Cannot find module '${expectedPath}'`) ||
-    message.includes(`Cannot find module "${expectedPath}"`)
+    message.includes(`Cannot find module "${expectedPath}"`) ||
+    // Bun uses the original relative specifier in its error message.
+    message.includes(`Cannot find module '${specifier}'`) ||
+    message.includes(`Cannot find module "${specifier}"`)
   );
 };
 
