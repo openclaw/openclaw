@@ -75,6 +75,17 @@ export async function markBlueBubblesChatRead(
   chatGuid: string,
   opts: BlueBubblesChatOpts = {},
 ): Promise<void> {
+  // Mark-read is a Private-API-only BlueBubbles endpoint. When the BB
+  // server reports `private_api: false`, the call returns HTTP 500 with
+  // "iMessage Private API is not enabled!", which the channel runtime
+  // then logs as an error and surfaces as a fallback warning in the
+  // chat reply — even though mark-read is a nice-to-have, not a
+  // prerequisite for the conversation. Silently skip when we know
+  // Private API is off. Unknown state (null) falls through so first
+  // call after boot still probes.
+  if (getCachedBlueBubblesPrivateApiStatus(opts.accountId) === false) {
+    return;
+  }
   await sendBlueBubblesChatEndpointRequest({
     chatGuid,
     opts,
@@ -89,6 +100,13 @@ export async function sendBlueBubblesTyping(
   typing: boolean,
   opts: BlueBubblesChatOpts = {},
 ): Promise<void> {
+  // Typing indicators are Private-API-only on BlueBubbles — same story
+  // as `markBlueBubblesChatRead` above. Skip silently when we know
+  // Private API is off rather than hammering BB with a 500 on every
+  // reply.
+  if (getCachedBlueBubblesPrivateApiStatus(opts.accountId) === false) {
+    return;
+  }
   await sendBlueBubblesChatEndpointRequest({
     chatGuid,
     opts,
