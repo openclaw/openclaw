@@ -98,7 +98,7 @@ export function createWebSearchTool(options?: {
           ? (getActiveSecretsRuntimeSnapshot()?.config ?? options?.config)
           : options?.config;
       const preferRuntimeProviders =
-        Boolean(runtimeProviderId) &&
+        !runtimeProviderId ||
         !resolveManifestContractOwnerPluginId({
           contract: "webSearchProviders",
           value: runtimeProviderId,
