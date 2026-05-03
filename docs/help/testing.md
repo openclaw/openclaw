@@ -58,10 +58,11 @@ When debugging real providers/models (requires real creds):
     Models whose metadata advertises `image` input also run a tiny image turn.
     Disable the extra probes with `OPENCLAW_LIVE_MODEL_FILE_PROBE=0` or
     `OPENCLAW_LIVE_MODEL_IMAGE_PROBE=0` when isolating provider failures.
-  - CI coverage: daily `OpenClaw Scheduled Live And E2E Checks` and manual
-    `OpenClaw Release Checks` both call the reusable live/E2E workflow with
-    `include_live_suites: true`, which includes separate Docker live model
-    matrix jobs sharded by provider.
+  - CI coverage: daily `OpenClaw Scheduled Live And E2E Checks` calls the
+    reusable live/E2E workflow through a logged stable dispatcher with
+    OpenAI-only live-model smoke coverage. Manual `OpenClaw Release Checks` and
+    full reusable-workflow dispatches keep the broader provider-sharded Docker
+    live model matrix.
   - For focused CI reruns, dispatch `OpenClaw Live And E2E Checks (Reusable)`
     with `include_live_suites: true` and `live_models_only: true`.
   - Add new high-signal provider secrets to `scripts/ci-hydrate-live-auth.sh`
