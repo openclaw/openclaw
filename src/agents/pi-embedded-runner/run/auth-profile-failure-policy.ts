@@ -10,5 +10,13 @@ export function resolveAuthProfileFailureReason(params: {
   if (params.policy === "local" || !params.failoverReason || params.failoverReason === "timeout") {
     return null;
   }
+  // `format` failures come from session-local request shape (e.g. malformed transcript,
+  // empty messages array, schema mismatch). They are not provider auth/billing/rate health
+  // signals, and putting the shared profile in cooldown over them blocks unrelated sessions
+  // (#76829). The retry-limit policy already excludes `format` for the same reason; mirror
+  // it here for shared profile health.
+  if (params.failoverReason === "format") {
+    return null;
+  }
   return params.failoverReason;
 }
