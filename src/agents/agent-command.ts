@@ -584,6 +584,7 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
+          config: cfg,
         });
       } catch (error) {
         log.warn(
@@ -1190,6 +1191,7 @@ async function agentCommandInternal(
           opts.bootstrapContextRunKind !== "cron" &&
           opts.bootstrapContextRunKind !== "heartbeat" &&
           !opts.internalEvents?.length,
+        preserveRuntimeModel: opts.bootstrapContextRunKind === "heartbeat",
       });
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }
@@ -1208,6 +1210,7 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
+          config: cfg,
         });
         sessionEntry = await (
           await loadCliCompactionRuntime()

@@ -826,6 +826,26 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
   };
 });
 
+vi.mock("./doctor/shared/legacy-config-issues.js", async () => {
+  const {
+    collectRelevantDoctorPluginIds,
+    listPluginDoctorLegacyConfigRules,
+  }: typeof import("../plugins/doctor-contract-registry.js") =
+    await import("../plugins/doctor-contract-registry.js");
+  const { findLegacyConfigIssues }: typeof import("../config/legacy.js") =
+    await import("../config/legacy.js");
+  return {
+    findDoctorLegacyConfigIssues: (raw: unknown, sourceRaw?: unknown) =>
+      findLegacyConfigIssues(
+        raw,
+        sourceRaw,
+        listPluginDoctorLegacyConfigRules({
+          pluginIds: collectRelevantDoctorPluginIds(raw),
+        }),
+      ),
+  };
+});
+
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupAutoEnableReasons: vi.fn(() => []),
   runPluginSetupConfigMigrations: vi.fn(({ config }: { config: unknown }) => ({

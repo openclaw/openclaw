@@ -118,9 +118,10 @@ pnpm test:docker:published-upgrade-survivor
 ```
 
 Available scenarios are `base`, `feishu-channel`, `bootstrap-persona`,
-`plugin-deps-cleanup`, `tilde-log-path`, and `versioned-runtime-deps`. In aggregate runs,
+`plugin-deps-cleanup`, `configured-plugin-installs`, `tilde-log-path`, and
+`versioned-runtime-deps`. In aggregate runs,
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` expands to all reported
-issue-shaped scenarios.
+issue-shaped scenarios, including the configured-plugin install migration.
 
 Full update migration is intentionally separate from Full Release CI. Use the
 manual `Update Migration` workflow when the release question is "can every
@@ -153,6 +154,11 @@ Candidate sources:
 - `source=url`: validate an HTTPS tarball with required `package_sha256`.
 - `source=artifact`: reuse a tarball uploaded by another Actions run.
 
+Full Release Validation uses `source=artifact` by default, built from the
+resolved release SHA. For post-publish proof, pass
+`package_acceptance_package_spec=openclaw@YYYY.M.D` so the same upgrade matrix
+targets the shipped npm package instead.
+
 Release checks call Package Acceptance with the package/update/plugin set:
 
 ```text
@@ -162,7 +168,7 @@ doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor 
 They also pass:
 
 ```text
-published_upgrade_survivor_baselines=release-history
+published_upgrade_survivor_baselines=all-since-2026.4.23
 published_upgrade_survivor_scenarios=reported-issues
 telegram_mode=mock-openai
 ```
@@ -171,10 +177,11 @@ This keeps package migration, update channel switching, stale plugin dependency
 cleanup, offline plugin coverage, plugin update behavior, and Telegram package
 QA on the same resolved artifact.
 
-`release-history` is a bounded release-check sample: latest six stable releases,
-`2026.4.23`, and one older pre-date anchor. For exhaustive published update
-migration coverage, use `all-since-2026.4.23` in the separate Update Migration
-workflow instead of Full Release CI.
+`all-since-2026.4.23` is the Full Release CI upgrade sample: every stable npm-published release from `2026.4.23` through `latest`. For exhaustive published
+update migration coverage, use `all-since-2026.4.23` in the separate Update
+Migration workflow instead of Full Release CI. `release-history` remains
+available for manual wider sampling when you also want the legacy pre-date
+anchor.
 
 Run a package profile manually when validating a candidate before release:
 
@@ -185,7 +192,7 @@ gh workflow run package-acceptance.yml \
   -f source=npm \
   -f package_spec=openclaw@beta \
   -f suite_profile=package \
-  -f published_upgrade_survivor_baselines=release-history \
+  -f published_upgrade_survivor_baselines=all-since-2026.4.23 \
   -f published_upgrade_survivor_scenarios=reported-issues \
   -f telegram_mode=mock-openai
 ```

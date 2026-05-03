@@ -308,6 +308,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.embedSandbox": "Control UI Embed Sandbox Mode",
   "gateway.controlUi.allowExternalEmbedUrls": "Allow External Control UI Embed URLs",
+  "gateway.controlUi.chatMessageMaxWidth": "Control UI Chat Message Max Width",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "Dangerously Allow Host-Header Origin Fallback",
@@ -716,6 +717,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.sendPolicy.rules[].match.chatType": "Session Send Rule Chat Type",
   "session.sendPolicy.rules[].match.keyPrefix": "Session Send Rule Key Prefix",
   "session.sendPolicy.rules[].match.rawKeyPrefix": "Session Send Rule Raw Key Prefix",
+  "session.writeLock": "Session Write Lock",
+  "session.writeLock.acquireTimeoutMs": "Session Write Lock Acquire Timeout",
   "session.agentToAgent": "Session Agent-to-Agent",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
   "session.threadBindings": "Session Thread Bindings",

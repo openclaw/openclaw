@@ -94,6 +94,11 @@ configured age, count, or disk budget.
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
 
+Transcript mutations use a session write lock on the transcript file. Lock acquisition waits up to
+`session.writeLock.acquireTimeoutMs` before surfacing a busy-session error; the default is `60000`
+ms. Raise this only when legitimate prep, cleanup, compaction, or transcript mirror work contends
+longer on slow machines. Stale-lock detection and maximum hold warnings remain separate policies.
+
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 
 1. Remove oldest archived, orphan transcript, or orphan trajectory artifacts first.

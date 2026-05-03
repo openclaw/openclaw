@@ -9,6 +9,7 @@ let acquireSessionWriteLock: typeof import("./session-write-lock.js").acquireSes
 let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLockFiles;
 let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
+let resolveSessionWriteLockAcquireTimeoutMs: typeof import("./session-write-lock.js").resolveSessionWriteLockAcquireTimeoutMs;
 
 vi.mock("../shared/pid-alive.js", async () => {
   const original =
@@ -133,6 +134,7 @@ describe("acquireSessionWriteLock", () => {
       cleanStaleLockFiles,
       resetSessionWriteLockStateForTest,
       resolveSessionLockMaxHoldFromTimeout,
+      resolveSessionWriteLockAcquireTimeoutMs,
     } = await import("./session-write-lock.js"));
   });
 
@@ -333,6 +335,20 @@ describe("acquireSessionWriteLock", () => {
   it("derives max hold from timeout plus grace", () => {
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(720_000);
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
+  });
+
+  it("resolves the session write-lock acquire timeout", () => {
+    expect(resolveSessionWriteLockAcquireTimeoutMs()).toBe(60_000);
+    expect(
+      resolveSessionWriteLockAcquireTimeoutMs({
+        session: { writeLock: { acquireTimeoutMs: 90_000 } },
+      }),
+    ).toBe(90_000);
+    expect(
+      resolveSessionWriteLockAcquireTimeoutMs({
+        session: { writeLock: { acquireTimeoutMs: 0 } },
+      }),
+    ).toBe(60_000);
   });
 
   it("clamps max hold for effectively no-timeout runs", () => {

@@ -17,6 +17,7 @@ export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
 export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
 export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
+export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
 
 ARTIFACT_ROOT="$(dirname "${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-/tmp/openclaw-upgrade-survivor-artifacts/summary.json}")"
 mkdir -p "$ARTIFACT_ROOT"
@@ -39,6 +40,8 @@ CURRENT_PHASE="setup"
 FAILURE_PHASE=""
 FAILURE_MESSAGE=""
 gateway_pid=""
+clawhub_fixture_pid=""
+configured_plugin_installs_clawhub_fixture_owned=""
 baseline_spec=""
 baseline_version=""
 baseline_version_expected="0"
@@ -67,10 +70,10 @@ rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
 
 validate_baseline_package_spec() {
   local spec="$1"
-  if [[ "$spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
+  if [[ "$spec" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
     return 0
   fi
-  echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, an exact OpenClaw release version, or a bare release version; got: $spec" >&2
+  echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, an exact OpenClaw release version, or a bare release version; got: $spec" >&2
   return 1
 }
 
@@ -95,12 +98,12 @@ normalize_baseline() {
       ;;
   esac
   case "$baseline_version" in
-    latest | beta)
+    latest | beta | alpha)
       baseline_version=""
       baseline_version_expected="0"
       ;;
     dev | main | "")
-      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@<version>, or a bare version" >&2
+      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, openclaw@<version>, or a bare version" >&2
       return 1
       ;;
     *)
@@ -190,6 +193,10 @@ NODE
 }
 
 cleanup() {
+  if [ -n "${clawhub_fixture_pid:-}" ]; then
+    kill "$clawhub_fixture_pid" 2>/dev/null || true
+    wait "$clawhub_fixture_pid" 2>/dev/null || true
+  fi
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
 }
 
@@ -269,17 +276,85 @@ plugin_deps_cleanup_plugins() {
   printf '%s\n' "${OPENCLAW_UPGRADE_SURVIVOR_PLUGIN_DEPS_CLEANUP_PLUGINS:-discord telegram}"
 }
 
+plugin_deps_cleanup_plugin_dirs() {
+  local plugin="$1"
+  printf '%s\n' \
+    "$(package_root)/dist/extensions/$plugin" \
+    "$(package_root)/extensions/$plugin"
+}
+
+configured_plugin_installs_enabled() {
+  [ "$SCENARIO" = "configured-plugin-installs" ]
+}
+
+start_configured_plugin_installs_clawhub_fixture() {
+  configured_plugin_installs_enabled || return 0
+  configured_plugin_installs_clawhub_fixture_owned=""
+  if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ] || [ -n "${CLAWHUB_URL:-}" ]; then
+    return 0
+  fi
+
+  local port_file="$ARTIFACT_ROOT/clawhub-not-found.port"
+  local requests_file="$ARTIFACT_ROOT/clawhub-not-found-requests.jsonl"
+  rm -f "$port_file" "$requests_file"
+  node - "$port_file" "$requests_file" <<'NODE' &
+const fs = require("node:fs");
+const http = require("node:http");
+const portFile = process.argv[2];
+const requestsFile = process.argv[3];
+const server = http.createServer((request, response) => {
+  fs.appendFileSync(
+    requestsFile,
+    `${JSON.stringify({ method: request.method, url: request.url, at: new Date().toISOString() })}\n`,
+  );
+  response.writeHead(404, { "content-type": "application/json" });
+  response.end('{"error":"fixture package not found"}\n');
+});
+server.listen(0, "127.0.0.1", () => {
+  fs.writeFileSync(portFile, String(server.address().port));
+});
+process.on("SIGTERM", () => server.close(() => process.exit(0)));
+process.on("SIGINT", () => server.close(() => process.exit(0)));
+NODE
+  clawhub_fixture_pid="$!"
+  for _ in $(seq 1 100); do
+    if [ -s "$port_file" ]; then
+      export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
+      configured_plugin_installs_clawhub_fixture_owned="1"
+      echo "Configured plugin install scenario using ClawHub 404 fixture: $OPENCLAW_CLAWHUB_URL"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "timed out starting ClawHub 404 fixture" >&2
+  return 1
+}
+
+assert_configured_plugin_installs_clawhub_attempted() {
+  configured_plugin_installs_enabled || return 0
+  if [ "${configured_plugin_installs_clawhub_fixture_owned:-}" != "1" ]; then
+    return 0
+  fi
+  local requests_file="$ARTIFACT_ROOT/clawhub-not-found-requests.jsonl"
+  # The install catalog may prefer npm; assertions.mjs validates the installed source.
+  if grep -q '/api/v1/packages/%40openclaw%2Fmatrix' "$requests_file" 2>/dev/null; then
+    echo "configured plugin install scenario attempted ClawHub for @openclaw/matrix"
+  fi
+}
+
 legacy_plugin_dependency_probe_paths() {
   local plugin="$1"
   local plugin_dir
-  plugin_dir="$(package_root)/dist/extensions/$plugin"
+  while IFS= read -r plugin_dir; do
+    printf '%s\n' \
+      "$plugin_dir/node_modules" \
+      "$plugin_dir/.openclaw-runtime-deps.json" \
+      "$plugin_dir/.openclaw-runtime-deps-stamp.json" \
+      "$plugin_dir/.openclaw-runtime-deps-copy-upgrade-survivor" \
+      "$plugin_dir/.openclaw-install-stage-upgrade-survivor" \
+      "$plugin_dir/.openclaw-pnpm-store"
+  done < <(plugin_deps_cleanup_plugin_dirs "$plugin")
   printf '%s\n' \
-    "$plugin_dir/node_modules" \
-    "$plugin_dir/.openclaw-runtime-deps.json" \
-    "$plugin_dir/.openclaw-runtime-deps-stamp.json" \
-    "$plugin_dir/.openclaw-runtime-deps-copy-upgrade-survivor" \
-    "$plugin_dir/.openclaw-install-stage-upgrade-survivor" \
-    "$plugin_dir/.openclaw-pnpm-store" \
     "$(package_root)/.local/bundled-plugin-runtime-deps/$plugin-upgrade-survivor" \
     "$OPENCLAW_STATE_DIR/.local/bundled-plugin-runtime-deps/$plugin-upgrade-survivor" \
     "$OPENCLAW_STATE_DIR/plugin-runtime-deps/$plugin-upgrade-survivor"
@@ -287,12 +362,7 @@ legacy_plugin_dependency_probe_paths() {
 
 install_baseline_plugin_dependencies() {
   plugin_deps_cleanup_enabled || return 0
-  echo "Running baseline doctor to install configured plugin dependencies before update."
-  if ! openclaw doctor --fix --non-interactive >"$BASELINE_DOCTOR_LOG" 2>&1; then
-    echo "baseline openclaw doctor failed while preparing plugin dependency cleanup scenario" >&2
-    cat "$BASELINE_DOCTOR_LOG" >&2 || true
-    return 1
-  fi
+  echo "Skipping baseline doctor for plugin dependency cleanup scenario; candidate doctor owns stale dependency cleanup."
 }
 
 seed_legacy_plugin_dependency_debris() {
@@ -302,10 +372,15 @@ seed_legacy_plugin_dependency_debris() {
   local plugin
   for plugin in $(plugin_deps_cleanup_plugins); do
     local plugin_dir
-    plugin_dir="$(package_root)/dist/extensions/$plugin"
-    if [ ! -d "$plugin_dir" ]; then
-      continue
-    fi
+    plugin_dir=""
+    local candidate_dir
+    while IFS= read -r candidate_dir; do
+      if [ -d "$candidate_dir" ]; then
+        plugin_dir="$candidate_dir"
+        break
+      fi
+    done < <(plugin_deps_cleanup_plugin_dirs "$plugin")
+    [ -n "$plugin_dir" ] || continue
     found=1
     mkdir -p \
       "$plugin_dir/node_modules/openclaw-upgrade-survivor-dep" \
@@ -335,6 +410,7 @@ seed_legacy_plugin_dependency_debris() {
   if [ "$found" -ne 1 ]; then
     echo "plugin-deps-cleanup scenario could not find a packaged Discord or Telegram plugin directory" >&2
     find "$(package_root)/dist" -maxdepth 3 -type d 2>/dev/null >&2 || true
+    find "$(package_root)/extensions" -maxdepth 2 -type d 2>/dev/null >&2 || true
     return 1
   fi
 }
@@ -642,7 +718,7 @@ start_gateway() {
 
 check_gateway_probes() {
   healthz_seconds="$(probe_gateway_endpoint /healthz live "$HEALTHZ_JSON")"
-  export OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING="discord,telegram,whatsapp,feishu"
+  export OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING="discord,telegram,whatsapp,feishu,matrix"
   readyz_seconds="$(probe_gateway_endpoint /readyz ready "$READYZ_JSON")"
   unset OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING
 }
@@ -681,9 +757,11 @@ phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_deb
 phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
+phase configured-plugin-installs-clawhub-fixture start_configured_plugin_installs_clawhub_fixture
 phase update-candidate update_candidate
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
 phase doctor run_doctor
+phase configured-plugin-installs-clawhub-attempted assert_configured_plugin_installs_clawhub_attempted
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
 phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config

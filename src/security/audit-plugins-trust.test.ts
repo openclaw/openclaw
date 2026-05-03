@@ -6,7 +6,17 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
-import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
+
+type CollectPluginsTrustFindings =
+  typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings;
+
+async function collectPluginsTrustFindingsForTest(
+  ...args: Parameters<CollectPluginsTrustFindings>
+): Promise<Awaited<ReturnType<CollectPluginsTrustFindings>>> {
+  vi.resetModules();
+  const { collectPluginsTrustFindings } = await import("./audit-plugins-trust.js");
+  return await collectPluginsTrustFindings(...args);
+}
 
 const mockChannelPlugins = vi.hoisted(() => [
   {
@@ -152,7 +162,7 @@ describe("security audit install metadata findings", () => {
   };
 
   const runInstallMetadataAudit = async (cfg: OpenClawConfig, stateDir: string) => {
-    return await collectPluginsTrustFindings({ cfg, stateDir });
+    return await collectPluginsTrustFindingsForTest({ cfg, stateDir });
   };
 
   const writePluginIndexInstallRecords = async (
@@ -439,7 +449,7 @@ describe("security audit extension tool reachability findings", () => {
     {};
 
   const runSharedExtensionsAudit = async (config: OpenClawConfig) => {
-    return await collectPluginsTrustFindings({
+    return await collectPluginsTrustFindingsForTest({
       cfg: config,
       stateDir: sharedExtensionsStateDir,
     });

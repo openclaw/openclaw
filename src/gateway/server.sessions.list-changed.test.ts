@@ -157,6 +157,49 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   );
 });
 
+test("sessions.list marks sessions with active abortable runs", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  await sessionsHandlers["sessions.list"]({
+    req: {
+      type: "req",
+      id: "req-sessions-list-active-run",
+      method: "sessions.list",
+      params: {},
+    },
+    params: {},
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
+      chatAbortControllers: new Map([["run-1", { sessionKey: "agent:main:main" }]]),
+    } as never,
+  });
+
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      sessions: expect.arrayContaining([
+        expect.objectContaining({
+          key: "agent:main:main",
+          hasActiveRun: true,
+        }),
+      ]),
+    }),
+    undefined,
+  );
+});
+
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
   const { dir } = await createSessionStoreDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};

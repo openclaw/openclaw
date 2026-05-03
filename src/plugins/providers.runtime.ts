@@ -3,6 +3,7 @@ import { resolveBundledPluginCompatibleActivationInputs } from "./activation-con
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
+  getRuntimePluginRegistryForLoadOptions,
   isPluginRegistryLoadInFlight,
   loadOpenClawPlugins,
   type PluginLoadOptions,
@@ -309,12 +310,15 @@ export function resolvePluginProviders(params: {
     );
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base);
-  const registry = getLoadedRuntimePluginRegistry({
-    env: base.env,
-    loadOptions: loadState.loadOptions,
-    workspaceDir: base.workspaceDir,
-    requiredPluginIds: loadState.loadOptions.onlyPluginIds,
-  });
+  const registry =
+    loadState.loadOptions.onlyPluginIds?.length === 0
+      ? undefined
+      : (getLoadedRuntimePluginRegistry({
+          env: base.env,
+          loadOptions: loadState.loadOptions,
+          workspaceDir: base.workspaceDir,
+          requiredPluginIds: loadState.loadOptions.onlyPluginIds,
+        }) ?? getRuntimePluginRegistryForLoadOptions(loadState.loadOptions));
   if (!registry) {
     return [];
   }

@@ -763,6 +763,22 @@ describe("resolvePluginTools optional tools", () => {
     },
   ])("$name", ({ params, expectedLoaderCall }) => {
     setOptionalDemoRegistry();
+    if (params.env) {
+      installToolManifestSnapshot({
+        config: createContext().config,
+        env: params.env,
+        plugin: {
+          id: "optional-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["optional_tool"],
+          },
+        },
+      });
+    }
 
     resolvePluginTools(createResolveToolsParams(params));
 
@@ -869,8 +885,16 @@ describe("resolvePluginTools optional tools", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("caches plugin tool factory results for equivalent request context", () => {
-    const factory = vi.fn(() => makeTool("cached_tool"));
+  it("caches plugin tool descriptors and uses the runtime only on execution", async () => {
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { sessionId?: string };
+      return {
+        ...makeTool("cached_tool"),
+        async execute() {
+          return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
+        },
+      };
+    });
     setRegistry([
       {
         pluginId: "cache-test",
@@ -881,16 +905,79 @@ describe("resolvePluginTools optional tools", () => {
       },
     ]);
 
-    const first = resolvePluginTools(createResolveToolsParams({ context: createContext() }));
-    const second = resolvePluginTools(createResolveToolsParams({ context: createContext() }));
+    const first = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), sessionId: "same" },
+      }),
+    );
+    const second = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), sessionId: "same" },
+      }),
+    );
 
     expectResolvedToolNames(first, ["cached_tool"]);
     expectResolvedToolNames(second, ["cached_tool"]);
     expect(factory).toHaveBeenCalledTimes(1);
-    expect(second[0]).toBe(first[0]);
+    expect(second[0]).not.toBe(first[0]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+
+    await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "same" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
   });
 
-  it("does not reuse plugin tool factory results across sandbox context changes", () => {
+  it("reuses cached plugin tool descriptors across session identity changes", async () => {
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { sessionId?: string };
+      return {
+        ...makeTool("cached_session_tool"),
+        async execute() {
+          return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "cache-session-test",
+        optional: false,
+        source: "/tmp/cache-session-test.js",
+        names: ["cached_session_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          sessionId: "first-session",
+          sessionKey: "agent:main:first-session",
+        },
+      }),
+    );
+    const second = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          sessionId: "second-session",
+          sessionKey: "agent:main:second-session",
+        },
+      }),
+    );
+
+    expectResolvedToolNames(first, ["cached_session_tool"]);
+    expectResolvedToolNames(second, ["cached_session_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "second-session" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse cached plugin tool descriptors across sandbox context changes", () => {
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sandboxed?: boolean };
       return ctx.sandboxed ? null : makeTool("sandbox_sensitive_tool");
@@ -921,109 +1008,35 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
-  it("does not reuse plugin tool factory results across runtime config changes", () => {
-    const firstRuntimeConfig = {
-      ...createContext().config,
-      plugins: { ...createContext().config.plugins, allow: ["runtime_sensitive_tool"] },
-    };
-    const secondRuntimeConfig = {
-      ...createContext().config,
-      plugins: { ...createContext().config.plugins, allow: ["runtime_sensitive_next_tool"] },
-    };
-    const factory = vi.fn((rawCtx: unknown) => {
-      const ctx = rawCtx as { runtimeConfig?: { plugins?: { allow?: string[] } } };
-      return makeTool(ctx.runtimeConfig?.plugins?.allow?.[0] ?? "runtime_missing_tool");
-    });
+  it("executes cached plugin tools registered with implicit names", async () => {
+    const factory = vi.fn(() => ({
+      ...makeTool("implicit_tool"),
+      async execute() {
+        return { content: [{ type: "text", text: "implicit-ok" }] };
+      },
+    }));
     setRegistry([
       {
-        pluginId: "runtime-sensitive",
+        pluginId: "implicit-owner",
         optional: false,
-        source: "/tmp/runtime-sensitive.js",
-        names: ["runtime_sensitive_tool", "runtime_sensitive_next_tool"],
+        source: "/tmp/implicit-owner.js",
+        names: [],
+        declaredNames: ["implicit_tool"],
         factory,
       },
     ]);
 
-    const first = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...createContext(), runtimeConfig: firstRuntimeConfig as never },
-      }),
-    );
-    const second = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...createContext(), runtimeConfig: secondRuntimeConfig as never },
-      }),
-    );
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
 
-    expectResolvedToolNames(first, ["runtime_sensitive_tool"]);
-    expectResolvedToolNames(second, ["runtime_sensitive_next_tool"]);
-    expect(factory).toHaveBeenCalledTimes(2);
-  });
-
-  it("reuses plugin tool factory results when only runtime config getter identity changes", () => {
-    const runtimeConfig = {
-      ...createContext().config,
-      plugins: { ...createContext().config.plugins, allow: ["getter_sensitive_tool"] },
-    };
-    const factory = vi.fn((rawCtx: unknown) => {
-      const ctx = rawCtx as { getRuntimeConfig?: () => { plugins?: { allow?: string[] } } };
-      return makeTool(ctx.getRuntimeConfig?.()?.plugins?.allow?.[0] ?? "getter_missing_tool");
-    });
-    setRegistry([
-      {
-        pluginId: "getter-sensitive",
-        optional: false,
-        source: "/tmp/getter-sensitive.js",
-        names: ["getter_sensitive_tool"],
-        factory,
-      },
-    ]);
-
-    const context = createContext();
-    const first = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...context, getRuntimeConfig: () => runtimeConfig as never },
-      }),
-    );
-    const second = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...context, getRuntimeConfig: () => runtimeConfig as never },
-      }),
-    );
-
-    expectResolvedToolNames(first, ["getter_sensitive_tool"]);
-    expectResolvedToolNames(second, ["getter_sensitive_tool"]);
+    expectResolvedToolNames(first, ["implicit_tool"]);
+    expectResolvedToolNames(second, ["implicit_tool"]);
     expect(factory).toHaveBeenCalledTimes(1);
-  });
 
-  it("reads live runtime config once per plugin tool resolution for cache keys", () => {
-    const runtimeConfig = createContext().config;
-    const getRuntimeConfig = vi.fn(() => runtimeConfig);
-    setRegistry([
-      {
-        pluginId: "getter-a",
-        optional: false,
-        source: "/tmp/getter-a.js",
-        names: ["getter_a_tool"],
-        factory: () => makeTool("getter_a_tool"),
-      },
-      {
-        pluginId: "getter-b",
-        optional: false,
-        source: "/tmp/getter-b.js",
-        names: ["getter_b_tool"],
-        factory: () => makeTool("getter_b_tool"),
-      },
-    ]);
-
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...createContext(), getRuntimeConfig: getRuntimeConfig as never },
-      }),
-    );
-
-    expectResolvedToolNames(tools, ["getter_a_tool", "getter_b_tool"]);
-    expect(getRuntimeConfig).toHaveBeenCalledTimes(1);
+    await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "implicit-ok" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
   });
 
   it("skips factory-returned tools outside the manifest tool contract", () => {
