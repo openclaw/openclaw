@@ -2,7 +2,7 @@ import type { WAMessage, WAMessageKey } from "@whiskeysockets/baileys";
 
 export type WhatsAppSendKind = "media" | "poll" | "reaction" | "text";
 
-export type WhatsAppSendKey = Omit<
+type WhatsAppSendKey = Omit<
   Pick<WAMessageKey, "fromMe" | "id" | "participant" | "remoteJid">,
   "id"
 > & {
@@ -58,10 +58,4 @@ export function combineWhatsAppSendResults(
     keys,
     providerAccepted: results.some((result) => result.providerAccepted),
   };
-}
-
-export function hasAcceptedWhatsAppSendResult(
-  result: WhatsAppSendResult | undefined,
-): result is WhatsAppSendResult {
-  return result?.providerAccepted === true;
 }

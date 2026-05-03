@@ -17,6 +17,7 @@ export OPENCLAW_ENTRY
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 
 probe="scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs"
+runtime_smoke="scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs"
 node "$probe" select > /tmp/bundled-plugin-sweep-ids
 
 mapfile -t plugin_entries < /tmp/bundled-plugin-sweep-ids
@@ -40,6 +41,14 @@ for plugin_entry in "${plugin_entries[@]}"; do
   }
   install_finished_at="$(date +%s)"
   node "$probe" assert-installed "$plugin_id" "$plugin_dir" "$requires_config"
+  if [[ "${OPENCLAW_BUNDLED_PLUGIN_RUNTIME_SMOKE:-1}" != "0" ]]; then
+    echo "Running bundled plugin runtime smoke: $plugin_id ($plugin_dir)"
+    node "$runtime_smoke" plugin "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_index"
+    node "$runtime_smoke" tts-global-disable "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_index" ""
+    if [[ "$plugin_id" == "${OPENCLAW_BUNDLED_PLUGIN_TTS_LIVE_PROVIDER:-openai}" ]]; then
+      node "$runtime_smoke" tts-openai-live "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_index"
+    fi
+  fi
 
   echo "Uninstalling bundled plugin: $plugin_id ($plugin_dir)"
   node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force >"$uninstall_log" 2>&1 || {

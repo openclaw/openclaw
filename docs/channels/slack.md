@@ -169,6 +169,7 @@ Base manifest (Socket Mode default):
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
     "app_home": {
+      "home_tab_enabled": true,
       "messages_tab_enabled": true,
       "messages_tab_read_only_enabled": false
     },
@@ -204,6 +205,7 @@ Base manifest (Socket Mode default):
         "pins:write",
         "reactions:read",
         "reactions:write",
+        "usergroups:read",
         "users:read"
       ]
     }
@@ -212,6 +214,7 @@ Base manifest (Socket Mode default):
     "socket_mode_enabled": true,
     "event_subscriptions": {
       "bot_events": [
+        "app_home_opened",
         "app_mention",
         "channel_rename",
         "member_joined_channel",
@@ -263,6 +266,8 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
 ### Additional manifest settings
 
 Surface different features that extend the above defaults.
+
+The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. The **Messages** tab remains enabled for Slack DMs.
 
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
@@ -568,6 +573,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     Mention sources:
 
     - explicit app mention (`<@botId>`)
+    - Slack user-group mention (`<!subteam^S...>`) when the bot user is a member of that user group; requires `usergroups:read`
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
 
@@ -590,6 +596,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 ## Threading, sessions, and reply tags
 
 - DMs route as `direct`; channels as `channel`; MPIMs as `group`.
+- Slack route bindings accept raw peer IDs plus Slack target forms such as `channel:C12345678`, `user:U12345678`, and `<@U12345678>`.
 - With default `session.dmScope=main`, Slack DMs collapse to agent main session.
 - Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
 - Thread replies can create thread session suffixes (`:thread:<threadTs>`) when applicable.
@@ -641,8 +648,8 @@ Notes:
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
-- Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
-- Top-level Slack DMs stay off-thread by default, so they do not show the thread-style preview; use thread replies or `typingReaction` if you want visible progress there.
+- Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
+- Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
@@ -708,7 +715,7 @@ Notes:
     - `user:<id>` for DMs
     - `channel:<id>` for channels
 
-    Slack DMs are opened via Slack conversation APIs when sending to user targets.
+    Text/block-only Slack DMs can post directly to user IDs; file uploads and threaded sends open the DM via Slack conversation APIs first because those paths require a concrete conversation ID.
 
   </Accordion>
 </AccordionGroup>

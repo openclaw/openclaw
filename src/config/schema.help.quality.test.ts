@@ -176,6 +176,8 @@ const TARGET_KEYS = [
   "session.threadBindings.enabled",
   "session.threadBindings.idleHours",
   "session.threadBindings.maxAgeHours",
+  "session.threadBindings.spawnSessions",
+  "session.threadBindings.defaultSpawnContext",
   "session.maintenance",
   "session.maintenance.mode",
   "session.maintenance.pruneAfter",
@@ -685,6 +687,12 @@ describe("config help copy quality", () => {
 
     const rawKeyPrefix = FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"];
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
+  });
+
+  it("documents session write-lock acquire timeout defaults", () => {
+    const acquireTimeout = FIELD_HELP["session.writeLock.acquireTimeoutMs"];
+    expect(acquireTimeout.includes("60000")).toBe(true);
+    expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
   });
 
   it("documents session maintenance duration/size examples and deprecations", () => {
