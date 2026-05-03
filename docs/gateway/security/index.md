@@ -92,6 +92,8 @@ Treat Gateway and node as one operator trust domain, with different roles:
 - **Gateway** is the control plane and policy surface (`gateway.auth`, tool policy, routing).
 - **Node** is remote execution surface paired to that Gateway (commands, device actions, host-local capabilities).
 - A caller authenticated to the Gateway is trusted at Gateway scope. After pairing, node actions are trusted operator actions on that node.
+- Operator scope levels and approval-time checks are summarized in
+  [Operator scopes](/gateway/operator-scopes).
 - Direct loopback backend clients authenticated with the shared gateway
   token/password can make internal control-plane RPCs without presenting a user
   device identity. This is not a remote or browser pairing bypass: network

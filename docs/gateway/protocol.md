@@ -211,6 +211,9 @@ Side-effecting methods require **idempotency keys** (see schema).
 
 ## Roles + scopes
 
+For the full operator scope model, approval-time checks, and shared-secret
+semantics, see [Operator scopes](/gateway/operator-scopes).
+
 ### Roles
 
 - `operator` = control plane client (CLI/UI/automation).
