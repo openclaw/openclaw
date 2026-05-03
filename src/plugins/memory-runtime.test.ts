@@ -247,6 +247,24 @@ describe("memory runtime auto-enable loading", () => {
     expect(ensureStandaloneRuntimePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
+  it("does not standalone-load the memory plugin when plugins are globally disabled", async () => {
+    const rawConfig = {
+      plugins: {
+        enabled: false,
+      },
+    };
+    getMemoryRuntimeMock.mockReturnValue(undefined);
+
+    await expect(
+      getActiveMemorySearchManager({
+        cfg: rawConfig as never,
+        agentId: "main",
+      }),
+    ).resolves.toEqual({ manager: null, error: "memory plugin unavailable" });
+
+    expectNoMemoryRuntimeBootstrap();
+  });
+
   it("does not standalone-load plugins when the memory runtime is already registered", () => {
     const rawConfig = {
       plugins: {

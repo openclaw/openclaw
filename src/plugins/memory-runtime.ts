@@ -7,8 +7,16 @@ import { getMemoryRuntime } from "./memory-state.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
 
 function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
-  const memorySlot = normalizePluginsConfig(config.plugins).slots.memory;
-  return typeof memorySlot === "string" && memorySlot.trim().length > 0 ? [memorySlot] : [];
+  const plugins = normalizePluginsConfig(config.plugins);
+  const memorySlot = plugins.slots.memory;
+  if (!plugins.enabled || typeof memorySlot !== "string" || memorySlot.trim().length === 0) {
+    return [];
+  }
+  const pluginId = memorySlot.trim();
+  if (plugins.deny.includes(pluginId) || plugins.entries[pluginId]?.enabled === false) {
+    return [];
+  }
+  return [pluginId];
 }
 
 function resolveMemoryRuntimeWorkspaceDir(cfg: OpenClawConfig): string | undefined {
