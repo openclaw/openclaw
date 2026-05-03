@@ -82,7 +82,6 @@ const emptyTotals = (): CostUsageTotals => ({
 
 const USAGE_COST_CACHE_VERSION = 2;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
-const USAGE_COST_CACHE_LOCK_STALE_MS = 10 * 60 * 1000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
@@ -209,10 +208,6 @@ async function isUsageCostCacheRefreshRunning(cachePath: string): Promise<boolea
   const lockPath = resolveUsageCostCacheLockPath(cachePath);
   const lock = await readUsageCostCacheLock(lockPath);
   if (!lock) {
-    return false;
-  }
-  if (Date.now() - lock.startedAt > USAGE_COST_CACHE_LOCK_STALE_MS) {
-    await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
     return false;
   }
   if (isProcessRunning(lock.pid)) {
@@ -1042,9 +1037,11 @@ export async function refreshCostUsageCache(params?: {
     const sessionSummaryFiles = new Set(params?.sessionFiles ?? []);
     const refreshStartMs = params?.startMs;
     const refreshFiles =
-      refreshStartMs === undefined || sessionSummaryFiles.size > 0
-        ? files
-        : files.filter((file) => file.mtimeMs >= refreshStartMs);
+      sessionSummaryFiles.size > 0
+        ? files.filter((file) => sessionSummaryFiles.has(file.filePath))
+        : refreshStartMs === undefined
+          ? files
+          : files.filter((file) => file.mtimeMs >= refreshStartMs);
     const livePaths = new Set(files.map((file) => file.filePath));
     for (const filePath of Object.keys(cache.files)) {
       if (!livePaths.has(filePath)) {
@@ -1201,6 +1198,7 @@ export async function loadSessionCostSummaryFromCache(params: {
             pricingFingerprint,
             requireSessionSummary: true,
           });
+        requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
       } else {
         requestCostUsageCacheRefresh({
           config: params.config,

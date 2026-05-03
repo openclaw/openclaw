@@ -604,7 +604,49 @@ describe("session cost usage", () => {
     });
   });
 
-  it("expires stale usage cache locks before refreshing", async () => {
+  it("limits session summary refreshes to requested files", async () => {
+    const root = await makeSessionCostRoot("cost-cache-session-requested-files");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-session-requested.jsonl");
+    const otherSessionFile = path.join(sessionsDir, "sess-cache-session-other.jsonl");
+    const entry = (timestamp: string, totalTokens: number) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        usage: {
+          input: totalTokens,
+          output: 0,
+          totalTokens,
+          cost: { total: totalTokens / 1000 },
+        },
+      },
+    });
+
+    await Promise.all([
+      fs.writeFile(sessionFile, JSON.stringify(entry("2026-02-05T12:00:00.000Z", 10)), "utf-8"),
+      fs.writeFile(
+        otherSessionFile,
+        JSON.stringify(entry("2026-02-05T12:01:00.000Z", 20)),
+        "utf-8",
+      ),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        files: Record<string, { sessionSummary?: unknown }>;
+      };
+
+      expect(cache.files[sessionFile]?.sessionSummary).toBeDefined();
+      expect(cache.files[otherSessionFile]?.sessionSummary).toBeUndefined();
+    });
+  });
+
+  it("respects live usage cache locks even when they are old", async () => {
     const root = await makeSessionCostRoot("cost-cache-stale-lock");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -634,7 +676,48 @@ describe("session cost usage", () => {
         lockPath,
         `${JSON.stringify({
           pid: process.pid,
-          startedAt: Date.now() - 11 * 60 * 1000,
+          startedAt: Date.now() - 60 * 60 * 1000,
+        })}\n`,
+        "utf-8",
+      );
+
+      const result = await refreshCostUsageCache();
+      expect(result).toBe("busy");
+      expect(await fs.readFile(lockPath, "utf-8")).toContain(String(process.pid));
+    });
+  });
+
+  it("expires abandoned usage cache locks before refreshing", async () => {
+    const root = await makeSessionCostRoot("cost-cache-abandoned-lock");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-abandoned-lock.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 5,
+            output: 5,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const lockPath = `${cachePath}.lock`;
+      await fs.writeFile(
+        lockPath,
+        `${JSON.stringify({
+          pid: 2_147_483_647,
+          startedAt: Date.now(),
         })}\n`,
         "utf-8",
       );
