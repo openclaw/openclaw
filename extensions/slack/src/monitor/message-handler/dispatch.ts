@@ -30,7 +30,7 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
-import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
+import { deleteSlackMessage, reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import {
@@ -789,7 +789,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         !payload.isError &&
         trimmedFinalText.length > 0
       ) {
-        await draftStream.clear();
+        await deleteBulletPreview();
         currentDraftKind = null;
         previewToolProgressLines = [];
         appendRenderedText = "";
@@ -927,14 +927,42 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   //                 as permanent Slack messages and rotate (forceNewMessage)
   //                 to start a fresh draft for the next segment.
   //   "bullets"   — an ephemeral `Working…\n• …` tool-progress preview.
-  //                 We DELETE these (chat.delete via draftStream.clear)
-  //                 at every transition out: turning into narrative,
-  //                 finalizing the turn, rotating on assistant boundary,
-  //                 or cleanup. The user sees the bullets in real time
-  //                 while the agent is working, but the channel ends the
-  //                 turn with only the agent's text content visible.
+  //                 We DELETE the underlying Slack message (chat.delete)
+  //                 and forceNewMessage the draftStream at every transition
+  //                 out: turning into narrative, finalizing the turn,
+  //                 rotating on assistant boundary, or cleanup. The user
+  //                 sees the bullets in real time while the agent is
+  //                 working, but the channel ends the turn with only the
+  //                 agent's text content visible.
   //   null        — no content has been written to the current draft yet.
   let currentDraftKind: "narrative" | "bullets" | null = null;
+
+  // Delete the current bullet preview message (chat.delete) AND reset the
+  // draftStream's cached IDs WITHOUT stopping the underlying loop. Why we
+  // can't just call draftStream.clear(): clear() calls discardPending()
+  // which calls stop(), permanently halting the stream — subsequent
+  // draftStream.update() calls in the same turn are silently ignored.
+  // This direct delete + forceNewMessage approach keeps the stream
+  // reusable for the next phase (narrative or another bullet burst).
+  const deleteBulletPreview = async (): Promise<void> => {
+    if (!draftStream) {
+      return;
+    }
+    const channelId = draftStream.channelId();
+    const messageId = draftStream.messageId();
+    draftStream.forceNewMessage();
+    if (!channelId || !messageId) {
+      return;
+    }
+    try {
+      await deleteSlackMessage(channelId, messageId, {
+        token: ctx.botToken,
+        accountId: account.accountId,
+      });
+    } catch (err) {
+      logVerbose(`slack: bullet preview delete failed: ${formatErrorMessage(err)}`);
+    }
+  };
 
   const pushPreviewToolProgress = (line?: string) => {
     if (!draftStream || !previewToolProgressEnabled || previewToolProgressSuppressed) {
@@ -974,15 +1002,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
 
     // Transition bullets → narrative: delete the ephemeral bullet-only
-    // draft so it doesn't pollute the channel with a stale Working…
-    // preview. We MUST await the clear before queueing the next update.
-    // Without await, the loop's throttled flush may interleave at the
-    // discardPending() await inside clear() and chat.update the still
-    // cached bullet message with the narrative text — then clear's
-    // delete proceeds against the (now-narrative) message, destroying
-    // the narrative.
+    // draft (chat.delete) and reset draftStream's cached IDs so the next
+    // update() creates a fresh permanent message hosting the agent's
+    // narrative text. We CANNOT use draftStream.clear() here — clear()
+    // calls discardPending() which calls stop(), permanently halting
+    // the stream and silently dropping every later update() in this
+    // turn. deleteBulletPreview keeps the stream reusable.
     if (currentDraftKind === "bullets" && draftStream) {
-      await draftStream.clear();
+      await deleteBulletPreview();
       previewToolProgressLines = [];
       appendRenderedText = "";
       appendSourceText = "";
@@ -1043,7 +1070,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         if (currentDraftKind === "narrative") {
           draftStream?.forceNewMessage();
         } else if (currentDraftKind === "bullets") {
-          await draftStream?.clear();
+          // Use deleteBulletPreview — NOT draftStream.clear() — so the
+          // stream stays usable for the next phase. clear() would call
+          // stop() and silently drop subsequent updates this turn.
+          await deleteBulletPreview();
         }
         currentDraftKind = null;
         appendRenderedText = "";
@@ -1171,9 +1201,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     // If the dispatch ended with a bullet-only Working… preview still
     // open (e.g. error path, or the final answer arrived with media that
     // forced deliverNormally elsewhere), delete it so the channel
-    // doesn't keep a dangling scaffolding message.
+    // doesn't keep a dangling scaffolding message. Use deleteBulletPreview
+    // (not draftStream.clear) so the stream remains usable for any
+    // late-arriving deliveries; the discardPending+stop in the next
+    // statement is the deliberate end-of-dispatch teardown.
     if (currentDraftKind === "bullets" && draftStream) {
-      await draftStream.clear();
+      await deleteBulletPreview();
       currentDraftKind = null;
     }
     await draftStream?.discardPending();
