@@ -1445,7 +1445,10 @@ export function buildGatewaySessionRow(params: {
   const space = entry?.space;
   const id = parsed?.id;
   const origin = entry?.origin;
-  const originLabel = origin?.label;
+  // Matches the fallback sender ID in resolveHeartbeatSenderId (targets.ts).
+  const HEARTBEAT_FALLBACK_SENDER = "heartbeat";
+  const originLabel =
+    origin?.label && origin.label !== HEARTBEAT_FALLBACK_SENDER ? origin.label : undefined;
   const displayName =
     entry?.displayName ??
     (channel
