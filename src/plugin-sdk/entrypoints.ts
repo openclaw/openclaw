@@ -43,6 +43,8 @@ export const publicPluginOwnedSdkEntrypoints = [
   "memory-host-markdown",
   "memory-host-search",
   "memory-host-status",
+  "matrix",
+  "mattermost",
   "speech-core",
   "telegram-command-config",
   "video-generation-core",
