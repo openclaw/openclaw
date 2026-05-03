@@ -770,13 +770,19 @@ async function deliverZalouserReply(params: {
     text: reply.text,
     sendText: async (chunk) => {
       try {
-        await sendMessageZalouser(chatId, chunk, {
+        const result = await sendMessageZalouser(chatId, chunk, {
           profile,
           isGroup,
           textMode: "markdown",
           textChunkMode: chunkMode,
           textChunkLimit,
         });
+        if (!result.ok) {
+          runtime.error(
+            `Zalouser message send failed (ok=false): ${result.error ?? "unknown error"} chatId=${chatId}`,
+          );
+          return;
+        }
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
         runtime.error(`Zalouser message send failed: ${String(err)}`);
@@ -784,7 +790,7 @@ async function deliverZalouserReply(params: {
     },
     sendMedia: async ({ mediaUrl, caption }) => {
       logVerbose(core, runtime, `Sending media to ${chatId}`);
-      await sendMessageZalouser(chatId, caption ?? "", {
+      const result = await sendMessageZalouser(chatId, caption ?? "", {
         profile,
         mediaUrl,
         isGroup,
@@ -792,6 +798,12 @@ async function deliverZalouserReply(params: {
         textChunkMode: chunkMode,
         textChunkLimit,
       });
+      if (!result.ok) {
+        runtime.error(
+          `Zalouser media send failed (ok=false): ${result.error ?? "unknown error"} chatId=${chatId}`,
+        );
+        return;
+      }
       statusSink?.({ lastOutboundAt: Date.now() });
     },
     onMediaError: (error) => {

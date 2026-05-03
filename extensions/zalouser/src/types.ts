@@ -72,6 +72,7 @@ export type ZaloSendResult = {
   ok: boolean;
   messageId?: string;
   error?: string;
+  errorCode?: number;
 };
 
 export type ZaloGroupContext = {
