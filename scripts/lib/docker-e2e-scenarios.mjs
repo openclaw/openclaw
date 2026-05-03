@@ -255,6 +255,14 @@ export const mainLanes = [
   npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update", {
     stateScenario: "empty",
   }),
+  npmLane(
+    "plugin-lifecycle-matrix",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-lifecycle-matrix",
+    {
+      stateScenario: "empty",
+      timeoutMs: 12 * 60 * 1000,
+    },
+  ),
   serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload", {
     stateScenario: "empty",
   }),
