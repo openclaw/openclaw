@@ -744,6 +744,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedReplyOptionEvents = [
       { kind: "item", progressText: "tool one" },
       { kind: "item", progressText: "tool two" },
+      { kind: "partial", text: "partial answer" },
     ];
 
     await dispatchPreparedSlackMessage(
