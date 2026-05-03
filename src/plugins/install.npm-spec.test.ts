@@ -118,6 +118,46 @@ function writeInstalledNpmPlugin(params: {
   return pluginDir;
 }
 
+type MockNpmPackage = {
+  spec: string;
+  packageName: string;
+  version: string;
+  npmRoot: string;
+  pluginId?: string;
+  integrity?: string;
+  shasum?: string;
+  indexJs?: string;
+  dependency?: { name: string; version: string };
+  hoistedDependency?: { name: string; version: string };
+  peerDependencies?: Record<string, string>;
+  expectedDependencySpec?: string;
+  installedVersion?: string;
+  installedIntegrity?: string;
+};
+
+function writeNpmRootPackageLock(params: {
+  npmRoot: string;
+  dependencies: Record<string, string>;
+  packages: MockNpmPackage[];
+}) {
+  const lockPackages: Record<string, unknown> = {
+    "": {
+      dependencies: params.dependencies,
+    },
+  };
+  for (const pkg of params.packages) {
+    lockPackages[`node_modules/${pkg.packageName}`] = {
+      version: pkg.installedVersion ?? pkg.version,
+      integrity: pkg.installedIntegrity ?? pkg.integrity ?? "sha512-plugin-test",
+    };
+  }
+  fs.writeFileSync(
+    path.join(params.npmRoot, "package-lock.json"),
+    `${JSON.stringify({ lockfileVersion: 3, packages: lockPackages }, null, 2)}\n`,
+    "utf-8",
+  );
+}
+
 function mockNpmViewAndInstall(params: {
   spec: string;
   packageName: string;
@@ -130,25 +170,14 @@ function mockNpmViewAndInstall(params: {
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
+  expectedDependencySpec?: string;
+  installedVersion?: string;
+  installedIntegrity?: string;
 }) {
   mockNpmViewAndInstallMany([params]);
 }
 
-function mockNpmViewAndInstallMany(
-  packages: Array<{
-    spec: string;
-    packageName: string;
-    version: string;
-    npmRoot: string;
-    pluginId?: string;
-    integrity?: string;
-    shasum?: string;
-    indexJs?: string;
-    dependency?: { name: string; version: string };
-    hoistedDependency?: { name: string; version: string };
-    peerDependencies?: Record<string, string>;
-  }>,
-) {
+function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
   const packagesByName = new Map(packages.map((pkg) => [pkg.packageName, pkg]));
   runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
     const viewPackage = packages.find(
@@ -175,13 +204,29 @@ function mockNpmViewAndInstallMany(
       const manifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")) as {
         dependencies?: Record<string, string>;
       };
+      const installedPackages: MockNpmPackage[] = [];
       for (const packageName of Object.keys(manifest.dependencies ?? {})) {
         const pkg = packagesByName.get(packageName);
         if (!pkg) {
           throw new Error(`unexpected managed npm dependency: ${packageName}`);
         }
-        writeInstalledNpmPlugin(pkg);
+        const dependencySpec = manifest.dependencies?.[packageName];
+        if (pkg.expectedDependencySpec && dependencySpec !== pkg.expectedDependencySpec) {
+          throw new Error(
+            `expected managed npm dependency ${packageName}@${pkg.expectedDependencySpec}, got ${dependencySpec ?? ""}`,
+          );
+        }
+        writeInstalledNpmPlugin({
+          ...pkg,
+          version: pkg.installedVersion ?? pkg.version,
+        });
+        installedPackages.push(pkg);
       }
+      writeNpmRootPackageLock({
+        npmRoot,
+        dependencies: manifest.dependencies ?? {},
+        packages: installedPackages,
+      });
       return successfulSpawn();
     }
     if (argv[0] === "npm" && argv[1] === "uninstall") {
@@ -244,6 +289,65 @@ describe("installPluginFromNpmSpec", () => {
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot,
     });
+  });
+
+  it("pins mutable npm specs to the verified resolved version", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "mutable-plugin@latest",
+      packageName: "mutable-plugin",
+      version: "1.2.3",
+      pluginId: "mutable-plugin",
+      npmRoot,
+      expectedDependencySpec: "1.2.3",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "mutable-plugin@latest",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    await expect(
+      fs.promises
+        .readFile(path.join(npmRoot, "package.json"), "utf8")
+        .then((raw) => JSON.parse(raw)),
+    ).resolves.toMatchObject({
+      dependencies: {
+        "mutable-plugin": "1.2.3",
+      },
+    });
+  });
+
+  it("rejects npm installs when the installed artifact drifts from verified metadata", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "drift-plugin@latest",
+      packageName: "drift-plugin",
+      version: "1.0.0",
+      pluginId: "drift-plugin",
+      integrity: "sha512-safe",
+      installedVersion: "1.0.0",
+      installedIntegrity: "sha512-evil",
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "drift-plugin@latest",
+      expectedIntegrity: "sha512-safe",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("integrity sha512-evil");
+    expect(result.error).toContain("expected sha512-safe");
+    expect(fs.existsSync(path.join(npmRoot, "node_modules", "drift-plugin"))).toBe(false);
   });
 
   it("rejects npm installs with blocked hoisted transitive dependencies", async () => {
