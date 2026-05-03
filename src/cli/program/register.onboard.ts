@@ -163,6 +163,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
     .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
+    .option("--daemon-env <KEY=VALUE>", "Extra Environment= entry for the daemon systemd unit (repeatable)", (val: string, prev: string[]) => [...(prev ?? []), val], [] as string[])
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-bootstrap", "Skip creating default agent workspace files")
@@ -239,6 +240,7 @@ export function registerOnboardCommand(program: Command) {
           resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,
           daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
+          daemonEnv: Array.isArray(opts.daemonEnv) ? (opts.daemonEnv as string[]) : undefined,
           skipChannels: Boolean(opts.skipChannels),
           skipSkills: Boolean(opts.skipSkills),
           skipBootstrap: Boolean(opts.skipBootstrap),

@@ -71,6 +71,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
+  daemonEnv?: string[];
   skipChannels?: boolean;
   /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;

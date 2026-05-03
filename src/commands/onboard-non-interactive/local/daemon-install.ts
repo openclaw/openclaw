@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveGatewayService } from "../../../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
+import { buildGatewayInstallPlan, gatewayInstallErrorHint, parseDaemonEnvEntries } from "../../daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../gateway-install-token.js";
 import type { OnboardOptions } from "../../onboard-types.js";
@@ -69,13 +69,18 @@ export async function installGatewayDaemonNonInteractive(params: {
     warn: (message) => runtime.log(message),
     config: params.nextConfig,
   });
+
+  // Merge any extra --daemon-env KEY=VALUE entries into the environment dict.
+  const extraEnv = parseDaemonEnvEntries(opts.daemonEnv, (msg) => runtime.log(msg));
+  const mergedEnvironment = { ...environment, ...extraEnv };
+
   try {
     await service.install({
       env: process.env,
       stdout: process.stdout,
       programArguments,
       workingDirectory,
-      environment,
+      environment: mergedEnvironment,
     });
   } catch (err) {
     runtime.error(`Gateway service install failed: ${String(err)}`);

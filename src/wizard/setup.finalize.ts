@@ -6,6 +6,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import {
   buildGatewayInstallPlan,
   gatewayInstallErrorHint,
+  parseDaemonEnvEntries,
 } from "../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -215,13 +216,19 @@ export async function finalizeSetupWizard(
             },
           );
 
+          // Merge any extra --daemon-env KEY=VALUE entries into the environment dict.
+          const extraEnv = parseDaemonEnvEntries(opts.daemonEnv, (msg) =>
+            prompter.note(msg, "--daemon-env"),
+          );
+          const mergedEnvironment = { ...environment, ...extraEnv };
+
           progress.update("Installing Gateway service…");
           await service.install({
             env: process.env,
             stdout: process.stdout,
             programArguments,
             workingDirectory,
-            environment,
+            environment: mergedEnvironment,
           });
         }
       } catch (err) {
