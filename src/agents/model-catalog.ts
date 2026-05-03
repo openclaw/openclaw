@@ -163,9 +163,11 @@ export function loadManifestModelCatalog(params: {
 }
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  return entries.sort((a, b) => {
+  return entries.toSorted((a, b) => {
     const p = a.provider.localeCompare(b.provider);
-    if (p !== 0) return p;
+    if (p !== 0) {
+      return p;
+    }
     return a.name.localeCompare(b.name);
   });
 }
@@ -174,19 +176,29 @@ function normalizePersistedModelCatalogEntry(
   providerRaw: string,
   entry: Record<string, unknown>,
 ): ModelCatalogEntry | undefined {
-  const id = normalizeOptionalString(entry?.id as string) ?? "";
-  if (!id) return undefined;
+  const id = normalizeOptionalString(entry.id) ?? "";
+  if (!id) {
+    return undefined;
+  }
   const provider = normalizeProviderId(providerRaw);
-  if (!provider) return undefined;
-  const name = normalizeOptionalString((entry?.name as string) ?? id) || id;
+  if (!provider) {
+    return undefined;
+  }
+  const name = normalizeOptionalString(entry.name ?? id) || id;
   const contextWindow =
     typeof entry?.contextWindow === "number" && entry.contextWindow > 0
       ? entry.contextWindow
       : undefined;
   const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
-  const input = Array.isArray(entry?.input) ? entry.input : undefined;
+  const input = Array.isArray(entry?.input)
+    ? entry.input.filter((value): value is ModelInputType =>
+        ["text", "image", "audio", "video", "document"].includes(String(value)),
+      )
+    : undefined;
   const compat =
-    entry?.compat && typeof entry.compat === "object" ? (entry.compat as Record<string, unknown>) : undefined;
+    entry?.compat && typeof entry.compat === "object"
+      ? (entry.compat as ModelCatalogEntry["compat"])
+      : undefined;
   return { id, name, provider, contextWindow, reasoning, input, compat };
 }
 
@@ -198,15 +210,21 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   const raw = await readFile(join(agentDir, "models.json"), "utf8");
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   const models: ModelCatalogEntry[] = [];
+  const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
+  const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
   const providers =
     parsed?.providers && typeof parsed.providers === "object"
       ? (parsed.providers as Record<string, Record<string, unknown>>)
       : {};
   for (const [providerRaw, providerConfig] of Object.entries(providers)) {
-    if (!Array.isArray(providerConfig?.models)) continue;
+    if (!Array.isArray(providerConfig?.models)) {
+      continue;
+    }
     for (const entry of providerConfig.models as Record<string, unknown>[]) {
       const normalized = normalizePersistedModelCatalogEntry(providerRaw, entry);
-      if (normalized) models.push(normalized);
+      if (normalized && !shouldSuppressBuiltInModel(normalized)) {
+        models.push(normalized);
+      }
     }
   }
   const configuredModels = buildConfiguredModelCatalog({ cfg });
