@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -241,6 +241,15 @@ function loadGeneratedBundledChannelModule(params: {
   }
 }
 
+function describeBundledChannelLoadError(error: unknown, channelId: string): string {
+  const detail = formatErrorMessage(error);
+  const code = extractErrorCode(error);
+  if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+    return `${detail} (run \`openclaw doctor --fix\` to install missing bundled runtime dependencies for channel ${channelId})`;
+  }
+  return detail;
+}
+
 function loadGeneratedBundledChannelEntry(params: {
   rootScope: BundledChannelRootScope;
   metadata: BundledChannelPluginMetadata;
@@ -264,7 +273,7 @@ function loadGeneratedBundledChannelEntry(params: {
       entry,
     };
   } catch (error) {
-    const detail = formatErrorMessage(error);
+    const detail = describeBundledChannelLoadError(error, params.metadata.manifest.id);
     log.warn(`[channels] failed to load bundled channel ${params.metadata.manifest.id}: ${detail}`);
     return null;
   }
@@ -293,7 +302,7 @@ function loadGeneratedBundledChannelSetupEntry(params: {
     }
     return setupEntry;
   } catch (error) {
-    const detail = formatErrorMessage(error);
+    const detail = describeBundledChannelLoadError(error, params.metadata.manifest.id);
     log.warn(
       `[channels] failed to load bundled channel setup entry ${params.metadata.manifest.id}: ${detail}`,
     );
@@ -573,7 +582,7 @@ function getBundledChannelPluginForRoot(
     loadContext.lazyPluginsById.set(id, normalizedPlugin);
     return normalizedPlugin;
   } catch (error) {
-    const detail = formatErrorMessage(error);
+    const detail = describeBundledChannelLoadError(error, id);
     log.warn(`[channels] failed to load bundled channel ${id}: ${detail}`);
     loadContext.lazyPluginsById.set(id, null);
     return undefined;
@@ -601,7 +610,7 @@ function getBundledChannelSecretsForRoot(
     loadContext.lazySecretsById.set(id, secrets ?? null);
     return secrets;
   } catch (error) {
-    const detail = formatErrorMessage(error);
+    const detail = describeBundledChannelLoadError(error, id);
     log.warn(`[channels] failed to load bundled channel secrets ${id}: ${detail}`);
     loadContext.lazySecretsById.set(id, null);
     return undefined;
@@ -626,7 +635,7 @@ function getBundledChannelAccountInspectorForRoot(
     loadContext.lazyAccountInspectorsById.set(id, inspector);
     return inspector;
   } catch (error) {
-    const detail = formatErrorMessage(error);
+    const detail = describeBundledChannelLoadError(error, id);
     log.warn(`[channels] failed to load bundled channel account inspector ${id}: ${detail}`);
     loadContext.lazyAccountInspectorsById.set(id, null);
     return undefined;
@@ -654,7 +663,7 @@ function getBundledChannelSetupPluginForRoot(
     loadContext.lazySetupPluginsById.set(id, plugin);
     return plugin;
   } catch (error) {
-    const detail = formatErrorMessage(error);
+    const detail = describeBundledChannelLoadError(error, id);
     log.warn(`[channels] failed to load bundled channel setup ${id}: ${detail}`);
     loadContext.lazySetupPluginsById.set(id, null);
     return undefined;
@@ -682,7 +691,7 @@ function getBundledChannelSetupSecretsForRoot(
     loadContext.lazySetupSecretsById.set(id, secrets ?? null);
     return secrets;
   } catch (error) {
-    const detail = formatErrorMessage(error);
+    const detail = describeBundledChannelLoadError(error, id);
     log.warn(`[channels] failed to load bundled channel setup secrets ${id}: ${detail}`);
     loadContext.lazySetupSecretsById.set(id, null);
     return undefined;
