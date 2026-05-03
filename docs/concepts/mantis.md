@@ -1,0 +1,433 @@
+---
+summary: "Mantis is the visual end-to-end verification system for reproducing OpenClaw bugs on live transports, capturing before and after evidence, and attaching artifacts to PRs."
+title: "Mantis"
+read_when:
+  - Building or running live visual QA for OpenClaw bugs
+  - Adding before and after verification for a pull request
+  - Adding Discord, Slack, WhatsApp, or other live transport scenarios
+  - Debugging QA runs that need screenshots, browser automation, or VNC access
+---
+
+Mantis is the OpenClaw end-to-end verification system for bugs that need a real
+runtime, a real transport, and visible proof. It runs a scenario against a known
+bad ref, captures evidence, runs the same scenario against a candidate ref, and
+publishes the comparison as artifacts that a maintainer can inspect from a PR or
+from a local command.
+
+Mantis starts with Discord because Discord gives us a high-value first lane:
+real bot auth, real guild channels, reactions, threads, native commands, and a
+browser UI where humans can visually confirm what the transport showed.
+
+## Goals
+
+- Reproduce a bug from a GitHub issue or PR with the same transport shape users
+  see.
+- Capture a **before** artifact on the baseline ref before applying the fix.
+- Capture an **after** artifact on the candidate ref after applying the fix.
+- Use a deterministic oracle whenever possible, such as a Discord REST reaction
+  read or channel transcript check.
+- Capture screenshots when the bug has a visible UI surface.
+- Run locally from an agent-controlled CLI and remotely from GitHub.
+- Preserve enough machine state for VNC rescue when login, browser automation, or
+  provider auth gets stuck.
+- Post concise status to an operator Discord channel when the run is blocked,
+  needs manual VNC help, or finishes.
+
+## Non Goals
+
+- Mantis is not a replacement for unit tests. A Mantis run should usually become
+  a smaller regression test after the fix is understood.
+- Mantis is not the normal fast CI gate. It is slower, uses live credentials, and
+  is reserved for bugs where the live environment matters.
+- Mantis should not require a human for normal operation. Manual VNC is a rescue
+  path, not the happy path.
+- Mantis does not store raw secrets in artifacts, logs, screenshots, Markdown
+  reports, or PR comments.
+
+## Ownership
+
+Mantis lives in the OpenClaw QA stack.
+
+- OpenClaw owns the scenario runtime, transport adapters, evidence schema, and
+  local CLI under `pnpm openclaw qa mantis`.
+- QA Lab owns the live transport harness pieces, browser capture helpers, and
+  artifact writers.
+- Crabbox owns warmed Linux machines when a remote VM is needed.
+- GitHub Actions owns the remote workflow entrypoint and artifact retention.
+- ClawSweeper owns GitHub comment routing: parsing maintainer commands,
+  dispatching the workflow, and posting the final PR comment.
+- OpenClaw agents drive Mantis through Codex when a scenario needs agentic setup,
+  debugging, or stuck-state reporting.
+
+This boundary keeps transport knowledge in OpenClaw, machine scheduling in
+Crabbox, and maintainer workflow glue in ClawSweeper.
+
+## Command Shape
+
+The first local command verifies the Discord bot, guild, channel, message send,
+reaction send, and artifact path:
+
+```bash
+pnpm openclaw qa mantis discord-smoke \
+  --output-dir .artifacts/qa-e2e/mantis/discord-smoke
+```
+
+The later before and after runner should accept this shape:
+
+```bash
+pnpm openclaw qa mantis run \
+  --transport discord \
+  --scenario discord-status-reactions-tool-only \
+  --baseline origin/main \
+  --candidate HEAD \
+  --output-dir .artifacts/qa-e2e/mantis/local-discord-status-reactions
+```
+
+The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
+workflow for the first real scenario is `Mantis Discord Status Reactions`. It
+accepts:
+
+- `baseline_ref`: the ref expected to reproduce queued-only behavior.
+- `candidate_ref`: the ref expected to show `queued -> thinking -> done`.
+
+It checks out the workflow harness ref, builds separate baseline and candidate
+worktrees, runs `discord-status-reactions-tool-only` against each worktree, and
+uploads `baseline/`, `candidate/`, `comparison.json`, and `mantis-report.md` as
+Actions artifacts.
+
+ClawSweeper command examples:
+
+```text
+@clawsweeper mantis discord discord-status-reactions-tool-only
+@clawsweeper verify e2e discord
+```
+
+The first command is explicit and scenario-focused. The second can later map a PR
+or issue to recommended Mantis scenarios from labels, changed files, and
+ClawSweeper review findings.
+
+## Run Lifecycle
+
+1. Acquire credentials.
+2. Allocate or reuse a VM.
+3. Prepare a clean checkout for the baseline ref.
+4. Install dependencies and build only what the scenario needs.
+5. Start a child OpenClaw Gateway with an isolated state directory.
+6. Configure the live transport, provider, model, and browser profile.
+7. Run the scenario and capture baseline evidence.
+8. Stop the gateway and preserve logs.
+9. Prepare the candidate ref in the same VM.
+10. Run the same scenario and capture candidate evidence.
+11. Compare the oracle results and visual evidence.
+12. Write Markdown, JSON, logs, screenshots, and optional trace artifacts.
+13. Upload GitHub Actions artifacts.
+14. Post a concise PR or Discord status message.
+
+The scenario should be able to fail in two different ways:
+
+- **Bug reproduced**: baseline failed in the expected way.
+- **Harness failure**: environment setup, credentials, Discord API, browser, or
+  provider failed before the bug oracle was meaningful.
+
+The final report must separate these cases so maintainers do not confuse a flaky
+environment with product behavior.
+
+## Discord MVP
+
+The first scenario should target Discord status reactions in guild channels where
+the source reply delivery mode is `message_tool_only`.
+
+Why it is a good Mantis seed:
+
+- It is visible in Discord as reactions on the triggering message.
+- It has a strong REST oracle through Discord message reaction state.
+- It exercises a real OpenClaw Gateway, Discord bot auth, message dispatch,
+  source reply delivery mode, status reaction state, and model turn lifecycle.
+- It is narrow enough to keep the first implementation honest.
+
+Expected scenario shape:
+
+```yaml
+id: discord-status-reactions-tool-only
+transport: discord
+baseline:
+  expect:
+    reproduced: true
+candidate:
+  expect:
+    fixed: true
+config:
+  messages:
+    ackReaction: "👀"
+    ackReactionScope: "group-mentions"
+    groupChat:
+      visibleReplies: "message_tool"
+    statusReactions:
+      enabled: true
+      timing:
+        debounceMs: 0
+discord:
+  requireMention: true
+  notifyChannel: operator-notify
+evidence:
+  rest:
+    messageReactions: true
+  browser:
+    screenshotMessageRow: true
+```
+
+Baseline evidence should show the queued acknowledgement reaction but no
+lifecycle transition in tool-only mode. Candidate evidence should show lifecycle
+status reactions running when `messages.statusReactions.enabled` is explicitly
+true.
+
+The executable first slice is the opt-in Discord live QA scenario:
+
+```bash
+pnpm openclaw qa discord \
+  --scenario discord-status-reactions-tool-only \
+  --provider-mode live-frontier \
+  --model openai/gpt-5.4 \
+  --alt-model openai/gpt-5.4 \
+  --fast \
+  --output-dir .artifacts/qa-e2e/mantis/discord-status-reactions-candidate
+```
+
+It configures the SUT with always-on guild handling, `visibleReplies:
+"message_tool"`, `ackReaction: "👀"`, and explicit status reactions. The oracle
+polls the real Discord triggering message and expects the observed sequence
+`👀 -> 🤔 -> 👍`. Artifacts include `discord-qa-reaction-timelines.json`,
+`discord-status-reactions-tool-only-timeline.html`, and
+`discord-status-reactions-tool-only-timeline.png`.
+
+## Existing QA Pieces
+
+Mantis should build on the existing private QA stack instead of starting from
+zero:
+
+- `pnpm openclaw qa discord` already runs a live Discord lane with driver and
+  SUT bots.
+- The live transport runner already writes reports and observed-message
+  artifacts under `.artifacts/qa-e2e/`.
+- Convex credential leases already provide exclusive access to shared live
+  transport credentials.
+- The browser control service already supports screenshots, snapshots,
+  headless managed profiles, and remote CDP profiles.
+- QA Lab already has a debugger UI and bus for transport-shaped testing.
+
+The first Mantis implementation can be a thin before/after runner over these
+pieces, plus one visual evidence layer.
+
+## Evidence Model
+
+Every run writes a stable artifact directory:
+
+```text
+.artifacts/qa-e2e/mantis/<run-id>/
+  mantis-report.md
+  mantis-summary.json
+  baseline/
+    summary.json
+    discord-message.json
+    screenshot-message-row.png
+    gateway-debug/
+  candidate/
+    summary.json
+    discord-message.json
+    screenshot-message-row.png
+    gateway-debug/
+  comparison.json
+  run.log
+```
+
+`mantis-summary.json` should be the machine-readable source of truth. The
+Markdown report is for PR comments and human review.
+
+The summary must include:
+
+- refs and SHAs tested
+- transport and scenario id
+- machine provider and machine id or lease id
+- credential source without secret values
+- baseline result
+- candidate result
+- whether the bug reproduced on baseline
+- whether the candidate fixed it
+- artifact paths
+- sanitized setup or cleanup issues
+
+Screenshots are evidence, not secrets. They still need redaction discipline:
+private channel names, user names, or message content may appear. For public PRs,
+prefer GitHub Actions artifact links over inline images until the redaction story
+is stronger.
+
+## Browser And VNC
+
+The browser lane has two modes:
+
+- **Headless automation**: default for CI. Chrome runs with CDP enabled, and
+  Playwright or OpenClaw browser control captures screenshots.
+- **VNC rescue**: enabled on the same VM when login, MFA, Discord anti-automation,
+  or visual debugging needs a human.
+
+The Discord observer browser profile should be persistent enough to avoid
+logging in for every run, but isolated from personal browser state. A profile
+belongs to the Mantis machine pool, not to a developer laptop.
+
+When Mantis gets stuck, it posts a Discord status message with:
+
+- run id
+- scenario id
+- machine provider
+- artifact directory
+- VNC or noVNC connection instructions if available
+- short blocker text
+
+The first private deployment can post these messages to the existing operator
+channel and move to a dedicated Mantis channel later.
+
+## Machines
+
+Mantis should prefer AWS through Crabbox for the first remote implementation.
+Crabbox gives us warmed machines, lease tracking, hydration, logs, results, and
+cleanup. If AWS capacity is too slow or unavailable, add a Hetzner provider
+behind the same machine interface.
+
+Minimum VM requirements:
+
+- Linux with a desktop-capable Chrome or Chromium install
+- CDP access for browser automation
+- VNC or noVNC for rescue
+- Node 22 and pnpm
+- OpenClaw checkout and dependency cache
+- Playwright Chromium browser cache when Playwright is used
+- enough CPU and memory for one OpenClaw Gateway, one browser, and one model run
+- outbound access to Discord, GitHub, model providers, and the credential broker
+
+The VM should not keep long-lived raw secrets outside the expected credential or
+browser profile stores.
+
+## Secrets
+
+Secrets live in GitHub organization or repository secrets for remote runs, and in
+a local operator-controlled secret file for local runs.
+
+Recommended secret names:
+
+- `OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN`
+- `OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN`
+- `OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN`
+- `OPENCLAW_QA_DISCORD_GUILD_ID`
+- `OPENCLAW_QA_DISCORD_CHANNEL_ID`
+- `OPENCLAW_QA_DISCORD_NOTIFY_CHANNEL_ID`
+- `OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for public GitHub artifact uploads
+- `OPENCLAW_QA_CONVEX_SITE_URL`
+- `OPENCLAW_QA_CONVEX_SECRET_CI`
+
+Long term, the Convex credential pool should remain the normal source for live
+transport credentials. GitHub secrets bootstrap the broker and fallback lanes.
+
+The Mantis runner must never print:
+
+- Discord bot tokens
+- provider API keys
+- browser cookies
+- auth profile contents
+- VNC passwords
+- raw credential payloads
+
+Public artifact uploads should also redact Discord target metadata such as bot,
+guild, channel, and message ids. The GitHub smoke workflow enables
+`OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for this reason.
+
+If a token is accidentally pasted into an issue, PR, chat, or log, rotate it
+after the new secret has been stored.
+
+## GitHub Artifacts And PR Comments
+
+The first GitHub version should upload screenshots as Actions artifacts and link
+them from the PR comment. Inline images can come later once redaction, retention,
+and public/private repo behavior are settled.
+
+The PR comment should be short:
+
+```md
+Mantis Discord verification: pass
+
+- Scenario: `discord-status-reactions-tool-only`
+- Baseline: reproduced on `<sha>`
+- Candidate: fixed on `<sha>`
+- Evidence: <artifact link>
+- Screenshots: baseline and candidate message-row captures in the artifact
+```
+
+When the run fails because the harness failed, the comment must say that instead
+of implying the candidate failed.
+
+## Private Deployment Notes
+
+A private deployment may already have a Mantis Discord application. Reuse that
+application instead of creating another app when it has the right bot
+permissions and can be safely rotated.
+
+Set the initial operator notification channel through secrets or deployment
+configuration. It can point at an existing maintainer or operations channel
+first, then move to a dedicated Mantis channel once one exists.
+
+Do not put guild ids, channel ids, bot tokens, browser cookies, or VNC passwords
+in this document. Store them in GitHub secrets, the credential broker, or the
+operator's local secret store.
+
+## Adding A Scenario
+
+A Mantis scenario should declare:
+
+- id and title
+- transport
+- required credentials
+- baseline ref policy
+- candidate ref policy
+- OpenClaw config patch
+- setup steps
+- stimulus
+- expected baseline oracle
+- expected candidate oracle
+- visual capture targets
+- timeout budget
+- cleanup steps
+
+Scenarios should prefer small, typed oracles:
+
+- Discord reaction state for reaction bugs
+- Discord message references for threading bugs
+- Slack thread ts and reaction API state for Slack bugs
+- email message ids and headers for email bugs
+- browser screenshots when UI is the only reliable observable
+
+Vision checks should be additive. If a platform API can prove the bug, use the
+API as the pass/fail oracle and keep screenshots for human confidence.
+
+## Provider Expansion
+
+After Discord, the same runner can add:
+
+- Slack: reactions, threads, app mentions, modals, file uploads.
+- Email: Gmail auth and message threading using `gog` where connectors are not
+  enough.
+- WhatsApp: QR login, re-identification, message delivery, media, reactions.
+- Telegram: group mention gating, commands, reactions where available.
+- Matrix: encrypted rooms, thread or reply relations, restart resume.
+
+Each transport should have one cheap smoke scenario and one or more bug-class
+scenarios. Expensive visual scenarios should stay opt-in.
+
+## Open Questions
+
+- Which Discord bot should be the driver, and which should be the SUT, when the
+  existing Mantis bot is reused?
+- Should the observer browser login use a human Discord account, a test account,
+  or only bot-readable REST evidence for the first phase?
+- How long should GitHub retain Mantis artifacts for PRs?
+- When should ClawSweeper automatically recommend Mantis instead of waiting for a
+  maintainer command?
+- Should screenshots be redacted or cropped before upload for public PRs?

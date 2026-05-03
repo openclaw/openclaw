@@ -399,6 +399,7 @@ export type UploadFileResult = {
 export type SendMediaResult = {
   messageId: string;
   chatId: string;
+  voiceIntentDegradedToFile?: boolean;
 };
 
 /**
@@ -694,6 +695,41 @@ function isFeishuNativeVoiceAudio(params: { fileName: string; contentType?: stri
   );
 }
 
+function normalizeMediaNameForExtension(raw: string): string {
+  try {
+    return new URL(raw).pathname;
+  } catch {
+    return raw.split(/[?#]/, 1)[0] ?? raw;
+  }
+}
+
+export function shouldSuppressFeishuTextForVoiceMedia(params: {
+  mediaUrl?: string;
+  fileName?: string;
+  contentType?: string;
+  audioAsVoice?: boolean;
+}): boolean {
+  if (params.audioAsVoice === true) {
+    return true;
+  }
+  if (
+    params.fileName &&
+    isFeishuNativeVoiceAudio({
+      fileName: params.fileName,
+      contentType: params.contentType,
+    })
+  ) {
+    return true;
+  }
+  if (!params.mediaUrl) {
+    return false;
+  }
+  return isFeishuNativeVoiceAudio({
+    fileName: normalizeMediaNameForExtension(params.mediaUrl),
+    contentType: params.contentType,
+  });
+}
+
 function isLikelyTranscodableAudio(params: { fileName: string; contentType?: string }): boolean {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
   const contentType = normalizeLowercaseStringOrEmpty(params.contentType);
@@ -837,10 +873,22 @@ export async function sendMediaFeishu(params: {
   contentType = prepared.contentType;
 
   const routing = resolveFeishuOutboundMediaKind({ fileName: name, contentType });
+  const voiceIntentDegradedToFile = audioAsVoice === true && routing.msgType !== "audio";
 
   if (routing.msgType === "image") {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
-    return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
+    const result = await sendImageFeishu({
+      cfg,
+      to,
+      imageKey,
+      replyToMessageId,
+      replyInThread,
+      accountId,
+    });
+    return {
+      ...result,
+      ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
+    };
   }
   const { fileKey } = await uploadFileFeishu({
     cfg,
@@ -849,7 +897,7 @@ export async function sendMediaFeishu(params: {
     fileType: routing.fileType ?? "stream",
     accountId,
   });
-  return sendFileFeishu({
+  const result = await sendFileFeishu({
     cfg,
     to,
     fileKey,
@@ -858,4 +906,8 @@ export async function sendMediaFeishu(params: {
     replyInThread,
     accountId,
   });
+  return {
+    ...result,
+    ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
+  };
 }

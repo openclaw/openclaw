@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { discoverStaticExtensionAssets } from "../../scripts/lib/static-extension-assets.mjs";
 import {
   copyStaticExtensionAssets,
   listStaticExtensionAssetOutputs,
+  rewriteRootRuntimeImportsToStableAliases,
   writeLegacyCliExitCompatChunks,
+  writeLegacyRootRuntimeCompatAliases,
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -21,6 +24,37 @@ describe("runtime postbuild static assets", () => {
         "dist/extensions/diffs/assets/viewer-runtime.js",
       ]),
     );
+  });
+
+  it("discovers static assets from plugin package metadata", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const packageDir = path.join(rootDir, "extensions", "demo");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/demo",
+        openclaw: {
+          build: {
+            staticAssets: [
+              {
+                source: "./assets/runtime.js",
+                output: "assets/runtime.js",
+              },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(discoverStaticExtensionAssets({ rootDir })).toEqual([
+      {
+        pluginDir: "demo",
+        src: "extensions/demo/assets/runtime.js",
+        dest: "dist/extensions/demo/assets/runtime.js",
+      },
+    ]);
   });
 
   it("copies declared static assets into dist", async () => {
@@ -84,6 +118,160 @@ describe("runtime postbuild static assets", () => {
       'export * from "./runtime-tts.runtime-AbCd1234.js";\n',
     );
     await expect(fs.stat(path.join(distDir, "library.js"))).rejects.toThrow();
+  });
+
+  it("does not write ambiguous stable aliases for colliding root runtime chunks", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "install.runtime-Aaa111.js"),
+      "export const pluginInstall = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "install.runtime-Bbb222.js"),
+      "export const daemonInstall = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "install.runtime.js"),
+      'export * from "./install.runtime-Stale.js";\n',
+      "utf8",
+    );
+
+    writeStableRootRuntimeAliases({ rootDir });
+
+    await expect(fs.stat(path.join(distDir, "install.runtime.js"))).rejects.toThrow();
+  });
+
+  it("keeps stable aliases when one colliding root runtime chunk re-exports the implementation", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "runtime-model-auth.runtime-Impl123.js"),
+      "export const auth = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "runtime-model-auth.runtime-Wrap456.js"),
+      'import { auth } from "./runtime-model-auth.runtime-Impl123.js";\nexport { auth };\n',
+      "utf8",
+    );
+
+    writeStableRootRuntimeAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "runtime-model-auth.runtime.js"), "utf8")).toBe(
+      'export * from "./runtime-model-auth.runtime-Wrap456.js";\n',
+    );
+  });
+
+  it("rewrites root runtime imports to stable aliases", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime-AbCd1234.js"),
+      "export const ready = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "dispatch-OldHash.js"),
+      [
+        'const lazy = () => import("./runtime-plugins.runtime-AbCd1234.js");',
+        'import "./missing.runtime-Nope.js";',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "dispatch-OldHash.js"), "utf8")).toBe(
+      [
+        'const lazy = () => import("./runtime-plugins.runtime.js");',
+        'import "./missing.runtime-Nope.js";',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps hashed imports when a stable runtime alias would collide", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "install.runtime-Aaa111.js"),
+      "export const pluginInstall = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "install.runtime-Bbb222.js"),
+      "export const daemonInstall = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "install-OldHash.js"),
+      [
+        'const pluginRuntime = () => import("./install.runtime-Aaa111.js");',
+        'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "install-OldHash.js"), "utf8")).toBe(
+      [
+        'const pluginRuntime = () => import("./install.runtime-Aaa111.js");',
+        'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves stable alias files pointing at their hashed runtime chunks", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime-AbCd1234.js"),
+      "export const ready = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime.js"),
+      'export * from "./runtime-plugins.runtime-AbCd1234.js";\n',
+      "utf8",
+    );
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "runtime-plugins.runtime.js"), "utf8")).toBe(
+      'export * from "./runtime-plugins.runtime-AbCd1234.js";\n',
+    );
+  });
+
+  it("writes compatibility aliases for previous release runtime chunk names", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime.js"),
+      'export * from "./runtime-plugins.runtime-NewHash.js";\n',
+      "utf8",
+    );
+
+    writeLegacyRootRuntimeCompatAliases({ rootDir });
+
+    expect(
+      await fs.readFile(path.join(distDir, "runtime-plugins.runtime-fLHuT7Vs.js"), "utf8"),
+    ).toBe('export * from "./runtime-plugins.runtime.js";\n');
+    expect(
+      await fs.readFile(path.join(distDir, "runtime-plugins.runtime-CNAfmQRG.js"), "utf8"),
+    ).toBe('export * from "./runtime-plugins.runtime.js";\n');
   });
 
   it("writes legacy CLI exit compatibility chunks", async () => {

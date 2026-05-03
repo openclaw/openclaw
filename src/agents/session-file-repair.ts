@@ -12,7 +12,6 @@ type RepairReport = {
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
-  trimmedTrailingAssistantMessages?: number;
   backupPath?: string;
   reason?: string;
 };
@@ -136,42 +135,11 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
   };
 }
 
-function isToolCallBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return type === "toolCall" || type === "toolUse" || type === "functionCall";
-}
-
-/** Trailing assistant without tool calls — safe to trim from disk.
- * Assistant turns with tool calls are kept so transcript repair can
- * synthesize missing tool results (mirrors the outbound guard). */
-function isTrimmableTrailingAssistantEntry(entry: unknown): boolean {
-  if (!entry || typeof entry !== "object") {
-    return false;
-  }
-  const record = entry as { type?: unknown; message?: unknown };
-  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
-    return false;
-  }
-  const message = record.message as { role?: unknown; content?: unknown };
-  if (message.role !== "assistant") {
-    return false;
-  }
-  const content = message.content;
-  if (Array.isArray(content) && content.some(isToolCallBlock)) {
-    return false;
-  }
-  return true;
-}
-
 function buildRepairSummaryParts(params: {
   droppedLines: number;
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
-  trimmedTrailingAssistantMessages: number;
 }): string {
   const parts: string[] = [];
   if (params.droppedLines > 0) {
@@ -185,9 +153,6 @@ function buildRepairSummaryParts(params: {
   }
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
-  }
-  if (params.trimmedTrailingAssistantMessages > 0) {
-    parts.push(`trimmed ${params.trimmedTrailingAssistantMessages} trailing assistant message(s)`);
   }
   return parts.length > 0 ? parts.join(", ") : "no changes";
 }
@@ -268,21 +233,11 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
-  // Sessions ending on role=assistant cause Anthropic prefill 400s when
-  // thinking is enabled. The outbound path strips per-request, but leaving
-  // the file corrupted causes repeated reject cycles across restarts.
-  let trimmedTrailingAssistantMessages = 0;
-  while (entries.length > 1 && isTrimmableTrailingAssistantEntry(entries[entries.length - 1])) {
-    entries.pop();
-    trimmedTrailingAssistantMessages += 1;
-  }
-
   if (
     droppedLines === 0 &&
     rewrittenAssistantMessages === 0 &&
     droppedBlankUserMessages === 0 &&
-    rewrittenUserMessages === 0 &&
-    trimmedTrailingAssistantMessages === 0
+    rewrittenUserMessages === 0
   ) {
     return { repaired: false, droppedLines: 0 };
   }
@@ -317,7 +272,6 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
-      trimmedTrailingAssistantMessages,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
   }
@@ -328,7 +282,6 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
-      trimmedTrailingAssistantMessages,
     })} (${path.basename(sessionFile)})`,
   );
   return {
@@ -337,7 +290,6 @@ export async function repairSessionFileIfNeeded(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
-    trimmedTrailingAssistantMessages,
     backupPath,
   };
 }

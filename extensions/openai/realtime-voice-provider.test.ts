@@ -192,14 +192,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       transport: "webrtc-sdp",
       clientSecret: "client-secret-123",
       offerUrl: "https://api.openai.com/v1/realtime/calls",
-      offerHeaders: {
-        originator: "openclaw",
-        version: "2026.3.22",
-      },
     });
-    expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).not.toHaveProperty(
-      "User-Agent",
-    );
+    // originator, version, and User-Agent are server-side attribution headers; they
+    // must not be forwarded to the browser so that the browser's direct SDP POST to
+    // api.openai.com passes the CORS preflight (only authorization,content-type
+    // allowed — #76435). All three are filtered, leaving no browser offer headers.
+    expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).toBeUndefined();
   });
 
   it("resolves keychain OPENAI_API_KEY refs before creating browser sessions", async () => {

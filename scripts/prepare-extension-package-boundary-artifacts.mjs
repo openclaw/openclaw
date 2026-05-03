@@ -45,6 +45,13 @@ const QA_CHANNEL_DTS_INPUTS = [
 ];
 const QA_CHANNEL_DTS_STAMP = "dist/plugin-sdk/extensions/qa-channel/.boundary-dts.stamp";
 const QA_CHANNEL_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/qa-channel/api.d.ts"];
+const DISCORD_DTS_INPUTS = [
+  "extensions/discord/api.ts",
+  "extensions/discord/src/api.ts",
+  "extensions/discord/tsconfig.json",
+];
+const DISCORD_DTS_STAMP = "dist/plugin-sdk/extensions/discord/.boundary-dts.stamp";
+const DISCORD_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/discord/api.d.ts"];
 const ENTRY_SHIMS_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entrypoints.json",
@@ -290,6 +297,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
+    const discordDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: DISCORD_DTS_INPUTS,
+        outputPaths: [DISCORD_DTS_STAMP, ...DISCORD_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(DISCORD_DTS_REQUIRED_OUTPUTS);
 
     const prerequisiteSteps = [];
     const dependentSteps = [];
@@ -356,6 +369,37 @@ async function main(argv = process.argv.slice(2)) {
         });
       } else {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
+      }
+      if (!discordDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: DISCORD_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "discord boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/discord/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/discord",
+            "--rootDir",
+            "extensions/discord",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: DISCORD_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[discord boundary dts] fresh; skipping\n");
       }
     }
 

@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
 import {
   createConfigIO,
   getRuntimeConfigSourceSnapshot,
@@ -615,6 +616,41 @@ describe("config io write", () => {
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("Config auto-stripped non-JSON prefix:"),
       );
+    });
+  });
+
+  it("caps repeated prefix-recovery clobber snapshots for doctor-style repair loops", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const cleanConfig = {
+        gateway: { mode: "local" },
+        agents: { list: [{ id: "main", default: true }] },
+      } satisfies ConfigFileSnapshot["config"];
+      const cleanRaw = `${JSON.stringify(cleanConfig, null, 2)}\n`;
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      for (let index = 0; index < CONFIG_CLOBBER_SNAPSHOT_LIMIT + 4; index++) {
+        await fs.writeFile(configPath, `Found and updated: False ${index}\n${cleanRaw}`, "utf-8");
+        const snapshot = await io.readConfigFileSnapshot();
+        expect(snapshot.valid).toBe(false);
+        await expect(io.recoverConfigFromJsonRootSuffix(snapshot)).resolves.toBe(true);
+      }
+
+      const entries = await fs.readdir(path.dirname(configPath));
+      const clobbered = entries.filter((entry) => entry.includes(".clobbered."));
+      expect(clobbered).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
+      const capWarnings = warn.mock.calls.filter(
+        ([message]) =>
+          typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
+      );
+      expect(capWarnings).toHaveLength(1);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(cleanRaw);
     });
   });
 

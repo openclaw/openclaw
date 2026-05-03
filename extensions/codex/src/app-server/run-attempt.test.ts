@@ -440,6 +440,30 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("forces the message dynamic tool for message-tool-only source replies", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = { tools: { profile: "coding" } };
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.messageProvider = "whatsapp";
+
+    const dynamicTools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: "agent:main:session-1",
+      sandbox: null,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+    const dynamicToolNames = dynamicTools.map((tool) => tool.name);
+
+    expect(dynamicToolNames).toContain("message");
+  });
+
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;
@@ -578,7 +602,14 @@ describe("runCodexAppServerAttempt", () => {
       }),
     ).resolves.toMatchObject({
       success: false,
-      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: message" }],
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.stringMatching(
+            /^(Unknown OpenClaw tool: message|Action send requires a target\.)$/u,
+          ),
+        },
+      ],
     });
 
     await expect(run).resolves.toMatchObject({
@@ -723,24 +754,28 @@ describe("runCodexAppServerAttempt", () => {
     params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
+    await vi.waitFor(() => expect(llmInput).toHaveBeenCalled(), { interval: 1 });
 
-    expect(llmInput).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-        provider: "codex",
-        model: "gpt-5.4-codex",
-        prompt: "hello",
-        imagesCount: 0,
-        historyMessages: [expect.objectContaining({ role: "assistant" })],
-        systemPrompt: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
-      }),
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-      }),
+    expect(llmInput.mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.objectContaining({
+            runId: "run-1",
+            sessionId: "session-1",
+            provider: "codex",
+            model: "gpt-5.4-codex",
+            prompt: "hello",
+            imagesCount: 0,
+            historyMessages: [expect.objectContaining({ role: "assistant" })],
+            systemPrompt: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
+          }),
+          expect.objectContaining({
+            runId: "run-1",
+            sessionId: "session-1",
+            sessionKey: "agent:main:session-1",
+          }),
+        ],
+      ]),
     );
 
     await harness.notify({

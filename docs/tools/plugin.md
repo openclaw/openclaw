@@ -128,6 +128,13 @@ visible plugin without importing runtime code or repairing dependencies.
 See [Plugin dependency resolution](/plugins/dependency-resolution) for the
 install-time lifecycle.
 
+For npm installs, mutable selectors such as `latest` or a dist-tag are resolved
+before installation and then pinned to the exact verified version in OpenClaw's
+managed npm root. After npm finishes, OpenClaw verifies the installed
+`package-lock.json` entry still matches the resolved version and integrity. If
+npm writes different package metadata, the install fails and the managed package
+is rolled back instead of accepting a different plugin artifact.
+
 Source checkouts are pnpm workspaces. If you clone OpenClaw to hack on bundled
 plugins, run `pnpm install`; OpenClaw then loads bundled plugins from
 `extensions/<id>` so edits and package-local dependencies are used directly.
@@ -154,6 +161,9 @@ Native plugin npm packages must declare `openclaw.extensions` in `package.json`.
 Each entry must stay inside the package directory and resolve to a readable
 runtime file, or to a TypeScript source file with an inferred built JavaScript
 peer such as `src/index.ts` to `dist/index.js`.
+Packaged installs must ship that JavaScript runtime output. The TypeScript
+source fallback is for source checkouts and local development paths, not for
+npm packages installed into OpenClaw's managed plugin root.
 
 Use `openclaw.runtimeExtensions` when published runtime files do not live at the
 same paths as the source entries. When present, `runtimeExtensions` must contain

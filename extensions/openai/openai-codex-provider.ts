@@ -172,6 +172,7 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
 function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
   const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  const synthBaseUrl = ctx.providerConfig?.baseUrl ?? OPENAI_CODEX_BASE_URL;
 
   if (lower === OPENAI_CODEX_GPT_55_MODEL_ID) {
     const model = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId) as
@@ -188,7 +189,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
         name: trimmedModelId,
         api: "openai-codex-responses",
         provider: PROVIDER_ID,
-        baseUrl: OPENAI_CODEX_BASE_URL,
+        baseUrl: synthBaseUrl,
         reasoning: true,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -264,7 +265,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
           : trimmedModelId,
       api: "openai-codex-responses",
       provider: PROVIDER_ID,
-      baseUrl: OPENAI_CODEX_BASE_URL,
+      baseUrl: synthBaseUrl,
       reasoning: true,
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -17,10 +17,7 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  hasFinalInboundReplyDispatch,
-  runInboundReplyTurn,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -665,6 +662,7 @@ export const dispatchTelegramMessage = async ({
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
   let queuedFinal = false;
+  let suppressSilentReplyFallback = false;
   let hadErrorReplyFailureOrSkip = false;
   let isFirstTurnInSession = false;
   let dispatchError: unknown;
@@ -728,6 +726,7 @@ export const dispatchTelegramMessage = async ({
       }
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
+    let lastVisibleNonPreviewDeliveryAtMs: number | undefined;
     const sendPayload = async (payload: ReplyPayload) => {
       if (isDispatchSuperseded()) {
         return false;
@@ -741,6 +740,7 @@ export const dispatchTelegramMessage = async ({
       });
       if (result.delivered) {
         deliveryState.markDelivered();
+        lastVisibleNonPreviewDeliveryAtMs = Date.now();
       }
       return result.delivered;
     };
@@ -793,6 +793,7 @@ export const dispatchTelegramMessage = async ({
       markDelivered: () => {
         deliveryState.markDelivered();
       },
+      getLastVisibleNonPreviewDeliveryAtMs: () => lastVisibleNonPreviewDeliveryAtMs,
     });
 
     if (isDmTopic) {
@@ -1171,6 +1172,8 @@ export const dispatchTelegramMessage = async ({
         return;
       }
       ({ queuedFinal } = turnResult.dispatchResult);
+      suppressSilentReplyFallback =
+        turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
     } catch (err) {
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
@@ -1300,7 +1303,12 @@ export const dispatchTelegramMessage = async ({
     sentFallback = result.delivered;
   }
 
-  if (!queuedFinal && !sentFallback && !dispatchError && !deliverySummary.delivered) {
+  if (
+    !sentFallback &&
+    !dispatchError &&
+    !deliverySummary.delivered &&
+    !suppressSilentReplyFallback
+  ) {
     const policySessionKey =
       ctxPayload.CommandSource === "native"
         ? (ctxPayload.CommandTargetSessionKey ?? ctxPayload.SessionKey)
@@ -1329,13 +1337,7 @@ export const dispatchTelegramMessage = async ({
     });
   }
 
-  const hasFinalResponse = hasFinalInboundReplyDispatch(
-    { queuedFinal },
-    {
-      fallbackDelivered: sentFallback,
-      deliverySummaryDelivered: deliverySummary.delivered,
-    },
-  );
+  const hasFinalResponse = deliverySummary.delivered || sentFallback || suppressSilentReplyFallback;
 
   if (statusReactionController && !hasFinalResponse) {
     void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
