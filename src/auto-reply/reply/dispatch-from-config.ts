@@ -1192,6 +1192,8 @@ export async function dispatchReplyFromConfig(
     });
     const suppressDefaultToolProgressMessages =
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
+    const shouldSuppressDefaultToolProgressMessages = () =>
+      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1257,7 +1259,7 @@ export async function dispatchReplyFromConfig(
             if (!deliveryPayload) {
               return;
             }
-            if (suppressDefaultToolProgressMessages) {
+            if (shouldSuppressDefaultToolProgressMessages()) {
               const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
               const execApproval =
                 deliveryPayload.channelData &&
@@ -1286,7 +1288,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onPlanUpdateFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "update" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
@@ -1297,7 +1299,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onApprovalEventFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "requested" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           const label = summarizeApprovalLabel({
@@ -1316,7 +1318,7 @@ export async function dispatchReplyFromConfig(
           if (!suppressAutomaticSourceDelivery) {
             await onPatchSummaryFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
+          if (payload.phase !== "end" || shouldSuppressDefaultToolProgressMessages()) {
             return;
           }
           const label = summarizePatchLabel({ summary: payload.summary, title: payload.title });
