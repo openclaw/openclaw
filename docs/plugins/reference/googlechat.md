@@ -12,7 +12,7 @@ Adds the Google Chat channel surface for sending and receiving OpenClaw messages
 ## Distribution
 
 - Package: `@openclaw/googlechat`
-- Install route: included in OpenClaw
+- Install route: ClawHub + npm
 
 ## Surface
 
