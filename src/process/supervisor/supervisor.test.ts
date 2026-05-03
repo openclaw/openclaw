@@ -140,7 +140,12 @@ describe("process supervisor", () => {
   });
 
   it("enforces no-output timeout for silent processes", async () => {
-    vi.useFakeTimers();
+    // Keep setImmediate on the real platform queue so the post-settle
+    // I/O drain in supervisor.ts (#30711) can fire after the kill is
+    // triggered. Fake only the timer APIs we need to control.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
     const adapter = createStubChildAdapter({
       onKill: (signal, current) => {
         current.settle(null, signal ?? "SIGKILL");
@@ -206,7 +211,11 @@ describe("process supervisor", () => {
   });
 
   it("applies overall timeout even for near-immediate timer firing", async () => {
-    vi.useFakeTimers();
+    // setImmediate stays real (post-settle I/O drain, #30711); see the
+    // no-output test above for the rationale.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
     const adapter = createStubChildAdapter({
       onKill: (signal, current) => {
         current.settle(null, signal ?? "SIGKILL");
@@ -229,6 +238,37 @@ describe("process supervisor", () => {
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
     expect(exit.reason).toBe("overall-timeout");
     expect(exit.timedOut).toBe(true);
+  });
+
+  it("cancel after settle does not overwrite termination reason", async () => {
+    // Regression test for the race where cancel() during the post-settle
+    // setImmediate I/O drain window could overwrite a successful exit
+    // reason with "manual-cancel" via a direct registry.updateState call.
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-cancel-race",
+      argv: createWriteStdoutArgv("done"),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+    });
+
+    adapter.emitStdout("done");
+    adapter.settle(0);
+
+    const exit = await run.wait();
+    // Process has already settled — cancel should be a no-op
+    supervisor.cancel(run.runId);
+
+    expect(exit.reason).toBe("exit");
+    expect(exit.exitCode).toBe(0);
+    expect(exit.stdout).toBe("done");
+
+    // Registry record should also reflect the true exit, not "manual-cancel"
+    const record = supervisor.getRecord(run.runId);
+    expect(record?.terminationReason).toBe("exit");
   });
 
   it("can stream output without retaining it in RunExit payload", async () => {

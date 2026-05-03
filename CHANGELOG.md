@@ -196,6 +196,7 @@ Docs: https://docs.openclaw.ai
 - Agents/fallback: suppress duplicate current-turn user-message transcript writes after embedded fallback retries while still sending the retry prompt to the model. (#63696) Thanks @dashhuang.
 - Channels/Telegram: force a fresh final message when a visible non-preview bubble (tool/block/error) was delivered after the active answer preview, so multi-step assistant replies no longer end up with the final answer above intermediate output. Fixes #76529. Thanks @jack-stormentswe.
 - Channels/Telegram: require an observed Telegram send, edit, or fallback before treating a forum-topic final as delivered, so final replies generated in transcript no longer disappear from Telegram topics. Fixes #76554. (#76764) Thanks @bubucilo and @obviyus.
+- Process supervisor: drain pending I/O callbacks before snapshotting `stdout`/`stderr` for backgrounded sandbox processes, so block-buffered output flushed by the child at exit (e.g. Bun on a Docker pipe) is no longer silently lost when the final `data` event and `close` event land in the same libuv poll cycle. Hardens `cancel()` so a late cancel during the post-settle drain window cannot overwrite a successful exit reason with `manual-cancel`. Fixes #30711. Thanks @aaajiao.
 
 ## 2026.5.2
 
