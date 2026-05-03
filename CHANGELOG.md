@@ -66,6 +66,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/status: add concrete service, config, listener-owner, and log collection next steps when gateway probes fail and Bonjour finds no local gateway, so frozen or port-conflict reports include the data needed for root-cause triage. Refs #49012. Thanks @vincentkoc.
 - Codex harness: forward OpenClaw workspace bootstrap files such as `SOUL.md` through native Codex config instructions while leaving `AGENTS.md` to Codex project-doc discovery. Fixes #76273. Thanks @zknicker.
 - Parallels/Windows update smoke: escape the stale post-swap import regex in the generated PowerShell script so expected `ERR_MODULE_NOT_FOUND` update handoffs continue to post-update health checks. (#75315)
+- Slack: allow draft preview streaming in top-level DMs when `replyToMode` is `off` while keeping Slack native streaming and assistant thread status gated on reply threads. Fixes #56480. (#56544) Thanks @HangGlidersRule.
 
 ## 2026.5.2
 

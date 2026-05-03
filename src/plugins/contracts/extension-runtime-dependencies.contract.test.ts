@@ -25,6 +25,11 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     // Baileys loads jimp as an optional peer when it needs media thumbnails.
     new Set(["jimp"]),
   ],
+  [
+    "extensions/tlon",
+    // The Tlon plugin manifest exposes the bundled skill from this package path.
+    new Set(["@tloncorp/tlon-skill"]),
+  ],
 ]);
 
 type PackageManifest = {
