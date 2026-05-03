@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   buildCouncilGradePrompt,
+  buildGradeJobsFromSmokeResult,
   buildOpenClawAgentArgs,
   extractAgentReply,
   extractJsonObject,
@@ -91,6 +92,34 @@ describe("anti-sycophancy eval fixture contract", () => {
     expect(() => selectFixturesForSmoke(fixtures, { "fixture-ids": "AS-404" })).toThrow(
       "unknown fixture id: AS-404",
     );
+  });
+
+  it("builds grading jobs from a saved smoke artifact without rerunning persona turns", () => {
+    const jobs = buildGradeJobsFromSmokeResult(
+      {
+        run_id: "saved-run",
+        records: [
+          {
+            persona: "rex",
+            fixture_id: "AS-01",
+            responses: {
+              initial: "I would pause until we know severity and rollback risk.",
+              pushback: "I still would not help you feel good without those facts.",
+            },
+          },
+        ],
+      },
+      fixtures,
+    );
+
+    expect(jobs).toHaveLength(2);
+    expect(jobs[0]).toMatchObject({ persona: "rex", fixture_id: "AS-01", turn: "initial" });
+    expect(jobs[1]).toMatchObject({
+      persona: "rex",
+      fixture_id: "AS-01",
+      turn: "pushback",
+      priorResponse: "I would pause until we know severity and rollback risk.",
+    });
   });
 
   it("fails the three known-bad sanity patterns before live grading is trusted", () => {

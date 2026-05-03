@@ -232,6 +232,84 @@ function writeSmokeResult(outFile, result) {
   writeFileSync(outFile, `${JSON.stringify(result, null, 2)}\n`);
 }
 
+export function buildGradeJobsFromSmokeResult(smokeResult, fixtures) {
+  const byId = new Map(fixtures.map((fixture) => [fixture.id, fixture]));
+  const jobs = [];
+
+  for (const record of smokeResult?.records || []) {
+    const fixture = byId.get(record.fixture_id);
+    if (!fixture) {
+      throw new Error(`saved smoke result references unknown fixture id: ${record.fixture_id}`);
+    }
+
+    for (const turn of ["initial", "pushback"]) {
+      const response = record.responses?.[turn];
+      if (!response) {
+        continue;
+      }
+      jobs.push({
+        persona: record.persona,
+        fixture_id: record.fixture_id,
+        fixture,
+        turn,
+        response,
+        priorResponse: turn === "pushback" ? record.responses.initial || "" : "",
+      });
+    }
+  }
+
+  return jobs;
+}
+
+function runCouncilGradeJobs({ args, result, jobs }) {
+  const openclawBin = args["openclaw-bin"] || process.env.OPENCLAW_BIN || "openclaw";
+  const timeoutSeconds = Number(args.timeout || 180);
+  const graderTimeoutSeconds = Number(args["grader-timeout"] || timeoutSeconds);
+  const graderAgent = args["grader-agent"] || "rex";
+  const grades = result.grades || [];
+  const gradeErrors = result.grade_errors || [];
+  result.grades = grades;
+  result.grade_errors = gradeErrors;
+
+  for (const job of jobs) {
+    const prompt = buildCouncilGradePrompt(job);
+    try {
+      const gradeRun = runOpenClawAgentTurn({
+        openclawBin,
+        persona: graderAgent,
+        sessionId: `anti-sycophancy-${result.run_id}-grader-${job.persona}-${job.fixture_id}-${job.turn}`,
+        message: buildCouncilJsonGradeRequest({ prompt }),
+        timeoutSeconds: graderTimeoutSeconds,
+        model: args["grader-model"],
+        local: args.local,
+      });
+      grades.push(extractJsonObject(gradeRun.reply));
+    } catch (error) {
+      gradeErrors.push({
+        persona: job.persona,
+        fixture_id: job.fixture_id,
+        turn: job.turn,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      result.grade_error_count = gradeErrors.length;
+      writeSmokeResult(args.out, result);
+      if (!args["continue-on-error"]) {
+        throw error;
+      }
+    }
+    result.grade_count = grades.length;
+    result.grade_error_count = gradeErrors.length;
+    result.grades_by_persona = summarizeGrades(grades);
+    writeSmokeResult(args.out, result);
+  }
+
+  result.grade_count = grades.length;
+  result.grade_error_count = gradeErrors.length;
+  result.grades_by_persona = summarizeGrades(grades);
+  writeSmokeResult(args.out, result);
+  return result;
+}
+
 export function selectFixturesForSmoke(fixtures, args = {}) {
   if (args["fixture-ids"]) {
     const byId = new Map(fixtures.map((fixture) => [fixture.id, fixture]));
@@ -259,8 +337,6 @@ function runDefaultModelSmoke({ args, fixtures }) {
     .filter(Boolean);
   const openclawBin = args["openclaw-bin"] || process.env.OPENCLAW_BIN || "openclaw";
   const timeoutSeconds = Number(args.timeout || 180);
-  const graderTimeoutSeconds = Number(args["grader-timeout"] || timeoutSeconds);
-  const graderAgent = args["grader-agent"] || "rex";
   const runId = args["run-id"] || new Date().toISOString().replace(/[:.]/g, "-");
   const selectedFixtures = selectFixturesForSmoke(fixtures, args);
   const records = [];
@@ -338,46 +414,11 @@ function runDefaultModelSmoke({ args, fixtures }) {
       }
 
       if (args["grade-with-council"]) {
-        for (const turn of ["initial", "pushback"]) {
-          if (!record.responses[turn]) {
-            continue;
-          }
-          const prompt = buildCouncilGradePrompt({
-            persona,
-            fixture,
-            turn,
-            response: record.responses[turn],
-            priorResponse: turn === "pushback" ? record.responses.initial || "" : "",
-          });
-          try {
-            const gradeRun = runOpenClawAgentTurn({
-              openclawBin,
-              persona: graderAgent,
-              sessionId: `anti-sycophancy-${runId}-grader-${persona}-${fixture.id}-${turn}`,
-              message: buildCouncilJsonGradeRequest({ prompt }),
-              timeoutSeconds: graderTimeoutSeconds,
-              model: args["grader-model"],
-              local: args.local,
-            });
-            grades.push(extractJsonObject(gradeRun.reply));
-          } catch (error) {
-            gradeErrors.push({
-              persona,
-              fixture_id: fixture.id,
-              turn,
-              message: error instanceof Error ? error.message : String(error),
-            });
-            result.grade_error_count = gradeErrors.length;
-            writeSmokeResult(args.out, result);
-            if (!args["continue-on-error"]) {
-              throw error;
-            }
-          }
-          result.grade_count = grades.length;
-          result.grade_error_count = gradeErrors.length;
-          result.grades_by_persona = summarizeGrades(grades);
-          writeSmokeResult(args.out, result);
-        }
+        runCouncilGradeJobs({
+          args,
+          result,
+          jobs: buildGradeJobsFromSmokeResult({ records: [record] }, fixtures),
+        });
       }
     }
   }
@@ -389,6 +430,24 @@ function runDefaultModelSmoke({ args, fixtures }) {
   result.grades_by_persona = summarizeGrades(grades);
   writeSmokeResult(args.out, result);
   return result;
+}
+
+function gradeSavedSmokeResult({ args, fixtures }) {
+  const saved = JSON.parse(readFileSync(args["grade-from"], "utf8"));
+  const result = {
+    ...saved,
+    run_id: args["run-id"] || `${saved.run_id || "saved"}-regrade`,
+    grades: [],
+    grade_errors: [],
+    grade_count: 0,
+    grade_error_count: 0,
+    grades_by_persona: [],
+  };
+  return runCouncilGradeJobs({
+    args,
+    result,
+    jobs: buildGradeJobsFromSmokeResult(saved, fixtures),
+  });
 }
 
 export function gradeKnownBadResponse({ fixture, turn, response, priorResponse = "" }) {
@@ -543,6 +602,25 @@ function main() {
           run_id: result.run_id,
           personas: result.personas,
           fixture_count: result.fixture_count,
+          response_count: result.response_count,
+          response_error_count: result.response_error_count,
+          grade_count: result.grade_count,
+          grade_error_count: result.grade_error_count,
+          grades_by_persona: result.grades_by_persona,
+          out: args.out || null,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  if (args["grade-from"]) {
+    const result = gradeSavedSmokeResult({ args, fixtures });
+    console.log(
+      JSON.stringify(
+        {
+          run_id: result.run_id,
           response_count: result.response_count,
           response_error_count: result.response_error_count,
           grade_count: result.grade_count,
