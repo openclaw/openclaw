@@ -152,12 +152,14 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   }
   const nextConfigRecord = nextConfig as Record<string, unknown>;
 
-  const validated = validateConfigObjectWithPlugins(nextConfig);
-  if (!validated.ok) {
-    throw createInvalidConfigError(
-      params.snapshot.path,
-      formatInvalidConfigDetails(validated.issues),
-    );
+  if (!params.writeOptions?.skipPluginValidation) {
+    const validated = validateConfigObjectWithPlugins(nextConfig);
+    if (!validated.ok) {
+      throw createInvalidConfigError(
+        params.snapshot.path,
+        formatInvalidConfigDetails(validated.issues),
+      );
+    }
   }
 
   const runtimeConfigSnapshot = getRuntimeConfigSnapshot();

@@ -2430,7 +2430,7 @@ export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
 ): Promise<void> {
-  const io = createConfigIO();
+  const io = createConfigIO(options.skipPluginValidation ? { pluginValidation: "skip" } : {});
   let nextCfg = cfg;
   const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshotState();
@@ -2451,6 +2451,7 @@ export async function writeConfigFile(
     allowConfigSizeDrop: options.allowConfigSizeDrop,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
     skipOutputLogs: options.skipOutputLogs,
+    skipPluginValidation: options.skipPluginValidation,
   });
   if (
     options.skipRuntimeSnapshotRefresh &&

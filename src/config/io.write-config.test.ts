@@ -1219,6 +1219,52 @@ describe("config io write", () => {
     });
   });
 
+  it("skipPluginValidation bypasses plugin schema rejection on writeConfigFile (#76800)", async () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "strict-plugin",
+          origin: "bundled",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: "/tmp/openclaw-test-strict-plugin",
+          source: "/tmp/openclaw-test-strict-plugin/index.ts",
+          manifestPath: "/tmp/openclaw-test-strict-plugin/openclaw.plugin.json",
+          configSchema: {
+            type: "object",
+            properties: { token: { type: "string" } },
+            required: ["token"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    } satisfies PluginManifestRegistry);
+
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, "{}\n", "utf-8");
+      // Plugin is enabled but missing required "token" — validation fails without skip
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }] },
+        plugins: { entries: { "strict-plugin": { enabled: true } } },
+      };
+
+      await expect(writeConfigFile(cfg, { skipPluginValidation: true })).resolves.not.toThrow();
+
+      await expect(writeConfigFile(cfg, { skipPluginValidation: false })).rejects.toThrow();
+    });
+
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [],
+    } satisfies PluginManifestRegistry);
+  });
+
   it("preserves authored tilde paths when runtime-shaped writes hand back absolute paths", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
