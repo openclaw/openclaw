@@ -38,6 +38,7 @@ import {
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
 import { hasInboundMedia } from "./inbound-media.js";
+import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
@@ -468,6 +469,12 @@ export async function tryDispatchAcpReply(params: {
         );
       }
     }
+
+    emitPreAgentMessageHooks({
+      ctx: params.ctx,
+      cfg: params.cfg,
+      isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
+    });
 
     const promptText = resolveAcpPromptText(params.ctx);
     const mediaAttachments = hasInboundMedia(params.ctx)
