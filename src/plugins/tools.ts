@@ -645,15 +645,18 @@ function resolvePluginToolRegistry(params: {
     return activeRegistry;
   }
 
+  const forceStandaloneLoad = Boolean(channelRegistry || activeRegistry);
   const standaloneRegistry = ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "active",
+    forceLoad: forceStandaloneLoad,
+    installRegistry: !forceStandaloneLoad,
     requiredPluginIds: params.onlyPluginIds,
     loadOptions: params.loadOptions,
   });
   if (registryHasScopedPluginTools(standaloneRegistry, params.onlyPluginIds)) {
     return standaloneRegistry;
   }
-  return channelRegistry ?? activeRegistry ?? standaloneRegistry;
+  return standaloneRegistry ?? channelRegistry ?? activeRegistry;
 }
 
 function registryHasScopedPluginTools(
@@ -670,7 +673,8 @@ function registryHasScopedPluginTools(
   if (scopedPluginIds.size === 0) {
     return true;
   }
-  return registry.tools.some((entry) => scopedPluginIds.has(entry.pluginId));
+  const registryPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
+  return Array.from(scopedPluginIds).every((pluginId) => registryPluginIds.has(pluginId));
 }
 
 function resolvePluginToolLoadState(params: {
