@@ -54,7 +54,6 @@ type SentRealtimeEvent = {
   type: string;
   audio?: string;
   session?: {
-    type?: string;
     audio?: {
       input?: {
         format?: { type?: string };
@@ -180,7 +179,6 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       {
         type: "transcription_session.update",
         session: {
-          type: "transcription",
           audio: {
             input: {
               format: { type: "audio/pcmu" },
@@ -209,7 +207,6 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       {
         type: "transcription_session.update",
         session: {
-          type: "transcription",
           audio: {
             input: {
               format: { type: "audio/pcmu" },

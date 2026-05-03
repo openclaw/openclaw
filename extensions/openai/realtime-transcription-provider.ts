@@ -149,7 +149,6 @@ function createOpenAIRealtimeTranscriptionSession(
       transport.sendJson({
         type: "transcription_session.update",
         session: {
-          type: "transcription",
           audio: {
             input: {
               format: {
