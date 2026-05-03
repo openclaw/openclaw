@@ -62,6 +62,13 @@ export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allow
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
 
+export type TelegramCallbackAckConfig = {
+  /** Optional toast text shown immediately after inline button clicks. Omit/empty = clear spinner only. */
+  text?: string;
+  /** Show the acknowledgement as a modal alert instead of a toast. Default: false. */
+  showAlert?: boolean;
+};
+
 export type TelegramExecApprovalConfig = {
   /** Enable mode for Telegram exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
   enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
@@ -156,6 +163,8 @@ export type TelegramAccountConfig = {
   mediaGroupFlushMs?: number;
   /** Telegram polling watchdog threshold in milliseconds. Default: 120000. */
   pollingStallThresholdMs?: number;
+  /** Optional visible acknowledgement for inline keyboard callback clicks. */
+  callbackAck?: TelegramCallbackAckConfig;
   /** Retry policy for outbound Telegram API calls. */
   retry?: OutboundRetryConfig;
   /** Network transport overrides for Telegram. */

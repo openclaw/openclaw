@@ -429,6 +429,23 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
+    Optional immediate click acknowledgement:
+
+```json5
+{
+  channels: {
+    telegram: {
+      callbackAck: {
+        text: "Got it", // shown as a Telegram toast after inline button clicks
+        showAlert: false, // true shows a modal alert instead
+      },
+    },
+  },
+}
+```
+
+    Leave `callbackAck.text` unset or empty to preserve the default behavior: clear Telegram's loading spinner without showing a toast.
+
     Scopes:
 
     - `off`

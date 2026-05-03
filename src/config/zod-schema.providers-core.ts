@@ -271,6 +271,16 @@ export const TelegramAccountSchemaBase = z
         "Buffer window in milliseconds for Telegram media groups/albums before dispatching them as one inbound message. Default: 500.",
       ),
     pollingStallThresholdMs: z.number().int().min(30_000).max(600_000).optional(),
+    callbackAck: z
+      .object({
+        text: z.string().max(200).optional(),
+        showAlert: z.boolean().optional(),
+      })
+      .strict()
+      .optional()
+      .describe(
+        "Optional visible acknowledgement for inline keyboard callback clicks. text is shown as an immediate Telegram toast; showAlert displays it as a modal alert.",
+      ),
     retry: RetryConfigSchema,
     network: z
       .object({

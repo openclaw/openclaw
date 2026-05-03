@@ -156,6 +156,18 @@ export const registerTelegramHandlers = ({
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
 
+  const buildCallbackAckPayload = () => {
+    const ack = telegramCfg.callbackAck;
+    const text = typeof ack?.text === "string" ? ack.text.trim() : "";
+    if (!text) {
+      return undefined;
+    }
+    return {
+      text,
+      ...(ack?.showAlert === true ? { show_alert: true } : {}),
+    };
+  };
+
   type TextFragmentEntry = {
     key: string;
     messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
@@ -1219,10 +1231,17 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
+    const callbackAckPayload = buildCallbackAckPayload();
     const answerCallbackQuery =
       typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
-        ? () => ctx.answerCallbackQuery()
-        : () => bot.api.answerCallbackQuery(callback.id);
+        ? () =>
+            callbackAckPayload
+              ? ctx.answerCallbackQuery(callbackAckPayload)
+              : ctx.answerCallbackQuery()
+        : () =>
+            callbackAckPayload
+              ? bot.api.answerCallbackQuery(callback.id, callbackAckPayload)
+              : bot.api.answerCallbackQuery(callback.id);
     // Answer immediately to prevent Telegram from retrying while we process
     await withTelegramApiErrorLogging({
       operation: "answerCallbackQuery",
