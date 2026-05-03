@@ -24,7 +24,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   const stop = params.stop;
   const keepaliveIntervalMs = params.keepaliveIntervalMs ?? 3_000;
   const maxConsecutiveFailures = Math.max(1, params.maxConsecutiveFailures ?? 2);
-  const maxDurationMs = params.maxDurationMs ?? 60_000; // Default 60s TTL
+  const maxDurationMs = params.maxDurationMs ?? 1_200_000; // Default 20min TTL
   let stopSent = false;
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;

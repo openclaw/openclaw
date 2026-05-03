@@ -240,17 +240,17 @@ describe("createTypingCallbacks", () => {
       });
     });
 
-    it("uses default 60s TTL when not specified", async () => {
+    it("uses default 20min TTL when not specified", async () => {
       await withFakeTimers(async () => {
         const { stop, callbacks } = createTypingHarness();
 
         await callbacks.onReplyStart();
 
-        // Should not stop at 59s
-        await vi.advanceTimersByTimeAsync(59_000);
+        // Should not stop at 19min 59s
+        await vi.advanceTimersByTimeAsync(1_199_000);
         expect(stop).not.toHaveBeenCalled();
 
-        // Should stop at 60s
+        // Should stop at 20min
         await vi.advanceTimersByTimeAsync(1_000);
         expect(stop).toHaveBeenCalledTimes(1);
       });
