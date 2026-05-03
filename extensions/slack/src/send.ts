@@ -232,39 +232,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function getErrorCode(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const obj = err as { code?: unknown; original?: unknown };
-  const code = obj.code;
-  if (typeof code !== "string") {
-    return undefined;
-  }
-  // @slack/web-api wraps network errors as slack_webapi_request_error and stores
-  // the underlying error in .original (attachOriginalToWebAPIRequestError defaults
-  // to true). Unwrap one level so callers can match the real network error code
-  // (EPIPE, ECONNRESET, etc.) instead of always seeing the wrapper code.
-  if (code === "slack_webapi_request_error" && obj.original && typeof obj.original === "object") {
-    const originalCode = (obj.original as { code?: unknown }).code;
-    if (typeof originalCode === "string") {
-      return originalCode;
-    }
-  }
-  return code;
-}
-
 function classifyTransientSlackSendError(err: unknown): string | undefined {
-  const code = getErrorCode(err);
-  if (
-    code === "EPIPE" ||
-    code === "ECONNRESET" ||
-    code === "ETIMEDOUT" ||
-    code === "ECONNABORTED"
-  ) {
-    return code;
-  }
-
   const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
   if (message.includes("client has no active connection")) {
     return "socket_no_active_connection";
