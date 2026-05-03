@@ -1,4 +1,13 @@
-# OpenClaw Incident Response Plan
+---
+summary: "How OpenClaw triages, responds to, and follows up on security incidents"
+title: "Incident response"
+read_when:
+  - Responding to a security report or suspected security incident
+  - Preparing a coordinated disclosure or patched security release
+  - Reviewing post-incident follow-up expectations
+---
+
+# Incident Response
 
 ## 1. Detection and triage
 

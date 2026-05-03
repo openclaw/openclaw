@@ -41,7 +41,7 @@ repos:
     hooks:
       - id: zizmor
         args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
-        exclude: "^(vendor/|Swabble/)"
+        exclude: "^(vendor/|apps/swabble/)"
 
   # Python checks for skills scripts
   - repo: https://github.com/astral-sh/ruff-pre-commit

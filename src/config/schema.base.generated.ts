@@ -21989,12 +21989,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           "Web channel runtime settings for heartbeat and reconnect behavior when operating web-based chat surfaces. Use reconnect values tuned to your network reliability profile and expected uptime needs.",
       },
       channels: {
+        type: "object",
+        properties: {},
+        additionalProperties: true,
         title: "Channels",
         description:
           "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.",
-        properties: {},
         required: [],
-        additionalProperties: true,
       },
       discovery: {
         type: "object",
