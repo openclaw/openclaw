@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/usage: serve `usage.cost` and `sessions.usage` from a durable transcript aggregate cache with lock-safe background refreshes and localized stale-cache status, so large usage views avoid repeated full scans. (#76650) Thanks @Marvinthebored.
+- Plugins/hooks: let `plugins.entries.<id>.hooks.timeoutMs` and `plugins.entries.<id>.hooks.timeouts` bound plugin typed hooks from operator config, so slow hooks can be tuned without patching installed plugin code. Fixes #76778. Thanks @vincentkoc.
 - Telegram: add `channels.telegram.mediaGroupFlushMs` at the top level and per account so operators can tune album buffering instead of being stuck with the hard-coded 500ms media-group flush window. Fixes #76149. Thanks @vincentkoc.
 - Config/messages: coerce boolean `messages.visibleReplies` and `messages.groupChat.visibleReplies` values to the documented enum modes so an intuitive toggle no longer invalidates config and drops channel startup. Fixes #75390. Thanks @scottgl9.
 - Feishu: accept and honor `channels.feishu.blockStreaming` at the top level and per account, while keeping the legacy default off so Feishu cards no longer reject documented config or silently drop block replies. Fixes #75555. Thanks @vincentkoc.

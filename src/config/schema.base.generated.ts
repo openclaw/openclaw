@@ -24091,6 +24091,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
                     },
+                    timeoutMs: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 600000,
+                      title: "Plugin Hook Timeout (ms)",
+                      description:
+                        "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. Use this to bound slow plugin hooks without changing plugin code; per-hook values in hooks.timeouts take precedence.",
+                    },
+                    timeouts: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 600000,
+                      },
+                      title: "Plugin Hook Timeout Overrides",
+                      description:
+                        "Per-hook timeout overrides in milliseconds keyed by typed hook name, capped at 600000. Use narrow overrides for known slow hooks such as before_prompt_build or agent_end instead of raising every hook timeout.",
+                    },
                   },
                   additionalProperties: false,
                   title: "Plugin Hook Policy",
@@ -28866,6 +28888,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Allow Prompt Injection Hooks",
       help: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
       tags: ["access"],
+    },
+    "plugins.entries.*.hooks.timeoutMs": {
+      label: "Plugin Hook Timeout (ms)",
+      help: "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. Use this to bound slow plugin hooks without changing plugin code; per-hook values in hooks.timeouts take precedence.",
+      tags: ["performance"],
+    },
+    "plugins.entries.*.hooks.timeouts": {
+      label: "Plugin Hook Timeout Overrides",
+      help: "Per-hook timeout overrides in milliseconds keyed by typed hook name, capped at 600000. Use narrow overrides for known slow hooks such as before_prompt_build or agent_end instead of raising every hook timeout.",
+      tags: ["performance"],
     },
     "plugins.entries.*.subagent": {
       label: "Plugin Subagent Policy",

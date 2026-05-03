@@ -5387,6 +5387,44 @@ module.exports = {
     ]);
   });
 
+  it("applies configured typed hook timeout overrides", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-timeouts",
+      filename: "hook-timeouts.cjs",
+      body: `module.exports = { id: "hook-timeouts", register(api) {
+  api.on("before_prompt_build", () => ({ prependContext: "prepend" }), { timeoutMs: 5000 });
+  api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));
+  api.on("before_agent_start", () => ({ modelOverride: "demo-model" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-timeouts"],
+        entries: {
+          "hook-timeouts": {
+            hooks: {
+              timeoutMs: 250,
+              timeouts: {
+                before_model_resolve: 750,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      Object.fromEntries(registry.typedHooks.map((entry) => [entry.hookName, entry.timeoutMs])),
+    ).toEqual({
+      before_prompt_build: 250,
+      before_model_resolve: 750,
+      before_agent_start: 250,
+    });
+  });
+
   it("blocks conversation typed hooks for non-bundled plugins unless explicitly allowed", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
