@@ -24,6 +24,10 @@ function collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir: string): Se
     if (typeof entry !== "string") {
       continue;
     }
+    // The root package intentionally excludes externalized official plugin
+    // runtime trees. Do not put their runtime sidecars in the root package
+    // baseline: packaged installs must load those files from the plugin's own
+    // npm package-local dist directory instead.
     const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
     if (match?.[1]) {
       excluded.add(match[1]);

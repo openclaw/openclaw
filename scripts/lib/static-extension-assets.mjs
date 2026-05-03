@@ -1,42 +1,88 @@
 import fs from "node:fs";
 import path from "node:path";
 
-/**
- * Static, non-transpiled runtime assets referenced by built extension code.
- *
- * `dest` is the root-package dist path. Package-local runtime builds rewrite it
- * under the plugin package's own dist directory.
- */
-export const STATIC_EXTENSION_ASSETS = [
-  {
-    src: "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
-    dest: "dist/extensions/acpx/mcp-proxy.mjs",
-  },
-  {
-    src: "extensions/acpx/src/runtime-internals/error-format.mjs",
-    dest: "dist/extensions/acpx/error-format.mjs",
-  },
-  {
-    src: "extensions/acpx/src/runtime-internals/mcp-command-line.mjs",
-    dest: "dist/extensions/acpx/mcp-command-line.mjs",
-  },
-  {
-    src: "extensions/diffs/assets/viewer-runtime.js",
-    dest: "dist/extensions/diffs/assets/viewer-runtime.js",
-  },
-];
+function toPosixPath(value) {
+  return String(value ?? "").replaceAll("\\", "/");
+}
+
+function readJsonFile(filePath, fsImpl) {
+  return JSON.parse(fsImpl.readFileSync(filePath, "utf8"));
+}
+
+function normalizePackageRelativePath(value) {
+  const normalized = toPosixPath(value)
+    .trim()
+    .replace(/^\.\/+/u, "");
+  if (!normalized || normalized.startsWith("../") || normalized.includes("/../")) {
+    return "";
+  }
+  return normalized;
+}
+
+function listExtensionPackageDirs(rootDir, fsImpl) {
+  const extensionsRoot = path.join(rootDir, "extensions");
+  if (!fsImpl.existsSync(extensionsRoot)) {
+    return [];
+  }
+  return fsImpl
+    .readdirSync(extensionsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({
+      dirName: entry.name,
+      packageDir: path.join(extensionsRoot, entry.name),
+    }))
+    .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
+}
+
+function readPackageStaticAssetEntries(packageJson) {
+  const entries = packageJson.openclaw?.build?.staticAssets;
+  return Array.isArray(entries) ? entries : [];
+}
+
+export function discoverStaticExtensionAssets(params = {}) {
+  const rootDir = params.rootDir ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const assets = [];
+  for (const { dirName, packageDir } of listExtensionPackageDirs(rootDir, fsImpl)) {
+    const packageJsonPath = path.join(packageDir, "package.json");
+    if (!fsImpl.existsSync(packageJsonPath)) {
+      continue;
+    }
+    const packageJson = readJsonFile(packageJsonPath, fsImpl);
+    for (const entry of readPackageStaticAssetEntries(packageJson)) {
+      const source = normalizePackageRelativePath(entry?.source);
+      const output = normalizePackageRelativePath(entry?.output);
+      if (!source || !output) {
+        continue;
+      }
+      assets.push({
+        pluginDir: dirName,
+        src: toPosixPath(path.posix.join("extensions", dirName, source)),
+        dest: toPosixPath(path.posix.join("dist", "extensions", dirName, output)),
+      });
+    }
+  }
+  return assets.toSorted((left, right) => left.dest.localeCompare(right.dest));
+}
 
 export function listStaticExtensionAssetOutputs(params = {}) {
-  const assets = params.assets ?? STATIC_EXTENSION_ASSETS;
+  const assets = params.assets ?? discoverStaticExtensionAssets(params);
   return assets
     .map(({ dest }) => dest.replace(/\\/g, "/"))
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export function listStaticExtensionAssetSources(params = {}) {
+  const assets = params.assets ?? discoverStaticExtensionAssets(params);
+  return assets
+    .map(({ src }) => src.replace(/\\/g, "/"))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function copyStaticExtensionAssets(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
-  const assets = params.assets ?? STATIC_EXTENSION_ASSETS;
   const fsImpl = params.fs ?? fs;
+  const assets = params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl });
   const warn = params.warn ?? console.warn;
   for (const { src, dest } of assets) {
     const srcPath = path.join(rootDir, src);
@@ -52,8 +98,8 @@ export function copyStaticExtensionAssets(params = {}) {
 
 export function copyStaticExtensionAssetsForPackage(params) {
   const rootDir = params.rootDir ?? process.cwd();
-  const assets = params.assets ?? STATIC_EXTENSION_ASSETS;
   const fsImpl = params.fs ?? fs;
+  const assets = params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl });
   const packagePrefix = `extensions/${params.pluginDir}/`;
   const rootDistPrefix = `dist/extensions/${params.pluginDir}/`;
   const copied = [];
