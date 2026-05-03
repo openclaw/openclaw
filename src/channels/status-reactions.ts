@@ -1,3 +1,5 @@
+import { TOOL_DISPLAY_CONFIG } from "../agents/tool-display-config.js";
+import { resolveToolDisplay } from "../agents/tool-display.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 /**
@@ -107,6 +109,9 @@ export function resolveToolEmoji(
   const normalized = normalizeOptionalLowercaseString(toolName) ?? "";
   if (!normalized) {
     return emojis.tool;
+  }
+  if (Object.hasOwn(TOOL_DISPLAY_CONFIG.tools, normalized)) {
+    return resolveToolDisplay({ name: toolName }).emoji;
   }
   if (WEB_TOOL_TOKENS.some((token) => normalized.includes(token))) {
     return emojis.web;
