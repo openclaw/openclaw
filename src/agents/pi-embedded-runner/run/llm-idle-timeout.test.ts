@@ -124,6 +124,19 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
+  // Node's URL parser normalizes every IPv4-mapped loopback form
+  // (`::ffff:127.0.0.1`, `::ffff:7F00:1`, mixed case, …) to the canonical
+  // `::ffff:7f00:1`. Exercise the user-facing input shapes here so the full
+  // parse → lowercase → bracket-strip → exact-match chain is regression-tested
+  // against future URL parser behavior, not just the canonical literal.
+  it.each([
+    "http://[::ffff:127.0.0.1]:11434",
+    "http://[::ffff:7f00:1]:11434",
+    "http://[::FFFF:127.0.0.1]:11434",
+  ])("disables the default idle watchdog for IPv4-mapped loopback baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
+  });
+
   it.each([
     // Just outside fc00::/7 (fe.. and 00fc::/16 are not unique-local).
     "http://[fec0::1]:11434",

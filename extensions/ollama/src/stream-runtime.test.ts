@@ -1713,6 +1713,35 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("falls back to catalog maxTokens as num_ctx when contextWindow is absent", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          // The helper default contextWindow is overridden back to undefined so
+          // the right side of `model.contextWindow ?? model.maxTokens` is the
+          // load-bearing branch.
+          model: { contextWindow: undefined, maxTokens: 65536 },
+        });
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options?: { num_ctx?: number };
+        };
+        expect(requestBody.options?.num_ctx).toBe(65536);
+      },
+    );
+  });
+
   it("maps configured native Ollama params.thinking=max to the stable top-level think value", async () => {
     await withMockNdjsonFetch(
       [
