@@ -182,6 +182,35 @@ describe("cron service ops seam coverage", () => {
     stop(state);
   });
 
+  it("keeps manual acknowledgement IDs separate from recoverable task run IDs", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const restoreStateDir = withStateDirForStorePath(storePath);
+
+    try {
+      await writeDueIsolatedJobSnapshot(storePath, now);
+
+      const state = createOkIsolatedCronState({ storePath, now, summary: "done" });
+      const manualRunId = `manual:isolated-timeout:${now}:1`;
+
+      await expect(
+        run(state, "isolated-timeout", "force", { runId: manualRunId }),
+      ).resolves.toEqual({
+        ok: true,
+        ran: true,
+      });
+
+      expect(findTaskByRunId(`cron:isolated-timeout:${now}`)).toMatchObject({
+        runtime: "cron",
+        status: "succeeded",
+        sourceId: "isolated-timeout",
+      });
+      expect(findTaskByRunId(manualRunId)).toBeUndefined();
+    } finally {
+      restoreStateDir();
+    }
+  });
+
   it("records timed out manual runs as timed_out in the shared task registry", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");

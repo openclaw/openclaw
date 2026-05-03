@@ -4324,6 +4324,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let deliveryerror: String?
     public let sessionid: String?
     public let sessionkey: String?
+    public let runid: String?
     public let runatms: Int?
     public let durationms: Int?
     public let nextrunatms: Int?
@@ -4344,6 +4345,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         deliveryerror: String?,
         sessionid: String?,
         sessionkey: String?,
+        runid: String?,
         runatms: Int?,
         durationms: Int?,
         nextrunatms: Int?,
@@ -4363,6 +4365,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.deliveryerror = deliveryerror
         self.sessionid = sessionid
         self.sessionkey = sessionkey
+        self.runid = runid
         self.runatms = runatms
         self.durationms = durationms
         self.nextrunatms = nextrunatms
@@ -4384,6 +4387,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         case deliveryerror = "deliveryError"
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
+        case runid = "runId"
         case runatms = "runAtMs"
         case durationms = "durationMs"
         case nextrunatms = "nextRunAtMs"
