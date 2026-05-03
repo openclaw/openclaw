@@ -63,7 +63,6 @@ Local trust:
 
 ## Security
 
-- Direct APNs delivery uses HTTP/2. OpenClaw code should use `connectApnsHttp2Session()` from `src/infra/push-apns-http2.ts` instead of raw `http2.connect()` so managed proxy mode can route APNs through the configured CONNECT proxy.
 - [Security overview](/gateway/security)
 - [Gateway config reference](/gateway/configuration)
 - [Troubleshooting](/gateway/troubleshooting)
