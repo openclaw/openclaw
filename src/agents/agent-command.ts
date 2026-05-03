@@ -1247,7 +1247,13 @@ async function agentCommandInternal(
 
     // Phase 2: Persist pending final delivery for main sessions before attempting delivery.
     // This ensures that if the process restarts during delivery, the payload is durable.
-    if (sessionStore && sessionKey && payloads.length > 0 && !isSubagentSessionKey(sessionKey)) {
+    if (
+      opts.deliver === true &&
+      sessionStore &&
+      sessionKey &&
+      payloads.length > 0 &&
+      !isSubagentSessionKey(sessionKey)
+    ) {
       const now = Date.now();
       const combinedPayload = payloads
         .map((p) => (typeof p.text === "string" ? p.text : ""))
@@ -1286,7 +1292,12 @@ async function agentCommandInternal(
     });
 
     // Phase 2: Clear pending delivery payload after successful delivery.
-    if (sessionStore && sessionKey && !isSubagentSessionKey(sessionKey)) {
+    if (
+      deliveryResult?.deliverySucceeded === true &&
+      sessionStore &&
+      sessionKey &&
+      !isSubagentSessionKey(sessionKey)
+    ) {
       const entry = sessionStore[sessionKey] ?? sessionEntry;
       const next: SessionEntry = {
         ...entry,

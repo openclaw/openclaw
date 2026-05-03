@@ -355,6 +355,8 @@ export async function deliverAgentCommandResult(params: {
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
+  let deliverySucceeded = false;
+  let deliveryHadError = false;
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;
@@ -368,6 +370,10 @@ export async function deliverAgentCommandResult(params: {
       return;
     }
     runtime.log(output);
+  };
+  const markDeliveryError = (err: unknown) => {
+    deliveryHadError = true;
+    logDeliveryError(err);
   };
   if (!deliver) {
     for (const payload of deliveryPayloads) {
@@ -386,12 +392,13 @@ export async function deliverAgentCommandResult(params: {
         replyToId: resolvedReplyToId ?? null,
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
-        onError: (err) => logDeliveryError(err),
+        onError: markDeliveryError,
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
       });
+      deliverySucceeded = !deliveryHadError;
     }
   }
 
-  return { payloads: normalizedPayloads, meta: resultMeta };
+  return { payloads: normalizedPayloads, meta: resultMeta, deliverySucceeded };
 }
