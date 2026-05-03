@@ -5,6 +5,7 @@ import {
   resolveBundledInstallPlanForCatalogEntry,
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
+  resolveOfficialExternalInstallPlanBeforeNpm,
 } from "./plugin-install-plan.js";
 
 describe("plugin install plan helpers", () => {
@@ -33,6 +34,35 @@ describe("plugin install plan helpers", () => {
     });
 
     expect(findBundledSource).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
+
+  it("resolves official external plugin ids before npm fallback", () => {
+    const findOfficialInstall = vi.fn().mockReturnValue({
+      npmSpec: "@openclaw/brave-plugin",
+    });
+
+    const result = resolveOfficialExternalInstallPlanBeforeNpm({
+      rawSpec: "brave",
+      findOfficialInstall,
+    });
+
+    expect(findOfficialInstall).toHaveBeenCalledWith("brave");
+    expect(result).toEqual({
+      pluginId: "brave",
+      npmSpec: "@openclaw/brave-plugin",
+    });
+  });
+
+  it("skips official external plugin resolution for explicit npm specs", () => {
+    const findOfficialInstall = vi.fn();
+
+    const result = resolveOfficialExternalInstallPlanBeforeNpm({
+      rawSpec: "brave@beta",
+      findOfficialInstall,
+    });
+
+    expect(findOfficialInstall).not.toHaveBeenCalled();
     expect(result).toBeNull();
   });
 

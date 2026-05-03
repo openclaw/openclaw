@@ -703,6 +703,49 @@ describe("plugins cli install", () => {
     );
   });
 
+  it("installs official external plugin ids through their catalog npm spec", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("brave");
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("brave"));
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    const originalBundledDisable = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    try {
+      await runPluginsCommand(["plugins", "install", "brave"]);
+    } finally {
+      if (originalBundledDisable === undefined) {
+        delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+      } else {
+        process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalBundledDisable;
+      }
+    }
+
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/brave-plugin",
+      }),
+    );
+    expect(runtimeLogs).toContain(
+      'Using official plugin package @openclaw/brave-plugin for install spec "brave".',
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      brave: expect.objectContaining({
+        source: "npm",
+        spec: "@openclaw/brave-plugin",
+        installPath: cliInstallPath("brave"),
+        version: "1.2.3",
+      }),
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+  });
+
   it("installs directly from npm when npm: prefix is used", async () => {
     const cfg = createEmptyPluginConfig();
     const enabledCfg = createEnabledPluginConfig("demo");

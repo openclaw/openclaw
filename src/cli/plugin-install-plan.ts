@@ -7,9 +7,29 @@ type BundledLookup = (params: {
   value: string;
 }) => BundledPluginSource | undefined;
 
-function isBareNpmPackageName(spec: string): boolean {
+export function isBareNpmPackageName(spec: string): boolean {
   const trimmed = spec.trim();
   return /^[a-z0-9][a-z0-9-._~]*$/.test(trimmed);
+}
+
+export function resolveOfficialExternalInstallPlanBeforeNpm(params: {
+  rawSpec: string;
+  findOfficialInstall: (pluginId: string) =>
+    | {
+        npmSpec?: string;
+      }
+    | null
+    | undefined;
+}): { pluginId: string; npmSpec: string } | null {
+  if (!isBareNpmPackageName(params.rawSpec)) {
+    return null;
+  }
+  const pluginId = params.rawSpec.trim();
+  const npmSpec = params.findOfficialInstall(pluginId)?.npmSpec?.trim();
+  if (!npmSpec) {
+    return null;
+  }
+  return { pluginId, npmSpec };
 }
 
 export function resolveBundledInstallPlanForCatalogEntry(params: {

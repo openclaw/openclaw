@@ -21,6 +21,10 @@ import {
   installPluginFromMarketplace,
   resolveMarketplaceInstallShortcut,
 } from "../plugins/marketplace.js";
+import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalPluginInstall,
+} from "../plugins/official-external-plugin-catalog.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -36,6 +40,7 @@ import {
 import {
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
+  resolveOfficialExternalInstallPlanBeforeNpm,
 } from "./plugin-install-plan.js";
 import {
   createHookPackInstallLogger,
@@ -744,6 +749,33 @@ export async function runPluginInstallCommand(params: {
         pluginId: bundledPreNpmPlan.bundledSource.pluginId,
       },
     );
+    return;
+  }
+
+  const officialPreNpmPlan = resolveOfficialExternalInstallPlanBeforeNpm({
+    rawSpec: raw,
+    findOfficialInstall: (pluginId) => {
+      const entry = getOfficialExternalPluginCatalogEntry(pluginId);
+      return entry ? resolveOfficialExternalPluginInstall(entry) : null;
+    },
+  });
+  if (officialPreNpmPlan) {
+    runtime.log(
+      `Using official plugin package ${officialPreNpmPlan.npmSpec} for install spec "${officialPreNpmPlan.pluginId}".`,
+    );
+    const officialNpmResult = await tryInstallPluginOrHookPackFromNpmSpec({
+      snapshot,
+      installMode,
+      spec: officialPreNpmPlan.npmSpec,
+      pin: opts.pin,
+      safetyOverrides,
+      allowBundledFallback: false,
+      extensionsDir,
+      runtime,
+    });
+    if (!officialNpmResult.ok) {
+      return runtime.exit(1);
+    }
     return;
   }
 
