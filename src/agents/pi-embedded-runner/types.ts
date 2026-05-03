@@ -137,6 +137,7 @@ export type EmbeddedPiRunMeta = {
   error?: {
     kind:
       | "context_overflow"
+      | "context_overflow_exhausted"
       | "compaction_failure"
       | "role_ordering"
       | "image_size"
