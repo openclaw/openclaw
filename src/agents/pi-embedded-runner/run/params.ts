@@ -24,6 +24,14 @@ export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
+export type CurrentTurnPromptContext = {
+  reply?: {
+    body: string;
+    senderLabel?: string;
+    isQuote?: boolean;
+  };
+};
+
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
@@ -86,6 +94,10 @@ export type RunEmbeddedPiAgentParams = {
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
   forceMessageTool?: boolean;
+  /** Include the heartbeat response tool for structured heartbeat outcomes. */
+  enableHeartbeatTool?: boolean;
+  /** Keep the heartbeat response tool available even when a narrow profile would omit it. */
+  forceHeartbeatTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   sessionFile: string;
@@ -96,6 +108,8 @@ export type RunEmbeddedPiAgentParams = {
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
+  /** Explicit current-turn context that must be visible to the model but not persisted as user text. */
+  currentTurnContext?: CurrentTurnPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */

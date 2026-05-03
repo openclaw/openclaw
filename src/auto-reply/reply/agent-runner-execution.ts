@@ -1449,6 +1449,7 @@ export async function runAgentTurnWithFallback(params: {
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
+                currentTurnContext: params.followupRun.currentTurnContext,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                 forceMessageTool:
@@ -1466,6 +1467,8 @@ export async function runAgentTurnWithFallback(params: {
                 })(),
                 suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
                 disableTools: params.opts?.disableTools,
+                enableHeartbeatTool: params.opts?.enableHeartbeatTool,
+                forceHeartbeatTool: params.opts?.forceHeartbeatTool,
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                 images: params.opts?.images,
