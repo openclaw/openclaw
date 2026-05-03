@@ -1,0 +1,12 @@
+{
+  "name": "stitch-todoist",
+  "version": "1.0.0",
+  "description": "Todoist management service for Stitch bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
