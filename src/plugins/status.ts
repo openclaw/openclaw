@@ -20,12 +20,11 @@ import {
   type PluginInspectShape,
 } from "./inspect-shape.js";
 import { loadOpenClawPlugins } from "./loader.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
-  loadPluginManifestRegistryForPluginRegistry,
   loadPluginRegistrySnapshotWithMetadata,
   type PluginRegistrySnapshotDiagnostic,
   type PluginRegistrySnapshotSource,
@@ -38,6 +37,7 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
+import { buildPluginDependencyStatus } from "./status-dependencies.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -53,7 +53,7 @@ export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.j
 
 export type PluginCompatibilityNotice = {
   pluginId: string;
-  code: "legacy-before-agent-start" | "legacy-implicit-startup-sidecar" | "hook-only";
+  code: "legacy-before-agent-start" | "hook-only";
   compatCode: PluginCompatCode;
   severity: "warn" | "info";
   message: string;
@@ -124,16 +124,6 @@ function buildCompatibilityNoticesForInspect(
         "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
     });
   }
-  if (inspect.plugin.compat?.includes("legacy-implicit-startup-sidecar")) {
-    warnings.push({
-      pluginId: inspect.plugin.id,
-      code: "legacy-implicit-startup-sidecar",
-      compatCode: "legacy-implicit-startup-sidecar",
-      severity: "warn",
-      message:
-        "relies on deprecated implicit startup loading; add activation.onStartup: true for startup work or activation.onStartup: false for startup-lazy plugins.",
-    });
-  }
   if (inspect.shape === "hook-only") {
     warnings.push({
       pluginId: inspect.plugin.id,
@@ -200,17 +190,19 @@ function buildPluginRecordFromInstalledIndex(
     channelIds: [...(manifest?.channels ?? [])],
     cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],
     providerIds: [...(manifest?.providers ?? [])],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
+    speechProviderIds: [...(manifest?.contracts?.speechProviders ?? [])],
+    realtimeTranscriptionProviderIds: [
+      ...(manifest?.contracts?.realtimeTranscriptionProviders ?? []),
+    ],
+    realtimeVoiceProviderIds: [...(manifest?.contracts?.realtimeVoiceProviders ?? [])],
+    mediaUnderstandingProviderIds: [...(manifest?.contracts?.mediaUnderstandingProviders ?? [])],
+    imageGenerationProviderIds: [...(manifest?.contracts?.imageGenerationProviders ?? [])],
+    videoGenerationProviderIds: [...(manifest?.contracts?.videoGenerationProviders ?? [])],
+    musicGenerationProviderIds: [...(manifest?.contracts?.musicGenerationProviders ?? [])],
+    webFetchProviderIds: [...(manifest?.contracts?.webFetchProviders ?? [])],
+    webSearchProviderIds: [...(manifest?.contracts?.webSearchProviders ?? [])],
+    migrationProviderIds: [...(manifest?.contracts?.migrationProviders ?? [])],
+    memoryEmbeddingProviderIds: [...(manifest?.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],
@@ -221,6 +213,11 @@ function buildPluginRecordFromInstalledIndex(
     hookCount: 0,
     configSchema: false,
     contracts: {},
+    dependencyStatus: buildPluginDependencyStatus({
+      rootDir: plugin.rootDir,
+      dependencies: manifest?.packageDependencies,
+      optionalDependencies: manifest?.packageOptionalDependencies,
+    }),
   };
 }
 
@@ -238,14 +235,13 @@ export function buildPluginRegistrySnapshotReport(
       }),
     { surface: "status" },
   );
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+  const metadataSnapshot = loadPluginMetadataSnapshot({
     index: result.snapshot,
     config,
-    env: params?.env,
+    env: params?.env ?? process.env,
     workspaceDir: params?.workspaceDir,
-    includeDisabled: true,
   });
-  const manifestByPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+  const manifestByPluginId = metadataSnapshot.byPluginId;
   return {
     workspaceDir: params?.workspaceDir,
     ...createEmptyPluginRegistry(),
@@ -266,12 +262,11 @@ function buildPluginReport(
   const initialWorkspaceDir =
     params?.workspaceDir ??
     resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig), params?.env);
-  const manifestRegistry = !loadModules
-    ? loadPluginManifestRegistryForPluginRegistry({
+  const metadataSnapshot = !loadModules
+    ? loadPluginMetadataSnapshot({
         config: rawConfig,
-        env: params?.env,
+        env: params?.env ?? process.env,
         workspaceDir: initialWorkspaceDir,
-        includeDisabled: true,
       })
     : undefined;
   const baseContext = resolvePluginRuntimeLoadContext({
@@ -279,7 +274,7 @@ function buildPluginReport(
     env: params?.env,
     logger: params?.logger,
     workspaceDir: initialWorkspaceDir,
-    manifestRegistry,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
   });
   const workspaceDir =
     baseContext.workspaceDir ?? initialWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
@@ -302,7 +297,7 @@ function buildPluginReport(
     config,
     workspaceDir,
     env: params?.env,
-    manifestRegistry,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
   });
   const effectiveConfig = withBundledPluginAllowlistCompat({
     config,
@@ -336,7 +331,6 @@ function buildPluginReport(
               loadModules,
               activate: false,
               cache: false,
-              installBundledRuntimeDeps: false,
               onlyPluginIds,
             }),
           ),
@@ -353,7 +347,7 @@ function buildPluginReport(
             logger: params?.logger,
             loadModules: false,
             onlyPluginIds,
-            manifestRegistry,
+            manifestRegistry: metadataSnapshot?.manifestRegistry,
             runtimeContext: context,
           }),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },
@@ -375,6 +369,14 @@ function buildPluginReport(
       Object.assign({}, plugin, {
         imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
         version: resolveReportedPluginVersion(plugin, params?.env),
+        dependencyStatus:
+          plugin.dependencyStatus ??
+          buildPluginDependencyStatus({
+            rootDir: plugin.rootDir,
+            dependencies: metadataSnapshot?.byPluginId.get(plugin.id)?.packageDependencies,
+            optionalDependencies: metadataSnapshot?.byPluginId.get(plugin.id)
+              ?.packageOptionalDependencies,
+          }),
       }),
     ),
   };

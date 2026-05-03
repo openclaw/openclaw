@@ -69,7 +69,7 @@ export function resolveWindowsProviderAuth(input: {
   if (process.env.OPENCLAW_PARALLELS_OPENAI_MODEL?.trim()) {
     return auth;
   }
-  return { ...auth, modelId: "openai/gpt-4.1-mini" };
+  return { ...auth, modelId: "openai/gpt-5.5" };
 }
 
 export function providerIdFromModelId(modelId: string): string {
@@ -82,8 +82,11 @@ export function resolveParallelsModelTimeoutSeconds(platform?: Platform): number
     platform === undefined
       ? undefined
       : process.env[`OPENCLAW_PARALLELS_${platform.toUpperCase()}_MODEL_TIMEOUT_S`];
-  const raw = Number(platformEnv || process.env.OPENCLAW_PARALLELS_MODEL_TIMEOUT_S || 600);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 600;
+  const defaultSeconds = platform === "macos" || platform === "windows" ? 1800 : 900;
+  const raw = Number(
+    platformEnv || process.env.OPENCLAW_PARALLELS_MODEL_TIMEOUT_S || defaultSeconds,
+  );
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : defaultSeconds;
 }
 
 export function providerTimeoutConfigJson(modelId: string, platform: Platform): string {
@@ -122,6 +125,10 @@ export function modelTransportConfigJson(modelId: string): string {
   });
 }
 
+export function configPathMapKey(key: string): string {
+  return `[${JSON.stringify(key)}]`;
+}
+
 export function modelProviderConfigBatchJson(modelId: string, platform: Platform): string {
   const commands: Array<{ path: string; value: unknown }> = [];
   const providerId = providerIdFromModelId(modelId);
@@ -135,7 +142,7 @@ export function modelProviderConfigBatchJson(modelId: string, platform: Platform
   const modelTransportConfig = modelTransportConfigJson(modelId);
   if (modelTransportConfig) {
     commands.push({
-      path: `agents.defaults.models.${modelId}`,
+      path: `agents.defaults.models${configPathMapKey(modelId)}`,
       value: JSON.parse(modelTransportConfig) as unknown,
     });
   }

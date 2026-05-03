@@ -180,6 +180,40 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("records core tool-prep stages for hot-path diagnostics", () => {
+    const stages: string[] = [];
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      recordToolPrepStage: (name) => stages.push(name),
+      senderIsOwner: true,
+    });
+
+    expect(stages).toEqual(
+      expect.arrayContaining([
+        "tool-policy",
+        "workspace-policy",
+        "base-coding-tools",
+        "shell-tools",
+        "openclaw-tools:test-helper",
+        "openclaw-tools",
+        "message-provider-policy",
+        "model-provider-policy",
+        "authorization-policy",
+        "schema-normalization",
+        "tool-hooks",
+        "abort-wrappers",
+        "deferred-followup-descriptions",
+      ]),
+    );
+    expect(stages.indexOf("tool-policy")).toBeLessThan(stages.indexOf("workspace-policy"));
+    expect(stages.indexOf("workspace-policy")).toBeLessThan(stages.indexOf("base-coding-tools"));
+    expect(stages.indexOf("openclaw-tools:test-helper")).toBeLessThan(
+      stages.indexOf("openclaw-tools"),
+    );
+    expect(stages.indexOf("schema-normalization")).toBeLessThan(stages.indexOf("tool-hooks"));
+  });
+
   it("preserves action enums in normalized schemas", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
     const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];
@@ -447,6 +481,54 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("browser")).toBe(false);
   });
 
+  it("includes browser tool with full profile when browser is configured (#76507)", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: { profile: "full" },
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as OpenClawConfig,
+      senderIsOwner: true,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    // full profile must not filter any tools — browser, canvas, etc. must be present.
+    expect(names.has("browser")).toBe(true);
+    expect(names.has("canvas")).toBe(true);
+    expect(names.has("exec")).toBe(true);
+    expect(names.has("message")).toBe(true);
+  });
+
+  it("includes browser tool with full profile for non-owner senders (#76507)", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: { profile: "full" },
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as OpenClawConfig,
+      senderIsOwner: false,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    // browser is NOT owner-only; it must be available to non-owner senders.
+    expect(names.has("browser")).toBe(true);
+    expect(names.has("canvas")).toBe(true);
+    // owner-only tools should be filtered for non-owners
+    expect(names.has("gateway")).toBe(false);
+    expect(names.has("cron")).toBe(false);
+    expect(names.has("nodes")).toBe(false);
+  });
+
+  it("includes browser tool without explicit profile (defaults to no filtering) (#76507)", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as OpenClawConfig,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    // No profile means no profile filtering — all tools pass.
+    expect(names.has("browser")).toBe(true);
+  });
+
   it("keeps browser out of coding-profile subagents unless profile-stage alsoAllow adds it", () => {
     const baseConfig = {
       browser: { enabled: true },
@@ -493,6 +575,29 @@ describe("createOpenClawCodingTools", () => {
       forceMessageTool: true,
     });
     expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
+  });
+
+  it("keeps heartbeat response available for heartbeat runs under the coding profile", () => {
+    const codingTools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+      trigger: "heartbeat",
+      enableHeartbeatTool: true,
+      forceHeartbeatTool: true,
+    });
+
+    expect(codingTools.some((tool) => tool.name === "heartbeat_respond")).toBe(true);
+  });
+
+  it("enables heartbeat response when visible replies are message-tool-only", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        messages: { visibleReplies: "message_tool" },
+        tools: { profile: "coding" },
+      } as OpenClawConfig,
+      trigger: "heartbeat",
+    });
+
+    expect(tools.some((tool) => tool.name === "heartbeat_respond")).toBe(true);
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {

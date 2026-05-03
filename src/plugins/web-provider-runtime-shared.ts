@@ -1,10 +1,6 @@
 import { withActivatedPluginIds } from "./activation-context.js";
-import {
-  isPluginRegistryLoadInFlight,
-  loadOpenClawPlugins,
-  resolveCompatibleRuntimePluginRegistry,
-  resolveRuntimePluginRegistry,
-} from "./loader.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import { isPluginRegistryLoadInFlight, loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope.js";
@@ -58,19 +54,34 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
   }) => TEntry[] | null;
 };
 
-function resolveWebProviderLoadOptions<TEntry>(
+type WebProviderRuntimeContext = {
+  env: NonNullable<PluginLoadOptions["env"]>;
+  workspaceDir?: string;
+  config: PluginLoadOptions["config"];
+  activationSourceConfig?: PluginLoadOptions["config"];
+  autoEnabledReasons: Record<string, string[]>;
+  loadPluginIds?: string[];
+  onlyPluginIds?: string[];
+};
+
+function resolveWebProviderRuntimeContext<TEntry>(
   params: ResolvePluginWebProvidersParams,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
-) {
+): WebProviderRuntimeContext {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const shouldFilterProviders =
+    params.config !== undefined ||
+    params.onlyPluginIds !== undefined ||
+    params.origin !== undefined ||
+    params.bundledAllowlistCompat === true;
   const { config, activationSourceConfig, autoEnabledReasons } =
     deps.resolveBundledResolutionConfig({
       ...params,
       workspaceDir,
       env,
     });
-  const onlyPluginIds = normalizePluginIdScope(
+  const candidatePluginIds = normalizePluginIdScope(
     deps.resolveCandidatePluginIds({
       config,
       workspaceDir,
@@ -79,19 +90,37 @@ function resolveWebProviderLoadOptions<TEntry>(
       origin: params.origin,
     }),
   );
+  const onlyPluginIds = shouldFilterProviders ? candidatePluginIds : undefined;
+  return {
+    activationSourceConfig,
+    autoEnabledReasons,
+    config,
+    env,
+    loadPluginIds: candidatePluginIds,
+    onlyPluginIds,
+    workspaceDir,
+  };
+}
+
+function resolveWebProviderLoadOptions(
+  context: WebProviderRuntimeContext,
+  params: ResolvePluginWebProvidersParams,
+) {
   return buildPluginRuntimeLoadOptionsFromValues(
     {
-      env,
-      config,
-      activationSourceConfig,
-      autoEnabledReasons,
-      workspaceDir,
+      env: context.env,
+      config: context.config,
+      activationSourceConfig: context.activationSourceConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
+      workspaceDir: context.workspaceDir,
       logger: createPluginRuntimeLoaderLogger(),
     },
     {
-      cache: params.cache ?? false,
+      cache: params.cache ?? true,
       activate: params.activate ?? false,
-      ...(hasExplicitPluginIdScope(onlyPluginIds) ? { onlyPluginIds } : {}),
+      ...(hasExplicitPluginIdScope(context.loadPluginIds)
+        ? { onlyPluginIds: context.loadPluginIds }
+        : {}),
     },
   );
 }
@@ -141,7 +170,7 @@ export function resolvePluginWebProviders<TEntry>(
         },
         {
           onlyPluginIds: pluginIds,
-          cache: params.cache ?? false,
+          cache: params.cache ?? true,
           activate: params.activate ?? false,
         },
       ),
@@ -149,20 +178,32 @@ export function resolvePluginWebProviders<TEntry>(
     return deps.mapRegistryProviders({ registry, onlyPluginIds: pluginIds });
   }
 
-  const loadOptions = resolveWebProviderLoadOptions(params, deps);
-  const compatible = resolveCompatibleRuntimePluginRegistry(loadOptions);
+  const context = resolveWebProviderRuntimeContext(params, deps);
+  const loadOptions = resolveWebProviderLoadOptions(context, params);
+  const compatible = getLoadedRuntimePluginRegistry({
+    env: context.env,
+    loadOptions,
+    workspaceDir: context.workspaceDir,
+    requiredPluginIds: context.loadPluginIds,
+  });
   if (compatible) {
     return deps.mapRegistryProviders({
       registry: compatible,
-      onlyPluginIds: params.onlyPluginIds,
+      onlyPluginIds: context.onlyPluginIds,
     });
   }
   if (isPluginRegistryLoadInFlight(loadOptions)) {
     return [];
   }
+  const scopedPluginIds = context.onlyPluginIds;
+  const hasExplicitEmptyScope = scopedPluginIds !== undefined && scopedPluginIds.length === 0;
+  if (hasExplicitEmptyScope) {
+    return [];
+  }
+  const registry = loadOpenClawPlugins(loadOptions);
   return deps.mapRegistryProviders({
-    registry: loadOpenClawPlugins(loadOptions),
-    onlyPluginIds: params.onlyPluginIds,
+    registry,
+    onlyPluginIds: context.onlyPluginIds,
   });
 }
 
@@ -170,9 +211,11 @@ export function resolveRuntimeWebProviders<TEntry>(
   params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
 ): TEntry[] {
-  const loadOptions =
-    params.config === undefined ? undefined : resolveWebProviderLoadOptions(params, deps);
-  const runtimeRegistry = resolveRuntimePluginRegistry(loadOptions);
+  const runtimeRegistry = getLoadedRuntimePluginRegistry({
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    requiredPluginIds: params.onlyPluginIds,
+  });
   if (runtimeRegistry) {
     return deps.mapRegistryProviders({
       registry: runtimeRegistry,

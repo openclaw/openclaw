@@ -17,11 +17,10 @@ const maxWarmFailures = Number(
 );
 const successMarker = process.env.OPENCLAW_NPM_TELEGRAM_SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const scenarioIds = new Set(
-  process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ??
-    "telegram-mentioned-message-reply"
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean),
+  (process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
 );
 
 if (!groupId || !driverToken || !sutToken) {
@@ -80,6 +79,10 @@ const driver = new TelegramBot(driverToken);
 const sut = new TelegramBot(sutToken);
 const observedMessages = [];
 let driverUpdateOffset = 0;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function messageText(message) {
   return message.text ?? message.caption ?? "";

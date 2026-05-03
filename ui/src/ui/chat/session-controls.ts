@@ -182,12 +182,17 @@ function resolveThinkingLevelOptions(
   if (activeRow?.thinkingLevels?.length) {
     return activeRow.thinkingLevels;
   }
-  if (defaults?.thinkingLevels?.length) {
+  const sessionModelMatchesDefaults =
+    (!activeRow?.modelProvider || activeRow.modelProvider === defaults?.modelProvider) &&
+    (!activeRow?.model || activeRow.model === defaults?.model);
+  if (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length) {
     return defaults.thinkingLevels;
   }
   const labels =
-    activeRow?.thinkingOptions ??
-    defaults?.thinkingOptions ??
+    (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
+    (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+      ? defaults.thinkingOptions
+      : null) ??
     (provider && model ? listThinkingLevelLabels(provider, model) : listThinkingLevelLabels());
   return labels.map((label) => ({
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),

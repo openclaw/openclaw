@@ -25,6 +25,7 @@ import {
   type PluginManifestActivation,
   type PluginManifestConfigContracts,
   type PluginManifest,
+  type PluginManifestCapabilityProviderMetadata,
   type PluginManifestChannelCommandDefaults,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
@@ -37,11 +38,15 @@ import {
   type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
   type PluginManifestSetup,
+  type PluginManifestToolMetadata,
+  type PluginPackageChannel,
+  type PluginPackageInstall,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.js";
 
 /**
  * Resolve a plugin source path, falling back from .ts to .js when the
@@ -96,6 +101,9 @@ export type PluginManifestRecord = {
   name?: string;
   description?: string;
   version?: string;
+  packageName?: string;
+  packageVersion?: string;
+  packageDescription?: string;
   enabledByDefault?: boolean;
   autoEnableWhenConfiguredProviders?: string[];
   legacyPluginIds?: string[];
@@ -122,6 +130,11 @@ export type PluginManifestRecord = {
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
+  packageManifest?: OpenClawPackageManifest;
+  packageDependencies?: PluginDependencySpecMap;
+  packageOptionalDependencies?: PluginDependencySpecMap;
+  packageChannel?: PluginPackageChannel;
+  packageInstall?: PluginPackageInstall;
   qaRunners?: PluginManifestQaRunner[];
   skills: string[];
   settingsFiles?: string[];
@@ -141,6 +154,10 @@ export type PluginManifestRecord = {
     string,
     PluginManifestMediaUnderstandingProviderMetadata
   >;
+  imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  toolMetadata?: Record<string, PluginManifestToolMetadata>;
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
@@ -269,6 +286,9 @@ function buildRecord(params: {
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
+    packageName: params.candidate.packageName,
+    packageVersion: params.candidate.packageVersion,
+    packageDescription: params.candidate.packageDescription,
     enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
     autoEnableWhenConfiguredProviders: params.manifest.autoEnableWhenConfiguredProviders,
     legacyPluginIds: params.manifest.legacyPluginIds,
@@ -298,6 +318,11 @@ function buildRecord(params: {
     providerAuthChoices: params.manifest.providerAuthChoices,
     activation: params.manifest.activation,
     setup: params.manifest.setup,
+    packageManifest: params.candidate.packageManifest,
+    packageDependencies: params.candidate.packageDependencies,
+    packageOptionalDependencies: params.candidate.packageOptionalDependencies,
+    packageChannel: params.candidate.packageManifest?.channel,
+    packageInstall: params.candidate.packageManifest?.install,
     qaRunners: params.manifest.qaRunners,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
@@ -316,6 +341,10 @@ function buildRecord(params: {
     configUiHints: params.manifest.uiHints,
     contracts: params.manifest.contracts,
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
+    imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
+    videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,
+    musicGenerationProviderMetadata: params.manifest.musicGenerationProviderMetadata,
+    toolMetadata: params.manifest.toolMetadata,
     configContracts: params.manifest.configContracts,
     channelConfigs,
     ...(params.candidate.packageManifest?.channel?.id
@@ -357,6 +386,14 @@ function buildBundleRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.idHint,
     description: normalizeOptionalString(params.manifest.description),
     version: normalizeOptionalString(params.manifest.version),
+    packageName: params.candidate.packageName,
+    packageVersion: params.candidate.packageVersion,
+    packageDescription: params.candidate.packageDescription,
+    packageManifest: params.candidate.packageManifest,
+    packageDependencies: params.candidate.packageDependencies,
+    packageOptionalDependencies: params.candidate.packageOptionalDependencies,
+    packageChannel: params.candidate.packageManifest?.channel,
+    packageInstall: params.candidate.packageManifest?.install,
     format: "bundle",
     bundleFormat: params.candidate.bundleFormat,
     bundleCapabilities: params.manifest.capabilities,
@@ -388,8 +425,19 @@ function pushProviderAuthEnvVarsCompatDiagnostic(params: {
   if (params.record.origin === "bundled" || !params.record.providerAuthEnvVars) {
     return;
   }
+  const setupProviderEnvVars = new Map(
+    (params.record.setup?.providers ?? []).map(
+      (provider) => [provider.id, new Set(provider.envVars ?? [])] as const,
+    ),
+  );
   const providerIds = Object.entries(params.record.providerAuthEnvVars)
-    .filter(([providerId, envVars]) => providerId.trim() && envVars.length > 0)
+    .filter(([providerId, envVars]) => {
+      if (!providerId.trim() || envVars.length === 0) {
+        return false;
+      }
+      const mirroredEnvVars = setupProviderEnvVars.get(providerId);
+      return !mirroredEnvVars || envVars.some((envVar) => !mirroredEnvVars.has(envVar));
+    })
     .map(([providerId]) => providerId)
     .toSorted((left, right) => left.localeCompare(right));
   if (providerIds.length === 0) {
@@ -540,6 +588,15 @@ export function loadPluginManifestRegistry(
   const config = params.config ?? {};
   const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;
+  let installRecords = params.installRecords;
+  let installRecordsLoaded = Boolean(params.installRecords);
+  const getInstallRecords = (): Record<string, PluginInstallRecord> => {
+    if (!installRecordsLoaded) {
+      installRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
+      installRecordsLoaded = true;
+    }
+    return installRecords ?? {};
+  };
 
   const discovery = params.candidates
     ? {
@@ -550,6 +607,7 @@ export function loadPluginManifestRegistry(
         workspaceDir: params.workspaceDir,
         extraPaths: normalized.loadPaths,
         env,
+        installRecords: getInstallRecords(),
       });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
@@ -557,15 +615,6 @@ export function loadPluginManifestRegistry(
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
-  let installRecords = params.installRecords;
-  let installRecordsLoaded = Boolean(params.installRecords);
-  const getInstallRecords = (): Record<string, PluginInstallRecord> => {
-    if (!installRecordsLoaded) {
-      installRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
-      installRecordsLoaded = true;
-    }
-    return installRecords ?? {};
-  };
 
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";
@@ -596,27 +645,39 @@ export function loadPluginManifestRegistry(
       continue;
     }
     const manifest = manifestRes.manifest;
-    const minHostVersionCheck = checkMinHostVersion({
-      currentVersion: currentHostVersion,
-      minHostVersion: candidate.packageManifest?.install?.minHostVersion,
-    });
-    if (!minHostVersionCheck.ok) {
-      const packageManifestSource = path.join(
-        candidate.packageDir ?? candidate.rootDir,
-        "package.json",
-      );
-      diagnostics.push({
-        level: minHostVersionCheck.kind === "unknown_host_version" ? "warn" : "error",
-        pluginId: manifest.id,
-        source: packageManifestSource,
-        message:
-          minHostVersionCheck.kind === "invalid"
-            ? `plugin manifest invalid | ${minHostVersionCheck.error}`
-            : minHostVersionCheck.kind === "unknown_host_version"
-              ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
-              : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+    if (candidate.origin !== "bundled") {
+      const allowLegacyBareMinHostVersion =
+        candidate.origin === "global" &&
+        matchesInstalledPluginRecord({
+          pluginId: manifest.id,
+          candidate,
+          config,
+          env,
+          installRecords: getInstallRecords(),
+        });
+      const minHostVersionCheck = checkMinHostVersion({
+        currentVersion: currentHostVersion,
+        minHostVersion: candidate.packageManifest?.install?.minHostVersion,
+        allowLegacyBareSemver: allowLegacyBareMinHostVersion,
       });
-      continue;
+      if (!minHostVersionCheck.ok) {
+        const packageManifestSource = path.join(
+          candidate.packageDir ?? candidate.rootDir,
+          "package.json",
+        );
+        diagnostics.push({
+          level: minHostVersionCheck.kind === "invalid" ? "error" : "warn",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message:
+            minHostVersionCheck.kind === "invalid"
+              ? `plugin manifest invalid | ${minHostVersionCheck.error}`
+              : minHostVersionCheck.kind === "unknown_host_version"
+                ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
+                : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+        });
+        continue;
+      }
     }
 
     const configSchema = "configSchema" in manifest ? manifest.configSchema : undefined;
@@ -710,7 +771,10 @@ export function loadPluginManifestRegistry(
         level: "warn",
         pluginId: manifest.id,
         source: overriddenCandidate.source,
-        message: `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
+        message:
+          winnerCandidate.origin === "config"
+            ? `duplicate plugin id resolved by explicit config-selected plugin; ${overriddenCandidate.origin} plugin will be overridden by config plugin (${winnerCandidate.source})`
+            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
       });
       continue;
     }

@@ -21,6 +21,8 @@ Current pieces:
   drive a real channel inside a child QA gateway.
 - `qa/`: repo-backed seed assets for the kickoff task and baseline QA
   scenarios.
+- [Mantis](/concepts/mantis): before and after live verification for bugs that
+  need real transports, browser screenshots, VM state, and PR evidence.
 
 ## Command surface
 
@@ -32,7 +34,7 @@ script aliases; both forms are supported.
 | `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                       |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                 |
 | `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                          |
-| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity-gate report.                                                                                    |
+| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report.                                                                                         |
 | `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                           |
 | `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                         |
 | `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                   |
@@ -45,6 +47,7 @@ script aliases; both forms are supported.
 | `qa matrix`                                         | Live transport lane against a disposable Tuwunel homeserver. See [Matrix QA](/concepts/qa-matrix).                                                                     |
 | `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                             |
 | `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                      |
+| `qa mantis`                                         | Planned before and after verification runner for live transport bugs. See [Mantis](/concepts/mantis).                                                                  |
 
 ## Operator flow
 

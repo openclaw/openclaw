@@ -396,11 +396,10 @@ export const dispatchTelegramMessage = async ({
       );
     }
   }
-  const hasNativeQuoteReply =
-    replyToMode !== "off" && Object.keys(replyQuoteByMessageId).length > 0;
+  const hasTelegramQuoteReply = replyToMode !== "off" && replyQuoteText != null;
   const canStreamAnswerDraft =
     previewStreamingEnabled &&
-    !hasNativeQuoteReply &&
+    !hasTelegramQuoteReply &&
     !accountBlockStreamingEnabled &&
     !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = streamReasoningDraft;
@@ -666,6 +665,7 @@ export const dispatchTelegramMessage = async ({
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
   let queuedFinal = false;
+  let suppressSilentReplyFallback = false;
   let hadErrorReplyFailureOrSkip = false;
   let isFirstTurnInSession = false;
   let dispatchError: unknown;
@@ -1172,6 +1172,8 @@ export const dispatchTelegramMessage = async ({
         return;
       }
       ({ queuedFinal } = turnResult.dispatchResult);
+      suppressSilentReplyFallback =
+        turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
     } catch (err) {
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
@@ -1301,7 +1303,13 @@ export const dispatchTelegramMessage = async ({
     sentFallback = result.delivered;
   }
 
-  if (!queuedFinal && !sentFallback && !dispatchError && !deliverySummary.delivered) {
+  if (
+    !queuedFinal &&
+    !sentFallback &&
+    !dispatchError &&
+    !deliverySummary.delivered &&
+    !suppressSilentReplyFallback
+  ) {
     const policySessionKey =
       ctxPayload.CommandSource === "native"
         ? (ctxPayload.CommandTargetSessionKey ?? ctxPayload.SessionKey)
@@ -1333,7 +1341,7 @@ export const dispatchTelegramMessage = async ({
   const hasFinalResponse = hasFinalInboundReplyDispatch(
     { queuedFinal },
     {
-      fallbackDelivered: sentFallback,
+      fallbackDelivered: sentFallback || suppressSilentReplyFallback,
       deliverySummaryDelivered: deliverySummary.delivered,
     },
   );

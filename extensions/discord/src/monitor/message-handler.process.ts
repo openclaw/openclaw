@@ -176,9 +176,12 @@ export async function processDiscordMessage(
         shouldBypassMention,
       }),
     );
-  const shouldSendAckReaction = !sourceRepliesAreToolOnly && shouldAckReaction();
+  const shouldSendAckReaction = shouldAckReaction();
+  const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
   const statusReactionsEnabled =
-    shouldSendAckReaction && cfg.messages?.statusReactions?.enabled !== false;
+    shouldSendAckReaction &&
+    cfg.messages?.statusReactions?.enabled !== false &&
+    (!sourceRepliesAreToolOnly || statusReactionsExplicitlyEnabled);
   const feedbackRest = createDiscordRestClient({
     cfg,
     token,
