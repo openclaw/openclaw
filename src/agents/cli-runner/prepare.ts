@@ -2,7 +2,9 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
+  createMcpLoopbackScopedBearerToken,
   getActiveMcpLoopbackRuntime,
+  releaseMcpLoopbackScopedBearerToken,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import type {
   CliBackendAuthEpochMode,
@@ -59,6 +61,8 @@ const prepareDeps = {
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
+  createMcpLoopbackScopedBearerToken,
+  releaseMcpLoopbackScopedBearerToken,
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
@@ -185,6 +189,12 @@ export async function prepareCliRunContext(
     }
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
+  const mcpBearerToken = mcpLoopbackRuntime
+    ? prepareDeps.createMcpLoopbackScopedBearerToken(mcpLoopbackRuntime, {
+        senderIsOwner: params.senderIsOwner === true,
+        ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
+      })
+    : undefined;
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: bundleMcpEnabled,
     mode: backendResolved.bundleMcpMode,
@@ -196,10 +206,7 @@ export async function prepareCliRunContext(
       : undefined,
     env: mcpLoopbackRuntime
       ? {
-          OPENCLAW_MCP_TOKEN:
-            params.senderIsOwner === true
-              ? mcpLoopbackRuntime.ownerToken
-              : mcpLoopbackRuntime.nonOwnerToken,
+          OPENCLAW_MCP_TOKEN: mcpBearerToken ?? mcpLoopbackRuntime.nonOwnerToken,
           OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
@@ -231,13 +238,20 @@ export async function prepareCliRunContext(
     preparedExecution?.env && Object.keys(preparedExecution.env).length > 0
       ? { ...preparedBackend.env, ...preparedExecution.env }
       : preparedBackend.env;
+  const releaseMcpBearerToken = mcpBearerToken
+    ? () => prepareDeps.releaseMcpLoopbackScopedBearerToken(mcpBearerToken)
+    : undefined;
   const preparedBackendCleanup =
-    preparedBackend.cleanup || preparedExecution?.cleanup
+    preparedBackend.cleanup || preparedExecution?.cleanup || releaseMcpBearerToken
       ? async () => {
           try {
             await preparedExecution?.cleanup?.();
           } finally {
-            await preparedBackend.cleanup?.();
+            try {
+              await preparedBackend.cleanup?.();
+            } finally {
+              releaseMcpBearerToken?.();
+            }
           }
         }
       : undefined;

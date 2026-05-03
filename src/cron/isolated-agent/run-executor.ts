@@ -172,6 +172,9 @@ export function createCronPromptExecutor(params: {
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: false,
+            ownerOnlyToolAllowlist: resolveCronOwnerOnlyToolAllowlist(
+              params.agentPayload?.toolsAllow,
+            ),
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

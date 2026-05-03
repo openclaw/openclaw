@@ -50,6 +50,7 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  ownerOnlyToolAllowlist?: string[];
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;

@@ -6,6 +6,10 @@ import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
+import {
+  type McpLoopbackBearerContext,
+  resolveMcpLoopbackScopedBearerContext,
+} from "./mcp-http.loopback-runtime.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
@@ -30,6 +34,7 @@ type McpRequestContext = {
   messageProvider: string | undefined;
   accountId: string | undefined;
   senderIsOwner: boolean;
+  ownerOnlyToolAllowlist: string[] | undefined;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -65,7 +70,7 @@ export function validateMcpLoopbackRequest(params: {
   res: ServerResponse;
   ownerToken: string;
   nonOwnerToken: string;
-}): { senderIsOwner: boolean } | null {
+}): McpLoopbackBearerContext | null {
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
@@ -118,8 +123,15 @@ export function validateMcpLoopbackRequest(params: {
   const authHeader = getHeader(params.req, "authorization") ?? "";
   const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
   const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-  const senderIsOwner = ownerTokenMatched ? true : nonOwnerTokenMatched ? false : null;
-  if (senderIsOwner === null) {
+  const scopedToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+  const scopedContext = scopedToken
+    ? resolveMcpLoopbackScopedBearerContext(scopedToken)
+    : undefined;
+  const bearerContext =
+    ownerTokenMatched || nonOwnerTokenMatched
+      ? { senderIsOwner: ownerTokenMatched }
+      : scopedContext;
+  if (!bearerContext) {
     logMcpLoopbackHttp("reject", {
       reason: "unauthorized",
       method: params.req.method ?? "",
@@ -142,7 +154,7 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return { senderIsOwner };
+  return bearerContext;
 }
 
 export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
@@ -174,5 +186,6 @@ export function resolveMcpRequestContext(
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     senderIsOwner: auth.senderIsOwner,
+    ownerOnlyToolAllowlist: auth.ownerOnlyToolAllowlist,
   };
 }

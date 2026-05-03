@@ -63,6 +63,7 @@ vi.mock("./tool-resolution.js", () => ({
 
 import {
   createMcpLoopbackServerConfig,
+  createMcpLoopbackScopedBearerToken,
   closeMcpLoopbackServer,
   getActiveMcpLoopbackRuntime,
   resolveMcpLoopbackBearerToken,
@@ -308,6 +309,65 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(200);
     expect(names).toContain("message");
     expect(names).not.toContain("cron");
+    expect(names).not.toContain("owner_probe");
+  });
+
+  it("keeps allowlisted owner-only tools for scoped non-owner loopback callers", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        },
+        {
+          name: "cron",
+          description: "manage schedules",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "cron" }],
+          }),
+        },
+        {
+          name: "owner_probe",
+          description: "owner-only by flag",
+          parameters: { type: "object", properties: {} },
+          ownerOnly: true,
+          execute: async () => ({
+            content: [{ type: "text", text: "owner" }],
+          }),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime
+        ? createMcpLoopbackScopedBearerToken(runtime, {
+            senderIsOwner: false,
+            ownerOnlyToolAllowlist: ["cron"],
+          })
+        : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const payload = (await response.json()) as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+
+    expect(response.status).toBe(200);
+    expect(names).toContain("message");
+    expect(names).toContain("cron");
     expect(names).not.toContain("owner_probe");
   });
 

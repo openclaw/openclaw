@@ -158,6 +158,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      createMcpLoopbackScopedBearerToken: vi.fn((runtime, params) =>
+        params.senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken,
+      ),
+      releaseMcpLoopbackScopedBearerToken: vi.fn(),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
@@ -609,6 +613,72 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
       expect(context.preparedBackend.env).toBeUndefined();
       expect(context.preparedBackend.backend.args).toEqual(["--print"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses scoped loopback bearer tokens for non-owner CLI owner-only grants", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const runtime = {
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      };
+      const getActiveMcpLoopbackRuntime = vi.fn(() => runtime);
+      const createMcpLoopbackScopedBearerToken = vi.fn(() => "scoped-non-owner-token");
+      const releaseMcpLoopbackScopedBearerToken = vi.fn();
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        createMcpLoopbackScopedBearerToken,
+        releaseMcpLoopbackScopedBearerToken,
+        createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "scoped-cli",
+            pluginId: "scoped-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "scoped-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              sessionMode: "existing",
+              output: "text",
+              input: "arg",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "scoped-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-scoped-loopback-token",
+        config: createCliBackendConfig(),
+        senderIsOwner: false,
+        ownerOnlyToolAllowlist: ["cron"],
+      });
+
+      expect(createMcpLoopbackScopedBearerToken).toHaveBeenCalledWith(runtime, {
+        senderIsOwner: false,
+        ownerOnlyToolAllowlist: ["cron"],
+      });
+      expect(context.preparedBackend.env?.OPENCLAW_MCP_TOKEN).toBe("scoped-non-owner-token");
+
+      await context.preparedBackend.cleanup?.();
+      expect(releaseMcpLoopbackScopedBearerToken).toHaveBeenCalledWith("scoped-non-owner-token");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

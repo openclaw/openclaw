@@ -48,7 +48,7 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
   };
 }
 
-function makeCliRuntimeParams() {
+function makeCliRuntimeParams(toolsAllow?: string[]) {
   const params = makeParams();
   const job = params.job as Record<string, unknown>;
   return {
@@ -68,6 +68,7 @@ function makeCliRuntimeParams() {
         message: "check owner tools",
         allowUnsafeExternalContent: true,
         externalContentSource: "webhook",
+        ...(toolsAllow ? { toolsAllow } : {}),
       },
     } as never,
   };
@@ -127,7 +128,7 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
         meta: { agentMeta: { usage: { input: 10, output: 20 } } },
       });
 
-      await runCronIsolatedAgentTurn(makeCliRuntimeParams());
+      await runCronIsolatedAgentTurn(makeCliRuntimeParams([" CRON "]));
 
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
       expect(runCliAgentMock).toHaveBeenCalledTimes(1);
@@ -136,6 +137,7 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
         model: "claude-opus-4-6",
         trigger: "cron",
         senderIsOwner: false,
+        ownerOnlyToolAllowlist: ["cron"],
       });
     },
   );

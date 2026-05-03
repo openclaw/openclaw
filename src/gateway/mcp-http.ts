@@ -25,7 +25,9 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
 export {
   createMcpLoopbackServerConfig,
+  createMcpLoopbackScopedBearerToken,
   getActiveMcpLoopbackRuntime,
+  releaseMcpLoopbackScopedBearerToken,
   resolveMcpLoopbackBearerToken,
 } from "./mcp-http.loopback-runtime.js";
 
@@ -113,6 +115,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           messageProvider: requestContext.messageProvider,
           accountId: requestContext.accountId,
           senderIsOwner: requestContext.senderIsOwner,
+          ownerOnlyToolAllowlist: requestContext.ownerOnlyToolAllowlist,
         });
 
         const messages = Array.isArray(parsed) ? parsed : [parsed];

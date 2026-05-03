@@ -411,6 +411,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     senderIsOwner: params.senderIsOwner,
+    ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
   };
 }
 
