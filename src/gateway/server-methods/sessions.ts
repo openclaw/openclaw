@@ -24,6 +24,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  createInternalHookEvent,
   hasInternalHookListeners,
   triggerInternalHook,
   type SessionPatchHookContext,
@@ -998,6 +999,24 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         return;
       }
       canonicalParentSessionKey = parent.canonicalKey;
+    }
+    // When creating a new session from a parent (Control UI /new flow), fire the command:new
+    // internal hook against the parent session so bundled hooks like session-memory can capture
+    // the outgoing session before the switch. Without this, commit 37aebf612b's change from
+    // sendChatMessageNow("/new") to sessions.create silently breaks hook delivery (#76957).
+    if (canonicalParentSessionKey && hasInternalHookListeners("command", "new")) {
+      const { entry: parentEntry } = loadSessionEntry(canonicalParentSessionKey);
+      const parentAgentId = normalizeAgentId(
+        resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? resolveDefaultAgentId(cfg),
+      );
+      const hookEvent = createInternalHookEvent("command", "new", canonicalParentSessionKey, {
+        sessionEntry: parentEntry,
+        previousSessionEntry: parentEntry,
+        commandSource: "webchat",
+        cfg,
+        workspaceDir: resolveAgentWorkspaceDir(cfg, parentAgentId),
+      });
+      await triggerInternalHook(hookEvent);
     }
     const loweredRequestedKey = normalizeOptionalLowercaseString(requestedKey);
     const key = requestedKey

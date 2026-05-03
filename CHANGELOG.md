@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway/sessions: fire the `command:new` internal hook against the parent session when `sessions.create` is called with a `parentSessionKey` (Control UI `/new` flow), restoring `session-memory` and custom `command:new` hook delivery after commit 37aebf612b rerouted the typed-`/new` path away from `sendChatMessageNow`. Fixes #76957. Thanks @hclsys.
 - Channels/streaming: add unified `streaming.mode: "progress"` drafts with auto single-word status labels and shared progress configuration across Discord, Telegram, Matrix, Slack, and Microsoft Teams.
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
 - Agents/tools: skip optional media and PDF tool factories when the effective tool denylist already blocks them, avoiding unnecessary hot-path setup for tools that will be filtered out before model use. (#76773) Thanks @dorukardahan.
