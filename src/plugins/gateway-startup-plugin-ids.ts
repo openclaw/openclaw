@@ -161,6 +161,175 @@ function hasConfiguredActivationPath(params: {
   );
 }
 
+const TTS_PROVIDER_CONFIG_RESERVED_KEYS = new Set([
+  "auto",
+  "enabled",
+  "maxTextLength",
+  "mode",
+  "modelOverrides",
+  "persona",
+  "personas",
+  "prefsPath",
+  "provider",
+  "providers",
+  "summaryModel",
+  "timeoutMs",
+]);
+
+function normalizeConfiguredSpeechProviderIdForStartup(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized === "edge" ? "microsoft" : normalized;
+}
+
+function addConfiguredTtsProviderIds(target: Set<string>, value: unknown): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  const directProvider = normalizeConfiguredSpeechProviderIdForStartup(value.provider);
+  if (directProvider) {
+    target.add(directProvider);
+  }
+  if (isRecord(value.providers)) {
+    for (const [providerId, providerConfig] of Object.entries(value.providers)) {
+      if (!isConfigActivationValueEnabled(providerConfig)) {
+        continue;
+      }
+      const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
+      if (normalized) {
+        target.add(normalized);
+      }
+    }
+  }
+  for (const [key, providerConfig] of Object.entries(value)) {
+    if (TTS_PROVIDER_CONFIG_RESERVED_KEYS.has(key) || !isRecord(providerConfig)) {
+      continue;
+    }
+    if (!isConfigActivationValueEnabled(providerConfig)) {
+      continue;
+    }
+    const normalized = normalizeConfiguredSpeechProviderIdForStartup(key);
+    if (normalized) {
+      target.add(normalized);
+    }
+  }
+}
+
+function collectConfiguredSpeechProviderIds(config: OpenClawConfig): ReadonlySet<string> {
+  const configured = new Set<string>();
+  addConfiguredTtsProviderIds(configured, config.messages?.tts);
+
+  const agents = config.agents;
+  if (isRecord(agents)) {
+    if (Array.isArray(agents.list)) {
+      for (const agent of agents.list) {
+        if (isRecord(agent)) {
+          addConfiguredTtsProviderIds(configured, agent.tts);
+        }
+      }
+    }
+  }
+
+  const channels = config.channels;
+  if (isRecord(channels)) {
+    for (const channelConfig of Object.values(channels)) {
+      if (!isRecord(channelConfig)) {
+        continue;
+      }
+      addConfiguredTtsProviderIds(configured, channelConfig.tts);
+      if (isRecord(channelConfig.voice)) {
+        addConfiguredTtsProviderIds(configured, channelConfig.voice.tts);
+      }
+      if (isRecord(channelConfig.accounts)) {
+        for (const accountConfig of Object.values(channelConfig.accounts)) {
+          if (!isRecord(accountConfig)) {
+            continue;
+          }
+          addConfiguredTtsProviderIds(configured, accountConfig.tts);
+          if (isRecord(accountConfig.voice)) {
+            addConfiguredTtsProviderIds(configured, accountConfig.voice.tts);
+          }
+        }
+      }
+    }
+  }
+
+  const pluginEntries = config.plugins?.entries;
+  if (isRecord(pluginEntries)) {
+    for (const entry of Object.values(pluginEntries)) {
+      if (!isRecord(entry) || !isRecord(entry.config)) {
+        continue;
+      }
+      addConfiguredTtsProviderIds(configured, entry.config.tts);
+    }
+  }
+
+  return configured;
+}
+
+function manifestOwnsConfiguredSpeechProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredSpeechProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (params.configuredSpeechProviderIds.size === 0) {
+    return false;
+  }
+  return (params.manifest?.contracts?.speechProviders ?? []).some((providerId) => {
+    const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
+    return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
+  });
+}
+
+function canStartConfiguredSpeechProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredSpeechProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredSpeechProvider({
+      manifest: params.manifest,
+      configuredSpeechProviderIds: params.configuredSpeechProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  if (params.plugin.origin === "bundled") {
+    return true;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: params.plugin.enabledByDefault,
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled && activationState.explicitlyEnabled;
+}
+
 function canStartConfiguredRootPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
@@ -341,6 +510,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
+  const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
@@ -386,6 +556,18 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           config: activationSourceConfig,
           pluginsConfig,
           activationSourcePlugins,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartConfiguredSpeechProviderPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          configuredSpeechProviderIds,
         })
       ) {
         return true;
