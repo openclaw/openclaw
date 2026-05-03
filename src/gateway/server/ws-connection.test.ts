@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebSocketServer } from "ws";
+import { WebSocket, type WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
 
 const { attachGatewayWsMessageHandlerMock } = vi.hoisted(() => ({
@@ -11,6 +11,7 @@ vi.mock("./ws-connection/message-handler.js", () => ({
   attachGatewayWsMessageHandler: attachGatewayWsMessageHandlerMock,
 }));
 
+import { CONNECTION_PING_INTERVAL_MS } from "./connection-health.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 
@@ -179,8 +180,9 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(clients.size).toBe(0);
   });
 
-  it("sends protocol pings until the connection closes", async () => {
+  it("sends connection-health pings from the authenticated socket timer until close", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-12T00:00:00Z"));
     const listeners = new Map<string, (...args: unknown[]) => void>();
     const wss = {
       on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
@@ -196,6 +198,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       },
       send: vi.fn(),
       ping: vi.fn(),
+      readyState: WebSocket.OPEN,
       close: vi.fn(),
     });
     const upgradeReq = {
@@ -235,20 +238,29 @@ describe("attachGatewayWsConnectionHandler", () => {
     const passed = attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as {
       setClient: (client: unknown) => boolean;
     };
-    expect(
-      passed.setClient({
-        socket,
-        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
-        connId: "ping-client",
-        usesSharedGatewayAuth: false,
-      }),
-    ).toBe(true);
+    const connectionHealth: { connectedAtMs: number; lastPingSentAtMs?: number } = {
+      connectedAtMs: Date.now(),
+    };
+    const client = {
+      socket,
+      connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+      connId: "ping-client",
+      connectionHealth,
+      usesSharedGatewayAuth: false,
+    };
+    expect(passed.setClient(client)).toBe(true);
 
-    vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
+    expect(socket.ping).toHaveBeenCalledWith(String(Date.now()));
+    expect(connectionHealth.lastPingSentAtMs).toBe(Date.now());
+
+    vi.advanceTimersByTime(CONNECTION_PING_INTERVAL_MS);
+    expect(socket.ping).toHaveBeenCalledTimes(2);
+    expect(socket.ping).toHaveBeenLastCalledWith(String(Date.now()));
+    expect(connectionHealth.lastPingSentAtMs).toBe(Date.now());
 
     socket.emit("close", 1000, Buffer.from("done"));
-    vi.advanceTimersByTime(25_000);
-    expect(socket.ping).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(CONNECTION_PING_INTERVAL_MS);
+    expect(socket.ping).toHaveBeenCalledTimes(2);
   });
 });

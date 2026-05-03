@@ -76,7 +76,7 @@ The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (pr
 }
 ```
 
-`connection` is not stored in the shared cached health snapshot. It is overlaid for the requesting WebSocket client so separate clients keep independent liveness and RTT state. Before the first successful WebSocket ping/pong, `connected` can be `true` while `rttMs` and `lastHeartbeatAt` are `null`.
+`connection` is not stored in the shared cached health snapshot. It is overlaid for the requesting WebSocket client so separate clients keep independent liveness and RTT state. RTT samples come from the authenticated WebSocket keepalive ping/pong. Before the first successful WebSocket ping/pong, `connected` can be `true` while `rttMs` and `lastHeartbeatAt` are `null`.
 
 ## Related
 

@@ -2,7 +2,7 @@ import { WebSocket } from "ws";
 import type { HealthSummary } from "../../commands/health.js";
 import type { GatewayConnectionHealthState, GatewayWsClient } from "./ws-types.js";
 
-export const CONNECTION_PING_INTERVAL_MS = 5_000;
+export const CONNECTION_PING_INTERVAL_MS = 25_000;
 // 4x stale tolerance: misses up to 3 pongs before reporting disconnected.
 export const CONNECTION_STALE_MS = CONNECTION_PING_INTERVAL_MS * 4;
 const MAX_PENDING_PING_TIMESTAMPS =

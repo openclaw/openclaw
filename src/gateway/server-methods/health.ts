@@ -119,10 +119,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     try {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
-      const payload = context.getEventLoopHealth
-        ? { ...snap, eventLoop: context.getEventLoopHealth() }
-        : snap;
-      respond(true, withConnectionHealth(payload, client), undefined);
+      respond(true, withConnectionHealth(snap, client), undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }

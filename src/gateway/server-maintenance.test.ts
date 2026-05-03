@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
 
@@ -30,7 +28,6 @@ function createActiveRun(sessionKey: string): ChatAbortControllerEntry {
 
 function createMaintenanceTimerDeps() {
   return {
-    clients: new Set<GatewayWsClient>(),
     broadcast: () => {},
     nodeSendToAllSubscribed: () => {},
     getPresenceVersion: () => 1,
@@ -51,13 +48,11 @@ function createMaintenanceTimerDeps() {
 
 function stopMaintenanceTimers(timers: {
   tickInterval: NodeJS.Timeout;
-  connectionPingInterval: NodeJS.Timeout;
   healthInterval: NodeJS.Timeout;
   dedupeCleanup: NodeJS.Timeout;
   mediaCleanup: NodeJS.Timeout | null;
 }) {
   clearInterval(timers.tickInterval);
-  clearInterval(timers.connectionPingInterval);
   clearInterval(timers.healthInterval);
   clearInterval(timers.dedupeCleanup);
   if (timers.mediaCleanup) {
@@ -124,32 +119,6 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(broadcast).toHaveBeenCalledWith("tick", { ts: Date.now() });
-
-    stopMaintenanceTimers(timers);
-  });
-
-  it("pings authenticated open clients on the connection health cadence", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-12T00:00:00Z"));
-    const { CONNECTION_PING_INTERVAL_MS } = await import("./server/connection-health.js");
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
-    const ping = vi.fn();
-    const deps = createMaintenanceTimerDeps();
-    const client = {
-      socket: { readyState: WebSocket.OPEN, ping },
-      connectionHealth: { connectedAtMs: Date.now() },
-    } as unknown as GatewayWsClient;
-    deps.clients.add(client);
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(CONNECTION_PING_INTERVAL_MS);
-
-    expect(ping).toHaveBeenCalledWith(String(Date.now()));
-    expect(
-      (client as { connectionHealth: { lastPingSentAtMs?: number } }).connectionHealth
-        .lastPingSentAtMs,
-    ).toBe(Date.now());
 
     stopMaintenanceTimers(timers);
   });

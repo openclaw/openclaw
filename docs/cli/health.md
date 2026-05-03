@@ -33,7 +33,8 @@ Notes:
   refresh in the background.
 - JSON output from an authenticated WebSocket health response includes a per-client
   `connection` block with `connected`, `rttMs`, and `lastHeartbeatAt`. Those fields
-  describe the current Gateway connection, not the cached service snapshot.
+  describe the current Gateway connection, not the cached service snapshot. RTT is
+  sampled from the authenticated WebSocket keepalive ping/pong.
 - `--verbose` forces a live probe, prints gateway connection details, and expands the
   human-readable output across all configured accounts and agents.
 - Output includes per-agent session stores when multiple agents are configured.
