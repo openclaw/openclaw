@@ -9,7 +9,7 @@ const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
 const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
 const CORE_PATH_RE = /^(?:src\/|ui\/|packages\/)/u;
 const TOOLING_PATH_RE =
-  /^(?:scripts\/|test\/vitest\/|\.github\/|git-hooks\/|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.gitignore$|\.oxlint.*|\.oxfmt.*)/u;
+  /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.gitignore$|\.oxlint.*|\.oxfmt.*)/u;
 const ROOT_GLOBAL_PATH_RE =
   /^(?:package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsdown\.config\.ts$|vitest\.config\.ts$)/u;
 const LIVE_DOCKER_TOOLING_PATH_RE =
@@ -177,7 +177,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (changedPath.startsWith("test/")) {
+    if (changedPath.startsWith("test/") || changedPath.startsWith("test-fixtures/")) {
       lanes.tooling = true;
       reasons.push(`${changedPath}: root test/support surface`);
       continue;

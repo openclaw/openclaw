@@ -187,6 +187,40 @@ function collectAllowedValuesFromBundledChannelSchemaPath(
   return collectAllowedValuesFromJsonSchemaNode(targetNode);
 }
 
+function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  if (!config.channels || !isRecord(config.channels)) {
+    return [];
+  }
+  const issues: ConfigValidationIssue[] = [];
+  for (const [channelId, schema] of bundledChannelSchemaById) {
+    if (!Object.prototype.hasOwnProperty.call(config.channels, channelId)) {
+      continue;
+    }
+    const result = validateJsonSchemaValue({
+      schema: schema as Record<string, unknown>,
+      cacheKey: `raw-channel:${channelId}`,
+      value: config.channels[channelId],
+      applyDefaults: false,
+    });
+    if (result.ok) {
+      continue;
+    }
+    for (const error of result.errors) {
+      const message = error.additionalProperty
+        ? `${error.message}: "${error.additionalProperty}"`
+        : error.message;
+      issues.push({
+        path:
+          error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`,
+        message: `invalid config: ${message}`,
+        allowedValues: error.allowedValues,
+        allowedValuesHiddenCount: error.allowedValuesHiddenCount,
+      });
+    }
+  }
+  return issues;
+}
+
 function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): AllowedValuesCollection {
   const message = typeof record.message === "string" ? record.message : "";
   const expectedMatch = message.match(CUSTOM_EXPECTED_ONE_OF_RE);
@@ -631,10 +665,18 @@ export function validateConfigObjectRaw(
       issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
     };
   }
+  const validatedConfig = validated.data as OpenClawConfig;
+  const channelIssues =
+    policyIssues.length > 0 ? collectRawBundledChannelConfigIssues(validatedConfig) : [];
+  if (channelIssues.length > 0) {
+    return {
+      ok: false,
+      issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, channelIssues),
+    };
+  }
   if (policyIssues.length > 0) {
     return { ok: false, issues: policyIssues };
   }
-  const validatedConfig = validated.data as OpenClawConfig;
   const duplicates = findDuplicateAgentDirs(validatedConfig);
   if (duplicates.length > 0) {
     return {
