@@ -64,11 +64,18 @@ Crabbox, and maintainer workflow glue in ClawSweeper.
 
 ## Command Shape
 
-The local command should support a narrow first flow and leave room for richer
-automation:
+The first local command verifies the Discord bot, guild, channel, message send,
+reaction send, and artifact path:
 
 ```bash
-pnpm openclaw qa mantis \
+pnpm openclaw qa mantis discord-smoke \
+  --output-dir .artifacts/qa-e2e/mantis/discord-smoke
+```
+
+The later before and after runner should accept this shape:
+
+```bash
+pnpm openclaw qa mantis run \
   --transport discord \
   --scenario discord-status-reactions-tool-only \
   --baseline origin/main \
@@ -76,7 +83,8 @@ pnpm openclaw qa mantis \
   --output-dir .artifacts/qa-e2e/mantis/local-discord-status-reactions
 ```
 
-The GitHub workflow should accept equivalent inputs:
+The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
+workflow should accept equivalent inputs:
 
 - `transport`: `discord` for the first version.
 - `scenario`: one or more scenario ids.

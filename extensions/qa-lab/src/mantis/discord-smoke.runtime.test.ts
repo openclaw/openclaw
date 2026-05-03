@@ -1,0 +1,153 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { fetchWithSsrFGuard } = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard,
+}));
+
+import { runMantisDiscordSmoke } from "./discord-smoke.runtime.js";
+
+function jsonResponse(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function emptyResponse(status = 204) {
+  return new Response(null, { status });
+}
+
+describe("mantis discord smoke runtime", () => {
+  let repoRoot: string;
+  let tokenFile: string;
+
+  beforeEach(async () => {
+    repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mantis-discord-smoke-"));
+    tokenFile = path.join(repoRoot, "mantis-token");
+    await fs.writeFile(tokenFile, "test-token", "utf8");
+    fetchWithSsrFGuard.mockReset();
+    const reactionPaths = new Set([
+      "/api/v10/channels/1456744319972282449/messages/1500000000000000001/reactions/%F0%9F%91%80/@me",
+      "/api/v10/channels/1456744319972282449/messages/1500000000000000001/reactions/👀/@me",
+    ]);
+    fetchWithSsrFGuard.mockImplementation(
+      async ({ url, init }: { url: string; init?: RequestInit }) => {
+        const pathname = new URL(url).pathname;
+        const method = init?.method ?? "GET";
+        if (pathname === "/api/v10/users/@me") {
+          return {
+            response: jsonResponse({ id: "1489650053747314748", username: "Mantis" }),
+            release: vi.fn(),
+          };
+        }
+        if (pathname === "/api/v10/guilds/1456350064065904867") {
+          return {
+            response: jsonResponse({ id: "1456350064065904867", name: "Friends" }),
+            release: vi.fn(),
+          };
+        }
+        if (pathname === "/api/v10/guilds/1456350064065904867/channels") {
+          return { response: jsonResponse([{ id: "1456744319972282449" }]), release: vi.fn() };
+        }
+        if (pathname === "/api/v10/channels/1456744319972282449" && method === "GET") {
+          return {
+            response: jsonResponse({ id: "1456744319972282449", name: "maintainers", type: 0 }),
+            release: vi.fn(),
+          };
+        }
+        if (pathname === "/api/v10/channels/1456744319972282449/messages" && method === "POST") {
+          return {
+            response: jsonResponse({
+              id: "1500000000000000001",
+              channel_id: "1456744319972282449",
+            }),
+            release: vi.fn(),
+          };
+        }
+        if (reactionPaths.has(pathname) && method === "PUT") {
+          return { response: emptyResponse(), release: vi.fn() };
+        }
+        return {
+          response: jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404),
+          release: vi.fn(),
+        };
+      },
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("writes pass artifacts without leaking the bot token", async () => {
+    const result = await runMantisDiscordSmoke({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/mantis/test",
+      tokenFile,
+      env: {
+        OPENCLAW_QA_DISCORD_GUILD_ID: "1456350064065904867",
+        OPENCLAW_QA_DISCORD_CHANNEL_ID: "1456744319972282449",
+      },
+      now: () => new Date("2026-05-03T12:00:00.000Z"),
+    });
+
+    expect(result.status).toBe("pass");
+    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
+      status: string;
+      tokenSource: string;
+      message: { id: string; posted: boolean; reactionAdded: boolean };
+    };
+    expect(summary).toMatchObject({
+      status: "pass",
+      tokenSource: "file",
+      message: {
+        id: "1500000000000000001",
+        posted: true,
+        reactionAdded: true,
+      },
+    });
+    expect(await fs.readFile(result.summaryPath, "utf8")).not.toContain("test-token");
+    expect(await fs.readFile(result.reportPath, "utf8")).not.toContain("test-token");
+  });
+
+  it("supports visibility-only smoke runs", async () => {
+    const result = await runMantisDiscordSmoke({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/mantis/visibility",
+      tokenFile,
+      skipPost: true,
+      env: {
+        OPENCLAW_QA_DISCORD_GUILD_ID: "1456350064065904867",
+        OPENCLAW_QA_DISCORD_CHANNEL_ID: "1456744319972282449",
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        init: expect.objectContaining({ method: "POST" }),
+      }),
+    );
+  });
+
+  it("fails before calling Discord when required ids are missing", async () => {
+    const result = await runMantisDiscordSmoke({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/mantis/missing",
+      tokenFile,
+      env: {},
+    });
+
+    expect(result.status).toBe("fail");
+    await expect(fs.readFile(path.join(result.outputDir, "error.txt"), "utf8")).resolves.toContain(
+      "Missing OPENCLAW_QA_DISCORD_GUILD_ID",
+    );
+  });
+});
