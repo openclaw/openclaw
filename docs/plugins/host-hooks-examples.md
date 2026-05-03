@@ -1338,8 +1338,13 @@ api.registerControlUiDescriptor({
   placement: "header",
   schema: {
     kind: "meter",
-    valuePath: "pluginExtensions.budget-guard.budget.spent",
-    capPath: "pluginExtensions.budget-guard.budget.capUsd",
+    source: {
+      kind: "pluginExtension",
+      pluginId: "budget-guard",
+      namespace: "budget",
+    },
+    valuePath: "value.spent",
+    capPath: "value.capUsd",
     format: "usd",
     warningRatio: 0.8,
     criticalRatio: 1.0,
@@ -1348,8 +1353,9 @@ api.registerControlUiDescriptor({
 ```
 
 The web Control UI, the macOS app, and the iOS app each ship a `meter`
-renderer that knows how to read `valuePath` and `capPath` from the session
-row. The plugin only ships data — never UI code.
+renderer that knows how to find the matching `pluginExtensions[]` entry by
+`pluginId` and `namespace`, then read `valuePath` and `capPath` relative to
+that entry. The plugin only ships data — never UI code.
 
 **Common pitfalls**
 
@@ -2088,7 +2094,12 @@ export default definePluginEntry({
       placement: "sidebar",
       schema: {
         kind: "approval-card",
-        valuePath: "pluginExtensions.deploy-approver.deploy-approver",
+        source: {
+          kind: "pluginExtension",
+          pluginId: "deploy-approver",
+          namespace: "deploy-approver",
+        },
+        valuePath: "value",
         actions: [
           { kind: "approve", label: "Approve", command: "/deploy-approve" },
           { kind: "deny", label: "Deny", command: "/deploy-deny" },
@@ -2427,7 +2438,12 @@ export default definePluginEntry({
       placement: "header",
       schema: {
         kind: "wizard-card",
-        valuePath: "pluginExtensions.setup-wizard.setup",
+        source: {
+          kind: "pluginExtension",
+          pluginId: "setup-wizard",
+          namespace: "setup",
+        },
+        valuePath: "value",
         steps: [
           { id: "provider", label: "Choose a provider" },
           { id: "workspace", label: "Pick your workspace" },
@@ -2487,7 +2503,12 @@ export default definePluginEntry({
       placement: "sidebar",
       schema: {
         kind: "review-summary",
-        valuePath: "pluginExtensions.review-assistant.review",
+        source: {
+          kind: "pluginExtension",
+          pluginId: "review-assistant",
+          namespace: "review",
+        },
+        valuePath: "value",
       },
     });
 
