@@ -636,6 +636,68 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "microsoft", "memory-core"],
     ],
     [
+      "includes agent-inherited active persona speech providers at startup",
+      {
+        channels: {},
+        messages: {
+          tts: {
+            personas: {
+              narrator: {
+                label: "Narrator",
+                provider: "microsoft",
+              },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "reader", tts: { persona: "narrator" } }],
+        },
+      } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes channel-inherited active persona speech providers at startup",
+      {
+        channels: {
+          "demo-channel": { tts: { persona: "narrator" } },
+        },
+        messages: {
+          tts: {
+            personas: {
+              narrator: {
+                label: "Narrator",
+                provider: "microsoft",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["demo-channel", "browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes account-inherited active persona speech providers at startup",
+      {
+        channels: {
+          "demo-channel": {
+            accounts: {
+              primary: { tts: { persona: "narrator" } },
+            },
+          },
+        },
+        messages: {
+          tts: {
+            personas: {
+              narrator: {
+                label: "Narrator",
+                provider: "microsoft",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["demo-channel", "browser", "microsoft", "memory-core"],
+    ],
+    [
       "honors disabled speech provider config blocks at startup",
       {
         channels: {},
