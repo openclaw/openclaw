@@ -621,9 +621,10 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
  */
 export function validateConfigObjectRaw(
   raw: unknown,
-  _opts?: {
+  opts?: {
     sourceRaw?: unknown;
     touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
+    validateBundledChannels?: boolean;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripDeprecatedValidationKeys(raw);
@@ -638,7 +639,9 @@ export function validateConfigObjectRaw(
   }
   const validatedConfig = validated.data as OpenClawConfig;
   const channelIssues =
-    policyIssues.length > 0 ? collectRawBundledChannelConfigIssues(validatedConfig) : [];
+    policyIssues.length > 0 || opts?.validateBundledChannels
+      ? collectRawBundledChannelConfigIssues(validatedConfig)
+      : [];
   if (channelIssues.length > 0) {
     return {
       ok: false,
