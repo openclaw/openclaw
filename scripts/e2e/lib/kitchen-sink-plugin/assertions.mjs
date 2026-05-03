@@ -142,14 +142,21 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "cli registration missing explicit commands metadata",
     "only bundled plugins can register Codex app-server extension factories",
     "only bundled plugins can register agent tool result middleware",
+    "agent event subscription registration requires id and handle",
     'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
     "context engine registration missing id",
+    "control UI descriptor registration requires id, surface, label, and valid optional fields",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
+    "node invoke policy registration missing commands",
+    "only bundled plugins can register trusted tool policies",
     "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
     "plugin must declare contracts.tools for: kitchen-sink-tool",
     'channel "kitchen-sink-channel-probe" registration missing required config helpers',
     'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
     "memory prompt supplement registration missing builder",
+    "session extension registration requires namespace and description",
+    "session scheduler job registration requires unique id, sessionKey, and kind",
+    "tool metadata registration missing toolName",
   ]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
     if (errorMessages.size > 0) {
