@@ -363,6 +363,49 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
+  it("aborts and drains embedded runs after an extended no-progress stall", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+
+      vi.advanceTimersByTime(9 * 60_000);
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(2 * 60_000);
+    } finally {
+      unsubscribe();
+    }
+
+    const stalledEvents = events.filter((event) => event.type === "session.stalled");
+    expect(stalledEvents.length).toBeGreaterThan(0);
+    expect(stalledEvents.at(-1)).toMatchObject({
+      classification: "stalled_agent_run",
+      reason: "active_work_without_progress",
+      activeWorkKind: "embedded_run",
+    });
+    expect(recoverStuckSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      sessionKey: "main",
+      ageMs: expect.any(Number),
+      queueDepth: 0,
+      allowActiveAbort: true,
+    });
+  });
+
   it("reports long-running sessions separately when active work is making progress", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
