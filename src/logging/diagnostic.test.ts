@@ -409,6 +409,7 @@ describe("stuck session diagnostics threshold", () => {
   it("reports long-running sessions separately when active work is making progress", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -439,6 +440,7 @@ describe("stuck session diagnostics threshold", () => {
       reason: "active_work",
       activeWorkKind: "embedded_run",
     });
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("long-running session:"));
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
@@ -667,6 +669,41 @@ describe("stuck session diagnostics threshold", () => {
         active: 0,
         waiting: 0,
         queued: 1,
+      }),
+    );
+  });
+
+  it("keeps transient event-loop max spikes debug-only when only background work is active", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay"],
+          intervalMs: 30_000,
+          eventLoopDelayP99Ms: 21,
+          eventLoopDelayMaxMs: 1_500,
+        }),
+      },
+    );
+
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    vi.advanceTimersByTime(30_000);
+
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        active: 1,
+        waiting: 0,
+        queued: 0,
       }),
     );
   });
