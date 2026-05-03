@@ -434,6 +434,16 @@ describe("clawhub helpers", () => {
     );
   });
 
+  it("degrades gracefully on 429 when the response carries no rate-limit headers", async () => {
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () => new Response("Rate limit exceeded", { status: 429 }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
+  });
+
   it("annotates 429 errors with rate-limit headers but no sign-in hint when authenticated", async () => {
     process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
     await expect(

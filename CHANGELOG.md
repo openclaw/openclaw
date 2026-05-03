@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
 - Exec approvals: add a tree-sitter-backed shell command explainer for future approval and command-review surfaces. (#75004) Thanks @jesse-merhi.
 - Agents/sandbox: store sandbox container and browser registry entries as per-runtime shard files, reducing unrelated session lock contention while `openclaw doctor --fix` migrates legacy monolithic registry files. (#74831) Thanks @luckylhb90.
+- Plugins/ClawHub: surface `RateLimit-*` headers in 429 errors from ClawHub, and append a `Sign in for higher rate limits.` hint when the request was unauthenticated, so users can see why downloads were throttled and how to lift the cap. Thanks @romneyda.
 
 ### Fixes
 
