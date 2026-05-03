@@ -345,20 +345,26 @@ after the new secret has been stored.
 
 ## GitHub Artifacts And PR Comments
 
-The first GitHub version should upload screenshots as Actions artifacts and link
-them from the PR comment. Inline images can come later once redaction, retention,
-and public/private repo behavior are settled.
+Mantis workflows should upload the full evidence bundle as a short-lived Actions
+artifact. When the workflow is run for a PR, it should also publish the redacted
+PNG screenshots to the `qa-artifacts` branch and upsert a PR comment with inline
+before/after screenshots. Raw logs, observed messages, and other bulky evidence
+stay in the Actions artifact.
 
-The PR comment should be short:
+The PR comment should be short and visual:
 
 ```md
-Mantis Discord verification: pass
+Mantis Discord Status Reactions QA
 
 - Scenario: `discord-status-reactions-tool-only`
-- Baseline: reproduced on `<sha>`
-- Candidate: fixed on `<sha>`
-- Evidence: <artifact link>
-- Screenshots: baseline and candidate message-row captures in the artifact
+- Run: <workflow run link>
+- Artifact: <artifact link>
+- Baseline: `<status>` at `<sha>`
+- Candidate: `<status>` at `<sha>`
+
+| Baseline            | Candidate           |
+| ------------------- | ------------------- |
+| <inline screenshot> | <inline screenshot> |
 ```
 
 When the run fails because the harness failed, the comment must say that instead
