@@ -3179,8 +3179,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("handles error block + response final — error delivered, response finalizes preview", async () => {
-    const draftStream = createDraftStream(999);
+  it("sends a fresh final after a visible error block bubble pushes the preview up", async () => {
+    const draftStream = createTestDraftStream({
+      messageId: 999,
+      visibleSinceMs: Date.now() - 1_000,
+    });
     createTelegramDraftStream.mockReturnValue(draftStream);
     editMessageTelegram.mockResolvedValue({ ok: true });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -3201,16 +3204,18 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext() });
 
-    // Block error went through deliverReplies
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    // Final was finalized via preview edit
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      999,
-      "The command timed out. Here's what I found...",
-      expect.any(Object),
+    // Error block + fresh final both went through deliverReplies; preview was
+    // not edited in place and the stale preview was cleared.
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({ text: "The command timed out. Here's what I found..." }),
+        ],
+      }),
     );
-    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalled();
   });
 
   // #76529: when a visible non-final message is delivered after the answer
