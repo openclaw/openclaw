@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import {
+  clearMemoryPluginState,
+  type MemoryPluginPublicArtifact,
+  registerMemoryCapability,
+} from "openclaw/plugin-sdk/memory-host-core";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
@@ -13,6 +19,16 @@ import {
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
+
+let statusMirrorImportId = 0;
+
+async function importMirroredStatusModule(): Promise<typeof import("./status.js")> {
+  statusMirrorImportId += 1;
+  return await importFreshModule<typeof import("./status.js")>(
+    import.meta.url,
+    `./status.js?runtimeMirror=${statusMirrorImportId}`,
+  );
+}
 
 async function resolveBridgeMissingArtifactsStatus() {
   const config = resolveMemoryWikiConfig(
@@ -39,6 +55,10 @@ async function resolveBridgeMissingArtifactsStatus() {
 }
 
 describe("resolveMemoryWikiStatus", () => {
+  afterEach(() => {
+    clearMemoryPluginState();
+  });
+
   it("reports missing vault and missing requested obsidian cli", async () => {
     const config = resolveMemoryWikiConfig(
       {
@@ -89,6 +109,50 @@ describe("resolveMemoryWikiStatus", () => {
 
     expect(status.bridgePublicArtifactCount).toBe(0);
     expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
+  });
+
+  it("counts canonical bridge artifacts when loaded from a mirrored runtime module instance", async () => {
+    const artifact: MemoryPluginPublicArtifact = {
+      kind: "memory-root",
+      workspaceDir: "workspace",
+      relativePath: "MEMORY.md",
+      absolutePath: "workspace/MEMORY.md",
+      agentIds: ["main"],
+      contentType: "markdown",
+    };
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [artifact];
+        },
+      },
+    });
+    const config = resolveMemoryWikiConfig(
+      {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+        },
+      },
+      { homedir: "openclaw-test-home" },
+    );
+    const mirroredStatus = await importMirroredStatusModule();
+
+    const status = await mirroredStatus.resolveMemoryWikiStatus(config, {
+      appConfig: {
+        agents: {
+          list: [{ id: "main", default: true, workspace: "workspace" }],
+        },
+      } as OpenClawConfig,
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(status.bridgePublicArtifactCount).toBe(1);
+    expect(status.warnings.map((warning) => warning.code)).not.toContain(
+      "bridge-artifacts-missing",
+    );
   });
 
   it("counts source provenance from the vault", async () => {
