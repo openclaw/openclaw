@@ -161,7 +161,6 @@ export async function openHttpConnectTunnel(params: HttpConnectTunnelParams): Pr
         timeout = setTimeout(() => {
           fail(new Error(`Proxy CONNECT timed out after ${Math.trunc(params.timeoutMs ?? 0)}ms`));
         }, Math.trunc(params.timeoutMs));
-        timeout.unref?.();
       }
 
       const proxyHost = resolveProxyHost(proxy);
