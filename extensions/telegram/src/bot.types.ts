@@ -1,24 +1,8 @@
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramBotInfo } from "./bot-info.js";
 import type { TelegramTransport } from "./fetch.js";
-
-export type TelegramBotInfo = {
-  id: number;
-  is_bot: true;
-  first_name: string;
-  last_name?: string;
-  username: string;
-  language_code?: string;
-  can_join_groups: boolean;
-  can_read_all_group_messages: boolean;
-  can_manage_bots: boolean;
-  supports_inline_queries: boolean;
-  can_connect_to_business: boolean;
-  has_main_web_app: boolean;
-  has_topics_enabled: boolean;
-  allows_users_to_create_topics: boolean;
-};
 
 export type TelegramBotOptions = {
   token: string;
