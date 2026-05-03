@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- macOS/launchd: set generated Gateway LaunchAgent plists to `ProcessType=Interactive` so the gateway keeps timely execution during idle periods. Fixes #58061; refs #62294 and closed duplicate #66992. (#62308) Thanks @bryanpearson and @zssggle-rgb.
 - Gateway/sessions: keep async `sessions.list` title and preview hydration bounded to transcript head/tail reads so Control UI polling cannot full-scan large session transcripts every refresh. Thanks @vincentkoc.
 - CLI/plugins: reject missing plugin ids before config writes in `plugins enable` and `plugins disable` so a typo no longer persists a stale config entry. (#73554) Thanks @ai-hpc.
 - Gateway: preserve stack diagnostics when `chat.send` or agent attachment parsing/staging fails, improving image-send failure triage. Refs #63432. (#75135) Thanks @keen0206.
