@@ -161,6 +161,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   keep chasing `main` with repeated full gates after one green run plus a clean
   rebase sanity pass.
 - User says `commit`: your changes only. `commit all`: all changes in grouped chunks. `push`: may `git pull --rebase` first.
+- User says `ship it`: changelog if needed, commit intended changes, pull --rebase, push.
 - Do not delete/rename unexpected files; ask if blocking, else ignore.
 - Bulk PR close/reopen >5: ask with count/scope.
 - PR/issue workflows: `$openclaw-pr-maintainer`. `/landpr`: `~/.codex/prompts/landpr.md`.
