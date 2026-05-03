@@ -260,6 +260,18 @@ describe("createWebSendApi", () => {
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
   });
 
+  it("does not send composing presence to newsletter JIDs", async () => {
+    await api.sendComposingTo("120363401234567890@newsletter");
+    expect(sendPresenceUpdate).not.toHaveBeenCalled();
+  });
+
+  it("preserves newsletter JIDs for outbound sends", async () => {
+    await api.sendMessage("120363401234567890@newsletter", "hello");
+    expect(sendMessage).toHaveBeenCalledWith("120363401234567890@newsletter", {
+      text: "hello",
+    });
+  });
+
   it("sends media as document when mediaType is undefined", async () => {
     const mediaBuffer = Buffer.from("test");
 

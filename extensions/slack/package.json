@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/slack",
-  "version": "2026.4.25",
+  "version": "2026.5.2",
   "private": true,
   "description": "OpenClaw Slack channel plugin",
   "type": "module",
@@ -33,12 +33,16 @@
         "nativeSkillsAutoEnabled": false
       },
       "configuredState": {
+        "env": {
+          "anyOf": [
+            "SLACK_APP_TOKEN",
+            "SLACK_BOT_TOKEN",
+            "SLACK_USER_TOKEN"
+          ]
+        },
         "specifier": "./configured-state",
         "exportName": "hasSlackConfiguredState"
       }
-    },
-    "bundle": {
-      "stageRuntimeDependencies": true
     }
   }
 }

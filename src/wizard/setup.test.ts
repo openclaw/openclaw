@@ -89,10 +89,11 @@ const finalizeSetupWizard = vi.hoisted(() =>
 const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
 const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
+const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
-const preparePostConfigBundledRuntimeDeps = vi.hoisted(() => vi.fn(async () => {}));
 
 function providerPluginStub(
   overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, "id">,
@@ -159,10 +160,6 @@ vi.mock("../commands/onboard-skills.js", () => ({
   setupSkills,
 }));
 
-vi.mock("../commands/post-config-runtime-deps.js", () => ({
-  preparePostConfigBundledRuntimeDeps,
-}));
-
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
 }));
@@ -209,6 +206,11 @@ vi.mock("../commands/health.js", () => ({
 
 vi.mock("../commands/onboard-hooks.js", () => ({
   setupInternalHooks,
+}));
+
+vi.mock("./setup.migration-import.js", () => ({
+  detectSetupMigrationSources,
+  runSetupMigrationImport,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -427,7 +429,6 @@ describe("runSetupWizard", () => {
   });
 
   it("skips prompts and setup steps when flags are set", async () => {
-    preparePostConfigBundledRuntimeDeps.mockClear();
     const select = vi.fn(
       async (_params: WizardSelectParams<unknown>) => "quickstart",
     ) as unknown as WizardPrompter["select"];
@@ -460,47 +461,7 @@ describe("runSetupWizard", () => {
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
-    expect(preparePostConfigBundledRuntimeDeps).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          gateway: expect.objectContaining({ mode: "local" }),
-        }),
-        runtime,
-      }),
-    );
   });
-
-  it("prepares bundled plugin runtime deps before finalizing local onboarding", async () => {
-    preparePostConfigBundledRuntimeDeps.mockClear();
-    finalizeSetupWizard.mockClear();
-
-    const prompter = buildWizardPrompter({});
-    const runtime = createRuntime({ throwsOnExit: true });
-
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipProviders: true,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
-
-    expect(preparePostConfigBundledRuntimeDeps).toHaveBeenCalledTimes(1);
-    expect(finalizeSetupWizard).toHaveBeenCalledTimes(1);
-    expect(preparePostConfigBundledRuntimeDeps.mock.invocationCallOrder[0]).toBeLessThan(
-      finalizeSetupWizard.mock.invocationCallOrder[0],
-    );
-  });
-
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
     replaceConfigFile.mockClear();

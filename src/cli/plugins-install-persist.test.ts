@@ -3,10 +3,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
   buildPluginDiagnosticsReport,
+  clearPluginRegistryLoadCache,
   enablePluginInConfig,
   loadPluginManifestRegistry,
+  replaceConfigFile,
   refreshPluginRegistry,
   resetPluginsCliTestState,
+  runtimeLogs,
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
@@ -60,6 +63,14 @@ describe("persistPluginInstall", () => {
       }),
     });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: enabledConfig,
+      baseHash: "config-1",
+      writeOptions: {
+        afterWrite: { mode: "restart", reason: "plugin source changed" },
+        unsetPaths: [["plugins", "installs"]],
+      },
+    });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: enabledConfig,
       installRecords: {
@@ -71,6 +82,82 @@ describe("persistPluginInstall", () => {
       },
       reason: "source-changed",
     });
+    expect(clearPluginRegistryLoadCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists installs even when runtime cache invalidation fails", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    clearPluginRegistryLoadCache.mockImplementation(() => {
+      throw new Error("cache unavailable");
+    });
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "alpha",
+      install: {
+        source: "npm",
+        spec: "alpha@1.0.0",
+        installPath: "/tmp/alpha",
+      },
+    });
+
+    expect(next).toEqual(enabledConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalled();
+    expect(
+      runtimeLogs.some((line) => line.includes("Plugin runtime cache invalidation failed")),
+    ).toBe(true);
+  });
+
+  it("invalidates runtime cache even when registry refresh fails", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    refreshPluginRegistry.mockRejectedValueOnce(new Error("registry unavailable"));
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "alpha",
+      install: {
+        source: "npm",
+        spec: "alpha@1.0.0",
+        installPath: "/tmp/alpha",
+      },
+    });
+
+    expect(next).toEqual(enabledConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalled();
+    expect(clearPluginRegistryLoadCache).toHaveBeenCalledTimes(1);
+    expect(runtimeLogs.some((line) => line.includes("Plugin registry refresh failed"))).toBe(true);
   });
 
   it("removes stale denylist entries before enabling installed plugins", async () => {
@@ -180,11 +267,11 @@ describe("persistPluginInstall", () => {
       config: enabledConfig,
       onlyPluginIds: ["legacy-memory"],
     });
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
-      config: enabledConfig,
-      includeDisabled: true,
-      pluginIds: ["legacy-memory"],
-    });
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: enabledConfig,
+      }),
+    );
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
     expect(next.plugins?.slots?.memory).toBe("legacy-memory");
   });
@@ -250,11 +337,11 @@ describe("persistPluginInstall", () => {
     });
 
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
-      config: enabledConfig,
-      includeDisabled: true,
-      pluginIds: ["memory-b"],
-    });
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: enabledConfig,
+      }),
+    );
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
     expect(next.plugins?.slots?.memory).toBe("memory-b");
   });
@@ -306,11 +393,11 @@ describe("persistPluginInstall", () => {
       config: enabledConfig,
       onlyPluginIds: ["plain"],
     });
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
-      config: enabledConfig,
-      includeDisabled: true,
-      pluginIds: ["plain"],
-    });
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: enabledConfig,
+      }),
+    );
     expect(next).toEqual(enabledConfig);
   });
 

@@ -19,8 +19,7 @@ import {
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
-let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
+let createConfigIO: typeof import("../config/config.js").createConfigIO;
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 let gatewayTestSeq = 0;
 const GATEWAY_TEST_ENV_KEYS = [
@@ -52,6 +51,7 @@ async function writeWorkspacePlugin(params: {
   workspaceDir: string;
   id: string;
   body: string;
+  activation?: { onStartup?: boolean };
 }): Promise<void> {
   const pluginDir = path.join(params.workspaceDir, ".openclaw", "extensions", params.id);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -60,6 +60,7 @@ async function writeWorkspacePlugin(params: {
     `${JSON.stringify(
       {
         id: params.id,
+        ...(params.activation ? { activation: params.activation } : {}),
         configSchema: { type: "object", additionalProperties: false, properties: {} },
       },
       null,
@@ -135,7 +136,7 @@ describe("gateway e2e", () => {
   });
 
   beforeAll(async () => {
-    ({ writeConfigFile, resolveConfigPath } = await import("../config/config.js"));
+    ({ createConfigIO } = await import("../config/config.js"));
   });
 
   it(
@@ -233,6 +234,7 @@ describe("gateway e2e", () => {
       await writeWorkspacePlugin({
         workspaceDir,
         id: "http-probe",
+        activation: { onStartup: true },
         body: `
 const fs = require("node:fs");
 const counterPath = ${JSON.stringify(registerCountPath)};
@@ -339,11 +341,14 @@ module.exports = {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
 
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-home-"));
+      const configPath = path.join(tempHome, ".openclaw", "openclaw.json");
       process.env.HOME = tempHome;
+      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = await createEmptyBundledPluginsDir(tempHome);
       process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-      delete process.env.OPENCLAW_STATE_DIR;
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
 
       const wizardToken = nextGatewayId("wiz-token");
       const port = await getFreeGatewayPort();
@@ -355,7 +360,7 @@ module.exports = {
           await prompter.intro("Wizard E2E");
           await prompter.note("write token");
           const token = await prompter.text({ message: "token" });
-          await writeConfigFile({
+          await createConfigIO({ configPath }).writeConfigFile({
             gateway: { auth: { mode: "token", token } },
           });
           await prompter.outro("ok");
@@ -410,11 +415,18 @@ module.exports = {
         );
         expect(next.status).toBe("done");
 
-        const parsed = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8"));
-        const token = (parsed as Record<string, unknown>)?.gateway as
-          | Record<string, unknown>
-          | undefined;
-        expect((token?.auth as { token?: string } | undefined)?.token).toBe(wizardToken);
+        await expect
+          .poll(
+            async () => {
+              const parsed = JSON.parse(await fs.readFile(configPath, "utf8"));
+              const token = (parsed as Record<string, unknown>)?.gateway as
+                | Record<string, unknown>
+                | undefined;
+              return (token?.auth as { token?: string } | undefined)?.token;
+            },
+            { timeout: 5_000 },
+          )
+          .toBe(wizardToken);
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "wizard e2e complete" });

@@ -8,7 +8,6 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
-import { preparePostConfigBundledRuntimeDeps } from "../commands/post-config-runtime-deps.js";
 import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
@@ -763,6 +762,13 @@ export async function runSetupWizard(
 
   // Plugin configuration (sandbox backends, tool plugins, etc.)
   if (flow !== "quickstart") {
+    const { setupOfficialPluginInstalls } = await import("./setup.official-plugins.js");
+    nextConfig = await setupOfficialPluginInstalls({
+      config: nextConfig,
+      prompter,
+      runtime,
+      workspaceDir,
+    });
     const { setupPluginConfig } = await import("./setup.plugin-config.js");
     nextConfig = await setupPluginConfig({
       config: nextConfig,
@@ -777,7 +783,6 @@ export async function runSetupWizard(
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
   nextConfig = await writeWizardConfigFile(nextConfig);
-  await preparePostConfigBundledRuntimeDeps({ config: nextConfig, runtime });
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
   const { launchedTui } = await finalizeSetupWizard({

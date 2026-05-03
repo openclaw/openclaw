@@ -132,11 +132,18 @@ export async function removeSlackReaction(
   opts: SlackActionClientOpts = {},
 ) {
   const client = await getClient(opts, "write");
-  await client.reactions.remove({
-    channel: channelId,
-    timestamp: messageId,
-    name: normalizeEmoji(emoji),
-  });
+  try {
+    await client.reactions.remove({
+      channel: channelId,
+      timestamp: messageId,
+      name: normalizeEmoji(emoji),
+    });
+  } catch (err) {
+    if (hasSlackPlatformError(err, "no_reaction")) {
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function removeOwnSlackReactions(
@@ -163,10 +170,9 @@ export async function removeOwnSlackReactions(
   }
   await Promise.all(
     Array.from(toRemove, (name) =>
-      client.reactions.remove({
-        channel: channelId,
-        timestamp: messageId,
-        name,
+      removeSlackReaction(channelId, messageId, name, {
+        ...opts,
+        client,
       }),
     ),
   );
@@ -257,37 +263,55 @@ export async function readSlackMessages(
     before?: string;
     after?: string;
     threadId?: string;
+    messageId?: string;
   } = {},
 ): Promise<{ messages: SlackMessageSummary[]; hasMore: boolean }> {
   const client = await getClient(opts);
+  const exactMessageId = opts.messageId?.trim();
+  const readLimit = exactMessageId ? 1 : opts.limit;
+  const exactBounds = exactMessageId
+    ? {
+        inclusive: true,
+        latest: exactMessageId,
+        oldest: undefined,
+      }
+    : {
+        latest: opts.before,
+        oldest: opts.after,
+      };
 
   // Use conversations.replies for thread messages, conversations.history for channel messages.
   if (opts.threadId) {
     const result = await client.conversations.replies({
       channel: channelId,
       ts: opts.threadId,
-      limit: opts.limit,
-      latest: opts.before,
-      oldest: opts.after,
+      limit: readLimit,
+      ...exactBounds,
+    });
+    const messages = ((result.messages ?? []) as SlackMessageSummary[]).filter((message) => {
+      if (exactMessageId) {
+        return message.ts === exactMessageId;
+      }
+      // conversations.replies includes the parent message; drop it for replies-only reads.
+      return message.ts !== opts.threadId;
     });
     return {
-      // conversations.replies includes the parent message; drop it for replies-only reads.
-      messages: (result.messages ?? []).filter(
-        (message) => (message as SlackMessageSummary)?.ts !== opts.threadId,
-      ) as SlackMessageSummary[],
-      hasMore: Boolean(result.has_more),
+      messages,
+      hasMore: exactMessageId ? false : Boolean(result.has_more),
     };
   }
 
   const result = await client.conversations.history({
     channel: channelId,
-    limit: opts.limit,
-    latest: opts.before,
-    oldest: opts.after,
+    limit: readLimit,
+    ...exactBounds,
   });
+  const messages = ((result.messages ?? []) as SlackMessageSummary[]).filter(
+    (message) => !exactMessageId || message.ts === exactMessageId,
+  );
   return {
-    messages: (result.messages ?? []) as SlackMessageSummary[],
-    hasMore: Boolean(result.has_more),
+    messages,
+    hasMore: exactMessageId ? false : Boolean(result.has_more),
   };
 }
 
