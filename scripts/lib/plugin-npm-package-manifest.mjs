@@ -76,6 +76,8 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
   const packageJson = {
     ...plan.packageJson,
     files: plan.packageFiles,
+    peerDependencies: plan.packagePeerMetadata.peerDependencies,
+    peerDependenciesMeta: plan.packagePeerMetadata.peerDependenciesMeta,
     openclaw: {
       ...plan.packageJson.openclaw,
       runtimeExtensions: plan.runtimeExtensions,
