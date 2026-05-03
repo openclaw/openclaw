@@ -1069,20 +1069,22 @@ export const agentHandlers: GatewayRequestHandlers = {
         claudeCliSessionId: entry?.claudeCliSessionId,
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
-      const sendPolicy = resolveSendPolicy({
-        cfg,
-        entry,
-        sessionKey: canonicalKey,
-        channel: entry?.channel,
-        chatType: entry?.chatType,
-      });
-      if (sendPolicy === "deny") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-        );
-        return;
+      if (request.deliver === true) {
+        const sendPolicy = resolveSendPolicy({
+          cfg,
+          entry: sessionEntry,
+          sessionKey: canonicalKey,
+          channel: sessionEntry?.channel,
+          chatType: sessionEntry?.chatType,
+        });
+        if (sendPolicy === "deny") {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+          );
+          return;
+        }
       }
       resolvedSessionId = sessionId;
       const canonicalSessionKey = canonicalKey;
