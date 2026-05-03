@@ -50,6 +50,26 @@ describe("commandsEqual", () => {
     expect(commandsEqual(currentFromDiscord(), desiredFromLocal())).toBe(true);
   });
 
+  test("ignores Discord null localization maps when local command omits them", () => {
+    const current = currentFromDiscord({
+      name_localizations: null,
+      description_localizations: null,
+      options: [
+        {
+          type: 3,
+          name: "name",
+          name_localizations: null,
+          description: "Skill name",
+          description_localizations: null,
+        } as any,
+      ],
+    });
+    const desired = desiredFromLocal({
+      options: [{ name: "name", description: "Skill name", type: 3 }],
+    });
+    expect(commandsEqual(current, desired)).toBe(true);
+  });
+
   test("treats `required: false` on an option as equivalent to field absent", () => {
     const current = currentFromDiscord({
       name: "skill",

@@ -242,6 +242,7 @@ const optionComparisonOmittedFields = new Set([
   "integration_types",
   "name_localized",
 ]);
+const nullableLocalizationFields = new Set(["description_localizations", "name_localizations"]);
 
 function stableComparableObject(value: unknown, path: string[] = []): unknown {
   if (Array.isArray(value)) {
@@ -266,6 +267,9 @@ function stableComparableObject(value: unknown, path: string[] = []): unknown {
     Object.entries(value as Record<string, unknown>)
       .filter(([key, entry]) => {
         if (entry === undefined) {
+          return false;
+        }
+        if (entry === null && nullableLocalizationFields.has(key)) {
           return false;
         }
         if (path.includes("options") && optionComparisonOmittedFields.has(key)) {
