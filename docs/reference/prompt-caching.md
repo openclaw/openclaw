@@ -328,6 +328,8 @@ Defaults:
 - `OPENCLAW_CACHE_TRACE_MESSAGES=0|1` toggles full message payload capture.
 - `OPENCLAW_CACHE_TRACE_PROMPT=0|1` toggles prompt text capture.
 - `OPENCLAW_CACHE_TRACE_SYSTEM=0|1` toggles system prompt capture.
+- `OPENCLAW_CACHE_TRACE_TOOLS=0|1` toggles recording of `tools` from `stream:context`.
+- `OPENCLAW_CACHE_TRACE_STAGES='regex'` filters which cache-trace stages are recorded. By default all stages are recorded.
 
 ### What to inspect
 

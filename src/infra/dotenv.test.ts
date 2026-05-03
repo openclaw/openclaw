@@ -724,6 +724,8 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_CACHE_TRACE_MESSAGES",
           "OPENCLAW_CACHE_TRACE_PROMPT",
           "OPENCLAW_CACHE_TRACE_SYSTEM",
+          "OPENCLAW_CACHE_TRACE_TOOLS",
+          "OPENCLAW_CACHE_TRACE_STAGES",
           "OPENCLAW_SHOW_SECRETS",
           "OPENCLAW_PLUGIN_CATALOG_PATHS",
           "OPENCLAW_MPM_CATALOG_PATHS",

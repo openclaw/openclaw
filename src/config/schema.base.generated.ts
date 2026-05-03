@@ -338,6 +338,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Cache Trace Include System",
                 description: "Include system prompt in trace output (default: true).",
               },
+              includeTools: {
+                type: "boolean",
+                title: "Cache Trace Include Tools",
+                description: "Include tools from stream context in trace output (default: false).",
+              },
+              stages: {
+                type: "string",
+                title: "Cache Trace Stages Filter",
+                description:
+                  "Optional regular expression used to filter which cache-trace stages are recorded. By default all stages are recorded, preserving existing behavior.",
+              },
             },
             additionalProperties: false,
             title: "Cache Trace",
@@ -24688,6 +24699,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "diagnostics.cacheTrace.includeSystem": {
       label: "Cache Trace Include System",
       help: "Include system prompt in trace output (default: true).",
+      tags: ["observability", "storage"],
+    },
+    "diagnostics.cacheTrace.includeTools": {
+      label: "Cache Trace Include Tools",
+      help: "Include tools from stream context in trace output (default: false).",
+      tags: ["observability", "storage"],
+    },
+    "diagnostics.cacheTrace.stages": {
+      label: "Cache Trace Stages Filter",
+      help: "Optional regular expression used to filter which cache-trace stages are recorded. By default all stages are recorded, preserving existing behavior.",
       tags: ["observability", "storage"],
     },
     "agents.list.*.identity.avatar": {

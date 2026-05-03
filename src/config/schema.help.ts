@@ -636,6 +636,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Include full message payloads in trace output (default: true).",
   "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
   "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
+  "diagnostics.cacheTrace.includeTools":
+    "Include tools from stream context in trace output (default: false).",
+  "diagnostics.cacheTrace.stages":
+    "Optional regular expression used to filter which cache-trace stages are recorded. By default all stages are recorded, preserving existing behavior.",
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":
