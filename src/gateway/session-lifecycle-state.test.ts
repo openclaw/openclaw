@@ -87,6 +87,31 @@ describe("session lifecycle state", () => {
     });
   });
 
+  it("maps startup-failed lifecycle events to failed", () => {
+    expect(
+      deriveGatewaySessionLifecycleSnapshot({
+        session: {
+          updatedAt: 1_000,
+          startedAt: 1_050,
+        },
+        event: {
+          ts: 2_000,
+          data: {
+            phase: "startup-failed",
+            endedAt: 1_550,
+          },
+        },
+      }),
+    ).toEqual({
+      updatedAt: 1_550,
+      status: "failed",
+      startedAt: 1_050,
+      endedAt: 1_550,
+      runtimeMs: 500,
+      abortedLastRun: false,
+    });
+  });
+
   it("maps aborted lifecycle end events without stopReason to timeout", () => {
     expect(
       derivePersistedSessionLifecyclePatch({

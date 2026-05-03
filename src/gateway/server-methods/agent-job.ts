@@ -130,19 +130,25 @@ function getPendingAgentRunTimeout(runId: string) {
 
 function createSnapshotFromLifecycleEvent(params: {
   runId: string;
-  phase: "end" | "error";
+  phase: "end" | "error" | "startup-failed";
   data?: Record<string, unknown>;
 }): AgentRunSnapshot {
   const { runId, phase, data } = params;
   const startedAt =
     typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
-  const error = typeof data?.error === "string" ? data.error : undefined;
+  const error =
+    typeof data?.error === "string"
+      ? data.error
+      : typeof data?.reason === "string"
+        ? data.reason
+        : undefined;
   const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
   const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
   return {
     runId,
-    status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
+    status:
+      phase === "error" || phase === "startup-failed" ? "error" : data?.aborted ? "timeout" : "ok",
     startedAt,
     endedAt,
     error,
@@ -176,7 +182,11 @@ function ensureAgentRunListener() {
       agentRunCache.delete(evt.runId);
       return;
     }
-    if (phase !== "end" && phase !== "error") {
+    if (phase === "first-progress") {
+      clearPendingAgentRunTimeout(evt.runId);
+      return;
+    }
+    if (phase !== "end" && phase !== "error" && phase !== "startup-failed") {
       return;
     }
     const snapshot = createSnapshotFromLifecycleEvent({

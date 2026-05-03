@@ -37,6 +37,35 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   });
 }
 
+export function emitFirstProgressOnce(
+  ctx: {
+    params: Pick<EmbeddedPiSubscribeContext["params"], "runId" | "onAgentEvent">;
+    state: Pick<EmbeddedPiSubscribeContext["state"], "firstProgressEmitted">;
+  },
+  source: "assistant" | "tool",
+  meta: Record<string, unknown> = {},
+): void {
+  if (ctx.state.firstProgressEmitted) {
+    return;
+  }
+  ctx.state.firstProgressEmitted = true;
+  const data = {
+    phase: "first-progress",
+    source,
+    ...meta,
+    progressedAt: Date.now(),
+  };
+  emitAgentEvent({
+    runId: ctx.params.runId,
+    stream: "lifecycle",
+    data,
+  });
+  void ctx.params.onAgentEvent?.({
+    stream: "lifecycle",
+    data: { phase: "first-progress", source, ...meta },
+  });
+}
+
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<void> {
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
@@ -115,6 +144,27 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       ...(ctx.state.terminalStopReason ? { stopReason: ctx.state.terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
     };
+    if (ctx.state.terminalStopReason === "aborted" && !ctx.state.firstProgressEmitted) {
+      const startupFailureData = {
+        phase: "startup-failed",
+        reason: "startup_aborted",
+        stopReason: ctx.state.terminalStopReason,
+        endedAt: Date.now(),
+      };
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "lifecycle",
+        data: startupFailureData,
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "startup-failed",
+          reason: "startup_aborted",
+          stopReason: ctx.state.terminalStopReason,
+        },
+      });
+    }
     if (isError) {
       emitAgentEvent({
         runId: ctx.params.runId,

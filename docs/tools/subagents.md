@@ -404,9 +404,13 @@ Announce context is normalized to a stable internal event block:
 | Follow-up      | Instruction describing when to reply vs stay silent                                                           |
 
 Terminal failed runs report failure status without replaying captured
-reply text. On timeout, if the child only got through tool calls, announce
-can collapse that history into a short partial-progress summary instead
-of replaying raw tool output.
+reply text. Embedded child runs emit a `first-progress` lifecycle signal
+on first visible assistant text or tool call; if an aborted run reaches
+termination before that signal, OpenClaw emits `startup-failed` and reports
+it as a startup failure instead of leaving the parent to infer a hang. On
+timeout, if the child only got through tool calls, announce can collapse
+that history into a short partial-progress summary instead of replaying raw
+tool output.
 
 ### Stats line
 

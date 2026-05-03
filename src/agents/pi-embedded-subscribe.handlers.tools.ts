@@ -26,6 +26,7 @@ import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
+import { emitFirstProgressOnce } from "./pi-embedded-subscribe.handlers.lifecycle.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
@@ -622,6 +623,7 @@ export function handleToolExecutionStart(
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
+    emitFirstProgressOnce(ctx, "tool", { name: toolName, toolCallId });
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
     emitAgentEvent({

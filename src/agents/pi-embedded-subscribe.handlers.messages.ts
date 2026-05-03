@@ -21,6 +21,7 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import { emitFirstProgressOnce } from "./pi-embedded-subscribe.handlers.lifecycle.js";
 import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
@@ -620,6 +621,9 @@ export function handleMessageUpdate(
         data,
       });
       ctx.state.emittedAssistantUpdate = true;
+      if (cleanedText.trim()) {
+        emitFirstProgressOnce(ctx, "assistant");
+      }
       if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
         void ctx.params.onPartialReply(data);
       }
@@ -751,6 +755,9 @@ export function handleMessageEnd(
       data,
     });
     ctx.state.emittedAssistantUpdate = true;
+    if (cleanedText.trim()) {
+      emitFirstProgressOnce(ctx, "assistant");
+    }
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }
 
