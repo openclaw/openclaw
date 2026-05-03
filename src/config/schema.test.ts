@@ -390,6 +390,18 @@ describe("config schema", () => {
     });
   });
 
+  it("accepts web fetch trusted env proxy opt-in in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          useTrustedEnvProxy: true,
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.useTrustedEnvProxy).toBe(true);
+  });
+
   it("rejects allowPrivateNetwork on media-understanding request config", () => {
     expect(() =>
       ToolsSchema.parse({

@@ -8759,6 +8759,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
                   },
+                  useTrustedEnvProxy: {
+                    type: "boolean",
+                    title: "Web Fetch Trusted Env Proxy",
+                    description:
+                      "Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy is operator-controlled and enforces outbound policy after DNS resolution.",
+                  },
                   ssrfPolicy: {
                     type: "object",
                     properties: {
@@ -25985,6 +25991,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "tools.web.fetch.readability": {
       label: "Web Fetch Readability Extraction",
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+      tags: ["tools"],
+    },
+    "tools.web.fetch.useTrustedEnvProxy": {
+      label: "Web Fetch Trusted Env Proxy",
+      help: "Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy is operator-controlled and enforces outbound policy after DNS resolution.",
       tags: ["tools"],
     },
     "tools.web.fetch.ssrfPolicy": {
