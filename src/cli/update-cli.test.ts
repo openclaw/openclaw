@@ -29,6 +29,7 @@ const runRestartScript = vi.fn();
 const mockedRunDaemonInstall = vi.fn();
 const serviceReadCommand = vi.fn();
 const serviceReadRuntime = vi.fn();
+const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid]));
 const inspectPortUsage = vi.fn();
 const classifyPortListener = vi.fn();
 const formatPortDiagnostics = vi.fn();
@@ -126,6 +127,10 @@ vi.mock("../infra/runtime-guard.js", () => ({
       patch: Number.parseInt(match[3] ?? "0", 10),
     };
   },
+}));
+
+vi.mock("../infra/restart-stale-pids.js", () => ({
+  getSelfAndAncestorPidsSync: () => mockGetSelfAndAncestorPidsSync(),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -498,6 +503,7 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
     prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
     runRestartScript.mockResolvedValue(undefined);
     inspectPortUsage.mockResolvedValue({
@@ -1419,6 +1425,26 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
     expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  });
+
+  it("refuses package updates from inside the active gateway process tree", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    serviceLoaded.mockResolvedValue(true);
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 4242]));
+
+    await updateCommand({ yes: true });
+
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain(
+      "openclaw update detected it is running inside the gateway process tree.",
+    );
+    expect(errors.join("\n")).toContain("Gateway PID 4242 is an ancestor");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(serviceStop).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
       ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
       expect.any(Object),

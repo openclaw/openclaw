@@ -8,18 +8,24 @@ Docs: https://docs.openclaw.ai
 
 - Plugins/onboarding: let Manual setup install optional official plugins, including ClawHub-backed diagnostics with npm fallback, and expose the external Codex plugin as a selectable provider setup choice. Thanks @vincentkoc.
 - Plugins/CLI: include package dependency install state in `openclaw plugins list --json` so scripts can spot missing plugin dependencies without runtime-loading plugins.
+- Discord/status: add degraded Discord transport and gateway event-loop starvation signals to `openclaw channels status`, `openclaw status --deep`, and fetch-timeout logs so intermittent socket resets do not look like a healthy running channel. (#76327) Thanks @joshavant.
 - Plugins/update: on the beta OpenClaw update channel, default-line npm and ClawHub plugin updates try `@beta` first and fall back to default/latest when no plugin beta release exists.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
 
 ### Fixes
 
+- Docker/Gateway: pass Docker setup `.env` values into gateway and CLI containers and preserve exec SecretRef `passEnv` keys in managed service plans, so 1Password Connect-backed Discord tokens keep resolving after doctor or plugin repair. Thanks @vincentkoc.
 - Gateway/sessions: keep async `sessions.list` title and preview hydration bounded to transcript head/tail reads so Control UI polling cannot full-scan large session transcripts every refresh. Thanks @vincentkoc.
+- CLI/plugins: reject missing plugin ids before config writes in `plugins enable` and `plugins disable` so a typo no longer persists a stale config entry. (#73554) Thanks @ai-hpc.
+- Agents/sessions: preserve delivered trailing assistant replies during session-file repair so Telegram/WebChat history is not rewritten to drop already-delivered responses. Fixes #76329. Thanks @obviyus.
+- Gateway/chat history: preserve oversized transcript turns as explicit omitted-message placeholders while avoiding large JSONL parse stalls. Thanks @vincentkoc.
 - Gateway: preserve stack diagnostics when `chat.send` or agent attachment parsing/staging fails, improving image-send failure triage. Refs #63432. (#75135) Thanks @keen0206.
 - Maintainer workflow: push prepared PR heads through GitHub's verified commit API by default and require an explicit override before git-protocol pushes can publish unsigned commits. Thanks @BunsDev.
 - Feishu: resolve setup/status probes through the selected/default account so multi-account configs with account-scoped app credentials show as configured and probeable. Fixes #72930. Thanks @brokemac79.
 - Gateway/responses: emit every client tool call from `/v1/responses` JSON and SSE responses when the agent invokes multiple client tools in a single turn, so multi-tool plans, graph orchestration calls, and similar batched flows no longer drop every call but the last. Fixes #52288. Thanks @CharZhou and @bonelli.
 - Gateway/agent: enforce `session.sendPolicy=deny` on gateway agent requests only when `deliver: true`, so non-delivery smoke checks and internal agent runs are no longer rejected with `send blocked by session policy` while outbound delivery remains gated. Fixes #73381. Thanks @wenxu007.
 - Slack/reactions: treat missing no_reaction remove responses as idempotent success and route own-reaction cleanup through the remove helper, so concurrent cleanup no longer surfaces Slack race errors. Fixes #50733. (#76304) Thanks @martingarramon and @Hollychou924.
+- Feishu: include media `file_key` and `image_key` values in inbound dedupe so reused message IDs still process distinct media attachments while true retries stay suppressed. Fixes #75057. Thanks @SymbolStar.
 - Control UI/Gateway: avoid full session-list reloads for locally applied message-phase session updates, carry known session keys through transcript-file update events, and defer media provider listing when explicit generation model config is present. Refs #76236, #76203, #76188, #76107, and #76166. Thanks @BunsDev.
 - Install/update: prune the obsolete `plugin-runtime-deps` state directory during packaged postinstall so upgrades from pre-2026.5.2 releases reclaim old bundled-plugin dependency caches without touching external plugin installs.
 - Auto-reply/queue: treat reset-triggered `/new` and `/reset` turns as interrupt runs across active-run queue handling, so steer/followup modes cannot delay a fresh session behind existing work. Fixes #74093. (#74144) Thanks @ruji9527 and @yelog.
@@ -31,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Channels: keep Matrix and Mattermost bundled in the core package instead of advertising external npm installs before those channels are cut over. Thanks @vincentkoc.
 - Bonjour: disable LAN mDNS advertising after a repeated stuck-announcing recovery instead of repeatedly restarting ciao and saturating the Gateway event loop.
 - Channels/setup: label installable channel picker hints as remote npm installs and hide remote install hints for bundled plugins that already ship with OpenClaw.
+- CLI/update: refuse package updates launched from the active gateway process tree before stopping the managed Gateway service, avoiding self-terminated in-lane updates that leave old Gateway code running. Fixes #75691. (#75819) Thanks @ai-hpc.
 - CLI/plugins: stop treating the non-plugin `auth` command root as a bundled plugin id, so restrictive `plugins.allow` configs no longer tell users to add stale `auth` plugin entries.
 - Doctor/plugins: update configured plugin installs whose stale manifests still declare channels without `channelConfigs`, so beta upgrades repair old Discord-style package payloads during `doctor --fix`.
 - Doctor/plugins: repair configured external plugin installs whose persisted install record points at a missing package directory, so upgrades reconcile phantom npm metadata before plugin runtime validation. Thanks @vincentkoc.
