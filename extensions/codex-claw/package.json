@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/codex-claw",
-  "version": "2026.5.4",
+  "version": "2026.5.5",
   "description": "Codex Desktop bridge for OpenClaw AGENTS.md and SOUL.md session context, post-compaction reinjection, and compatibility review",
   "keywords": [
     "openclaw",
@@ -21,6 +21,7 @@
   "type": "module",
   "files": [
     "README.md",
+    "SKILL.md",
     "index.ts",
     "openclaw.plugin.json",
     "package.json",
