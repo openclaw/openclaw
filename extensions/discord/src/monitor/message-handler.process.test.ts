@@ -931,6 +931,43 @@ describe("processDiscordMessage session routing", () => {
     expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
   });
 
+  it("honors explicit status reactions for always-on guild replies", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createBaseContext({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      ackReactionScope: "all",
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "all",
+          statusReactions: {
+            enabled: true,
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    const runPromise = runProcessDiscordMessage(ctx);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.runAllTimersAsync();
+    await runPromise;
+
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    const emojis = getReactionEmojis();
+    expect(emojis).toContain("👀");
+    expect(emojis).toContain(DEFAULT_EMOJIS.thinking);
+    expect(emojis).toContain(DEFAULT_EMOJIS.done);
+  });
+
   it("uses PluralKit original ids for inbound dedupe while preserving the Discord message id", async () => {
     const ctx = await createBaseContext({
       canonicalMessageId: "orig-123",
