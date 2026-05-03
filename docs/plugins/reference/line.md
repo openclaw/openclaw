@@ -12,7 +12,7 @@ Adds the LINE channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/line`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub
 
 ## Surface
 

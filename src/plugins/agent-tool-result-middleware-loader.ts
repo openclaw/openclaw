@@ -68,18 +68,18 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
       return [];
     }
 
-    const registry = getLoadedRuntimePluginRegistry({
-      workspaceDir: params.workspaceDir,
-      env,
-      requiredPluginIds: pluginIds,
-    });
     const runtimeRegistry =
-      registry ??
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: params.workspaceDir,
+        env,
+        requiredPluginIds: pluginIds,
+      }) ??
       loadOpenClawPlugins({
         config,
         workspaceDir: params.workspaceDir,
         env,
         onlyPluginIds: pluginIds,
+        manifestRegistry,
         activate: false,
       });
 

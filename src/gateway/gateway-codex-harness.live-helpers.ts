@@ -122,10 +122,17 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
     normalized.includes("session status: running on") &&
     normalized.includes("context at") &&
     mentionsModel;
+  const isRunningSessionStatus =
+    normalized.includes("session is running on") &&
+    normalized.includes("context used") &&
+    normalized.includes("cache hit") &&
+    normalized.includes("no compactions") &&
+    mentionsModel;
 
   return (
     isCurrentSessionStatus ||
     isCompactSessionStatus ||
+    isRunningSessionStatus ||
     (mentionsOpenClawStatus && mentionsHarnessSession && mentionsModel)
   );
 }

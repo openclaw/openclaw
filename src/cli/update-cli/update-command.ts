@@ -24,6 +24,7 @@ import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
+import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
@@ -236,8 +237,29 @@ type PrePackageServiceStop = {
   inspected: boolean;
   runtimeInspected: boolean;
   running: boolean;
+  blockMessage?: string;
   serviceEnv?: NodeJS.ProcessEnv;
 };
+
+function formatGatewayAncestryBlockMessage(pid: number): string {
+  return `openclaw update detected it is running inside the gateway process tree.
+Gateway PID ${pid} is an ancestor of this process, so this updater cannot safely stop or restart the gateway that owns it.
+Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`;
+}
+
+function isGatewayAncestorPid(pid: unknown): pid is number {
+  return typeof pid === "number" && pid > 0 && getSelfAndAncestorPidsSync().has(pid);
+}
+
+function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
+  return isGatewayAncestorPid(pid) ? formatGatewayAncestryBlockMessage(pid) : undefined;
+}
+
+function gatewayRuntimeAncestryBlockMessage(
+  runtime: { pid?: unknown } | null | undefined,
+): string | undefined {
+  return gatewayAncestryBlockMessage(runtime?.pid);
+}
 
 async function maybeStopManagedServiceBeforePackageUpdate(params: {
   shouldRestart: boolean;
@@ -297,6 +319,18 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
       inspected: true,
       runtimeInspected: true,
       running: false,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  const blockMessage = gatewayRuntimeAncestryBlockMessage(serviceState.runtime);
+  if (blockMessage) {
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      running: true,
+      blockMessage,
       serviceEnv: serviceState.env,
     };
   }
@@ -1813,6 +1847,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } catch (err) {
       stop();
       defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
+      defaultRuntime.exit(1);
+      return;
+    }
+
+    if (prePackageServiceStop?.blockMessage) {
+      stop();
+      defaultRuntime.error(prePackageServiceStop.blockMessage);
       defaultRuntime.exit(1);
       return;
     }

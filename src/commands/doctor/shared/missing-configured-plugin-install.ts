@@ -275,6 +275,27 @@ function collectDownloadableInstallCandidates(params: {
   );
 }
 
+function collectUpdateDeferredPluginIds(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  configuredPluginIds: ReadonlySet<string>;
+  configuredChannelIds: ReadonlySet<string>;
+  blockedPluginIds?: ReadonlySet<string>;
+}): Set<string> {
+  const pluginIds = new Set(params.configuredPluginIds);
+  for (const candidate of collectDownloadableInstallCandidates({
+    cfg: params.cfg,
+    env: params.env,
+    missingPluginIds: new Set(),
+    configuredPluginIds: params.configuredPluginIds,
+    configuredChannelIds: params.configuredChannelIds,
+    blockedPluginIds: params.blockedPluginIds,
+  })) {
+    pluginIds.add(candidate.pluginId);
+  }
+  return pluginIds;
+}
+
 function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
   snapshot: PluginMetadataSnapshot;
   configuredPluginIds: ReadonlySet<string>;
@@ -515,7 +536,15 @@ async function repairMissingPluginInstalls(params: {
   }
 
   if (isUpdatePackageDoctorPass(env)) {
-    for (const pluginId of params.pluginIds) {
+    const updateDeferredPluginIds = collectUpdateDeferredPluginIds({
+      cfg: params.cfg,
+      env,
+      configuredPluginIds: params.pluginIds,
+      configuredChannelIds: params.channelIds,
+      blockedPluginIds: params.blockedPluginIds,
+    });
+    for (const pluginId of updateDeferredPluginIds) {
+      deferredPluginIds.add(pluginId);
       const record = nextRecords[pluginId];
       if (!record || !isInstalledRecordMissingOnDisk(record, env)) {
         continue;
@@ -524,7 +553,6 @@ async function repairMissingPluginInstalls(params: {
         nextRecords = { ...records };
       }
       delete nextRecords[pluginId];
-      deferredPluginIds.add(pluginId);
       changes.push(
         `Deferred missing configured plugin "${pluginId}" install repair until post-update doctor.`,
       );
