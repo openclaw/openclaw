@@ -1295,7 +1295,7 @@ describe("listSessionsFromStore selected model display", () => {
     }
   });
 
-  test("skips transcript usage fallback for default list rows", () => {
+  test("skips transcript usage fallback for default async list rows", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-fast-"));
     try {
       const storePath = path.join(tmpDir, "sessions.json");
@@ -1325,7 +1325,7 @@ describe("listSessionsFromStore selected model display", () => {
         } as SessionEntry,
       };
 
-      const fast = listSessionsFromStore({
+      const fast = await listSessionsFromStoreAsync({
         cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
         storePath,
         store,

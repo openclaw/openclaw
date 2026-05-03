@@ -1989,10 +1989,9 @@ export function listSessionsFromStore(params: {
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
+  const sessionListTranscriptUsageMaxBytes = 64 * 1024;
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
-  const sessionListTranscriptUsageMaxBytes =
-    includeDerivedTitles || includeLastMessage ? 64 * 1024 : 0;
   const sessionListTranscriptFieldRows = 100;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => {
