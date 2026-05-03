@@ -71,6 +71,21 @@ function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: str
   );
 }
 
+function isErroredConfigSelectedShadowDiagnostic(params: {
+  entry: { level?: string; message?: string; pluginId?: string };
+  plugins: readonly { id: string; origin: string; status: string }[];
+}): boolean {
+  if (!params.entry.pluginId || !isConfigSelectedShadowDiagnostic(params.entry)) {
+    return false;
+  }
+  return params.plugins.some(
+    (plugin) =>
+      plugin.id === params.entry.pluginId &&
+      plugin.origin === "config" &&
+      plugin.status === "error",
+  );
+}
+
 export function registerPluginsCli(program: Command) {
   const plugins = program
     .command("plugins")
@@ -345,7 +360,9 @@ export function registerPluginsCli(program: Command) {
       const report = buildPluginDiagnosticsReport({ effectiveOnly: true });
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
-      const shadowed = report.diagnostics.filter(isConfigSelectedShadowDiagnostic);
+      const shadowed = report.diagnostics.filter((entry) =>
+        isErroredConfigSelectedShadowDiagnostic({ entry, plugins: report.plugins }),
+      );
       const compatibility = buildPluginCompatibilityNotices({ report });
 
       if (

@@ -1,6 +1,7 @@
 import { replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -12,7 +13,7 @@ import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trac
 import { buildPluginSnapshotReport } from "../plugins/status.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
-import { shortenHomePath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import {
   applySlotSelectionForPlugin,
   enableInternalHookEntries,
@@ -60,6 +61,16 @@ export type ConfigSnapshotForInstallPersist = {
   baseHash: string | undefined;
 };
 
+function sourceMatchesInstalledPath(params: {
+  activeSource: string;
+  installedSource: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const activeSource = resolveUserPath(params.activeSource, params.env);
+  const installedSource = resolveUserPath(params.installedSource, params.env);
+  return activeSource === installedSource || isPathInside(installedSource, activeSource);
+}
+
 function logShadowedNpmInstallWarning(params: {
   config: OpenClawConfig;
   pluginId: string;
@@ -79,7 +90,11 @@ function logShadowedNpmInstallWarning(params: {
     onlyPluginIds: [params.pluginId],
   });
   const active = report.plugins.find((plugin) => plugin.id === params.pluginId);
-  if (!active || active.origin !== "config" || active.source === installedSource) {
+  if (
+    !active ||
+    active.origin !== "config" ||
+    sourceMatchesInstalledPath({ activeSource: active.source, installedSource })
+  ) {
     return;
   }
 
