@@ -136,6 +136,20 @@ describe("runMessageAction", () => {
     });
   });
 
+  it("exits with failure when plugin registry loading fails before dispatch", async () => {
+    vi.mocked(ensurePluginRegistryLoaded).mockImplementationOnce(() => {
+      throw new Error("plugin load failed");
+    });
+
+    await runSendAction();
+
+    expect(messageCommandMock).not.toHaveBeenCalled();
+    expect(errorMock).toHaveBeenCalledWith("Error: plugin load failed");
+    expect(exitMock).toHaveBeenCalledOnce();
+    expect(exitMock).toHaveBeenCalledWith(1);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
+  });
+
   it("runs gateway_stop hooks before exit when registered", async () => {
     hasHooksMock.mockReturnValueOnce(true);
     await runSendAction();
