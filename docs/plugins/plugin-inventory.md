@@ -19,7 +19,7 @@ pnpm plugins:inventory:gen
 ## Definitions
 
 - **Core npm package:** built into the `openclaw` npm package and available without a separate plugin install.
-- **Official external package:** OpenClaw-maintained plugin omitted from the core npm package and installed through ClawHub and/or npm.
+- **Official external package:** OpenClaw-maintained plugin omitted from the core npm package, kept in this official inventory, and installed on demand through ClawHub and/or npm.
 - **Source checkout only:** repo-local plugin omitted from published npm artifacts and not advertised as an installable package.
 
 Source checkouts are different from npm installs: after `pnpm install`, bundled
