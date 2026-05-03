@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/commands: normalize empty plugin command handler results and let Telegram native plugin commands send the empty-response fallback instead of throwing when a handler returns `undefined`. Fixes #74800. Thanks @vincentkoc.
 - Plugins/OpenRouter: advertise DeepSeek V4 thinking levels, including `xhigh` and `max`, through the runtime and lightweight provider policy surfaces so `/think` validation no longer rejects OpenRouter-routed DeepSeek V4 models. Fixes #74788. Thanks @vincentkoc.
 - Status/sessions: ignore malformed non-string persisted session provider/model metadata instead of throwing while rendering status summaries. Thanks @vincentkoc.
 - CLI/config: remove only the targeted array element for `openclaw config unset array[index]` instead of replaying the unset during config write and deleting the shifted next element. Fixes #76290. Thanks @SymbolStar and @vincentkoc.
