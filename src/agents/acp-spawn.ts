@@ -39,6 +39,8 @@ import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { logVerbose } from "../globals.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import {
   getSessionBindingService,
@@ -86,6 +88,7 @@ import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
+const ACP_RUN_CLEANUP_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
@@ -945,11 +948,10 @@ async function initializeAcpSpawnRuntime(params: {
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
     runtimeOptions:
-      params.model || params.thinking || params.runTimeoutSeconds
+      params.model || params.thinking
         ? {
             ...(params.model ? { model: params.model } : {}),
             ...(params.thinking ? { thinking: params.thinking } : {}),
-            ...(params.runTimeoutSeconds ? { timeoutSeconds: params.runTimeoutSeconds } : {}),
           }
         : undefined,
     cwd: params.cwd,
@@ -967,6 +969,69 @@ async function initializeAcpSpawnRuntime(params: {
     sessionStore,
     storePath,
   };
+}
+
+function scheduleCompletedAcpRunCleanup(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  runId: string;
+  runtimeCloseHandle: AcpSpawnRuntimeCloseHandle;
+}): void {
+  let disposed = false;
+  let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const cleanup = async (reason: string) => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    unsubscribe();
+    if (cleanupTimer) {
+      clearTimeout(cleanupTimer);
+    }
+
+    await params.runtimeCloseHandle.runtime
+      .close({
+        handle: params.runtimeCloseHandle.handle,
+        reason,
+      })
+      .catch((err) => {
+        logVerbose(
+          `acp-spawn: runtime cleanup close failed for completed run ${params.sessionKey}: ${String(err)}`,
+        );
+      });
+
+    await getAcpSessionManager()
+      .closeSession({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        reason,
+        allowBackendUnavailable: true,
+        requireAcpSession: false,
+      })
+      .catch((err) => {
+        logVerbose(
+          `acp-spawn: manager cleanup close failed for completed run ${params.sessionKey}: ${String(err)}`,
+        );
+      });
+  };
+
+  const unsubscribe = onAgentEvent((event) => {
+    if (disposed || event.runId !== params.runId || event.stream !== "lifecycle") {
+      return;
+    }
+    const phase = typeof event.data?.phase === "string" ? event.data.phase : undefined;
+    if (phase === "end") {
+      void cleanup("run-complete");
+    } else if (phase === "error") {
+      void cleanup("run-error");
+    }
+  });
+
+  cleanupTimer = setTimeout(() => {
+    void cleanup("run-cleanup-timeout");
+  }, ACP_RUN_CLEANUP_TIMEOUT_MS);
+  cleanupTimer.unref?.();
 }
 
 async function bindPreparedAcpThread(params: {
@@ -1411,12 +1476,22 @@ export async function spawnAcpDirect(
       sessionKey,
       shouldDeleteSession: true,
       deleteTranscript: true,
+      runtimeCloseHandle: initializedRuntime,
     });
     return createAcpSpawnFailure({
       status: "error",
       errorCode: "dispatch_failed",
       error: summarizeError(err),
       childSessionKey: sessionKey,
+    });
+  }
+
+  if (spawnMode === "run" && initializedRuntime) {
+    scheduleCompletedAcpRunCleanup({
+      cfg,
+      sessionKey,
+      runId: childRunId,
+      runtimeCloseHandle: initializedRuntime,
     });
   }
 
