@@ -299,6 +299,30 @@ class MemoryDB {
     return this.table!.countRows();
   }
 
+  async reindex(timeoutSeconds: number): Promise<{ rowCount: number; indexed: boolean }> {
+    await this.ensureInitialized();
+    const rowCount = await this.table!.countRows();
+    if (rowCount === 0) {
+      return { rowCount, indexed: false };
+    }
+    const lancedb = await loadLanceDbModule();
+    await this.table!.createIndex("vector", {
+      config: lancedb.Index.ivfFlat(),
+      replace: true,
+      waitTimeoutSeconds: timeoutSeconds,
+    });
+    return { rowCount, indexed: true };
+  }
+
+  async dropIndexes(): Promise<{ dropped: string[] }> {
+    await this.ensureInitialized();
+    const indexNames = (await this.table!.listIndices()).map((index) => index.name).toSorted();
+    for (const indexName of indexNames) {
+      await this.table!.dropIndex(indexName);
+    }
+    return { dropped: indexNames };
+  }
+
   async getTable(): Promise<LanceDB.Table> {
     await this.ensureInitialized();
     return this.table!;
@@ -847,6 +871,39 @@ export default definePluginEntry({
               orderByCreatedAt: Boolean(opts.orderByCreatedAt),
             });
             console.log(JSON.stringify(entries, null, 2));
+          });
+
+        memory
+          .command("reindex")
+          .description("Recreate the LanceDB IVF_FLAT vector index for the vector column")
+          .option("--timeout <seconds>", "Seconds to wait for index creation to finish", "180")
+          .action(async (opts) => {
+            const timeoutSeconds = Number.parseInt(String(opts.timeout), 10);
+            if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+              throw new Error(
+                `Invalid timeout value: ${timeoutSeconds}. Must be a positive integer!`,
+              );
+            }
+            const { rowCount, indexed } = await db.reindex(timeoutSeconds);
+            if (!indexed) {
+              console.log(`No memories to reindex (rows: ${rowCount})`);
+              return;
+            }
+            console.log(
+              `Recreated vector index for column: vector (rows: ${rowCount}, timeout: ${timeoutSeconds}s)`,
+            );
+          });
+
+        memory
+          .command("drop-index")
+          .description("Drop all LanceDB indexes for the memories table")
+          .action(async () => {
+            const { dropped } = await db.dropIndexes();
+            if (dropped.length === 0) {
+              console.log("No memory indexes to drop");
+              return;
+            }
+            console.log(`Dropped ${dropped.length} memory index(es): ${dropped.join(", ")}`);
           });
 
         memory
