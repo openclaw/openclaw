@@ -140,6 +140,7 @@ const config = {
         "@openclaw/*",
         "playwright-core",
         "sqlite-vec",
+        "tree-sitter-bash",
         ...rootBundledPluginRuntimeDependencies,
       ],
       project: [
