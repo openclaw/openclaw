@@ -982,6 +982,56 @@ describe("resolvePluginTools optional tools", () => {
     });
   });
 
+  it("rejects normalized plugin tool name collisions with core tools", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["Message", "other_tool"],
+        declaredNames: ["Message", "other_tool"],
+        factory: () => [makeTool("Message"), makeTool("other_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        existingToolNames: new Set(["message"]),
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["other_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool name conflict (multi): Message",
+    );
+  });
+
+  it("rejects normalized cached plugin tool name collisions with core tools", () => {
+    const factory = vi.fn(() => makeTool("Message"));
+    setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["Message"],
+        declaredNames: ["Message"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(
+      createResolveToolsParams({
+        existingToolNames: new Set(["message"]),
+      }),
+    );
+
+    expectResolvedToolNames(first, ["Message"]);
+    expect(second).toEqual([]);
+    expect(factory).toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "uses loaded plugin tools with an explicit env",

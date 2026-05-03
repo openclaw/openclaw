@@ -567,7 +567,7 @@ function resolveCachedPluginTools(params: {
     }
     const pluginTools: AnyAgentTool[] = [];
     let hasNameConflict = false;
-    const localNames = new Set<string>();
+    const localNormalizedNames = new Set<string>();
     for (const cachedDescriptor of cached) {
       if (
         !cachedDescriptor.optional &&
@@ -587,14 +587,15 @@ function resolveCachedPluginTools(params: {
       ) {
         continue;
       }
+      const normalizedDescriptorName = normalizeToolName(cachedDescriptor.descriptor.name);
       if (
-        localNames.has(cachedDescriptor.descriptor.name) ||
-        params.existing.has(cachedDescriptor.descriptor.name)
+        localNormalizedNames.has(normalizedDescriptorName) ||
+        params.existingNormalized.has(normalizedDescriptorName)
       ) {
         hasNameConflict = true;
         break;
       }
-      localNames.add(cachedDescriptor.descriptor.name);
+      localNormalizedNames.add(normalizedDescriptorName);
       pluginTools.push(
         createCachedDescriptorPluginTool({
           descriptor: cachedDescriptor,
@@ -929,7 +930,7 @@ export function resolvePluginTools(params: {
     if (list.length === 0) {
       continue;
     }
-    const nameSet = new Set<string>();
+    const normalizedNameSet = new Set<string>();
     for (const toolRaw of list) {
       // Plugin factories run at request time and can return arbitrary values; isolate
       // malformed tools here so one bad plugin tool cannot poison every provider.
@@ -963,7 +964,8 @@ export function resolvePluginTools(params: {
         });
         continue;
       }
-      if (nameSet.has(tool.name) || existing.has(tool.name)) {
+      const normalizedToolName = normalizeToolName(tool.name);
+      if (normalizedNameSet.has(normalizedToolName) || existingNormalized.has(normalizedToolName)) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
         if (!params.suppressNameConflicts) {
           context.logger.error(message);
@@ -976,8 +978,9 @@ export function resolvePluginTools(params: {
         }
         continue;
       }
-      nameSet.add(tool.name);
+      normalizedNameSet.add(normalizedToolName);
       existing.add(tool.name);
+      existingNormalized.add(normalizedToolName);
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
         optional: entry.optional,
