@@ -258,6 +258,12 @@ export async function acquireSharedMatrixClient(
   return state.client;
 }
 
+/**
+ * @deprecated Returns before the underlying clients finish persisting their
+ * crypto/sync state. Prefer {@link stopSharedClientAsync} so callers can await
+ * the final flush before the process exits; otherwise recently-negotiated
+ * Olm/Megolm sessions can be lost on shutdown.
+ */
 export function stopSharedClient(): void {
   for (const state of sharedClientStates.values()) {
     state.client.stop();
@@ -266,6 +272,21 @@ export function stopSharedClient(): void {
   sharedClientPromises.clear();
 }
 
+/**
+ * Awaits each shared client's final persist before returning. Use this on
+ * shutdown paths where the process may exit immediately afterwards.
+ */
+export async function stopSharedClientAsync(): Promise<void> {
+  const clients = Array.from(sharedClientStates.values(), (state) => state.client);
+  sharedClientStates.clear();
+  sharedClientPromises.clear();
+  await Promise.all(clients.map((client) => client.stopAndPersist()));
+}
+
+/**
+ * @deprecated Returns before the underlying client finishes persisting its
+ * crypto/sync state. Prefer {@link stopSharedClientForAccountAsync}.
+ */
 export function stopSharedClientForAccount(auth: MatrixAuth): void {
   const key = buildSharedClientKey(auth);
   const state = sharedClientStates.get(key);
@@ -274,6 +295,16 @@ export function stopSharedClientForAccount(auth: MatrixAuth): void {
   }
   state.client.stop();
   deleteSharedClientState(state);
+}
+
+export async function stopSharedClientForAccountAsync(auth: MatrixAuth): Promise<void> {
+  const key = buildSharedClientKey(auth);
+  const state = sharedClientStates.get(key);
+  if (!state) {
+    return;
+  }
+  deleteSharedClientState(state);
+  await state.client.stopAndPersist();
 }
 
 export function removeSharedClientInstance(client: MatrixClient): boolean {
@@ -285,11 +316,23 @@ export function removeSharedClientInstance(client: MatrixClient): boolean {
   return true;
 }
 
+/**
+ * @deprecated Returns before the underlying client finishes persisting its
+ * crypto/sync state. Prefer {@link stopSharedClientInstanceAsync} or
+ * {@link releaseSharedClientInstance} with mode `"persist"`.
+ */
 export function stopSharedClientInstance(client: MatrixClient): void {
   if (!removeSharedClientInstance(client)) {
     return;
   }
   client.stop();
+}
+
+export async function stopSharedClientInstanceAsync(client: MatrixClient): Promise<void> {
+  if (!removeSharedClientInstance(client)) {
+    return;
+  }
+  await client.stopAndPersist();
 }
 
 export async function releaseSharedClientInstance(
