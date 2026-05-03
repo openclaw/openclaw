@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- CI/Testbox: add maintainer Windows and WSL2 Testbox harnesses for plugin surface debugging. Thanks @vincentkoc.
 - Channels/streaming: add unified `streaming.mode: "progress"` drafts with auto single-word status labels and shared progress configuration across Discord, Telegram, Matrix, Slack, and Microsoft Teams.
 - Agents/commands: add `/steer <message>` for queue-independent steering of the active current-session run without starting a new turn when the session is idle. (#76934)
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.

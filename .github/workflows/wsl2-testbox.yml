@@ -1,0 +1,55 @@
+name: WSL2 Testbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      testbox_id:
+        type: string
+        description: "Testbox session ID"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  wsl2:
+    permissions:
+      contents: read
+    name: wsl2
+    runs-on: blacksmith-16vcpu-windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Begin Testbox
+        uses: useblacksmith/begin-testbox@d0e04585c26905fdd92c94a09c159544c7ee1b67
+        with:
+          testbox_id: ${{ inputs.testbox_id }}
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Verify WSL2 availability
+        shell: pwsh
+        run: |
+          wsl.exe --status
+          wsl.exe --list --verbose
+          $distros = wsl.exe --list --quiet
+          if (-not ($distros -match "Ubuntu")) {
+            throw "Ubuntu WSL distribution is not available on this runner."
+          }
+
+          $workspace = (wsl.exe -d Ubuntu -- wslpath -u "$env:GITHUB_WORKSPACE").Trim()
+          wsl.exe -d Ubuntu -- bash -lc "set -euo pipefail; uname -a; test -d '$workspace'"
+
+      - name: Run Testbox
+        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
+        if: always()
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

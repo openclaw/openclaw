@@ -1,0 +1,129 @@
+name: Windows Testbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      testbox_id:
+        type: string
+        description: "Testbox session ID"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  windows:
+    permissions:
+      contents: read
+    name: windows
+    runs-on: blacksmith-16vcpu-windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Begin Testbox
+        uses: useblacksmith/begin-testbox@d0e04585c26905fdd92c94a09c159544c7ee1b67
+        with:
+          testbox_id: ${{ inputs.testbox_id }}
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Try to exclude workspace from Windows Defender
+        shell: pwsh
+        run: |
+          $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
+          if (-not $cmd) {
+            Write-Host "Add-MpPreference not available, skipping Defender exclusions."
+            exit 0
+          }
+
+          try {
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+            Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
+            Write-Host "Defender exclusions applied."
+          } catch {
+            Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
+          }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          check-latest: false
+
+      - name: Setup pnpm + cache store
+        id: pnpm-cache
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          pnpm-version: "10.33.0"
+          cache-key-suffix: "windows-testbox-node24"
+          use-restore-keys: "false"
+          use-actions-cache: "true"
+
+      - name: Capture Node path
+        run: |
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          if command -v cygpath >/dev/null 2>&1; then
+            node_bin="$(cygpath -u "$node_bin")"
+          fi
+          echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        env:
+          CI: true
+        run: |
+          export PATH="$NODE_BIN:$PATH"
+          node -v
+          npm -v
+          pnpm -v
+          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+
+      - name: Save pnpm store cache
+        if: steps.pnpm-cache.outputs.cache-enabled == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: ${{ steps.pnpm-cache.outputs.store-path }}
+          key: ${{ steps.pnpm-cache.outputs.primary-key }}
+
+      - name: Hydrate Testbox provider env helper
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+          ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+        run: bash scripts/ci-hydrate-testbox-env.sh
+
+      - name: Run Testbox
+        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
+        if: always()
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
