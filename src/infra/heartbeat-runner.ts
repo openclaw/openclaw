@@ -1585,6 +1585,9 @@ export async function runHeartbeatOnce(opts: {
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
       suppressToolErrorWarnings,
       ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),
+      ...(usesHeartbeatResponseTool
+        ? { sourceReplyDeliveryMode: "message_tool_only" as const }
+        : {}),
       ...(hasDueCommitments ? { disableTools: true, skillFilter: [] } : {}),
       // Heartbeat timeout is a per-run override so user turns keep the global default.
       timeoutOverrideSeconds,

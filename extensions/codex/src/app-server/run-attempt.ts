@@ -343,6 +343,7 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
+  const attemptClientFactory = clientFactory;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -537,7 +538,7 @@ export async function runCodexAppServerAttempt(
       operation: async () => {
         let attemptedClient: CodexAppServerClient | undefined;
         const startupAttempt = async () => {
-          const startupClient = await clientFactory(
+          const startupClient = await attemptClientFactory(
             appServer.start,
             startupAuthProfileId,
             agentDir,
@@ -1811,6 +1812,7 @@ export const __testing = {
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
   applyCodexDynamicToolProfile,
+  buildDynamicTools,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {

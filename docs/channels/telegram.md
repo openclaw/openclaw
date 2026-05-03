@@ -301,9 +301,14 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Use `streaming.mode: "off"` only when you want final-only delivery: Telegram preview edits are disabled and generic tool/progress chatter is suppressed instead of being sent as standalone "Working..." messages. Approval prompts, media payloads, and errors still route through normal final delivery. Use `streaming.preview.toolProgress: false` when you only want to keep answer preview edits while hiding the tool-progress status lines.
 
+    <Note>
+      Telegram selected quote replies are the exception. When `replyToMode` is `"first"`, `"all"`, or `"batched"` and the inbound message includes selected quote text, OpenClaw sends the final answer through Telegram's native quote-reply path instead of editing the answer preview, so `streaming.preview.toolProgress` cannot show the short "Working..." lines for that turn. Current-message replies without selected quote text still keep preview streaming. Set `replyToMode: "off"` when tool-progress visibility matters more than native quote replies, or set `streaming.preview.toolProgress: false` to acknowledge the trade-off.
+    </Note>
+
     For text-only replies:
 
-    - short DM/group/topic previews: OpenClaw keeps the same preview message and performs a final edit in place
+    - short DM/group/topic previews: OpenClaw keeps the same preview message and performs a final edit in place, unless a visible non-preview message was sent after the preview appeared
+    - previews followed by visible non-preview output: OpenClaw sends the completed reply as a fresh final message and cleans up the older preview, so the final answer appears after intermediate output
     - previews older than about one minute: OpenClaw sends the completed reply as a fresh final message and then cleans up the preview, so Telegram's visible timestamp reflects completion time instead of the preview creation time
 
     For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
@@ -855,7 +860,6 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
     - `getMe returned 401` is a Telegram authentication failure for the configured bot token.
     - Re-copy or regenerate the bot token in BotFather, then update `channels.telegram.botToken`, `channels.telegram.tokenFile`, `channels.telegram.accounts.<id>.botToken`, or `TELEGRAM_BOT_TOKEN` for the default account.
     - `deleteWebhook 401 Unauthorized` during startup is also an auth failure; treating it as "no webhook exists" would only defer the same bad-token failure to later API calls.
-    - If `deleteWebhook` fails with a transient network error during polling startup, OpenClaw checks `getWebhookInfo`; when Telegram reports an empty webhook URL, polling continues because cleanup is already satisfied.
 
   </Accordion>
 
@@ -864,6 +868,8 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
     - Node 22+ + custom fetch/proxy can trigger immediate abort behavior if AbortSignal types mismatch.
     - Some hosts resolve `api.telegram.org` to IPv6 first; broken IPv6 egress can cause intermittent Telegram API failures.
     - If logs include `TypeError: fetch failed` or `Network request for 'getUpdates' failed!`, OpenClaw now retries these as recoverable network errors.
+    - During polling startup, OpenClaw reuses the successful startup `getMe` probe for grammY so the runner does not need a second `getMe` before the first `getUpdates`.
+    - If `deleteWebhook` fails with a transient network error during polling startup, OpenClaw continues into long polling instead of making another pre-poll control-plane call. A still-active webhook surfaces as a `getUpdates` conflict; OpenClaw then rebuilds the Telegram transport and retries webhook cleanup.
     - If Telegram sockets recycle on a short fixed cadence, check for a low `channels.telegram.timeoutSeconds`; bot clients clamp configured values below the outbound and `getUpdates` request guards, but older releases could abort every poll or reply when this was set below those guards.
     - If logs include `Polling stall detected`, OpenClaw restarts polling and rebuilds the Telegram transport after 120 seconds without completed long-poll liveness by default.
     - `openclaw channels status --probe` and `openclaw doctor` warn when a running polling account has not completed `getUpdates` after startup grace, when a running webhook account has not completed `setWebhook` after startup grace, or when the last successful polling transport activity is stale.

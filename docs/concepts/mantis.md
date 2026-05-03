@@ -84,14 +84,16 @@ pnpm openclaw qa mantis run \
 ```
 
 The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
-workflow should accept equivalent inputs:
+workflow for the first real scenario is `Mantis Discord Status Reactions`. It
+accepts:
 
-- `transport`: `discord` for the first version.
-- `scenario`: one or more scenario ids.
-- `baseline_ref`: default `origin/main` or the linked issue's reported bad tag.
-- `candidate_ref`: the PR head SHA.
-- `machine_provider`: `aws` by default, with later `hetzner` fallback.
-- `post_to_pr`: whether ClawSweeper should comment with the result.
+- `baseline_ref`: the ref expected to reproduce queued-only behavior.
+- `candidate_ref`: the ref expected to show `queued -> thinking -> done`.
+
+It checks out the workflow harness ref, builds separate baseline and candidate
+worktrees, runs `discord-status-reactions-tool-only` against each worktree, and
+uploads `baseline/`, `candidate/`, `comparison.json`, and `mantis-report.md` as
+Actions artifacts.
 
 ClawSweeper command examples:
 
@@ -178,6 +180,25 @@ Baseline evidence should show the queued acknowledgement reaction but no
 lifecycle transition in tool-only mode. Candidate evidence should show lifecycle
 status reactions running when `messages.statusReactions.enabled` is explicitly
 true.
+
+The executable first slice is the opt-in Discord live QA scenario:
+
+```bash
+pnpm openclaw qa discord \
+  --scenario discord-status-reactions-tool-only \
+  --provider-mode live-frontier \
+  --model openai/gpt-5.4 \
+  --alt-model openai/gpt-5.4 \
+  --fast \
+  --output-dir .artifacts/qa-e2e/mantis/discord-status-reactions-candidate
+```
+
+It configures the SUT with always-on guild handling, `visibleReplies:
+"message_tool"`, `ackReaction: "👀"`, and explicit status reactions. The oracle
+polls the real Discord triggering message and expects the observed sequence
+`👀 -> 🤔 -> 👍`. Artifacts include `discord-qa-reaction-timelines.json`,
+`discord-status-reactions-tool-only-timeline.html`, and
+`discord-status-reactions-tool-only-timeline.png`.
 
 ## Existing QA Pieces
 
@@ -324,20 +345,38 @@ after the new secret has been stored.
 
 ## GitHub Artifacts And PR Comments
 
-The first GitHub version should upload screenshots as Actions artifacts and link
-them from the PR comment. Inline images can come later once redaction, retention,
-and public/private repo behavior are settled.
+Mantis workflows should upload the full evidence bundle as a short-lived Actions
+artifact. When the workflow is run for a bug report or fix PR, it should also
+publish the redacted PNG screenshots to the `qa-artifacts` branch and upsert a
+comment on that bug or fix PR with inline before/after screenshots. Do not post
+the primary proof only on a generic QA automation PR. Raw logs, observed
+messages, and other bulky evidence stay in the Actions artifact.
 
-The PR comment should be short:
+Production workflows should post those comments with the Mantis GitHub App, not
+with `github-actions[bot]`. Store the app id and private key as
+`MANTIS_GITHUB_APP_ID` and `MANTIS_GITHUB_APP_PRIVATE_KEY` GitHub Actions
+secrets. The workflow should update an existing Mantis-owned comment when one
+exists; if only an older `github-actions[bot]` comment exists, it should create a
+new Mantis-owned comment instead of rewriting the legacy bot comment.
+
+The PR comment should be short and visual:
 
 ```md
-Mantis Discord verification: pass
+Mantis Discord Status Reactions QA
+
+Summary: Mantis reran the reported Discord status-reaction bug against the known
+bad baseline and the candidate fix. The baseline reproduced the bug, while the
+candidate showed the expected queued -> thinking -> done sequence.
 
 - Scenario: `discord-status-reactions-tool-only`
-- Baseline: reproduced on `<sha>`
-- Candidate: fixed on `<sha>`
-- Evidence: <artifact link>
-- Screenshots: baseline and candidate message-row captures in the artifact
+- Run: <workflow run link>
+- Artifact: <artifact link>
+- Baseline: `<status>` at `<sha>`
+- Candidate: `<status>` at `<sha>`
+
+| Baseline            | Candidate           |
+| ------------------- | ------------------- |
+| <inline screenshot> | <inline screenshot> |
 ```
 
 When the run fails because the harness failed, the comment must say that instead

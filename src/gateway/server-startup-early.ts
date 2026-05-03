@@ -102,6 +102,7 @@ export async function startGatewayEarlyRuntime(params: {
   const bonjourStop = await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
     startGatewayPluginDiscovery(params),
   );
+  let getActiveTaskCount = () => 0;
 
   if (!params.minimalTestGateway) {
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, taskRegistryMaintenance] =
@@ -118,6 +119,7 @@ export async function startGatewayEarlyRuntime(params: {
       cronRuntimeAuthoritative: true,
     });
     taskRegistryMaintenance.startTaskRegistryMaintenance();
+    getActiveTaskCount = () => taskRegistryMaintenance.getInspectableTaskRegistrySummary().active;
   }
 
   const skillsChangeUnsub = params.minimalTestGateway
@@ -175,6 +177,7 @@ export async function startGatewayEarlyRuntime(params: {
 
   return {
     bonjourStop,
+    getActiveTaskCount,
     skillsChangeUnsub,
     startMaintenance,
   };

@@ -240,7 +240,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(seenPrompt).toContain("what does this mean?");
-    expect(seenPrompt).toContain("Replied message (untrusted, for context):");
+    expect(seenPrompt).toContain("Reply target of current user message (untrusted, for context):");
     expect(seenPrompt).toContain('"sender_label": "Mike"');
     expect(seenPrompt).toContain("WT daily plan - Sat May 2");
     expect(seenPrompt).toContain("./quoted-secret.png");
