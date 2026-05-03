@@ -7,6 +7,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import {
   getTelegramRetryAfterMs,
+  isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramRateLimitError,
@@ -360,6 +361,14 @@ export function createTelegramDraftStream(params: {
         // Return false immediately without sleeping. The backoff wait is deferred to
         // the start of the next sendOrEditStreamMessage call. The draft loop only
         // restores the failed snapshot when no newer update() arrived in-flight.
+        return false;
+      }
+      if (isRecoverableTelegramNetworkError(err, { allowMessageMatch: true })) {
+        lastSentText = "";
+        lastSentParseMode = undefined;
+        params.warn?.(
+          `telegram stream preview transient network error (will retry): ${formatErrorMessage(err)}`,
+        );
         return false;
       }
       streamState.stopped = true;
