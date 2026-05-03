@@ -87,11 +87,20 @@ export async function parseBashForCommandExplanation(source: string): Promise<Tr
   }
   const parser = await getBashParserForCommandExplanation();
   const deadlineMs = performance.now() + MAX_COMMAND_EXPLANATION_PARSE_MS;
+  let timedOut = false;
   const tree = parser.parse(source, null, {
-    progressCallback: () => performance.now() > deadlineMs,
+    progressCallback: () => {
+      timedOut = performance.now() > deadlineMs;
+      return timedOut;
+    },
   });
   if (!tree) {
     parser.reset();
+    if (timedOut) {
+      throw new Error(
+        `tree-sitter-bash timed out after ${MAX_COMMAND_EXPLANATION_PARSE_MS}ms while parsing shell command`,
+      );
+    }
     throw new Error("tree-sitter-bash returned no parse tree");
   }
   return tree;

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Parser } from "web-tree-sitter";
 import { explainShellCommand } from "./extract.js";
 import {
@@ -20,6 +20,7 @@ afterEach(() => {
     setBashParserLoaderForCommandExplanationForTest();
     parserLoaderOverridden = false;
   }
+  vi.restoreAllMocks();
 });
 
 describe("command explainer tree-sitter runtime", () => {
@@ -69,6 +70,28 @@ describe("command explainer tree-sitter runtime", () => {
     expect(() =>
       resolvePackageFileForCommandExplanation("web-tree-sitter", "missing-openclaw-parser.wasm"),
     ).toThrow("Unable to locate missing-openclaw-parser.wasm in web-tree-sitter");
+  });
+
+  it("reports parser progress cancellation as a timeout", async () => {
+    const reset = vi.fn();
+    const parser = {
+      parse: (
+        _source: string,
+        _oldTree: unknown,
+        options?: { progressCallback?: (state: unknown) => boolean },
+      ) => {
+        options?.progressCallback?.({ currentOffset: 0, hasError: false });
+        return null;
+      },
+      reset,
+    } as unknown as Parser;
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(501);
+    setParserLoaderForTest(async () => parser);
+
+    await expect(parseBashForCommandExplanation("echo hi")).rejects.toThrow(
+      "tree-sitter-bash timed out after 500ms while parsing shell command",
+    );
+    expect(reset).toHaveBeenCalledOnce();
   });
 
   it("explains a pipeline with python inline eval", async () => {
