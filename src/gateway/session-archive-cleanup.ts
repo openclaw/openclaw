@@ -59,7 +59,7 @@ export async function sweepSessionArchiveFiles(params: {
     return { removed: 0, directories: 0 };
   }
 
-  const config = resolveMaintenanceConfigFromInput();
+  const config = resolveMaintenanceConfigFromInput(params.cfg?.session?.maintenance);
   let totalRemoved = 0;
 
   // Clean up old .deleted and .reset archives using existing retention config.

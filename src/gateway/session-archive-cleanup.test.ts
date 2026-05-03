@@ -158,6 +158,20 @@ describe("sweepSessionArchiveFiles", () => {
     expect(fs.readdirSync(sessionsDir)).toHaveLength(0);
   });
 
+  it("forwards configured session.maintenance to the resolver", async () => {
+    const maintenance = {
+      mode: "warn" as const,
+      pruneAfter: "7d",
+      resetArchiveRetention: false as const,
+    };
+    await sweepSessionArchiveFiles({
+      stateDir: tempDir,
+      cfg: { session: { maintenance } } as never,
+    });
+
+    expect(mocks.resolveMaintenanceConfigFromInput).toHaveBeenCalledWith(maintenance);
+  });
+
   it("returns zeros when no agent session directories exist", async () => {
     mocks.resolveAgentSessionDirs.mockResolvedValue([]);
     const result = await sweepSessionArchiveFiles({ stateDir: tempDir });
