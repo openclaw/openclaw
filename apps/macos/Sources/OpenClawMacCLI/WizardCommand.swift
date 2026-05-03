@@ -537,24 +537,21 @@ private func readPasswordWithPrompt(_ prompt: String) throws -> String {
     // input at _PASSWORD_LEN (128 chars on BSD/macOS), which would silently
     // discard longer credentials such as JWTs or extended provider tokens.
     print("\(prompt): ", terminator: "")
-    fflush(stdout)
 
-    var oldTerm = termios()
-    let echoDisabled: Bool
-    if isatty(STDIN_FILENO) != 0 && tcgetattr(STDIN_FILENO, &oldTerm) == 0 {
-        var newTerm = oldTerm
-        newTerm.c_lflag &= ~tcflag_t(ECHO)
-        echoDisabled = tcsetattr(STDIN_FILENO, TCSANOW, &newTerm) == 0
-    } else {
-        echoDisabled = false
+    var oldAttrs = termios()
+    var echoDisabled = false
+    if isatty(STDIN_FILENO) != 0 && tcgetattr(STDIN_FILENO, &oldAttrs) == 0 {
+        var newAttrs = oldAttrs
+        newAttrs.c_lflag &= ~tcflag_t(ECHO)
+        echoDisabled = tcsetattr(STDIN_FILENO, TCSANOW, &newAttrs) == 0
     }
     defer {
         if echoDisabled {
-            _ = tcsetattr(STDIN_FILENO, TCSANOW, &oldTerm)
+            _ = tcsetattr(STDIN_FILENO, TCSANOW, &oldAttrs)
+            // The user's Enter keystroke wasn't echoed while ECHO was disabled;
+            // emit a newline so subsequent output starts on its own line.
+            print("")
         }
-        // The user's Enter keystroke wasn't echoed while ECHO was disabled;
-        // emit a newline so subsequent output starts on its own line.
-        print("")
     }
 
     guard let line = readLine() else {
