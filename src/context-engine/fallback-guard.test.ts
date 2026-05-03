@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  applyContextEngineBootGuard,
   applyContextEngineFallbackGuard,
   fallbackGuardOutcomeIsBlocking,
   DEFAULT_FALLBACK_GUARD_SIZE_BYTES,
@@ -107,7 +108,7 @@ describe("applyContextEngineFallbackGuard", () => {
     const message = logger.warn.mock.calls[0]?.[0] ?? "";
     expect(message).toContain("session-size guard tripped");
     expect(message).toContain('engine="lossless-claw"');
-    expect(message).toContain("action=warn");
+    expect(message).toContain("Action:    warn");
   });
 
   it("archives when action=archive", () => {
@@ -200,7 +201,7 @@ describe("applyContextEngineFallbackGuard", () => {
     expect(outcome.triggered[0]?.path).toMatch(/session-live\.jsonl$/u);
   });
 
-  it("uses default 1MiB threshold when config does not override", () => {
+  it("uses default 2MiB threshold when config does not override", () => {
     writeJsonl(tmpDir, "session-big.jsonl", DEFAULT_FALLBACK_GUARD_SIZE_BYTES + 1024);
     writeJsonl(tmpDir, "session-small.jsonl", 1024);
     const logger = makeLogger();
@@ -214,7 +215,145 @@ describe("applyContextEngineFallbackGuard", () => {
       warnedPaths: new Set(),
     });
     expect(outcome.resolvedSizeBytes).toBe(DEFAULT_FALLBACK_GUARD_SIZE_BYTES);
+    expect(outcome.resolvedSizeBytes).toBe(2 * 1_048_576);
     expect(outcome.triggered).toHaveLength(1);
+  });
+
+  it("warn message includes a copy-pasteable recovery prompt for the agent", () => {
+    writeJsonl(tmpDir, "session-big.jsonl", 5 * 1024 * 1024);
+    const logger = makeLogger();
+    applyContextEngineFallbackGuard({
+      config: configWith("warn", "1mb"),
+      failedEngineId: "lossless-claw",
+      fallbackReason: "engine not registered",
+      logger,
+      resolveSessionsDir: () => tmpDir,
+      warnedPaths: new Set(),
+    });
+    const message = logger.warn.mock.calls[0]?.[0] ?? "";
+    expect(message).toContain("Session-size guard");
+    expect(message).toContain("Read the archived transcript at");
+    expect(message).toContain("last ~200 non-system messages");
+    expect(message).toContain("openclaw doctor --fix");
+    expect(message).toContain("openclaw config set plugins.slots.contextEngine");
+  });
+
+  it("archive message includes the archived path inside the recovery prompt", () => {
+    writeJsonl(tmpDir, "session-big.jsonl", 5 * 1024 * 1024);
+    const logger = makeLogger();
+    const outcome = applyContextEngineFallbackGuard({
+      config: configWith("archive", "1mb"),
+      failedEngineId: "lossless-claw",
+      fallbackReason: "engine not registered",
+      logger,
+      resolveSessionsDir: () => tmpDir,
+    });
+    const archived = outcome.triggered[0]?.archivedPath;
+    expect(archived).toBeDefined();
+    const message = logger.warn.mock.calls[0]?.[0] ?? "";
+    expect(message).toContain("Session-size guard archived");
+    expect(message).toContain(archived as string);
+    expect(message).toContain("paste this prompt into the agent");
+  });
+});
+
+describe("applyContextEngineBootGuard", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = createTempSessionsDir();
+  });
+
+  afterEach(() => {
+    if (fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function bootConfig(slot: string | undefined): OpenClawConfig {
+    return {
+      plugins: { slots: slot === undefined ? {} : { contextEngine: slot } },
+      session: {
+        maintenance: { contextFallbackGuard: { action: "warn", sizeBytes: "1mb" } },
+      },
+    } as OpenClawConfig;
+  }
+
+  it("returns null when configured engine is loaded at boot", () => {
+    writeJsonl(tmpDir, "session-big.jsonl", 5 * 1024 * 1024);
+    const outcome = applyContextEngineBootGuard({
+      config: bootConfig("lossless-claw"),
+      activeContextEngineId: "lossless-claw",
+      loadedPluginIds: new Set(["lossless-claw"]),
+      logger: makeLogger(),
+      resolveSessionsDir: () => tmpDir,
+    });
+    expect(outcome).toBeNull();
+  });
+
+  it("fires when slots.contextEngine is unset (default legacy)", () => {
+    writeJsonl(tmpDir, "session-big.jsonl", 5 * 1024 * 1024);
+    const logger = makeLogger();
+    const outcome = applyContextEngineBootGuard({
+      config: bootConfig(undefined),
+      activeContextEngineId: undefined,
+      loadedPluginIds: new Set(),
+      logger,
+      resolveSessionsDir: () => tmpDir,
+      warnedPaths: new Set(),
+    });
+    expect(outcome).not.toBeNull();
+    expect(outcome?.triggered).toHaveLength(1);
+    const message = logger.warn.mock.calls[0]?.[0] ?? "";
+    expect(message).toContain('engine="(legacy/none)"');
+    expect(message).toContain("no context engine configured");
+  });
+
+  it("fires when slots.contextEngine is 'legacy'", () => {
+    writeJsonl(tmpDir, "session-big.jsonl", 5 * 1024 * 1024);
+    const logger = makeLogger();
+    const outcome = applyContextEngineBootGuard({
+      config: bootConfig("legacy"),
+      activeContextEngineId: "legacy",
+      loadedPluginIds: new Set(),
+      logger,
+      resolveSessionsDir: () => tmpDir,
+      warnedPaths: new Set(),
+    });
+    expect(outcome).not.toBeNull();
+    expect(outcome?.triggered).toHaveLength(1);
+  });
+
+  it("fires when configured engine is set but not loaded at boot", () => {
+    writeJsonl(tmpDir, "session-big.jsonl", 5 * 1024 * 1024);
+    const logger = makeLogger();
+    const outcome = applyContextEngineBootGuard({
+      config: bootConfig("lossless-claw"),
+      activeContextEngineId: "lossless-claw",
+      loadedPluginIds: new Set(["browser", "telegram", "cortex"]),
+      logger,
+      resolveSessionsDir: () => tmpDir,
+      warnedPaths: new Set(),
+    });
+    expect(outcome).not.toBeNull();
+    expect(outcome?.triggered).toHaveLength(1);
+    const message = logger.warn.mock.calls[0]?.[0] ?? "";
+    expect(message).toContain('engine="lossless-claw"');
+    expect(message).toContain("did not load at gateway startup");
+  });
+
+  it("returns null when no transcripts exceed threshold even with no engine", () => {
+    writeJsonl(tmpDir, "session-small.jsonl", 1024);
+    const outcome = applyContextEngineBootGuard({
+      config: bootConfig(undefined),
+      activeContextEngineId: undefined,
+      loadedPluginIds: new Set(),
+      logger: makeLogger(),
+      resolveSessionsDir: () => tmpDir,
+      warnedPaths: new Set(),
+    });
+    expect(outcome).not.toBeNull();
+    expect(outcome?.triggered).toHaveLength(0);
   });
 
   it("dedups warn messages for the same path within one process", () => {

@@ -35,7 +35,15 @@ import { sanitizeForLog } from "../terminal/ansi.js";
  * conservatively warns instead of archiving.
  */
 
-export const DEFAULT_FALLBACK_GUARD_SIZE_BYTES = 1_048_576; // 1 MiB
+/**
+ * Default per-transcript byte threshold. 2 MiB of jsonl text is roughly
+ * 500k tokens of message content (ratios vary by tool-result density).
+ * 500k tokens overflows every shipping context window; for models in the
+ * 200-256k effective-window range it overflows much sooner. Operators on
+ * smaller-context models can dial this down via
+ * `session.maintenance.contextFallbackGuard.sizeBytes`.
+ */
+export const DEFAULT_FALLBACK_GUARD_SIZE_BYTES = 2 * 1_048_576; // 2 MiB
 export const DEFAULT_FALLBACK_GUARD_ACTION = "auto" as const;
 
 export type FallbackGuardAction = "warn" | "archive" | "block" | "auto";
@@ -257,21 +265,27 @@ export function applyContextEngineFallbackGuard(
     };
 
     const sizeMb = (stat.size / 1_048_576).toFixed(2);
-    const baseMessage = `[context-engine] session-size guard tripped: agent="${sanitizeForLog(
-      options.agentId ?? "(default)",
-    )}" engine="${sanitizeForLog(options.failedEngineId)}" reason="${sanitizeForLog(
-      options.fallbackReason,
-    )}" file="${sanitizeForLog(entry)}" size=${sizeMb}MiB threshold=${(
-      thresholdBytes / 1_048_576
-    ).toFixed(2)}MiB`;
+    const thresholdMb = (thresholdBytes / 1_048_576).toFixed(2);
+    const summary =
+      `[context-engine] session-size guard tripped: agent="${sanitizeForLog(
+        options.agentId ?? "(default)",
+      )}" engine="${sanitizeForLog(options.failedEngineId)}" reason="${sanitizeForLog(
+        options.fallbackReason,
+      )}" file="${sanitizeForLog(entry)}" size=${sizeMb}MiB threshold=${thresholdMb}MiB`;
 
     if (resolvedAction === "warn") {
       if (!warnedPaths.has(fullPath)) {
         warnedPaths.add(fullPath);
         logger.warn(
-          `${baseMessage} action=warn — install or repair the configured ` +
-            `context-engine plugin, or run \`openclaw sessions archive\` to ` +
-            `rotate this transcript before the next gateway start.`,
+          renderWarnMessage({
+            summary,
+            archivedPath: null,
+            agentId: options.agentId,
+            failedEngineId: options.failedEngineId,
+            fallbackReason: options.fallbackReason,
+            sizeMb,
+            originalPath: fullPath,
+          }),
         );
       }
       triggered.push(result);
@@ -284,12 +298,19 @@ export function applyContextEngineFallbackGuard(
         ioFs.renameSync(fullPath, archivedPath);
         result.archivedPath = archivedPath;
         logger.warn(
-          `${baseMessage} action=archive archivedTo="${sanitizeForLog(path.basename(archivedPath))}"` +
-            ` — original transcript moved aside; next session start will be fresh.`,
+          renderArchiveMessage({
+            summary,
+            archivedPath,
+            agentId: options.agentId,
+            failedEngineId: options.failedEngineId,
+            fallbackReason: options.fallbackReason,
+            sizeMb,
+            originalPath: fullPath,
+          }),
         );
       } catch (err) {
         logger.error?.(
-          `${baseMessage} action=archive FAILED: ${sanitizeForLog(
+          `${summary} action=archive FAILED: ${sanitizeForLog(
             err instanceof Error ? err.message : String(err),
           )} — manual intervention required.`,
         );
@@ -303,7 +324,7 @@ export function applyContextEngineFallbackGuard(
 
     if (resolvedAction === "block") {
       logger.error?.(
-        `${baseMessage} action=block — refusing to resolve fallback engine. ` +
+        `${summary} action=block — refusing to resolve fallback engine. ` +
           `Repair the configured context-engine plugin or rotate the offending ` +
           `transcript before retrying.`,
       );
@@ -329,4 +350,215 @@ export function applyContextEngineFallbackGuard(
  */
 export function fallbackGuardOutcomeIsBlocking(outcome: FallbackGuardOutcome): boolean {
   return outcome.triggered.some((entry) => entry.appliedAction === "block");
+}
+
+// ---------------------------------------------------------------------------
+// Periodic (boot-time) guard
+// ---------------------------------------------------------------------------
+//
+// The on-fallback path catches "configured engine failed to load" — but does
+// not protect users who run on the default `legacy` engine (no engine
+// configured, or `slots.contextEngine` unset). The legacy engine compacts
+// in-memory at request time and never shrinks the on-disk jsonl, so an
+// unmanaged session can still grow until it stalls the gateway on next load.
+//
+// {@link applyContextEngineBootGuard} runs once at gateway startup and
+// applies the same size-guard policy when the active context engine is
+// "legacy" (i.e. no real engine is managing the on-disk transcripts). This
+// gives operators a single config knob that protects every user, not only
+// users with a configured-but-broken engine.
+
+export type ApplyBootGuardOptions = Omit<
+  ApplyFallbackGuardOptions,
+  "failedEngineId" | "fallbackReason"
+> & {
+  /** Resolved active context-engine plugin id, or "legacy" / undefined for default. */
+  activeContextEngineId: string | undefined;
+  /** Plugin ids that successfully loaded at gateway boot. */
+  loadedPluginIds: ReadonlySet<string>;
+};
+
+/**
+ * Boot-time periodic guard. Returns null when no guard is needed (an active
+ * context engine is loaded for the slot). Otherwise applies the same size
+ * policy as {@link applyContextEngineFallbackGuard} with a synthesized
+ * "no-active-context-engine" reason.
+ *
+ * Trigger conditions:
+ *   - `slots.contextEngine` is unset, "legacy", or empty → no engine ever
+ *     manages this session → guard runs.
+ *   - `slots.contextEngine` is set but the plugin isn't in
+ *     `loadedPluginIds` → engine failed to load → guard runs.
+ *   - `slots.contextEngine` matches a loaded plugin → guard short-circuits
+ *     (the engine itself is responsible for size management).
+ */
+export function applyContextEngineBootGuard(
+  options: ApplyBootGuardOptions,
+): FallbackGuardOutcome | null {
+  const slot = options.config?.plugins?.slots?.contextEngine?.trim();
+  const normalizedSlot = slot && slot.length > 0 ? slot : "legacy";
+  const isLegacy = normalizedSlot === "legacy";
+  const engineLoaded = options.loadedPluginIds.has(normalizedSlot);
+
+  // Engine is configured AND loaded — engine owns size management; skip.
+  if (!isLegacy && engineLoaded) {
+    return null;
+  }
+
+  const failedEngineId = isLegacy ? "(legacy/none)" : normalizedSlot;
+  const fallbackReason = isLegacy
+    ? "no context engine configured (slots.contextEngine is unset or 'legacy')"
+    : `configured engine "${normalizedSlot}" did not load at gateway startup`;
+
+  return applyContextEngineFallbackGuard({
+    config: options.config,
+    agentDir: options.agentDir,
+    agentId: options.agentId,
+    failedEngineId,
+    fallbackReason,
+    logger: options.logger,
+    resolveSessionsDir: options.resolveSessionsDir,
+    hasContextEngineHistory: options.hasContextEngineHistory,
+    fs: options.fs,
+    warnedPaths: options.warnedPaths,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Operator-facing message renderers
+// ---------------------------------------------------------------------------
+//
+// These emit a multi-line block that operators see in the gateway log. The
+// recovery prompt is copy-pasteable into the agent chat in a fresh session
+// and instructs the agent to summarize the archived tail using LCM-style
+// chunked summaries — sized to reload meaningful context (~40k tokens of
+// summary across the last ~200 messages) into the new session, since the
+// fresh session has the full context window available to absorb it.
+
+type GuardMessageContext = {
+  summary: string;
+  archivedPath: string | null;
+  agentId: string | undefined;
+  failedEngineId: string;
+  fallbackReason: string;
+  sizeMb: string;
+  originalPath: string;
+};
+
+const RECOVERY_PROMPT_MAX_SUMMARY_TOKENS = 40_000;
+const RECOVERY_PROMPT_PER_CHUNK_MIN_TOKENS = 1_000;
+const RECOVERY_PROMPT_PER_CHUNK_MAX_TOKENS = 2_000;
+const RECOVERY_PROMPT_TAIL_MESSAGES = 200;
+
+function renderRecoveryPrompt(params: {
+  archivedPath: string | null;
+  originalPath: string;
+}): string {
+  const target = params.archivedPath ?? params.originalPath;
+  return [
+    `My previous session was archived because the configured context-engine plugin`,
+    `failed to load and the transcript would have overflowed the model context on`,
+    `next gateway start. Read the archived transcript at:`,
+    ``,
+    `  ${target}`,
+    ``,
+    `Take the last ~${RECOVERY_PROMPT_TAIL_MESSAGES} non-system messages (skip heartbeat,`,
+    `synthetic, and bootstrap turns). Group them into chronological chunks of`,
+    `~${RECOVERY_PROMPT_PER_CHUNK_MIN_TOKENS}-${RECOVERY_PROMPT_PER_CHUNK_MAX_TOKENS} tokens each — one chunk per coherent unit of work (a`,
+    `tool-call run, a topic shift, a multi-message exchange). For each chunk emit a`,
+    `${RECOVERY_PROMPT_PER_CHUNK_MIN_TOKENS}-${RECOVERY_PROMPT_PER_CHUNK_MAX_TOKENS} token summary that:`,
+    `  - names the goal of the work in that chunk,`,
+    `  - lists tools called with key inputs/outputs (file paths, commits, decisions),`,
+    `  - notes unresolved threads, errors, or pending follow-ups.`,
+    ``,
+    `Stop at ~${(RECOVERY_PROMPT_MAX_SUMMARY_TOKENS / 1000).toFixed(0)}k tokens of aggregate summary so the fresh session keeps`,
+    `headroom. Output chunks in chronological order with one-line dividers like`,
+    `"chunk N: <topic>" so I can reference them later. After the chunks, give:`,
+    `  - "open threads": anything in-flight,`,
+    `  - "decisions made": anything settled,`,
+    `  - "next likely action": what I would have done next.`,
+    ``,
+    `That summary is now my working context — proceed from there.`,
+  ].join("\n");
+}
+
+function indent(text: string, prefix: string): string {
+  return text
+    .split("\n")
+    .map((line) => `${prefix}${line}`)
+    .join("\n");
+}
+
+function renderWarnMessage(ctx: GuardMessageContext): string {
+  const recoveryPrompt = renderRecoveryPrompt({
+    archivedPath: null,
+    originalPath: ctx.originalPath,
+  });
+  return [
+    ctx.summary,
+    "",
+    `[context-engine] Session-size guard: a transcript would stall the gateway on next load.`,
+    ``,
+    `  Reason:    Context engine "${sanitizeForLog(ctx.failedEngineId)}" is configured but failed`,
+    `             (${sanitizeForLog(ctx.fallbackReason)}). Falling back to the default`,
+    `             "legacy" engine, which does not shrink on-disk transcripts.`,
+    ``,
+    `  Transcript: ${ctx.originalPath}`,
+    `              (${ctx.sizeMb} MiB — ${RECOVERY_PROMPT_MAX_SUMMARY_TOKENS / 1_000}k+ tokens of message content)`,
+    ``,
+    `  Action:    warn (no automatic archive)`,
+    ``,
+    `  Repair the engine, then restart the gateway:`,
+    `    openclaw doctor --fix`,
+    `    launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway   # macOS`,
+    ``,
+    `  Or rotate this transcript yourself before next gateway start:`,
+    `    openclaw sessions archive ${path.basename(ctx.originalPath, ".jsonl")}`,
+    ``,
+    `  Or remove the configured slot to fall back cleanly:`,
+    `    openclaw config set plugins.slots.contextEngine ""`,
+    ``,
+    `  If you choose archive instead, paste this into the next agent turn to`,
+    `  reload meaningful context from the tail of the transcript:`,
+    `  ┌─────────────────────────────────────────────────────────────────────────┐`,
+    indent(recoveryPrompt, "  │ "),
+    `  └─────────────────────────────────────────────────────────────────────────┘`,
+  ].join("\n");
+}
+
+function renderArchiveMessage(ctx: GuardMessageContext): string {
+  const archivedPath = ctx.archivedPath;
+  if (!archivedPath) {
+    // Defensive: archive renderer always called with a real archived path.
+    return ctx.summary;
+  }
+  const recoveryPrompt = renderRecoveryPrompt({
+    archivedPath,
+    originalPath: ctx.originalPath,
+  });
+  return [
+    ctx.summary,
+    "",
+    `[context-engine] Session-size guard archived a transcript that would have stalled the gateway.`,
+    ``,
+    `  Reason:    Context engine "${sanitizeForLog(ctx.failedEngineId)}" is configured but failed`,
+    `             (${sanitizeForLog(ctx.fallbackReason)}). Falling back to the default`,
+    `             "legacy" engine would have loaded the full transcript on next start.`,
+    ``,
+    `  Archived:  ${ctx.originalPath}`,
+    `             → ${archivedPath}`,
+    `             (${ctx.sizeMb} MiB — ${RECOVERY_PROMPT_MAX_SUMMARY_TOKENS / 1_000}k+ tokens of message content)`,
+    ``,
+    `  Next session start will be fresh and small. To recover the prior context,`,
+    `  paste this prompt into the agent on the first turn:`,
+    `  ┌─────────────────────────────────────────────────────────────────────────┐`,
+    indent(recoveryPrompt, "  │ "),
+    `  └─────────────────────────────────────────────────────────────────────────┘`,
+    ``,
+    `  Repair the engine plugin so this does not repeat:`,
+    `    openclaw doctor --fix`,
+    ``,
+    `  Or remove the configured slot to fall back cleanly without this guard:`,
+    `    openclaw config set plugins.slots.contextEngine ""`,
+  ].join("\n");
 }

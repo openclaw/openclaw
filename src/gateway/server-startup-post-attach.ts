@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { applyContextEngineBootGuard } from "../context-engine/fallback-guard.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
@@ -687,6 +688,10 @@ export async function startGatewayPostAttachRuntime(
     await params.onStartupPluginsLoaded?.(loaded);
   }
 
+  const loadedPluginIds = pluginRegistry.plugins
+    .filter((plugin) => plugin.status === "loaded")
+    .map((plugin) => plugin.id);
+
   await measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
@@ -694,14 +699,35 @@ export async function startGatewayPostAttachRuntime(
       bindHosts: params.bindHosts,
       port: params.port,
       tlsEnabled: params.tlsEnabled,
-      loadedPluginIds: pluginRegistry.plugins
-        .filter((plugin) => plugin.status === "loaded")
-        .map((plugin) => plugin.id),
+      loadedPluginIds,
       log: params.log,
       isNixMode: params.isNixMode,
       startupStartedAt: params.startupStartedAt,
     }),
   );
+
+  // Boot-time session-size guard (#76940). Catches the no-engine and
+  // configured-but-not-loaded cases. The on-fallback guard inside
+  // resolveContextEngine handles the "engine fails at request time" case.
+  // Both share one config knob and one policy.
+  try {
+    applyContextEngineBootGuard({
+      config: params.cfgAtStart,
+      activeContextEngineId: params.cfgAtStart.plugins?.slots?.contextEngine,
+      loadedPluginIds: new Set(loadedPluginIds),
+      logger: {
+        warn: (message) => params.log.warn(message),
+        error: (message) => params.log.error(message),
+      },
+    });
+  } catch (err) {
+    // Defensive: never let the guard itself stall startup.
+    params.log.warn(
+      `[context-engine] boot-time session-size guard threw (skipping): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
 
   const stopGatewayUpdateCheckPromise = params.minimalTestGateway
     ? Promise.resolve(() => {})
