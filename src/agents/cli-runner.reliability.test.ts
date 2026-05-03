@@ -889,4 +889,45 @@ describe("resolveCliNoOutputTimeoutMs", () => {
     });
     expect(timeoutMs).toBe(42_000);
   });
+
+  it("keeps the default resume watchdog ceiling at 180s for short timeouts", () => {
+    // 600s timeout * 0.3 ratio = 180s exactly — boundary case, ceiling unchanged.
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      useResume: true,
+    });
+    expect(timeoutMs).toBe(180_000);
+  });
+
+  it("scales the resume watchdog ceiling with explicit large timeoutMs (cron timeoutSeconds)", () => {
+    // Issue #76289: a cron job configured with timeoutSeconds: 1800 (30m) was
+    // silently capped at 180s by the static profile.maxMs. With the fix, the
+    // ceiling scales with the configured timeout: 1_800_000 * 0.3 = 540_000.
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 1_800_000,
+      useResume: true,
+    });
+    expect(timeoutMs).toBe(540_000);
+  });
+
+  it("never exceeds timeoutMs - 1s as the absolute upper bound", () => {
+    // Even with a generous ratio, the watchdog must stay below the global timeout.
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: {
+        command: "codex",
+        reliability: {
+          watchdog: {
+            resume: {
+              noOutputTimeoutRatio: 0.95,
+            },
+          },
+        },
+      },
+      timeoutMs: 60_000,
+      useResume: true,
+    });
+    expect(timeoutMs).toBeLessThanOrEqual(59_000);
+  });
 });

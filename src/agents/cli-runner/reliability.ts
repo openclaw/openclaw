@@ -67,7 +67,14 @@ export function resolveCliNoOutputTimeoutMs(params: {
     return Math.min(profile.noOutputTimeoutMs, cap);
   }
   const computed = Math.floor(params.timeoutMs * profile.noOutputTimeoutRatio);
-  const bounded = Math.min(profile.maxMs, Math.max(profile.minMs, computed));
+  // When the caller's timeoutMs is much larger than the default profile (e.g. an
+  // explicitly configured cron timeoutSeconds > 180s with the resume profile),
+  // scale the watchdog ceiling with the configured timeout instead of silently
+  // clamping to the static profile.maxMs default. The static cap remains a
+  // floor for the ceiling, so default behavior is preserved at small timeouts.
+  // Issue #76289.
+  const effectiveMaxMs = Math.max(profile.maxMs, computed);
+  const bounded = Math.min(effectiveMaxMs, Math.max(profile.minMs, computed));
   return Math.min(bounded, cap);
 }
 
