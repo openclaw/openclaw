@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI/Talk: fix Talk (OpenAI Realtime WebRTC) CORS failure by stripping server-side-only attribution headers (`originator`, `version`, `User-Agent`) from browser offer headers; `api.openai.com/v1/realtime/calls` only allows `authorization` and `content-type` in its CORS preflight, so forwarding these headers caused the browser SDP exchange to fail. Fixes #76435. Thanks @hclsys.
 - Plugins/onboarding: trust optional official plugin and web-search installs selected from the official catalog so npm security scanning treats them like other source-linked official install paths. Thanks @vincentkoc.
 - Microsoft Teams: persist sent-message markers across Gateway restarts so follow-up replies to recent bot messages keep resolving the original conversation instead of dropping out after restart, with marker TTLs preserved on best-effort recovery. (#75585) Thanks @amknight.
 - Matrix: persist pending approval reaction targets across Gateway restarts so room approvers can still approve or deny outstanding prompts after OpenClaw comes back online. (#75586) Thanks @amknight.
