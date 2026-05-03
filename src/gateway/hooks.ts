@@ -218,6 +218,13 @@ type HookAgentPayload = {
   wakeMode: "now" | "next-heartbeat";
   sessionKey?: string;
   deliver: boolean;
+  /**
+   * When true, holds the HTTP connection open until the agent completes.
+   * The response includes a `text` field with the agent's output.
+   * Bypasses the idempotency cache — the caller handles retry deduplication.
+   * Use `timeoutSeconds` to bound the wait.
+   */
+  blocking?: boolean;
   channel: HookMessageChannel;
   to?: string;
   model?: string;
@@ -230,6 +237,10 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
   sourcePath: string;
   allowUnsafeExternalContent?: boolean;
   externalContentSource?: HookExternalContentSource;
+  /** Pre-allocated run ID from the caller. When provided, dispatchAgentHook uses this
+   *  instead of generating a new UUID, allowing the caller to cache the ID before the
+   *  async dispatch begins to close the idempotency async gap. */
+  runId?: string;
 };
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
@@ -434,6 +445,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
     typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) && timeoutRaw > 0
       ? Math.floor(timeoutRaw)
       : undefined;
+  const blocking = payload.blocking === true;
   return {
     ok: true,
     value: {
@@ -444,6 +456,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       wakeMode,
       sessionKey,
       deliver,
+      blocking,
       channel,
       to,
       model,

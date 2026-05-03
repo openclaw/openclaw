@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
@@ -46,7 +46,9 @@ export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) =>
 
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
-  dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
+  dispatchAgentHook: (
+    value: HookAgentDispatchPayload,
+  ) => Promise<{ runId: string; outputText?: string; agentError?: string }>;
 };
 
 type HookReplayEntry = {
@@ -171,6 +173,13 @@ export function createHooksRequestHandler(
     pruneHookReplayCache(now);
   };
 
+  const forgetHookRunId = (key: string | undefined): void => {
+    if (!key) {
+      return;
+    }
+    hookReplayCache.delete(key);
+  };
+
   return async (req, res) => {
     const hooksConfig = getHooksConfig();
     if (!hooksConfig) {
@@ -281,25 +290,28 @@ export function createHooksRequestHandler(
         return true;
       }
       const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
-      const replayKey = buildHookReplayCacheKey({
-        pathKey: "agent",
-        token,
-        idempotencyKey,
-        dispatchScope: {
-          agentId: targetAgentId ?? null,
-          sessionKey:
-            normalized.value.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
-          message: normalized.value.message,
-          name: normalized.value.name,
-          wakeMode: normalized.value.wakeMode,
-          deliver: normalized.value.deliver,
-          channel: normalized.value.channel,
-          to: normalized.value.to ?? null,
-          model: normalized.value.model ?? null,
-          thinking: normalized.value.thinking ?? null,
-          timeoutSeconds: normalized.value.timeoutSeconds ?? null,
-        },
-      });
+      // Blocking requests bypass idempotency cache — caller handles retry deduplication
+      const replayKey = normalized.value.blocking
+        ? undefined
+        : buildHookReplayCacheKey({
+            pathKey: "agent",
+            token,
+            idempotencyKey,
+            dispatchScope: {
+              agentId: targetAgentId ?? null,
+              sessionKey:
+                normalized.value.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
+              message: normalized.value.message,
+              name: normalized.value.name,
+              wakeMode: normalized.value.wakeMode,
+              deliver: normalized.value.deliver,
+              channel: normalized.value.channel,
+              to: normalized.value.to ?? null,
+              model: normalized.value.model ?? null,
+              thinking: normalized.value.thinking ?? null,
+              timeoutSeconds: normalized.value.timeoutSeconds ?? null,
+            },
+          });
       const cachedRunId = resolveCachedHookRunId(replayKey, now);
       if (cachedRunId) {
         sendJson(res, 200, { ok: true, runId: cachedRunId });
@@ -317,16 +329,38 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
         return true;
       }
-      const runId = dispatchAgentHook({
-        ...normalized.value,
-        idempotencyKey,
-        sessionKey: normalizedDispatchSessionKey,
-        sourcePath: `${basePath}/agent`,
-        agentId: targetAgentId,
-        externalContentSource: "webhook",
+      // Pre-allocate and cache before dispatch to close the idempotency async gap:
+      // concurrent retries with the same key will hit the cache rather than
+      // starting a second agent run. For blocking requests replayKey is undefined
+      // so rememberHookRunId is a no-op.
+      const preRunId = randomUUID();
+      rememberHookRunId(replayKey, preRunId, now);
+      let dispatchResult: Awaited<ReturnType<typeof dispatchAgentHook>>;
+      try {
+        dispatchResult = await dispatchAgentHook({
+          ...normalized.value,
+          runId: preRunId,
+          idempotencyKey,
+          sessionKey: normalizedDispatchSessionKey,
+          sourcePath: `${basePath}/agent`,
+          agentId: targetAgentId,
+          externalContentSource: "webhook",
+        });
+      } catch (err) {
+        forgetHookRunId(replayKey);
+        sendJson(res, 500, { ok: false, runId: preRunId, error: String(err) });
+        return true;
+      }
+      const { runId, outputText, agentError } = dispatchResult;
+      if (agentError) {
+        sendJson(res, 500, { ok: false, runId, error: agentError });
+        return true;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        runId,
+        ...(outputText !== undefined && { text: outputText }),
       });
-      rememberHookRunId(replayKey, runId, now);
-      sendJson(res, 200, { ok: true, runId });
       return true;
     }
 
@@ -412,29 +446,40 @@ export function createHooksRequestHandler(
             sendJson(res, 200, { ok: true, runId: cachedRunId });
             return true;
           }
-          const runId = dispatchAgentHook({
-            message: mapped.action.message,
-            name: mapped.action.name ?? "Hook",
-            idempotencyKey,
-            agentId: targetAgentId,
-            wakeMode: mapped.action.wakeMode,
-            sessionKey: normalizedDispatchSessionKey,
-            sourcePath: `${basePath}/${subPath}`,
-            deliver: resolveHookDeliver(mapped.action.deliver),
-            channel,
-            to: mapped.action.to,
-            model: mapped.action.model,
-            thinking: mapped.action.thinking,
-            timeoutSeconds: mapped.action.timeoutSeconds,
-            allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
-            externalContentSource: resolveMappedHookExternalContentSource({
-              subPath,
-              payload: payload as Record<string, unknown>,
-              sessionKey: sessionKey.value,
-            }),
-          });
-          rememberHookRunId(replayKey, runId, now);
-          sendJson(res, 200, { ok: true, runId });
+          // Mappings are external-event-triggered and intentionally non-blocking.
+          // Pre-allocate and cache before dispatch to close the idempotency async gap.
+          const preRunId = randomUUID();
+          rememberHookRunId(replayKey, preRunId, now);
+          let mappedDispatchResult: Awaited<ReturnType<typeof dispatchAgentHook>>;
+          try {
+            mappedDispatchResult = await dispatchAgentHook({
+              message: mapped.action.message,
+              name: mapped.action.name ?? "Hook",
+              runId: preRunId,
+              idempotencyKey,
+              agentId: targetAgentId,
+              wakeMode: mapped.action.wakeMode,
+              sessionKey: normalizedDispatchSessionKey,
+              sourcePath: `${basePath}/${subPath}`,
+              deliver: resolveHookDeliver(mapped.action.deliver),
+              channel,
+              to: mapped.action.to,
+              model: mapped.action.model,
+              thinking: mapped.action.thinking,
+              timeoutSeconds: mapped.action.timeoutSeconds,
+              allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
+              externalContentSource: resolveMappedHookExternalContentSource({
+                subPath,
+                payload: payload as Record<string, unknown>,
+                sessionKey: sessionKey.value,
+              }),
+            });
+          } catch (err) {
+            forgetHookRunId(replayKey);
+            sendJson(res, 500, { ok: false, runId: preRunId, error: String(err) });
+            return true;
+          }
+          sendJson(res, 200, { ok: true, runId: mappedDispatchResult.runId });
           return true;
         }
       } catch (err) {
