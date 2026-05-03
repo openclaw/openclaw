@@ -457,14 +457,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             text: options.fallbackText,
             useCard: false,
             infoKind: "final",
-            sendChunk: async ({ chunk, isFirst }) => {
+            sendChunk: async ({ chunk }) => {
               await sendMessageFeishu({
                 cfg,
                 to: chatId,
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
                 replyInThread: effectiveReplyInThread,
-                mentions: isFirst ? mentionTargets : undefined,
                 accountId,
               });
             },
