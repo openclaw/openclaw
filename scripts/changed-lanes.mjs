@@ -9,7 +9,7 @@ const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
 const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
 const CORE_PATH_RE = /^(?:src\/|ui\/|packages\/)/u;
 const TOOLING_PATH_RE =
-  /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.oxlint.*|\.oxfmt.*)/u;
+  /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|config\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.oxlint.*|\.oxfmt.*)/u;
 const ROOT_GLOBAL_PATH_RE =
   /^(?:package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsdown\.config\.ts$|vitest\.config\.ts$)/u;
 const LEGACY_ROOT_ASSET_PATH_RE = /^assets\//u;

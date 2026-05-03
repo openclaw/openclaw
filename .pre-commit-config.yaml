@@ -25,7 +25,7 @@ repos:
     rev: v0.11.0
     hooks:
       - id: shellcheck
-        args: [--severity=error] # Only fail on errors, not warnings/info
+        args: [--rcfile=config/shellcheckrc, --severity=error] # Only fail on errors, not warnings/info
         # Exclude vendor and scripts with embedded code or known issues
         exclude: "^(vendor/|scripts/e2e/)"
 
