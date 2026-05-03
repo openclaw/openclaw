@@ -446,6 +446,12 @@ export abstract class MemoryManagerSyncOps {
     this.watcher.on("change", markDirty);
     this.watcher.on("unlink", markDirty);
     this.watcher.on("unlinkDir", markDirty);
+    this.watcher.on("error", (err) => {
+      // File watcher errors (e.g., ENOSPC) should not crash the gateway.
+      // Log the error and continue - memory search still works without auto-sync.
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`memory watcher error: ${message}`);
+    });
   }
 
   protected ensureSessionListener() {
