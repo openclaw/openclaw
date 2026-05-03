@@ -98,6 +98,40 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+it("uses continuation prompt on compaction retry when currentMessageId is unchanged", async () => {
+    const overflowError = makeOverflowError();
+
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-51024",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("auto-compaction succeeded"),
+    );
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("retrying prompt"),
+    );
+    // Assert the second attempt uses suppressNextUserMessagePersistence: true
+    // and does not re-submit the original prompt as fresh user content
+    const secondCallArgs = mockedRunEmbeddedAttempt.mock.calls[1]?.[0];
+    expect(secondCallArgs?.suppressNextUserMessagePersistence).toBe(true);
+    expect(result.meta.error).toBeUndefined();
+  });
   it("retries after successful compaction on likely-overflow promptError variants", async () => {
     const overflowHintError = new Error("Context window exceeded: requested 12000 tokens");
 
