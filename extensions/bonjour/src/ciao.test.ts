@@ -146,6 +146,33 @@ describe("bonjour-ciao", () => {
     expect(ignoreCiaoUnhandledRejection(wrapper)).toBe(true);
   });
 
+  it("classifies IPv6-only interface assertion (no valid addresses) (#76499)", () => {
+    const err = Object.assign(
+      new Error("Could not find valid addresses for interface 'fly-redis'"),
+      { name: "AssertionError" },
+    );
+    expect(classifyCiaoUnhandledRejection(err)).toEqual({
+      kind: "no-valid-addresses",
+      formatted: "AssertionError: Could not find valid addresses for interface 'fly-redis'",
+    });
+  });
+
+  it("suppresses IPv6-only interface assertion as non-fatal (#76499)", () => {
+    const err = Object.assign(new Error("Could not find valid addresses for interface 'wg0'"), {
+      name: "AssertionError",
+    });
+    expect(ignoreCiaoUnhandledRejection(err)).toBe(true);
+  });
+
+  it("suppresses IPv6-only interface assertion wrapped in cause chain (#76499)", () => {
+    const inner = Object.assign(
+      new Error("Could not find valid addresses for interface 'fly-redis'"),
+      { name: "AssertionError" },
+    );
+    const outer = new Error("ciao NetworkManager init failed", { cause: inner });
+    expect(ignoreCiaoUnhandledRejection(outer)).toBe(true);
+  });
+
   it("keeps unrelated rejections visible", () => {
     expect(ignoreCiaoUnhandledRejection(new Error("boom"))).toBe(false);
   });

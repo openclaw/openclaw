@@ -399,6 +399,13 @@ export async function startGatewayBonjourAdvertiser(
         logger.warn(
           `bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: ${classification.formatted}`,
         );
+      } else if (classification.kind === "no-valid-addresses") {
+        // IPv6-only interfaces (e.g. WireGuard/Fly.io) lack an IPv4 address
+        // that ciao accepts. This condition is stable — recreating the advertiser
+        // re-enters the same assertion — so skip recovery to avoid a restart loop.
+        logger.warn(
+          `bonjour: disabling mDNS — no valid addresses for interface: ${classification.formatted}`,
+        );
       } else {
         const label =
           classification.kind === "netmask-assertion"
@@ -537,7 +544,12 @@ export async function startGatewayBonjourAdvertiser(
             svc,
           )}): ${classification.formatted}`,
         );
-        requestCiaoRecovery?.(classification);
+        if (
+          classification.kind !== "interface-enumeration-failure" &&
+          classification.kind !== "no-valid-addresses"
+        ) {
+          requestCiaoRecovery?.(classification);
+        }
         return;
       }
       logger.warn(

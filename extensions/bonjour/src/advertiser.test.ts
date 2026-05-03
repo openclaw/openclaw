@@ -435,6 +435,64 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
+  it("suppresses no-valid-addresses rejection without restarting advertiser (#76499)", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
+      | ((reason: unknown) => boolean)
+      | undefined;
+    const err = Object.assign(
+      new Error("Could not find valid addresses for interface 'fly-redis'"),
+      { name: "AssertionError" },
+    );
+    expect(handler?.(err)).toBe(true);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("no valid addresses for interface"),
+    );
+    // Stable condition — must NOT trigger advertiser recreation
+    expect(createService).toHaveBeenCalledTimes(1);
+
+    await started.stop();
+  });
+
+  it("suppresses no-valid-addresses advertise failure without restarting advertiser (#76499)", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const noValidErr = Object.assign(
+      new Error("Could not find valid addresses for interface 'wg0'"),
+      { name: "AssertionError" },
+    );
+    const advertise = vi.fn().mockRejectedValueOnce(noValidErr).mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy, serviceState: "unannounced" });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    // Trigger the advertise failure path
+    await vi.waitFor(() => {
+      expect(advertise).toHaveBeenCalled();
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("no-valid-addresses"));
+    // Must NOT recreate the advertiser — stable interface condition
+    expect(createService).toHaveBeenCalledTimes(1);
+
+    await started.stop();
+  });
+
   it("recovers when ciao cancellation escapes the advertiser", async () => {
     enableAdvertiserUnitMode();
 
