@@ -3012,6 +3012,7 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - QA-Lab: add `--pack personal-agent` for `openclaw qa suite` so maintainers can run the accepted personal-agent scenario pack by selector. (#82760) Thanks @iFiras-Max1.
 - QA-Lab: add a private Codex-vs-Pi runtime parity axis with runtime-pair suite runs, parity reports, and release-check wiring. (#80238) Thanks @100yenadmin.
 - Slack: add Slack assistant thread lifecycle support with assistant view manifest entries, suggested prompts, thread-scoped assistant sessions, and Slack-provided assistant context. Fixes #80787. Thanks @mobybot27.
+- Memory/LanceDB: add `memory_refresh` tool for atomic replace and conflict preview, with per-id locking, rollback on insert failure, and a metadata-only audit log at `~/.openclaw/memory/refresh-audit.jsonl` written with `0o600` permissions. (#73788) Thanks @amittell.
 
 ### Fixes
 
