@@ -677,6 +677,34 @@ describe("processDiscordMessage ack reactions", () => {
     expect(getReactionEmojis()).toEqual(["👀"]);
   });
 
+  it("enables full status reactions in tool-only guild channels when statusReactions.enabled is explicitly true", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      return createNoQueuedDispatchResult();
+    });
+
+    // Guild channel with message_tool_only source delivery (default for guild channels without visibleReplies: "automatic")
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          statusReactions: {
+            enabled: true,
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const emojis = getReactionEmojis();
+    expect(emojis).toContain("👀");
+    // Thinking emoji should appear because statusReactions state machine is active
+    expect(emojis).toContain(DEFAULT_EMOJIS.thinking);
+  });
+
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
