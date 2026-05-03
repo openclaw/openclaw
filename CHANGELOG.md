@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 - Active Memory: apply `setupGraceTimeoutMs` to the embedded recall runner as well as the outer prompt-build watchdog, so very-cold first recalls keep the configured setup grace end-to-end. (#74480) Thanks @volcano303.
 - CLI/config: keep JSON dry-run patches validating touched channel configuration against bundled channel schemas even when the patch only contains SecretRef objects.
+- UI/Dreams: keep diary day-chip navigation visible inside the sticky header chrome so long entries don't push the date switcher out of view. Fixes #76638. Thanks @Thatgfsj.
 - Plugins/tools: keep disabled bundled tool plugins out of explicit runtime allowlist ownership and fall back from loaded-but-empty channel registries to tool-bearing plugin registries, so Active Memory can use bundled `memory-core` search/get tools even when `memory-lancedb` is disabled. Fixes #76603. Thanks @jwong-art.
 - Plugins/install: run `npm install` from the managed npm-root manifest so installing one `@openclaw/*` plugin preserves already installed sibling plugins instead of pruning them. Fixes #76571. (#76602) Thanks @byungskers and @crpol.
 - Channels/QQ Bot: resolve structured `clientSecret` SecretRefs before QQ token exchange, expose the QQ Bot secret contract to secrets tooling, and reject legacy `secretref:/...` marker strings. (#74772) Thanks @xialonglee.
