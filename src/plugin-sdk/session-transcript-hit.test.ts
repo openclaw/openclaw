@@ -19,6 +19,35 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
   it("uses .md basename for QMD exports", () => {
     expect(extractTranscriptStemFromSessionsMemoryHit("qmd/sessions/x/y/z.md")).toBe("z");
   });
+
+  it("strips .jsonl.reset.<iso> archive suffix so rotated transcripts resolve to the live stem", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "sessions/abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z",
+      ),
+    ).toBe("abc-uuid");
+  });
+
+  it("strips .jsonl.deleted.<iso> archive suffix the same way", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "sessions/def-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z",
+      ),
+    ).toBe("def-uuid");
+  });
+
+  it("handles archive suffix on bare basenames without the sessions/ prefix", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit("ghi-thread.jsonl.reset.2026-02-16T22-28-33.000Z"),
+    ).toBe("ghi-thread");
+  });
+
+  it("does not mistake arbitrary suffixes containing .jsonl. for archives", () => {
+    // Not a real archive pattern: suffix after .jsonl. must be `reset` or `deleted`.
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit("sessions/weird.jsonl.backup.2026-01-01.zst"),
+    ).toBeNull();
+  });
 });
 
 describe("resolveTranscriptStemToSessionKeys", () => {

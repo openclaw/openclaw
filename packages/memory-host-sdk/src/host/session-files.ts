@@ -63,9 +63,23 @@ type SessionTranscriptStoreEntry = {
 
 function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
   const fileName = path.basename(absPath);
-  return (
-    isSessionArchiveArtifactName(fileName) || isCompactionCheckpointTranscriptFileName(fileName)
-  );
+  // Compaction checkpoints are always skipped: they are derived snapshots of an
+  // active session and would double-index the same content.
+  if (isCompactionCheckpointTranscriptFileName(fileName)) {
+    return true;
+  }
+  // Legacy backups and `.jsonl.bak.<iso>` rotations are opaque pre-archive
+  // copies, not a user-facing session artifact; skip them too.
+  if (
+    isSessionArchiveArtifactName(fileName) &&
+    !isUsageCountedSessionTranscriptFileName(fileName)
+  ) {
+    return true;
+  }
+  // Usage-counted archives (`.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`) are
+  // the rotated-but-retained copies of real sessions and must stay indexed so
+  // `memory_search` can surface hits on post-reset / post-delete history.
+  return false;
 }
 
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
