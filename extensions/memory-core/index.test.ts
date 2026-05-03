@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
+import memoryCoreEntry from "./index.js";
 import {
   buildMemoryFlushPlan,
   DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
@@ -7,6 +8,61 @@ import {
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
 } from "./src/flush-plan.js";
 import { buildPromptSection } from "./src/prompt-section.js";
+
+function parseMemoryCoreConfig(value: unknown) {
+  const { safeParse } = memoryCoreEntry.configSchema;
+  if (!safeParse) {
+    throw new Error("memory-core config schema is missing safeParse");
+  }
+  return safeParse(value);
+}
+
+describe("memory-core plugin entry", () => {
+  it("accepts configured dreaming settings", () => {
+    const result = parseMemoryCoreConfig({
+      dreaming: {
+        enabled: true,
+        timezone: "Europe/London",
+        storage: {
+          mode: "both",
+        },
+        phases: {
+          deep: {
+            enabled: true,
+            minRecallCount: 3,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({
+        dreaming: {
+          enabled: true,
+          timezone: "Europe/London",
+          storage: {
+            mode: "both",
+          },
+          phases: {
+            deep: {
+              enabled: true,
+              minRecallCount: 3,
+            },
+          },
+        },
+      });
+    }
+  });
+
+  it("rejects unknown memory-core config keys", () => {
+    const result = parseMemoryCoreConfig({
+      typo: true,
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {

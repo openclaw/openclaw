@@ -1,3 +1,4 @@
+import type { JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
 import {
   jsonResult,
   resolveMemorySearchConfig,
@@ -7,11 +8,13 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
+  buildJsonPluginConfigSchema,
   definePluginEntry,
   type AnyAgentTool,
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
@@ -80,6 +83,13 @@ const MemoryGetSchema = Type.Object({
     Type.Union([Type.Literal("memory"), Type.Literal("wiki"), Type.Literal("all")]),
   ),
 });
+
+const memoryCoreConfigSchema = buildJsonPluginConfigSchema(
+  manifest.configSchema as JsonSchemaObject,
+  {
+    cacheKey: "memory-core.plugin-config",
+  },
+);
 
 function createLazyMemoryTool(params: {
   options: MemoryToolOptions;
@@ -171,6 +181,7 @@ export default definePluginEntry({
   name: "Memory (Core)",
   description: "File-backed memory search tools and CLI",
   kind: "memory",
+  configSchema: memoryCoreConfigSchema,
   register(api) {
     registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);
