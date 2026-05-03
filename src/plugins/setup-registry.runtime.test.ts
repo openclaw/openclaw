@@ -64,7 +64,7 @@ describe("setup-registry runtime fallback", () => {
     });
     expect(resolvePluginSetupCliBackendRuntime({ backend: "local-cli" })).toBeUndefined();
     expect(resolvePluginSetupCliBackendRuntime({ backend: "disabled-cli" })).toBeUndefined();
-    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(3);
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
       config: {},
       env: process.env,
