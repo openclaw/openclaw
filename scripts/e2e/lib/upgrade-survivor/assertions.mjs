@@ -416,6 +416,16 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
   }
 }
 
+function assertConfiguredPluginAvailable(index, pluginId, packageName) {
+  const records = index.installRecords ?? {};
+  const bundled = (index.plugins ?? []).find((plugin) => plugin?.pluginId === pluginId);
+  if (bundled) {
+    assert(bundled.enabled !== false, `configured bundled ${pluginId} plugin is disabled`);
+    return;
+  }
+  assertExternalPluginInstall(records, pluginId, packageName);
+}
+
 function assertConfiguredPluginInstalls() {
   const coverage = getCoverage();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
@@ -432,7 +442,7 @@ function assertConfiguredPluginInstalls() {
   assert(!matrix, "internal matrix plugin should not be installed externally");
   assert(bundledMatrix, "configured bundled matrix plugin is missing from the plugin index");
   assert(bundledMatrix.enabled !== false, "configured bundled matrix plugin is disabled");
-  assertExternalPluginInstall(records, "discord", "@openclaw/discord");
+  assertConfiguredPluginAvailable(index, "brave", "@openclaw/brave-plugin");
   assert(!records.telegram, "internal telegram plugin should not be installed externally");
 }
 

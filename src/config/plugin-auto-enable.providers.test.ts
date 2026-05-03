@@ -73,6 +73,37 @@ describe("applyPluginAutoEnable providers", () => {
     expect(result.changes).toContain("xai web search configured, enabled automatically.");
   });
 
+  it("auto-enables selected web search provider plugins under restrictive allowlists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "brave",
+          channels: [],
+          contracts: {
+            webSearchProviders: ["brave"],
+          },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.brave?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "brave"]);
+    expect(result.changes).toContain("brave web search provider selected, enabled automatically.");
+  });
+
   it("materializes xai setup auto-enable when the plugin-owned x_search tool is configured", () => {
     const result = materializePluginAutoEnableCandidates({
       config: {
