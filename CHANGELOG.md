@@ -9,7 +9,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/file-transfer: add bundled file-transfer plugin with `file_fetch`, `dir_list`, `dir_fetch`, and `file_write` agent tools for binary file ops on paired nodes; default-deny per-node path policy under `plugins.entries.file-transfer.config.nodes` with operator approval, symlink traversal refused by default (opt-in `followSymlinks`), and a 16 MB byte ceiling per round-trip. (#74742) Thanks @omarshahine.
 
 ### Changes
-- Plugins/hooks: extend `session_end` to fire when a subagent spawn fails and when a cron isolated agent session completes, so plugins can react to task completion without polling. The `subagent_ended` hook continues to fire alongside `session_end` for backward compatibility. (#10142) Thanks @mitchelldavis44.
 
 - Plugins/onboarding: let Manual setup install optional official plugins, including ClawHub-backed diagnostics with npm fallback, and expose the external Codex plugin as a selectable provider setup choice. Thanks @vincentkoc.
 - Plugins/CLI: include package dependency install state in `openclaw plugins list --json` so scripts can spot missing plugin dependencies without runtime-loading plugins.
@@ -22,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Channels/secrets: resolve SecretRef-backed channel credentials through external plugin secret contracts after the plugin split, covering runtime startup, target discovery, webhook auth, disabled-account enumeration, and late-bound web_search config. (#76449) Thanks @joshavant.
 - Docker/Gateway: pass Docker setup `.env` values into gateway and CLI containers and preserve exec SecretRef `passEnv` keys in managed service plans, so 1Password Connect-backed Discord tokens keep resolving after doctor or plugin repair. Thanks @vincentkoc.
 - Control UI/WebChat: explain compaction boundaries in chat history and link directly to session checkpoint controls so pre-compaction turns no longer look silently lost after refresh. Fixes #76415. Thanks @BunsDev.
+- Channels/WhatsApp: attach native outbound mention metadata for group text and media captions by resolving `@+<digits>` and `@<digits>` tokens against WhatsApp participant data, including LID groups. Fixes #39879; carries forward #56863. Thanks @kengi1437, @joe2643, and @fridayck.
 - Gateway/sessions: keep async `sessions.list` title and preview hydration bounded to transcript head/tail reads so Control UI polling cannot full-scan large session transcripts every refresh. Thanks @vincentkoc.
 - Gateway/sessions: keep bulk `sessions.list` rows lightweight by skipping per-row transcript usage fallback, display model inference, and plugin projection, avoiding event-loop stalls in large session stores. Thanks @Marvinthebored and @vincentkoc.
 - CLI/plugins: reject missing plugin ids before config writes in `plugins enable` and `plugins disable` so a typo no longer persists a stale config entry. (#73554) Thanks @ai-hpc.
