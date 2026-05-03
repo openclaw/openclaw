@@ -11,6 +11,11 @@ describe("deriveToolParams", () => {
     expect(deriveToolParams("read_file", { path: "/tmp/x" })).toEqual({});
   });
 
+  it("ignores prototype-key tool names when looking up parsers", () => {
+    expect(deriveToolParams("__proto__", { input: "anything" })).toEqual({});
+    expect(deriveToolParams("hasOwnProperty", { input: "anything" })).toEqual({});
+  });
+
   it("derives apply_patch destination paths from the input envelope", () => {
     const patch = [
       "*** Begin Patch",

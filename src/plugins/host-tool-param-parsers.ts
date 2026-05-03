@@ -44,6 +44,9 @@ export function deriveToolParams(
   params: unknown,
   options?: HostToolDerivationOptions,
 ): HostToolDerivedParams {
+  if (!Object.hasOwn(HOST_TOOL_PARAM_PARSERS, toolName)) {
+    return {};
+  }
   const parser = HOST_TOOL_PARAM_PARSERS[toolName];
   return parser ? parser(params, options) : {};
 }
