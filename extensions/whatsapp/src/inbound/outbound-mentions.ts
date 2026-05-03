@@ -128,9 +128,13 @@ function participantValues(participant: WhatsAppOutboundMentionParticipant): {
 
 function chooseMentionJid(participant: WhatsAppOutboundMentionParticipant): string | null {
   const values = participantValues(participant);
+  const idJid = normalizeKnownUserJid(values.id ?? "");
+  const lidJid = normalizeKnownUserJid(values.lid ?? "");
   return (
-    normalizeKnownUserJid(values.id ?? "") ??
-    normalizeKnownUserJid(values.lid ?? "") ??
+    (idJid && isLidJid(idJid) ? idJid : null) ??
+    (lidJid && isLidJid(lidJid) ? lidJid : null) ??
+    idJid ??
+    lidJid ??
     normalizeKnownUserJid(values.phoneNumber ?? "") ??
     normalizeKnownUserJid(values.e164 ?? "")
   );
@@ -210,7 +214,9 @@ export function resolveWhatsAppOutboundMentions(params: {
     }
     const token = match[0];
     const digits = match[1].replace(/\D/g, "");
-    const target = byPhone.get(digits) ?? byLid.get(digits);
+    const target = token.startsWith("@+")
+      ? (byPhone.get(digits) ?? byLid.get(digits))
+      : (byLid.get(digits) ?? byPhone.get(digits));
     if (!target) {
       continue;
     }

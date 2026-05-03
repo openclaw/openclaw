@@ -51,6 +51,37 @@ describe("resolveWhatsAppOutboundMentions", () => {
     });
   });
 
+  it("prefers explicit LID metadata over a phone JID id", () => {
+    expect(
+      resolveWhatsAppOutboundMentions({
+        chatJid: "120363000000000000@g.us",
+        text: "ping @15551234567 and @277038292303944",
+        participants: [
+          {
+            id: "15551234567@s.whatsapp.net",
+            lid: "277038292303944@lid",
+          },
+        ],
+      }),
+    ).toEqual({
+      text: "ping @277038292303944 and @277038292303944",
+      mentionedJids: ["277038292303944@lid"],
+    });
+  });
+
+  it("uses bare digit tokens for LIDs before phone numbers when participant keys collide", () => {
+    expect(
+      resolveWhatsAppOutboundMentions({
+        chatJid: "120363000000000000@g.us",
+        text: "ping @277038292303944 and @+277038292303944",
+        participants: [{ id: "277038292303944@s.whatsapp.net" }, { id: "277038292303944@lid" }],
+      }),
+    ).toEqual({
+      text: "ping @277038292303944 and @+277038292303944",
+      mentionedJids: ["277038292303944@lid", "277038292303944@s.whatsapp.net"],
+    });
+  });
+
   it("applies LID rewrites by match position while skipping code spans", () => {
     expect(
       resolveWhatsAppOutboundMentions({
