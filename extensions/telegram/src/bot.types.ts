@@ -4,8 +4,6 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import type { TelegramTransport } from "./fetch.js";
 
-export type TelegramChatSendLimiter = { acquire(): Promise<void> };
-
 export type TelegramBotOptions = {
   token: string;
   accountId?: string;

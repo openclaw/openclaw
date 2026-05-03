@@ -57,7 +57,7 @@ import {
   resolveMarkdownTableMode,
   resolveSessionStoreEntry,
 } from "./bot-message-dispatch.runtime.js";
-import type { TelegramBotOptions, TelegramChatSendLimiter } from "./bot.types.js";
+import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import { getTelegramTextParts, resolveTelegramReplyId } from "./bot/helpers.js";
 import {
@@ -101,9 +101,6 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 const DRAFT_MIN_INITIAL_CHARS = 30;
 /** Base edit throttle per stream; multiplied by concurrent stream count to stay within rate limits. */
 const DRAFT_STREAM_BASE_THROTTLE_MS = 1000;
-/** Minimum spacing enforced by the shared rate limiter across all lanes in a dispatch. */
-const DRAFT_SHARED_RATE_LIMITER_INTERVAL_MS = 1100;
-
 /**
  * Wraps a sendTyping function so it is throttled proportionally to the number of
  * active draft stream lanes. With N lanes each already generating edits, typing
@@ -126,32 +123,6 @@ function throttleTypingForStreamCount(
     }
     lastSentMs = now;
     await sendTyping();
-  };
-}
-
-/**
- * Serialized rate limiter shared across all Telegram API sends within a single
- * dispatch (draft stream edits, final delivery, error fallbacks).  Chains
- * acquires so at most one send proceeds per minIntervalMs.
- */
-function createSharedEditRateLimiter(minIntervalMs: number): TelegramChatSendLimiter {
-  let lastSendMs = 0;
-  let chain: Promise<void> = Promise.resolve();
-  return {
-    acquire() {
-      chain = chain.then(
-        () =>
-          new Promise<void>((resolve) => {
-            const waitMs = minIntervalMs - (Date.now() - lastSendMs);
-            const delay = Math.max(waitMs, 0);
-            setTimeout(() => {
-              lastSendMs = Date.now();
-              resolve();
-            }, delay);
-          }),
-      );
-      return chain;
-    },
   };
 }
 
@@ -488,14 +459,6 @@ export const dispatchTelegramMessage = async ({
   // Telegram's per-chat rate limit (~1 edit/second).
   const activeDraftStreamCount = (canStreamAnswerDraft ? 1 : 0) + (canStreamReasoningDraft ? 1 : 0);
   const draftThrottleMs = DRAFT_STREAM_BASE_THROTTLE_MS * Math.max(1, activeDraftStreamCount);
-  // Per-chat send limiter: serialises ALL Telegram API sends within this dispatch (draft
-  // stream edits, final delivery, error fallbacks) so concurrent sends don't exceed the
-  // per-chat rate limit.  Always created when any streaming is active so that non-stream
-  // sends (e.g. error messages triggered by provider rate limits) queue behind active edits.
-  const sharedEditRateLimiter =
-    activeDraftStreamCount > 0
-      ? createSharedEditRateLimiter(DRAFT_SHARED_RATE_LIMITER_INTERVAL_MS)
-      : undefined;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
@@ -514,7 +477,6 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           throttleMs: draftThrottleMs,
           minInitialChars: draftMinInitialChars,
-          rateLimiter: sharedEditRateLimiter,
           renderText,
           renderContinuationText,
           onSupersededPreview:
@@ -815,7 +777,6 @@ export const dispatchTelegramMessage = async ({
     replyQuotePosition,
     replyQuoteEntities,
     replyQuoteByMessageId,
-    rateLimiter: sharedEditRateLimiter,
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;

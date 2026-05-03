@@ -101,11 +101,6 @@ export function createTelegramDraftStream(params: {
   renderContinuationText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
-  /**
-   * Optional shared rate limiter across lanes. acquire() resolves when it is safe to send,
-   * enforcing a minimum inter-send interval across all streams sharing the bucket.
-   */
-  rateLimiter?: { acquire(): Promise<void> };
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -239,11 +234,20 @@ export function createTelegramDraftStream(params: {
     // (accumulated while the failing send was in-flight) is used for the retry
     // rather than the stale text the loop snapshotted before the failed send.
     if (rateLimitedUntilMs > 0) {
+      if (streamState.final) {
+        rateLimitedUntilMs = 0;
+        pendingForceNewMessage = false;
+        return false;
+      }
       const remaining = rateLimitedUntilMs - Date.now();
       if (remaining > 0) {
         await new Promise<void>((r) => setTimeout(r, remaining));
       }
       rateLimitedUntilMs = 0;
+      if (streamState.final) {
+        pendingForceNewMessage = false;
+        return false;
+      }
       if (pendingForceNewMessage) {
         pendingForceNewMessage = false;
         textBaseOffset = 0;
@@ -331,7 +335,6 @@ export function createTelegramDraftStream(params: {
 
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
-    await params.rateLimiter?.acquire();
     try {
       const sent = await sendMessageTransportPreview({
         renderedText,
