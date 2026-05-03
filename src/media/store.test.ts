@@ -364,6 +364,28 @@ describe("media store", () => {
       },
     },
     {
+      name: "saves buffer when fsync raises EACCES (Windows restricted handle) (#76844)",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const originalOpen = fs.open.bind(fs) as typeof fs.open;
+          vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const handle = await originalOpen(...args);
+            const eacces = new Error("permission denied") as NodeJS.ErrnoException;
+            eacces.code = "EACCES";
+            vi.spyOn(handle, "sync").mockRejectedValue(eacces);
+            return handle;
+          });
+          const saved = await store.saveMediaBuffer(
+            Buffer.from("pdf-content"),
+            "application/pdf",
+            "inbound",
+          );
+          const stat = await fs.stat(saved.path);
+          expect(stat.isFile()).toBe(true);
+        });
+      },
+    },
+    {
       name: "rejects traversal media subdirs before saving buffers",
       run: async () => {
         await withTempStore(async (store, home) => {
