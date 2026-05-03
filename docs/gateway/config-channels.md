@@ -97,6 +97,15 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```json5
 {
   web: {
+    enabled: true,
+    heartbeatSeconds: 60,
+    reconnect: {
+      initialMs: 2000,
+      maxMs: 120000,
+      factor: 1.4,
+      jitter: 0.2,
+      maxAttempts: 0,
+    },
     whatsapp: {
       keepAliveIntervalMs: 25000,
       connectTimeoutMs: 60000,
@@ -106,7 +115,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   channels: {
     whatsapp: {
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
-      allowFrom: ["+15555550123", "+447700900123"],
+      allowFrom: ["+155****0123", "+447****0123"],
       textChunkLimit: 4000,
       chunkMode: "length", // length | newline
       mediaMaxMb: 50,
@@ -115,18 +124,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         "*": { requireMention: true },
       },
       groupPolicy: "allowlist",
-      groupAllowFrom: ["+15551234567"],
-    },
-  },
-  web: {
-    enabled: true,
-    heartbeatSeconds: 60,
-    reconnect: {
-      initialMs: 2000,
-      maxMs: 120000,
-      factor: 1.4,
-      jitter: 0.2,
-      maxAttempts: 0,
+      groupAllowFrom: ["+155****4567"],
     },
   },
 }
