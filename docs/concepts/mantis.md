@@ -299,6 +299,7 @@ Recommended secret names:
 - `OPENCLAW_QA_DISCORD_GUILD_ID`
 - `OPENCLAW_QA_DISCORD_CHANNEL_ID`
 - `OPENCLAW_QA_DISCORD_NOTIFY_CHANNEL_ID`
+- `OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for public GitHub artifact uploads
 - `OPENCLAW_QA_CONVEX_SITE_URL`
 - `OPENCLAW_QA_CONVEX_SECRET_CI`
 
@@ -313,6 +314,10 @@ The Mantis runner must never print:
 - auth profile contents
 - VNC passwords
 - raw credential payloads
+
+Public artifact uploads should also redact Discord target metadata such as bot,
+guild, channel, and message ids. The GitHub smoke workflow enables
+`OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for this reason.
 
 If a token is accidentally pasted into an issue, PR, chat, or log, rotate it
 after the new secret has been stored.

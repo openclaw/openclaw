@@ -142,6 +142,44 @@ describe("mantis discord smoke runtime", () => {
     );
   });
 
+  it("redacts Discord target metadata in public artifacts", async () => {
+    const result = await runMantisDiscordSmoke({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/mantis/redacted",
+      tokenFile,
+      redactPublicMetadata: true,
+      env: {
+        OPENCLAW_QA_DISCORD_GUILD_ID: "1456350064065904867",
+        OPENCLAW_QA_DISCORD_CHANNEL_ID: "1456744319972282449",
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    const summaryText = await fs.readFile(result.summaryPath, "utf8");
+    const reportText = await fs.readFile(result.reportPath, "utf8");
+    expect(reportText).toContain("# Mantis Discord Smoke");
+    expect(reportText).toContain("- Bot: <redacted> (<redacted>)");
+    expect(reportText).toContain("- Guild: <redacted> (<redacted>)");
+    expect(reportText).toContain("- Channel: #<redacted> (<redacted>)");
+    for (const text of [summaryText, reportText]) {
+      expect(text).toContain("<redacted>");
+      expect(text).not.toContain("1489650053747314748");
+      expect(text).not.toContain("1456350064065904867");
+      expect(text).not.toContain("Friends");
+      expect(text).not.toContain("1456744319972282449");
+      expect(text).not.toContain("maintainers");
+      expect(text).not.toContain("1500000000000000001");
+    }
+    expect(summaryText).not.toContain("Mantis");
+    expect(JSON.parse(summaryText)).toMatchObject({
+      metadataRedaction: true,
+      bot: { id: "<redacted>", username: "<redacted>" },
+      guild: { id: "<redacted>", name: "<redacted>" },
+      channel: { id: "<redacted>", name: "<redacted>" },
+      message: { id: "<redacted>" },
+    });
+  });
+
   it("fails before calling Discord when required ids are missing", async () => {
     const result = await runMantisDiscordSmoke({
       repoRoot,

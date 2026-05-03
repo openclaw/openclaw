@@ -12,6 +12,7 @@ export type MantisDiscordSmokeOptions = {
   message?: string;
   now?: () => Date;
   outputDir?: string;
+  redactPublicMetadata?: boolean;
   repoRoot?: string;
   skipPost?: boolean;
   token?: string;
@@ -82,6 +83,7 @@ type MantisDiscordSmokeSummary = {
     posted: boolean;
     reactionAdded: boolean;
   };
+  metadataRedaction: boolean;
   outputDir: string;
   reportPath: string;
   startedAt: string;
@@ -95,10 +97,16 @@ const DEFAULT_MANTIS_TOKEN_ENV = "OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN";
 const DEFAULT_MANTIS_TOKEN_FILE_ENV = "OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN_FILE";
 const DEFAULT_GUILD_ID_ENV = "OPENCLAW_QA_DISCORD_GUILD_ID";
 const DEFAULT_CHANNEL_ID_ENV = "OPENCLAW_QA_DISCORD_CHANNEL_ID";
+const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 
 function trimToValue(value: string | undefined) {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isTruthyOptIn(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function assertDiscordSnowflake(value: string, label: string) {
@@ -232,6 +240,7 @@ function renderMantisDiscordSmokeReport(summary: MantisDiscordSmokeSummary) {
     "# Mantis Discord Smoke",
     "",
     `Status: ${summary.status}`,
+    `Metadata redaction: ${summary.metadataRedaction ? "enabled" : "disabled"}`,
     `Started: ${summary.startedAt}`,
     `Finished: ${summary.finishedAt}`,
     `Output: ${summary.outputDir}`,
@@ -259,11 +268,73 @@ function renderMantisDiscordSmokeReport(summary: MantisDiscordSmokeSummary) {
   return `${lines.join("\n")}\n`;
 }
 
-async function writeMantisDiscordSmokeArtifacts(summary: MantisDiscordSmokeSummary) {
+function addSensitiveValue(values: Set<string>, value: string | undefined) {
+  const resolved = trimToValue(value);
+  if (resolved && resolved !== "<redacted>") {
+    values.add(resolved);
+  }
+}
+
+function redactMantisDiscordMetadata(text: string, sensitiveValues: ReadonlySet<string>) {
+  let redacted = text;
+  const sortedValues = [...sensitiveValues].sort((a, b) => b.length - a.length);
+  for (const value of sortedValues) {
+    redacted = redacted.replaceAll(value, "<redacted>");
+  }
+  return redacted;
+}
+
+function buildPublishedMantisDiscordSmokeSummary(
+  summary: MantisDiscordSmokeSummary,
+  sensitiveValues: ReadonlySet<string>,
+): MantisDiscordSmokeSummary {
+  if (!summary.metadataRedaction) {
+    return summary;
+  }
+  return {
+    ...summary,
+    apiCalls: summary.apiCalls.map((call) => ({
+      ...call,
+      path: redactMantisDiscordMetadata(call.path, sensitiveValues),
+    })),
+    bot: summary.bot
+      ? {
+          id: "<redacted>",
+          username: summary.bot.username ? "<redacted>" : undefined,
+        }
+      : undefined,
+    channel: summary.channel
+      ? {
+          id: "<redacted>",
+          name: summary.channel.name ? "<redacted>" : undefined,
+          type: summary.channel.type,
+        }
+      : undefined,
+    guild: summary.guild
+      ? {
+          id: "<redacted>",
+          name: summary.guild.name ? "<redacted>" : undefined,
+        }
+      : undefined,
+    message: summary.message
+      ? {
+          ...summary.message,
+          id: summary.message.id ? "<redacted>" : "",
+        }
+      : undefined,
+  };
+}
+
+async function writeMantisDiscordSmokeArtifacts(
+  summary: MantisDiscordSmokeSummary,
+  sensitiveValues: ReadonlySet<string>,
+) {
   await fs.mkdir(summary.outputDir, { recursive: true });
-  const report = renderMantisDiscordSmokeReport(summary);
+  const publishedSummary = buildPublishedMantisDiscordSmokeSummary(summary, sensitiveValues);
+  const report = renderMantisDiscordSmokeReport(publishedSummary);
+  const summaryJson = `${JSON.stringify(publishedSummary, null, 2)}\n`;
   await fs.writeFile(summary.reportPath, report, "utf8");
-  await fs.writeFile(summary.summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  await fs.writeFile(summary.summaryPath, summaryJson, "utf8");
 }
 
 export async function runMantisDiscordSmoke(
@@ -271,6 +342,8 @@ export async function runMantisDiscordSmoke(
 ): Promise<MantisDiscordSmokeResult> {
   const env = opts.env ?? process.env;
   const startedAt = (opts.now ?? (() => new Date()))();
+  const redactPublicMetadata =
+    opts.redactPublicMetadata ?? isTruthyOptIn(env[QA_REDACT_PUBLIC_METADATA_ENV]);
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir = await ensureRepoBoundDirectory(
     repoRoot,
@@ -282,6 +355,7 @@ export async function runMantisDiscordSmoke(
   const summaryPath = path.join(outputDir, "mantis-discord-smoke-summary.json");
   const reportPath = path.join(outputDir, "mantis-discord-smoke-report.md");
   const apiCalls: DiscordApiCall[] = [];
+  const sensitiveValues = new Set<string>();
   const summary: MantisDiscordSmokeSummary = {
     apiCalls,
     artifacts: {
@@ -289,6 +363,7 @@ export async function runMantisDiscordSmoke(
       summaryPath,
     },
     finishedAt: startedAt.toISOString(),
+    metadataRedaction: redactPublicMetadata,
     outputDir,
     reportPath,
     startedAt: startedAt.toISOString(),
@@ -312,6 +387,8 @@ export async function runMantisDiscordSmoke(
       label: DEFAULT_CHANNEL_ID_ENV,
       value: opts.channelId,
     });
+    addSensitiveValue(sensitiveValues, guildId);
+    addSensitiveValue(sensitiveValues, channelId);
     const bot = await callDiscordApi<DiscordUser>({
       apiCalls,
       label: "current-user",
@@ -345,6 +422,12 @@ export async function runMantisDiscordSmoke(
     summary.bot = { id: bot.id, username: bot.username };
     summary.guild = { id: guild.id, name: guild.name };
     summary.channel = { id: channel.id, name: channel.name, type: channel.type };
+    addSensitiveValue(sensitiveValues, bot.id);
+    addSensitiveValue(sensitiveValues, bot.username);
+    addSensitiveValue(sensitiveValues, guild.id);
+    addSensitiveValue(sensitiveValues, guild.name);
+    addSensitiveValue(sensitiveValues, channel.id);
+    addSensitiveValue(sensitiveValues, channel.name);
 
     if (opts.skipPost) {
       summary.message = { id: "", posted: false, reactionAdded: false };
@@ -360,6 +443,7 @@ export async function runMantisDiscordSmoke(
         path: `/channels/${channelId}/messages`,
         token,
       });
+      addSensitiveValue(sensitiveValues, message.id);
       await callDiscordApi<void>({
         apiCalls,
         label: "add-reaction",
@@ -380,12 +464,16 @@ export async function runMantisDiscordSmoke(
     };
     await fs.writeFile(
       path.join(outputDir, "error.txt"),
-      `${formatErrorMessage(error)}${os.EOL}`,
+      `${
+        redactPublicMetadata
+          ? redactMantisDiscordMetadata(formatErrorMessage(error), sensitiveValues)
+          : formatErrorMessage(error)
+      }${os.EOL}`,
       "utf8",
     );
   } finally {
     summary.finishedAt = new Date().toISOString();
-    await writeMantisDiscordSmokeArtifacts(summary);
+    await writeMantisDiscordSmokeArtifacts(summary, sensitiveValues);
   }
 
   return {
