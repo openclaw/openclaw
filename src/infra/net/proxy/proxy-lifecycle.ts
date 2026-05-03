@@ -252,6 +252,10 @@ function withTlsTargetHost(configuration: unknown): unknown {
     return configuration;
   }
 
+  // Compatibility shim for https://github.com/gajus/global-agent/issues/83.
+  // global-agent@4.1.3 can CONNECT to the right host while leaving Node TLS
+  // certificate validation pointed at the proxy socket host. Keep this until
+  // upstream carries the CONNECT target host through to tls.connect().
   const tlsOptions: Record<string, unknown> = {
     ...configuration.tls,
     host: configuration.host,
