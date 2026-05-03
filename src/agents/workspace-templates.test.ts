@@ -64,8 +64,8 @@ describe("AGENTS.md template content priority order", () => {
     const content = await fs.readFile(templatePath, "utf-8");
     return content
       .split("\n")
-      .filter((line) => /^## /.test(line))
-      .map((line) => line.replace(/^## /, "").trim());
+      .filter((line) => line.startsWith("## "))
+      .map((line) => line.slice("## ".length).trim());
   }
 
   it("places Red Lines before Memory and Group Chats", async () => {
