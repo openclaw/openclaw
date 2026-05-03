@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
-import { resolvePluginNpmRuntimeBuildPlan } from "./plugin-npm-runtime-build.mjs";
+import {
+  listPluginNpmRuntimeBuildOutputs,
+  resolvePluginNpmRuntimeBuildPlan,
+} from "./plugin-npm-runtime-build.mjs";
 
 const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
   "src/config/bundled-channel-config-metadata.generated.ts";
@@ -28,34 +31,8 @@ function packageRelativePathExists(packageDir, relativePath) {
   return fs.existsSync(path.join(packageDir, relativePath));
 }
 
-function mergePackageFiles(packageDir, files) {
-  const merged = new Set(
-    Array.isArray(files) ? files.filter((entry) => typeof entry === "string") : [],
-  );
-  merged.add("dist/**");
-  if (packageRelativePathExists(packageDir, "openclaw.plugin.json")) {
-    merged.add("openclaw.plugin.json");
-  }
-  if (packageRelativePathExists(packageDir, "README.md")) {
-    merged.add("README.md");
-  }
-  if (packageRelativePathExists(packageDir, "SKILL.md")) {
-    merged.add("SKILL.md");
-  }
-  if (packageRelativePathExists(packageDir, "skills")) {
-    merged.add("skills/**");
-  }
-  return [...merged];
-}
-
-function listRuntimeBuildOutputs(plan) {
-  return Object.keys(plan.entry)
-    .map((entryKey) => `./dist/${entryKey}.js`)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 function assertPluginNpmRuntimeBuildExists(plan) {
-  const missing = listRuntimeBuildOutputs(plan).filter(
+  const missing = listPluginNpmRuntimeBuildOutputs(plan).filter(
     (runtimePath) => !packageRelativePathExists(plan.packageDir, runtimePath.replace(/^\.\//u, "")),
   );
   if (missing.length > 0) {
@@ -98,7 +75,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
 
   const packageJson = {
     ...plan.packageJson,
-    files: mergePackageFiles(packageDir, plan.packageJson.files),
+    files: plan.packageFiles,
     openclaw: {
       ...plan.packageJson.openclaw,
       runtimeExtensions: plan.runtimeExtensions,
