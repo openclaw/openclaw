@@ -238,8 +238,9 @@ img.chat-avatar {
   background: transparent;
 }
 
-.chat-bubble.has-copy {
-  padding-right: 70px;
+.chat-bubble.has-copy,
+.chat-bubble--has-actions {
+  padding-right: 76px;
 }
 
 .chat-duplicate-count {
@@ -279,10 +280,26 @@ img.chat-avatar {
   pointer-events: auto;
 }
 
-@media (hover: none) {
+@media (hover: none), (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-bubble--has-actions {
+    display: flex;
+    flex-direction: column;
+    padding-right: 14px;
+  }
+
   .chat-bubble-actions {
+    position: static;
+    order: 2;
+    justify-content: flex-end;
+    margin-top: 8px;
     opacity: 1;
     pointer-events: auto;
+  }
+
+  .chat-copy-btn,
+  .chat-expand-btn {
+    min-width: 44px;
+    min-height: 44px;
   }
 }
 
@@ -618,10 +635,45 @@ details.msg-meta:not([open]) .msg-meta__details {
   background: #dc2626;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-group {
     margin-left: 0;
     margin-right: 0;
+  }
+
+  .chat-group-footer {
+    width: 100%;
+    gap: 6px;
+    row-gap: 6px;
+  }
+
+  .chat-sender-name {
+    min-width: 0;
+    max-width: 42vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-group-footer button {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 8px;
+    opacity: 0.72;
+    pointer-events: auto;
+  }
+
+  .msg-meta {
+    max-width: 100%;
+  }
+
+  .msg-meta__summary {
+    min-height: 34px;
+    padding: 5px 10px 5px 8px;
+  }
+
+  .chat-delete-wrap {
+    flex: 0 0 auto;
   }
 
   .chat-group-messages {

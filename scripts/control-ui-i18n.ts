@@ -477,7 +477,11 @@ async function loadMeta(filePath: string): Promise<LocaleMeta | null> {
 }
 
 function renderMeta(meta: LocaleMeta): string {
-  return `${JSON.stringify(meta, null, 2)}\n`;
+  const rendered = JSON.stringify(meta, null, 2).replace(
+    /"fallbackKeys": \[\n {4}("[^"]+")\n {2}\]/,
+    '"fallbackKeys": [$1]',
+  );
+  return `${rendered}\n`;
 }
 
 async function loadTranslationMemory(
@@ -982,13 +986,13 @@ async function runProcess(
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
     });
     child.once("error", reject);
     if (options.input !== undefined) {
@@ -997,6 +1001,8 @@ async function runProcess(
       child.stdin.end();
     }
     child.once("close", (code) => {
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      const stderr = Buffer.concat(stderrChunks).toString("utf8");
       if ((code ?? 1) !== 0 && options.rejectOnFailure) {
         reject(
           new Error(`${executable} ${args.join(" ")} failed: ${stderr.trim() || stdout.trim()}`),
