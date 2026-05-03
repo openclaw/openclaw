@@ -27,6 +27,10 @@ const DEFAULT_OUTPUT_AUDIO_FORMAT = "pcm16";
 // https://docs.x.ai/developers/model-capabilities/audio/voice-agent
 export const XAI_VOICES = ["eve", "ara", "rex", "sal", "leo"] as const;
 export type XaiVoice = (typeof XAI_VOICES)[number];
+
+// pt 235n (audit #8) — Set lookup avoids the per-voice-resolution
+// linear .find() / .includes() walk over the const tuple.
+const _XAI_VOICE_SET: ReadonlySet<string> = new Set(XAI_VOICES);
 export const DEFAULT_XAI_VOICE: XaiVoice = "ara";
 
 type XaiMessage = Record<string, unknown>;
@@ -695,12 +699,13 @@ export function resolveXaiVoice(voice?: string): XaiVoice {
     return DEFAULT_XAI_VOICE;
   }
   const normalized = voice.toLowerCase();
-  const match = XAI_VOICES.find((candidate) => candidate === normalized);
-  return match ?? DEFAULT_XAI_VOICE;
+  // pt 235n — O(1) Set lookup
+  return _XAI_VOICE_SET.has(normalized) ? (normalized as XaiVoice) : DEFAULT_XAI_VOICE;
 }
 
 export function isValidXaiVoice(voice: string): boolean {
-  return (XAI_VOICES as readonly string[]).includes(voice.toLowerCase());
+  // pt 235n — O(1) Set lookup
+  return _XAI_VOICE_SET.has(voice.toLowerCase());
 }
 
 function queueBounded(
@@ -716,7 +721,12 @@ function queueBounded(
   }
   if (kind === "audio") {
     if (queues.audio.length >= MAX_PENDING_AUDIO) {
-      queues.audio.shift();
+      // pt 235n (audit #1) — was .shift() per overflow which is
+      // O(n) array shift. Hot voice path; under sustained
+      // overflow that's N*shift_count. Batch-trim 25% in a
+      // single splice so the amortized per-push cost is O(1).
+      const drop = Math.max(1, Math.floor(MAX_PENDING_AUDIO / 4));
+      queues.audio.splice(0, drop);
     }
     queues.audio.push(payload);
     return;

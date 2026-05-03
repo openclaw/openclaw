@@ -90,8 +90,13 @@ export function startGatewayMaintenanceTimers(params: {
       }
     }
     if (params.dedupe.size > DEDUPE_MAX) {
-      const entries = [...params.dedupe.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
-      for (let i = 0; i < params.dedupe.size - DEDUPE_MAX; i++) {
+      // pt 235n (audit #7) — was [...map.entries()].toSorted(...).
+      // Both spread + toSorted allocate distinct copies. Single
+      // Array.from + in-place sort drops one allocation per tick.
+      const entries = Array.from(params.dedupe.entries());
+      entries.sort((a, b) => a[1].ts - b[1].ts);
+      const target = params.dedupe.size - DEDUPE_MAX;
+      for (let i = 0; i < target; i++) {
         params.dedupe.delete(entries[i][0]);
       }
     }
