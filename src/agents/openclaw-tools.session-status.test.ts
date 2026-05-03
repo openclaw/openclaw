@@ -492,6 +492,37 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+  it("resolves sessionKey=current to runSessionKey when sandbox key differs from live session (#76708)", async () => {
+    resetSessionStore({
+      "agent:main:telegram:default:direct:1234": {
+        sessionId: "s-tg-direct",
+        updatedAt: 5,
+        status: "done",
+      },
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+        status: "running",
+      },
+    });
+
+    // The tool is constructed with the Telegram sandbox key as agentSessionKey
+    // but the actual live run session key as runSessionKey.
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
+      config: {
+        ...mockConfig,
+        tools: { ...mockConfig.tools, sessions: { visibility: "all" } },
+      } as never,
+    });
+
+    const result = await tool.execute("call-current-run-session", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+  });
+
   it("treats the TUI client label as the current requester session", async () => {
     resetSessionStore({
       "agent:main:main": {

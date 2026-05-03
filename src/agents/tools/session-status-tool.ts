@@ -276,6 +276,12 @@ async function resolveModelOverride(params: {
 
 export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
+  /**
+   * The actual live run session key. When the tool is constructed with a sandbox/policy
+   * session key (e.g. a Telegram direct peer key), this allows `session_status({sessionKey:
+   * "current"})` to resolve to the live run session instead of the stale sandbox key.
+   */
+  runSessionKey?: string;
   config?: OpenClawConfig;
   sandboxed?: boolean;
 }): AnyAgentTool {
@@ -346,12 +352,23 @@ export function createSessionStatusTool(opts?: {
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+
+      // When sessionKey is literally "current" and a runSessionKey is provided,
+      // resolve directly to the live run session instead of falling through to
+      // stale sandbox/policy key resolution (#76708).
+      if (requestedKeyRaw === "current" && opts?.runSessionKey) {
+        requestedKeyRaw = opts.runSessionKey;
+      }
+
       const currentSessionAlias = resolveCurrentSessionClientAlias({
         key: requestedKeyRaw ?? "",
         requesterInternalKey: effectiveRequesterKey,
       });
       if (currentSessionAlias) {
-        requestedKeyRaw = currentSessionAlias;
+        // When a runSessionKey is provided (e.g. the live run session key), prefer it
+        // over the sandbox/policy key so "current" resolves to the active run session
+        // instead of a stale sandbox key (e.g. a Telegram direct peer key).
+        requestedKeyRaw = opts?.runSessionKey ?? currentSessionAlias;
       }
       const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       let resolvedViaSessionId = false;
