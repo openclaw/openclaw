@@ -237,6 +237,22 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body.toString("utf-8")).toBe("original-image");
   });
 
+  it("serves same-session requester image reads before bearer auth", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      headers: { "x-openclaw-requester-session-key": sessionKey },
+      denyAuth: true,
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("image/png");
+    expect(result.body.toString("utf-8")).toBe("original-image");
+    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+  });
+
   it("rejects unauthenticated requests before serving bytes", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
 
