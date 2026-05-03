@@ -72,6 +72,10 @@ type GlobalAgentConnectConfiguration = Record<string, unknown> & {
   host: string;
   tls: Record<string, unknown>;
 };
+type GlobalAgentCreateConnection = (configuration: unknown, callback: unknown) => unknown;
+type GlobalAgentHttpsAgent = {
+  createConnection: GlobalAgentCreateConnection;
+};
 
 let globalAgentBootstrapped = false;
 let nodeHttpStackSnapshot: NodeHttpStackSnapshot | null = null;
@@ -247,6 +251,13 @@ function isGlobalAgentConnectConfiguration(
   return typeof value["host"] === "string" && isRecord(value["tls"]);
 }
 
+function isGlobalAgentHttpsAgent(value: unknown): value is GlobalAgentHttpsAgent {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value["createConnection"] === "function";
+}
+
 function withTlsTargetHost(configuration: unknown): unknown {
   if (!isGlobalAgentConnectConfiguration(configuration)) {
     return configuration;
@@ -271,17 +282,12 @@ function withTlsTargetHost(configuration: unknown): unknown {
 
 function patchGlobalAgentHttpsConnectTlsTargetHost(): void {
   const agent = https.globalAgent;
-  if (typeof agent !== "object" || agent === null || patchedGlobalAgentHttpsAgents.has(agent)) {
+  if (!isGlobalAgentHttpsAgent(agent) || patchedGlobalAgentHttpsAgents.has(agent)) {
     return;
   }
 
-  const agentRecord = agent as unknown as Record<string, unknown>;
-  const createConnection = agentRecord["createConnection"];
-  if (typeof createConnection !== "function") {
-    return;
-  }
-
-  agentRecord["createConnection"] = function createConnectionWithTlsTargetHost(
+  const createConnection = agent.createConnection;
+  agent.createConnection = function createConnectionWithTlsTargetHost(
     this: unknown,
     configuration: unknown,
     callback: unknown,
