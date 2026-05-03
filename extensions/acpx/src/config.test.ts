@@ -58,6 +58,44 @@ describe("embedded acpx plugin config", () => {
     });
   });
 
+  it("combines agent command with args array", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          claude: {
+            command: "node",
+            args: ["/path/to/adapter.mjs", "--verbose"],
+          },
+          codex: {
+            command: "codex-acp",
+            args: ["--model", "gpt-5"],
+          },
+        },
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      claude: "node /path/to/adapter.mjs --verbose",
+      codex: "codex-acp --model gpt-5",
+    });
+  });
+
+  it("handles agent command without args (backward compat)", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          simple: { command: "simple-acp" },
+        },
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      simple: "simple-acp",
+    });
+  });
+
   it("leaves probeAgent undefined by default so the runtime picks its built-in probe agent", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: undefined,

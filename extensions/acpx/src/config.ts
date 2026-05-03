@@ -238,10 +238,12 @@ export function resolveAcpxPluginConfig(params: {
     moduleUrl: params.moduleUrl,
   });
   const agents = Object.fromEntries(
-    Object.entries(normalized.agents ?? {}).map(([name, entry]) => [
-      normalizeLowercaseStringOrEmpty(name),
-      entry.command.trim(),
-    ]),
+    Object.entries(normalized.agents ?? {}).map(([name, entry]) => {
+      const cmd = entry.command.trim();
+      const cmdArgs = entry.args ?? [];
+      const fullCommand = cmdArgs.length > 0 ? `${cmd} ${cmdArgs.join(" ")}` : cmd;
+      return [normalizeLowercaseStringOrEmpty(name), fullCommand];
+    }),
   );
 
   // Lowercase probeAgent so lookups match the registry keys built above, which
