@@ -8,6 +8,7 @@ import {
   listTasksForSessionKeyForStatus,
 } from "../../tasks/task-status-access.js";
 import {
+  buildTaskOperationalSummary,
   buildTaskStatusSnapshot,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
@@ -19,6 +20,8 @@ const MAX_VISIBLE_TASKS = 5;
 
 const TASK_STATUS_ICONS: Record<TaskRecord["status"], string> = {
   queued: "🟡",
+  awaiting_approval: "🟠",
+  waiting_external: "🟣",
   running: "🟢",
   succeeded: "✅",
   failed: "🔴",
@@ -57,6 +60,14 @@ function formatTaskTiming(task: TaskRecord): string | undefined {
   if (task.status === "queued") {
     return `queued ${formatTimeAgo(Date.now() - task.createdAt)}`;
   }
+  if (task.status === "awaiting_approval") {
+    const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
+    return `awaiting approval ${formatTimeAgo(Date.now() - referenceAt)}`;
+  }
+  if (task.status === "waiting_external") {
+    const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
+    return `waiting external ${formatTimeAgo(Date.now() - referenceAt)}`;
+  }
   const endedAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
   return `finished ${formatTimeAgo(Date.now() - endedAt)}`;
 }
@@ -70,8 +81,12 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
   const status = task.status.replaceAll("_", " ");
   const timing = formatTaskTiming(task);
   const detail = formatTaskDetail(task);
+  const operationalSummary = buildTaskOperationalSummary(task);
   const meta = [TASK_RUNTIME_LABELS[task.runtime], status, timing].filter(Boolean).join(" · ");
   const lines = [`${index + 1}. ${TASK_STATUS_ICONS[task.status]} ${title}`, `   ${meta}`];
+  lines.push(
+    `   ${operationalSummary.state} · ${operationalSummary.stage}${operationalSummary.nextAction ? ` · next: ${operationalSummary.nextAction}` : ""}`,
+  );
   if (detail) {
     lines.push(`   ${detail}`);
   }

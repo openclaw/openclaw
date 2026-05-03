@@ -1,7 +1,10 @@
 import { listTasksForFlowId } from "./runtime-internal.js";
 import { getTaskFlowRegistryRestoreFailure, listTaskFlowRecords } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import {
+  isActiveTaskStatus,
+  type TaskRecord,
+} from "./task-registry.types.js";
 
 export type TaskFlowAuditSeverity = "warn" | "error";
 export type TaskFlowAuditCode =
@@ -162,9 +165,7 @@ export function listTaskFlowAuditFindings(
     const referenceAt = getReferenceAt(flow);
     const ageMs = Math.max(0, now - referenceAt);
     const linkedTasks = getLinkedTasks(flow.flowId);
-    const activeTasks = linkedTasks.filter(
-      (task) => task.status === "queued" || task.status === "running",
-    );
+    const activeTasks = linkedTasks.filter((task) => isActiveTaskStatus(task.status));
 
     if (flow.status === "running" && ageMs >= staleRunningMs) {
       findings.push(

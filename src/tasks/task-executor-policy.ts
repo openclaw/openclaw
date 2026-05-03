@@ -1,5 +1,10 @@
 import type { TaskEventRecord, TaskRecord, TaskStatus } from "./task-registry.types.js";
-import { formatTaskStatusTitleText, sanitizeTaskStatusText } from "./task-status.js";
+import {
+  buildTaskLifecycleEventFromRecord,
+  formatTaskLifecycleEvent,
+  formatTaskStatusTitleText,
+  sanitizeTaskStatusText,
+} from "./task-status.js";
 
 export function isTerminalTaskStatus(status: TaskStatus): boolean {
   return (
@@ -79,12 +84,28 @@ export function formatTaskStateChangeMessage(
   event: TaskEventRecord,
 ): string | null {
   const title = resolveTaskDisplayTitle(task);
-  if (event.kind === "running") {
-    return `Background task started: ${title}.`;
+  const lifecycleEvent = buildTaskLifecycleEventFromRecord(task, {
+    kind: event.kind,
+    summary: sanitizeTaskStatusText(event.summary) || undefined,
+  });
+  if (!lifecycleEvent) {
+    return null;
   }
-  if (event.kind === "progress") {
-    const summary = sanitizeTaskStatusText(event.summary);
-    return summary ? `Background task update: ${title}. ${summary}` : null;
+  const detail = formatTaskLifecycleEvent(lifecycleEvent);
+  if (lifecycleEvent.event === "task.started") {
+    return detail
+      ? `Background task started: ${title}. ${detail}`
+      : `Background task started: ${title}.`;
+  }
+  if (lifecycleEvent.event === "task.progressed") {
+    return detail
+      ? `Background task update: ${title}. ${detail}`
+      : `Background task update: ${title}.`;
+  }
+  if (lifecycleEvent.event === "task.blocked") {
+    return detail
+      ? `Background task blocked: ${title}. ${detail}`
+      : `Background task blocked: ${title}.`;
   }
   return null;
 }

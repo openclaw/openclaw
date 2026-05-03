@@ -58,7 +58,7 @@ describe("task-executor-policy", () => {
       "Task needs follow-up: ACP import (run run-1234). Needs login.",
     );
     expect(formatTaskStateChangeMessage(blockedTask, progressEvent)).toBe(
-      "Background task update: ACP import. No output for 60s.",
+      "Background task update: ACP import. finished · completed · No output for 60s.",
     );
   });
 
@@ -116,6 +116,36 @@ describe("task-executor-policy", () => {
     );
     expect(formatTaskBlockedFollowupMessage(blockedTask)).toBe(
       "Task needs follow-up: ACP import (run run-1234). Command did not run: approval timed out.",
+    );
+  });
+
+  it("formats started and blocked state change messages with lifecycle detail", () => {
+    const runningTask = createTask({
+      status: "running",
+      label: "ACP import",
+      progressSummary: "booting worker",
+    });
+    const blockedTask = createTask({
+      status: "awaiting_approval",
+      label: "ACP import",
+      progressSummary: "patch applied",
+    });
+
+    expect(
+      formatTaskStateChangeMessage(runningTask, {
+        at: 10,
+        kind: "running",
+      }),
+    ).toBe(
+      "Background task started: ACP import. active · running · booting worker · next: wait for completion",
+    );
+    expect(
+      formatTaskStateChangeMessage(blockedTask, {
+        at: 11,
+        kind: "awaiting_approval",
+      }),
+    ).toBe(
+      "Background task blocked: ACP import. blocked · awaiting approval · patch applied · blocker: approval required · next: approve and continue",
     );
   });
 

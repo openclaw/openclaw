@@ -4,6 +4,8 @@ export type TaskAuditSeverity = "warn" | "error";
 export type TaskAuditCode =
   | "stale_queued"
   | "stale_running"
+  | "stale_awaiting_approval"
+  | "stale_waiting_external"
   | "lost"
   | "delivery_failed"
   | "missing_cleanup"
@@ -38,6 +40,8 @@ export function createEmptyTaskAuditSummary(): TaskAuditSummary {
     byCode: {
       stale_queued: 0,
       stale_running: 0,
+      stale_awaiting_approval: 0,
+      stale_waiting_external: 0,
       lost: 0,
       delivery_failed: 0,
       missing_cleanup: 0,
