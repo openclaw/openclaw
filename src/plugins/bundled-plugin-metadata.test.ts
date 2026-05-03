@@ -34,7 +34,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
-  "diffs",
   "file-transfer",
   "google-meet",
   "llm-task",
@@ -140,6 +139,24 @@ function readPackageManifest(pluginDir: string): PackageManifest | undefined {
     : undefined;
 }
 
+function collectRootPackageExcludedExtensionDirsForTest(): readonly string[] {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+    files?: unknown;
+  };
+  if (!Array.isArray(packageJson.files)) {
+    return [];
+  }
+  return packageJson.files
+    .flatMap((entry) => {
+      if (typeof entry !== "string") {
+        return [];
+      }
+      const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
+      return match?.[1] ? [match[1]] : [];
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function collectRepoBundledChannelConfigsForTest(dirName: string) {
   const pluginDir = path.join(repoRoot, "extensions", dirName);
   const manifest = loadPluginManifest(pluginDir, false);
@@ -227,6 +244,18 @@ describe("bundled plugin metadata", () => {
     );
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-matrix/runtime-api.js");
+  });
+
+  it("excludes root-package-excluded plugin sidecars from the packaged runtime sidecar baseline", () => {
+    for (const pluginDir of collectRootPackageExcludedExtensionDirsForTest()) {
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(`dist/extensions/${pluginDir}/index.js`);
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
+        `dist/extensions/${pluginDir}/runtime-api.js`,
+      );
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
+        `dist/extensions/${pluginDir}/runtime-setter-api.js`,
+      );
+    }
   });
 
   it("captures setup-entry metadata for bundled channel plugins", () => {
@@ -326,6 +355,9 @@ describe("bundled plugin metadata", () => {
       {
         dir: "discord",
         configuredState: {
+          env: {
+            allOf: ["DISCORD_BOT_TOKEN"],
+          },
           specifier: "./configured-state",
           exportName: "hasDiscordConfiguredState",
         },
@@ -333,6 +365,9 @@ describe("bundled plugin metadata", () => {
       {
         dir: "irc",
         configuredState: {
+          env: {
+            allOf: ["IRC_HOST", "IRC_NICK"],
+          },
           specifier: "./configured-state",
           exportName: "hasIrcConfiguredState",
         },
@@ -340,6 +375,9 @@ describe("bundled plugin metadata", () => {
       {
         dir: "slack",
         configuredState: {
+          env: {
+            anyOf: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"],
+          },
           specifier: "./configured-state",
           exportName: "hasSlackConfiguredState",
         },
@@ -347,6 +385,9 @@ describe("bundled plugin metadata", () => {
       {
         dir: "telegram",
         configuredState: {
+          env: {
+            allOf: ["TELEGRAM_BOT_TOKEN"],
+          },
           specifier: "./configured-state",
           exportName: "hasTelegramConfiguredState",
         },

@@ -14,6 +14,7 @@ import { attachModelProviderRequestTransport } from "./provider-request-config.j
 import {
   buildTransportAwareSimpleStreamFn,
   createBoundaryAwareStreamFnForModel,
+  createOpenClawTransportStreamFnForModel,
   isTransportAwareApiSupported,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
@@ -167,6 +168,20 @@ describe("openai transport stream", () => {
   it("builds boundary-aware stream shapers for supported default agent transports", () => {
     expect(
       createBoundaryAwareStreamFnForModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">),
+    ).toBeTypeOf("function");
+    expect(
+      createOpenClawTransportStreamFnForModel({
         id: "gpt-5.4",
         name: "GPT-5.4",
         api: "openai-responses",
@@ -978,6 +993,31 @@ describe("openai transport stream", () => {
     ) as { input?: Array<{ role?: string }> };
 
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
+  });
+
+  it("uses model maxTokens for Responses params when runtime maxTokens is omitted", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 65_536,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { max_output_tokens?: unknown };
+
+    expect(params.max_output_tokens).toBe(65_536);
   });
 
   it("uses top-level instructions for Codex responses and strips unsupported ChatGPT params", () => {
@@ -2355,6 +2395,57 @@ describe("openai transport stream", () => {
     );
 
     expect(params.max_tokens).toBe(2048);
+    expect(params).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("uses model maxTokens for OpenAI completions params when runtime maxTokens is omitted", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 65_536,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("uses model maxTokens with max_tokens completions compat when runtime maxTokens is omitted", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "zai-org/GLM-4.7-TEE",
+        name: "GLM 4.7 TEE",
+        api: "openai-completions",
+        provider: "chutes",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 65_536,
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_tokens).toBe(65_536);
     expect(params).not.toHaveProperty("max_completion_tokens");
   });
 

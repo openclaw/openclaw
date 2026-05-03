@@ -117,7 +117,7 @@ vi.mock("../oauth-env.js", () => ({
   isRemoteEnvironment: mocks.isRemoteEnvironment,
 }));
 
-vi.mock("../oauth-flow.js", () => ({
+vi.mock("../../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers: vi.fn(() => ({
     onAuth: vi.fn(),
     onPrompt: vi.fn(),
@@ -128,7 +128,7 @@ vi.mock("../auth-token.js", () => ({
   validateAnthropicSetupToken: vi.fn(() => undefined),
 }));
 
-vi.mock("../provider-auth-helpers.js", () => {
+vi.mock("../../plugins/provider-auth-choice-helpers.js", () => {
   const normalize = (value: string | undefined) => value?.trim().toLowerCase() ?? "";
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     Boolean(value && typeof value === "object" && !Array.isArray(value));

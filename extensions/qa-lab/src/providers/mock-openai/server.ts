@@ -1465,6 +1465,12 @@ async function buildResponsesPayload(
     /silent snack recall check/i.test(allInputText)
   ) {
     if (!toolOutput) {
+      if (!hasDeclaredTool(body, "memory_recall")) {
+        return buildToolCallEventsWithArgs("memory_search", {
+          query: "QA movie night snack lemon pepper wings blue cheese",
+          maxResults: 3,
+        });
+      }
       return buildToolCallEventsWithArgs("memory_recall", {
         query: "QA movie night snack lemon pepper wings blue cheese",
         limit: 3,
@@ -1489,6 +1495,23 @@ async function buildResponsesPayload(
         return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
       }
       return buildAssistantEvents("NONE");
+    }
+    const results = Array.isArray(toolJson?.results)
+      ? (toolJson.results as Array<Record<string, unknown>>)
+      : [];
+    const first = results[0];
+    if (typeof first?.path === "string") {
+      const from =
+        typeof first.startLine === "number"
+          ? Math.max(1, first.startLine)
+          : typeof first.endLine === "number"
+            ? Math.max(1, first.endLine)
+            : 1;
+      return buildToolCallEventsWithArgs("memory_get", {
+        path: first.path,
+        from,
+        lines: 4,
+      });
     }
     const memorySnippet = Array.isArray(toolJson?.results)
       ? JSON.stringify(toolJson.results)

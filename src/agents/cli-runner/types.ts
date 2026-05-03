@@ -29,6 +29,7 @@ export type RunCliAgentParams = {
   thinkLevel?: ThinkLevel;
   timeoutMs: number;
   runId: string;
+  lane?: string;
   jobId?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

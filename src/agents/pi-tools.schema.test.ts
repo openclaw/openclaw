@@ -48,6 +48,29 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
+  it("normalizes typed object schemas with missing or invalid properties", () => {
+    const schemas = [
+      { type: "object" },
+      { type: "object", properties: undefined },
+      { type: "object", properties: null },
+      { type: "object", properties: [] },
+      { type: "object", properties: "invalid" },
+    ];
+
+    for (const schema of schemas) {
+      expect(normalizeToolParameterSchema(schema)).toEqual({
+        type: "object",
+        properties: {},
+      });
+    }
+  });
+
+  it("leaves non-object typed schemas without properties unchanged", () => {
+    const schema = { type: "array", items: { type: "string" } };
+
+    expect(normalizeToolParameterSchema(schema)).toEqual(schema);
+  });
+
   it("inlines local $ref before removing unsupported keywords", () => {
     const cleaned = cleanToolSchemaForGemini({
       type: "object",
@@ -166,6 +189,38 @@ describe("normalizeToolParameters", () => {
       label: "list_regions",
       description: "List all AWS regions",
       parameters: { type: "object" },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    const parameters = normalized.parameters as Record<string, unknown>;
+    expect(parameters.type).toBe("object");
+    expect(parameters.properties).toEqual({});
+  });
+
+  it("injects properties:{} when properties key exists but is undefined (MCP SDK edge case #75362)", () => {
+    const tool: AnyAgentTool = {
+      name: "get_flux_instance",
+      label: "get_flux_instance",
+      description: "Get flux instance",
+      parameters: { type: "object", properties: undefined } as unknown as Record<string, unknown>,
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    const parameters = normalized.parameters as Record<string, unknown>;
+    expect(parameters.type).toBe("object");
+    expect(parameters.properties).toEqual({});
+  });
+
+  it("injects properties:{} when properties key is null (MCP SDK edge case #75362)", () => {
+    const tool: AnyAgentTool = {
+      name: "get_flux_instance",
+      label: "get_flux_instance",
+      description: "Get flux instance",
+      parameters: { type: "object", properties: null } as unknown as Record<string, unknown>,
       execute: vi.fn(),
     };
 

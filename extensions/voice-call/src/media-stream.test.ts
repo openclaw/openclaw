@@ -589,6 +589,7 @@ describe("MediaStreamHandler security hardening", () => {
     const sttReady = createDeferred();
     const sttConnectStarted = createDeferred();
     const transcriptionReady = createDeferred();
+    const audioReceived = createDeferred();
     const receivedAudio: Buffer[] = [];
     let onConnectCalls = 0;
     let onTranscriptionReadyCalls = 0;
@@ -600,6 +601,7 @@ describe("MediaStreamHandler security hardening", () => {
       },
       sendAudio: (audio) => {
         receivedAudio.push(Buffer.from(audio));
+        audioReceived.resolve();
       },
       close: () => {},
       isConnected: () => false,
@@ -623,9 +625,10 @@ describe("MediaStreamHandler security hardening", () => {
       },
     });
     const server = await startWsServer(handler);
+    let ws: WebSocket | undefined;
 
     try {
-      const ws = await connectWs(server.url);
+      ws = await connectWs(server.url);
       ws.send(
         JSON.stringify({
           event: "start",
@@ -642,7 +645,7 @@ describe("MediaStreamHandler security hardening", () => {
           media: { payload: Buffer.from("early").toString("base64") },
         }),
       );
-      await flush();
+      await withTimeout(audioReceived.promise);
 
       expect(Buffer.concat(receivedAudio).toString()).toBe("early");
       expect(onConnectCalls).toBe(1);
@@ -652,10 +655,16 @@ describe("MediaStreamHandler security hardening", () => {
       await withTimeout(transcriptionReady.promise);
       expect(onConnectCalls).toBe(1);
       expect(onTranscriptionReadyCalls).toBe(1);
-
-      ws.close();
-      await waitForClose(ws);
     } finally {
+      sttReady.resolve();
+      if (ws) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+        if (ws.readyState !== WebSocket.CLOSED) {
+          await waitForClose(ws).catch(() => {});
+        }
+      }
       await server.close();
     }
   });

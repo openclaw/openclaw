@@ -8,15 +8,12 @@ import {
 } from "../plugins/bundle-mcp.js";
 import { isRecord } from "../utils.js";
 
-export type MergedBundleMcpConfig = {
+type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
 };
 
-export type BundleMcpServerMapper = (
-  server: BundleMcpServerConfig,
-  name: string,
-) => BundleMcpServerConfig;
+type BundleMcpServerMapper = (server: BundleMcpServerConfig, name: string) => BundleMcpServerConfig;
 
 const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
   "streamable-http": "http",

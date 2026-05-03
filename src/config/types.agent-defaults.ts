@@ -17,6 +17,7 @@ import type {
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
+export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
 export type Gpt5PromptOverlayConfig = {
@@ -148,6 +149,13 @@ export type CliBackendConfig = {
   serialize?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
+    /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
+    outputLimits?: {
+      /** Max raw JSONL characters retained for one live CLI turn. */
+      maxTurnRawChars?: number;
+      /** Max raw JSONL lines retained for one live CLI turn. */
+      maxTurnLines?: number;
+    };
     /** No-output watchdog tuning (fresh vs resumed runs). */
     watchdog?: {
       /** Fresh/new sessions (non-resume). */
@@ -224,6 +232,13 @@ export type AgentDefaultsConfig = {
   promptOverlays?: PromptOverlaysConfig;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
+  /**
+   * List of optional bootstrap filenames to skip writing to the workspace root.
+   * Applies to: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
+   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
+   * Example: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"]
+   */
+  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   /**
    * Controls when workspace bootstrap files (AGENTS.md, SOUL.md, etc.) are
    * injected into the system prompt:

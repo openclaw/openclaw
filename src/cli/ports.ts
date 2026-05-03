@@ -276,6 +276,10 @@ export async function forceFreePortAndWait(
     killed = killPortWithFuser(port, "SIGTERM");
   }
 
+  if (killed.length === 0) {
+    return { killed, waitedMs: 0, escalatedToSigkill: false };
+  }
+
   const checkBusy = async (): Promise<boolean> =>
     useFuserFallback ? isPortBusy(port) : listPortListeners(port).length > 0;
 

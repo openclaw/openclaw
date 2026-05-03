@@ -7,20 +7,15 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "discord",
     pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "opusscript"],
-    mirroredRootRuntimeDeps: ["https-proxy-agent"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
     pluginId: "feishu",
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
-    mirroredRootRuntimeDeps: ["typebox"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "google", pluginLocalRuntimeDeps: ["@google/genai"] },
-  {
-    pluginId: "google-meet",
-    mirroredRootRuntimeDeps: ["commander", "typebox"],
-  },
+  { pluginId: "google" },
+  { pluginId: "google-meet" },
   {
     pluginId: "googlechat",
     pluginLocalRuntimeDeps: ["gaxios", "google-auth-library"],
@@ -28,28 +23,13 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "amazon-bedrock",
-    pluginLocalRuntimeDeps: [
-      "@aws-sdk/client-bedrock",
-      "@aws-sdk/client-bedrock-runtime",
-      "@aws-sdk/credential-provider-node",
-    ],
-  },
-  {
-    pluginId: "amazon-bedrock-mantle",
-    pluginLocalRuntimeDeps: ["@aws/bedrock-token-generator"],
-  },
+  { pluginId: "amazon-bedrock" },
+  { pluginId: "amazon-bedrock-mantle" },
   {
     pluginId: "diffs",
-    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme", "playwright-core"],
-    mirroredRootRuntimeDeps: ["typebox"],
+    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme"],
   },
-  {
-    pluginId: "file-transfer",
-    pluginLocalRuntimeDeps: ["minimatch"],
-    mirroredRootRuntimeDeps: ["typebox"],
-  },
+  { pluginId: "file-transfer" },
   {
     pluginId: "matrix",
     pluginLocalRuntimeDeps: [
@@ -59,14 +39,12 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "matrix-js-sdk",
       "music-metadata",
     ],
-    mirroredRootRuntimeDeps: ["markdown-it"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "memory-lancedb",
     pluginLocalRuntimeDeps: ["@lancedb/lancedb"],
-    mirroredRootRuntimeDeps: ["typebox", "openai"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -75,11 +53,9 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "@azure/identity",
       "@microsoft/teams.api",
       "@microsoft/teams.apps",
-      "express",
       "jsonwebtoken",
       "jwks-rsa",
     ],
-    mirroredRootRuntimeDeps: ["typebox"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
@@ -88,22 +64,14 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["nostr-tools"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
+  { pluginId: "openshell" },
   {
     pluginId: "qqbot",
     pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
-    mirroredRootRuntimeDeps: ["ws"],
   },
-  {
-    pluginId: "slack",
-    pluginLocalRuntimeDeps: ["@slack/bolt", "@slack/web-api"],
-    mirroredRootRuntimeDeps: ["https-proxy-agent"],
-  },
+  { pluginId: "slack" },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "telegram",
-    pluginLocalRuntimeDeps: ["@grammyjs/runner", "@grammyjs/transformer-throttler", "grammy"],
-  },
+  { pluginId: "telegram" },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },

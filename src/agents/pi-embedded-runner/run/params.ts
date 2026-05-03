@@ -103,6 +103,8 @@ export type RunEmbeddedPiAgentParams = {
   disableTools?: boolean;
   provider?: string;
   model?: string;
+  /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
+  modelFallbacksOverride?: string[];
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   authProfileId?: string;
@@ -149,7 +151,7 @@ export type RunEmbeddedPiAgentParams = {
     stream: string;
     data: Record<string, unknown>;
     sessionKey?: string;
-  }) => void;
+  }) => void | Promise<void>;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
