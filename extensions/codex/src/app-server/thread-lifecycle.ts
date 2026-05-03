@@ -25,9 +25,10 @@ import {
 } from "./protocol.js";
 import {
   clearCodexAppServerBinding,
-  isCodexAppServerNativeAuthProfileId,
+  isCodexAppServerNativeAuthProfile,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
+  type CodexAppServerAuthProfileLookup,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
@@ -41,7 +42,11 @@ export async function startOrResumeThread(params: {
   config?: JsonObject;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
-  const binding = await readCodexAppServerBinding(params.params.sessionFile);
+  const binding = await readCodexAppServerBinding(params.params.sessionFile, {
+    authProfileStore: params.params.authProfileStore,
+    agentDir: params.params.agentDir,
+    config: params.params.config,
+  });
   if (binding?.threadId) {
     // `/codex resume <thread>` writes a binding before the next turn can know
     // the dynamic tool catalog, so only invalidate fingerprints we actually have.
@@ -75,16 +80,27 @@ export async function startOrResumeThread(params: {
         const fallbackModelProvider = resolveCodexAppServerModelProvider({
           provider: params.params.provider,
           authProfileId: boundAuthProfileId,
+          authProfileStore: params.params.authProfileStore,
+          agentDir: params.params.agentDir,
+          config: params.params.config,
         });
-        await writeCodexAppServerBinding(params.params.sessionFile, {
-          threadId: response.thread.id,
-          cwd: params.cwd,
-          authProfileId: boundAuthProfileId,
-          model: params.params.modelId,
-          modelProvider: response.modelProvider ?? fallbackModelProvider,
-          dynamicToolsFingerprint,
-          createdAt: binding.createdAt,
-        });
+        await writeCodexAppServerBinding(
+          params.params.sessionFile,
+          {
+            threadId: response.thread.id,
+            cwd: params.cwd,
+            authProfileId: boundAuthProfileId,
+            model: params.params.modelId,
+            modelProvider: response.modelProvider ?? fallbackModelProvider,
+            dynamicToolsFingerprint,
+            createdAt: binding.createdAt,
+          },
+          {
+            authProfileStore: params.params.authProfileStore,
+            agentDir: params.params.agentDir,
+            config: params.params.config,
+          },
+        );
         return {
           ...binding,
           threadId: response.thread.id,
@@ -121,17 +137,28 @@ export async function startOrResumeThread(params: {
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
+    authProfileStore: params.params.authProfileStore,
+    agentDir: params.params.agentDir,
+    config: params.params.config,
   });
   const createdAt = new Date().toISOString();
-  await writeCodexAppServerBinding(params.params.sessionFile, {
-    threadId: response.thread.id,
-    cwd: params.cwd,
-    authProfileId: params.params.authProfileId,
-    model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? modelProvider,
-    dynamicToolsFingerprint,
-    createdAt,
-  });
+  await writeCodexAppServerBinding(
+    params.params.sessionFile,
+    {
+      threadId: response.thread.id,
+      cwd: params.cwd,
+      authProfileId: params.params.authProfileId,
+      model: response.model ?? params.params.modelId,
+      modelProvider: response.modelProvider ?? modelProvider,
+      dynamicToolsFingerprint,
+      createdAt,
+    },
+    {
+      authProfileStore: params.params.authProfileStore,
+      agentDir: params.params.agentDir,
+      config: params.params.config,
+    },
+  );
   return {
     schemaVersion: 1,
     threadId: response.thread.id,
@@ -159,6 +186,9 @@ export function buildThreadStartParams(
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
     authProfileId: params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
   });
   return {
     model: params.modelId,
@@ -190,6 +220,9 @@ export function buildThreadResumeParams(
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
     authProfileId: options.authProfileId ?? params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
   });
   return {
     threadId: options.threadId,
@@ -345,6 +378,9 @@ function buildUserInput(
 function resolveCodexAppServerModelProvider(params: {
   provider: string;
   authProfileId?: string;
+  authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
 }): string | undefined {
   const normalized = params.provider.trim();
   const normalizedLower = normalized.toLowerCase();
@@ -354,7 +390,7 @@ function resolveCodexAppServerModelProvider(params: {
     return undefined;
   }
   if (
-    isCodexAppServerNativeAuthProfileId(params.authProfileId) &&
+    isCodexAppServerNativeAuthProfile(params) &&
     (normalizedLower === "openai" || normalizedLower === "openai-codex")
   ) {
     // When OpenClaw is forwarding ChatGPT/Codex OAuth, forcing the public
