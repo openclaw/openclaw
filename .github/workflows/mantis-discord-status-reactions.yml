@@ -14,7 +14,7 @@ on:
         default: main
         type: string
       pr_number:
-        description: Optional PR number to receive the QA evidence comment
+        description: Optional bug or fix PR number to receive the QA evidence comment
         required: false
         type: string
 
@@ -333,6 +333,8 @@ jobs:
           cat > "$comment_file" <<EOF
           <!-- mantis-discord-status-reactions -->
           ## Mantis Discord Status Reactions QA
+
+          Summary: Mantis reran Discord status reactions against the known queued-only baseline and the candidate ref. The baseline reproduced the bug, while the candidate showed the expected queued -> thinking -> done reaction sequence.
 
           - Scenario: \`discord-status-reactions-tool-only\`
           - Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}

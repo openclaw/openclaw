@@ -346,15 +346,20 @@ after the new secret has been stored.
 ## GitHub Artifacts And PR Comments
 
 Mantis workflows should upload the full evidence bundle as a short-lived Actions
-artifact. When the workflow is run for a PR, it should also publish the redacted
-PNG screenshots to the `qa-artifacts` branch and upsert a PR comment with inline
-before/after screenshots. Raw logs, observed messages, and other bulky evidence
-stay in the Actions artifact.
+artifact. When the workflow is run for a bug report or fix PR, it should also
+publish the redacted PNG screenshots to the `qa-artifacts` branch and upsert a
+comment on that bug or fix PR with inline before/after screenshots. Do not post
+the primary proof only on a generic QA automation PR. Raw logs, observed
+messages, and other bulky evidence stay in the Actions artifact.
 
 The PR comment should be short and visual:
 
 ```md
 Mantis Discord Status Reactions QA
+
+Summary: Mantis reran the reported Discord status-reaction bug against the known
+bad baseline and the candidate fix. The baseline reproduced the bug, while the
+candidate showed the expected queued -> thinking -> done sequence.
 
 - Scenario: `discord-status-reactions-tool-only`
 - Run: <workflow run link>
