@@ -266,7 +266,19 @@ function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void
   }
 }
 
-function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unknown>): void {
+/**
+ * Strip reasoning_content from assistant messages that did NOT perform a tool
+ * call while preserving it for tool-call turns.
+ *
+ * DeepSeek V4 thinking-mode contract:
+ *   • No-tool-call turns: reasoning_content should NOT be passed back; the
+ *     API silently ignores it, but older endpoints return 400.
+ *   • Tool-call turns: reasoning_content MUST be present in every subsequent
+ *     request or the API returns 400.
+ */
+function stripDeepSeekV4ReasoningContentForNonToolCallTurns(
+  payload: Record<string, unknown>,
+): void {
   if (!Array.isArray(payload.messages)) {
     return;
   }
@@ -278,9 +290,15 @@ function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unkno
     if (record.role !== "assistant") {
       continue;
     }
-    if (!("reasoning_content" in record)) {
-      record.reasoning_content = "";
+    // Tool-call turns: preserve reasoning_content, backfill if missing
+    if (Array.isArray(record.tool_calls) && record.tool_calls.length > 0) {
+      if (!("reasoning_content" in record)) {
+        record.reasoning_content = "";
+      }
+      continue;
     }
+    // Non-tool-call turns: strip reasoning_content
+    delete record.reasoning_content;
   }
 }
 
@@ -309,7 +327,7 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
 
       payload.thinking = { type: "enabled" };
       payload.reasoning_effort = resolveDeepSeekV4ReasoningEffort(params.thinkingLevel);
-      ensureDeepSeekV4AssistantReasoningContent(payload);
+      stripDeepSeekV4ReasoningContentForNonToolCallTurns(payload);
     });
   };
 }
