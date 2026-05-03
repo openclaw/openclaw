@@ -146,6 +146,24 @@ describe("bonjour-ciao", () => {
     expect(ignoreCiaoUnhandledRejection(wrapper)).toBe(true);
   });
 
+  it("classifies no-valid-addresses assertion for IPv6-only interfaces (#76499)", () => {
+    const err = Object.assign(
+      new Error("Could not find valid addresses for interface 'fly-redis'"),
+      { name: "AssertionError" },
+    );
+    expect(classifyCiaoUnhandledRejection(err)).toEqual({
+      kind: "no-valid-addresses",
+      formatted: "AssertionError: Could not find valid addresses for interface 'fly-redis'",
+    });
+  });
+
+  it("suppresses no-valid-addresses rejections as non-fatal (#76499)", () => {
+    const err = Object.assign(new Error("Could not find valid addresses for interface 'wg0'"), {
+      name: "AssertionError",
+    });
+    expect(ignoreCiaoUnhandledRejection(err)).toBe(true);
+  });
+
   it("keeps unrelated rejections visible", () => {
     expect(ignoreCiaoUnhandledRejection(new Error("boom"))).toBe(false);
   });

@@ -399,6 +399,13 @@ export async function startGatewayBonjourAdvertiser(
         logger.warn(
           `bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: ${classification.formatted}`,
         );
+      } else if (classification.kind === "no-valid-addresses") {
+        // IPv6-only or address-less interfaces (e.g. WireGuard fly-redis) have no
+        // IPv4 address for ciao to bind. Recovery is futile until the interface
+        // gets a valid address; log once and skip mDNS for that interface.
+        logger.warn(
+          `bonjour: skipping mDNS — no valid addresses on interface: ${classification.formatted}`,
+        );
       } else {
         const label =
           classification.kind === "netmask-assertion"
