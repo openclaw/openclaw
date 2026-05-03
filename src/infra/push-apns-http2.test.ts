@@ -1,5 +1,5 @@
 import type http2 from "node:http2";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { connectSpy, tlsConnectSpy, tunnelSpy, fakeSession, fakeTlsSocket } = vi.hoisted(() => {
   const fakeSession = { close: vi.fn(), destroy: vi.fn() };
@@ -28,13 +28,18 @@ vi.mock("./net/http-connect-tunnel.js", () => ({
 }));
 
 describe("connectApnsHttp2Session", () => {
-  it("uses direct http2.connect when no HTTPS proxy is configured", async () => {
+  beforeEach(() => {
+    connectSpy.mockClear();
+    tlsConnectSpy.mockClear();
+    tunnelSpy.mockClear();
+  });
+  it("uses direct http2.connect when managed proxy is inactive", async () => {
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
 
     const session = await connectApnsHttp2Session({
       authority: "https://api.sandbox.push.apple.com",
       timeoutMs: 10_000,
-      env: {},
+      getManagedProxyUrl: () => undefined,
     });
 
     expect(session).toBe(fakeSession);
@@ -42,13 +47,13 @@ describe("connectApnsHttp2Session", () => {
     expect(connectSpy).toHaveBeenCalledWith("https://api.sandbox.push.apple.com");
   });
 
-  it("uses an HTTP CONNECT tunnel and disables direct fallback when HTTPS proxy is configured", async () => {
+  it("uses an HTTP CONNECT tunnel when managed proxy is active", async () => {
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
 
     const session = await connectApnsHttp2Session({
       authority: "https://api.push.apple.com",
       timeoutMs: 10_000,
-      env: { HTTPS_PROXY: "http://proxy.example:8080" },
+      getManagedProxyUrl: () => "http://proxy.example:8080",
     });
 
     expect(session).toBe(fakeSession);
@@ -73,6 +78,29 @@ describe("connectApnsHttp2Session", () => {
     expect(createConnection?.(new URL("https://api.push.apple.com"), {})).toBe(fakeTlsSocket);
   });
 
+  it("ignores ambient proxy env when managed proxy is inactive", async () => {
+    const originalHttpsProxy = process.env["HTTPS_PROXY"];
+    process.env["HTTPS_PROXY"] = "http://ambient.example:8080";
+    try {
+      const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
+
+      const session = await connectApnsHttp2Session({
+        authority: "https://api.push.apple.com",
+        timeoutMs: 10_000,
+        getManagedProxyUrl: () => undefined,
+      });
+
+      expect(session).toBe(fakeSession);
+      expect(tunnelSpy).not.toHaveBeenCalled();
+    } finally {
+      if (originalHttpsProxy === undefined) {
+        delete process.env["HTTPS_PROXY"];
+      } else {
+        process.env["HTTPS_PROXY"] = originalHttpsProxy;
+      }
+    }
+  });
+
   it("rejects non-APNs authorities", async () => {
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
 
@@ -80,7 +108,7 @@ describe("connectApnsHttp2Session", () => {
       connectApnsHttp2Session({
         authority: "https://example.com",
         timeoutMs: 10_000,
-        env: { HTTPS_PROXY: "http://proxy.example:8080" },
+        getManagedProxyUrl: () => "http://proxy.example:8080",
       }),
     ).rejects.toThrow("Unsupported APNs authority");
   });

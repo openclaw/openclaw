@@ -19,6 +19,7 @@ vi.mock("../../../logger.js", () => ({
 import { bootstrap as bootstrapGlobalAgent } from "global-agent";
 import { logInfo, logWarn } from "../../../logger.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
+import { _resetActiveManagedProxyStateForTests } from "./active-proxy-state.js";
 import {
   _resetGlobalAgentBootstrapForTests,
   dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane,
@@ -66,6 +67,7 @@ describe("startProxy", () => {
     mockLogInfo.mockReset();
     mockLogWarn.mockReset();
     _resetGlobalAgentBootstrapForTests();
+    _resetActiveManagedProxyStateForTests();
     (global as Record<string, unknown>)["GLOBAL_AGENT"] = undefined;
     http.request = originalHttpRequest;
     http.get = originalHttpGet;
@@ -111,6 +113,23 @@ describe("startProxy", () => {
 
     expect(process.env["http_proxy"]).toBeUndefined();
     expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it("exposes the active managed proxy URL", async () => {
+    const { getActiveManagedProxyUrl } = await import("./active-proxy-state.js");
+
+    expect(getActiveManagedProxyUrl()).toBeUndefined();
+
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+    });
+
+    expect(getActiveManagedProxyUrl()).toBe("http://127.0.0.1:3128");
+
+    await stopProxy(handle);
+
+    expect(getActiveManagedProxyUrl()).toBeUndefined();
   });
 
   it("uses OPENCLAW_PROXY_URL when config proxyUrl is omitted", async () => {
