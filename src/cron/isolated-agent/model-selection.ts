@@ -1,4 +1,3 @@
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
@@ -149,12 +148,5 @@ export async function resolveCronModelSelection(
     }
   }
 
-  const executionProvider =
-    resolveCliRuntimeExecutionProvider({
-      provider,
-      cfg: params.cfgWithAgentDefaults,
-      agentId: params.agentId,
-    }) ?? provider;
-
-  return { ok: true, provider: executionProvider, model };
+  return { ok: true, provider, model };
 }

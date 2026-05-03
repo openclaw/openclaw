@@ -404,7 +404,7 @@ describe("cron model formatting and precedence edge cases", () => {
   });
 
   describe("CLI runtime compatibility", () => {
-    it("uses a configured per-agent Claude CLI runtime for resolved Anthropic models", async () => {
+    it("keeps the canonical Anthropic provider when a per-agent Claude CLI runtime is configured", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -422,7 +422,7 @@ describe("cron model formatting and precedence edge cases", () => {
           },
           agentId: "scheduler",
         },
-        { provider: "claude-cli", model: "claude-opus-4-6" },
+        { provider: "anthropic", model: "claude-opus-4-6" },
       );
     });
 
@@ -453,7 +453,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("uses a configured default Claude CLI runtime for resolved Anthropic models", async () => {
+    it("keeps the canonical Anthropic provider when a default Claude CLI runtime is configured", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -465,7 +465,7 @@ describe("cron model formatting and precedence edge cases", () => {
             },
           },
         },
-        { provider: "claude-cli", model: "claude-opus-4-6" },
+        { provider: "anthropic", model: "claude-opus-4-6" },
       );
     });
 
