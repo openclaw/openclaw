@@ -428,6 +428,105 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("clears live tool stream artifacts after final payload is committed", () => {
+    const state = Object.assign(
+      createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Complete reply",
+        chatStreamStartedAt: 100,
+      }),
+      {
+        toolStreamById: new Map([["call-1", { toolCallId: "call-1" }]]),
+        toolStreamOrder: ["call-1"],
+        chatToolMessages: [{ role: "tool", toolCallId: "call-1" }],
+        chatStreamSegments: [{ text: "Pre-tool narration", ts: 99 }],
+      },
+    );
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Complete reply" }],
+        timestamp: 101,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([payload.message]);
+    expect(state.chatToolMessages).toEqual([]);
+    expect(state.chatStreamSegments).toEqual([]);
+    // Preserve stream bookkeeping so app-gateway can still detect tool usage
+    // and replace live artifacts with persisted history after final events.
+    expect(state.toolStreamOrder).toEqual(["call-1"]);
+    expect(state.toolStreamById.size).toBe(1);
+  });
+
+  it("clears live tool stream artifacts after aborted payload is committed", () => {
+    const state = Object.assign(
+      createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Partial reply",
+        chatStreamStartedAt: 100,
+      }),
+      {
+        toolStreamById: new Map([["call-1", { toolCallId: "call-1" }]]),
+        toolStreamOrder: ["call-1"],
+        chatToolMessages: [{ role: "tool", toolCallId: "call-1" }],
+        chatStreamSegments: [{ text: "Pre-tool narration", ts: 99 }],
+      },
+    );
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial reply" }],
+        timestamp: 101,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatToolMessages).toEqual([]);
+    expect(state.chatStreamSegments).toEqual([]);
+    expect(state.toolStreamOrder).toEqual(["call-1"]);
+    expect(state.toolStreamById.size).toBe(1);
+  });
+
+  it("clears live tool stream artifacts after error payload", () => {
+    const state = Object.assign(
+      createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Working",
+        chatStreamStartedAt: 100,
+      }),
+      {
+        toolStreamById: new Map([["call-1", { toolCallId: "call-1" }]]),
+        toolStreamOrder: ["call-1"],
+        chatToolMessages: [{ role: "tool", toolCallId: "call-1" }],
+        chatStreamSegments: [{ text: "Pre-tool narration", ts: 99 }],
+      },
+    );
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "boom",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatToolMessages).toEqual([]);
+    expect(state.chatStreamSegments).toEqual([]);
+    expect(state.toolStreamOrder).toEqual(["call-1"]);
+    expect(state.toolStreamById.size).toBe(1);
+    expect(state.lastError).toBe("boom");
+  });
+
   it("processes aborted from own run and keeps partial assistant message", () => {
     const existingMessage = {
       role: "user",

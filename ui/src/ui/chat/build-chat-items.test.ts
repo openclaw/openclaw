@@ -24,7 +24,51 @@ function firstMessageContent(group: MessageGroup): unknown[] {
   return Array.isArray(message.content) ? message.content : [];
 }
 
+function streamItems(props: Partial<BuildChatItemsProps>) {
+  return buildChatItems(createProps(props)).filter((item) => item.kind === "stream");
+}
+
 describe("buildChatItems", () => {
+  it("subtracts committed pre-tool stream segments from cumulative live stream text", () => {
+    const streams = streamItems({
+      toolMessages: [
+        {
+          role: "assistant",
+          toolCallId: "call-1",
+          content: [{ type: "toolcall", name: "exec", arguments: {} }],
+          timestamp: 2,
+        },
+      ],
+      streamSegments: [{ text: "Pre-tool narration.", ts: 1 }],
+      stream: "Pre-tool narration.\nFinal answer.",
+      streamStartedAt: 3,
+    });
+
+    expect(streams).toHaveLength(2);
+    expect(streams[0]).toMatchObject({ text: "Pre-tool narration." });
+    expect(streams[1]).toMatchObject({ text: "Final answer." });
+  });
+
+  it("keeps live stream text intact when it is not cumulative", () => {
+    const streams = streamItems({
+      toolMessages: [
+        {
+          role: "assistant",
+          toolCallId: "call-1",
+          content: [{ type: "toolcall", name: "exec", arguments: {} }],
+          timestamp: 2,
+        },
+      ],
+      streamSegments: [{ text: "Pre-tool narration.", ts: 1 }],
+      stream: "Final answer.",
+      streamStartedAt: 3,
+    });
+
+    expect(streams).toHaveLength(2);
+    expect(streams[0]).toMatchObject({ text: "Pre-tool narration." });
+    expect(streams[1]).toMatchObject({ text: "Final answer." });
+  });
+
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const groups = messageGroups({
       messages: [
