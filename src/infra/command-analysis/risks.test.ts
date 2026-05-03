@@ -16,6 +16,8 @@ describe("command-analysis risks", () => {
     expect(detectInlineEvalArgv(["sudo", "-u", "root", "python3", "-c", "print(1)"])?.flag).toBe(
       "-c",
     );
+    expect(detectInlineEvalArgv(["sudo", "-uroot", "python3", "-c", "print(1)"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["doas", "-uroot", "python3", "-c", "print(1)"])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["env", "sudo", "python3", "-c", "print(1)"])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["command", "node", "--eval", "1"])?.flag).toBe("--eval");
     expect(detectInlineEvalArgv(["env", "-S", 'python3 -c "print(1)"'])?.flag).toBe("-c");
@@ -56,6 +58,12 @@ describe("command-analysis risks", () => {
     expect(hit).toBe("sudo");
     expect(
       detectShellWrapperThroughCarrierArgv(
+        ["sudo", "-uroot", "bash", "-lc", "id"],
+        (argv, startIndex) => argv[startIndex] === "-lc",
+      ),
+    ).toBe("sudo");
+    expect(
+      detectShellWrapperThroughCarrierArgv(
         ["sudo", "echo", "bash", "-lc", "id"],
         (argv, startIndex) => argv[startIndex] === "-lc",
       ),
@@ -77,6 +85,12 @@ describe("command-analysis risks", () => {
     expect(buildCommandPayloadCandidates(["FOO=1", "sudo", "-E", "/approve", "abc"])).toEqual([
       "/approve abc",
     ]);
+    expect(
+      buildCommandPayloadCandidates(["sudo", "-uroot", "bash", "-lc", "/approve req allow-once"]),
+    ).toEqual(["bash -lc /approve req allow-once", "/approve req allow-once"]);
+    expect(
+      buildCommandPayloadCandidates(["doas", "-uroot", "bash", "-lc", "/approve req allow-once"]),
+    ).toEqual(["bash -lc /approve req allow-once", "/approve req allow-once"]);
     expect(buildCommandPayloadCandidates(["env", "-S", "bash -lc '/approve abc deny'"])).toEqual([
       "bash -lc /approve abc deny",
       "/approve abc deny",
