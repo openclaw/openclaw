@@ -13,10 +13,15 @@ on:
         required: true
         default: main
         type: string
+      pr_number:
+        description: Optional PR number to receive the QA evidence comment
+        required: false
+        type: string
 
 permissions:
-  contents: read
-  pull-requests: read
+  contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: mantis-discord-status-reactions-${{ inputs.baseline_ref }}-${{ inputs.candidate_ref }}-${{ github.run_attempt }}
@@ -252,6 +257,7 @@ jobs:
           fi
 
       - name: Upload Mantis status reaction artifacts
+        id: upload_artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -259,3 +265,101 @@ jobs:
           path: ${{ steps.run_mantis.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: warn
+
+      - name: Comment PR with inline QA screenshots
+        if: ${{ always() && inputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$TARGET_PR" =~ ^[0-9]+$ ]]; then
+            echo "pr_number must be numeric, got '${TARGET_PR}'." >&2
+            exit 1
+          fi
+
+          root=".artifacts/qa-e2e/mantis/discord-status-reactions"
+          for required in \
+            "$root/comparison.json" \
+            "$root/baseline/discord-status-reactions-tool-only-timeline.png" \
+            "$root/candidate/discord-status-reactions-tool-only-timeline.png"
+          do
+            if [[ ! -f "$required" ]]; then
+              echo "Missing required QA evidence file: $required" >&2
+              exit 1
+            fi
+          done
+
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${TARGET_PR}" --jq '.number' >/dev/null
+
+          artifact_root="mantis/discord-status-reactions/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          artifacts_worktree="$(mktemp -d)"
+          git init --quiet "$artifacts_worktree"
+          git -C "$artifacts_worktree" config user.name "github-actions[bot]"
+          git -C "$artifacts_worktree" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$artifacts_worktree" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          if git -C "$artifacts_worktree" fetch --quiet origin qa-artifacts; then
+            git -C "$artifacts_worktree" checkout --quiet -B qa-artifacts FETCH_HEAD
+          else
+            git -C "$artifacts_worktree" checkout --quiet --orphan qa-artifacts
+          fi
+
+          mkdir -p "$artifacts_worktree/$artifact_root"
+          cp "$root/baseline/discord-status-reactions-tool-only-timeline.png" "$artifacts_worktree/$artifact_root/baseline.png"
+          cp "$root/candidate/discord-status-reactions-tool-only-timeline.png" "$artifacts_worktree/$artifact_root/candidate.png"
+          cp "$root/comparison.json" "$artifacts_worktree/$artifact_root/comparison.json"
+          cp "$root/mantis-report.md" "$artifacts_worktree/$artifact_root/mantis-report.md"
+
+          git -C "$artifacts_worktree" add "$artifact_root"
+          if git -C "$artifacts_worktree" diff --cached --quiet; then
+            echo "No QA screenshot artifact changes to publish."
+          else
+            git -C "$artifacts_worktree" commit --quiet -m "qa: publish Mantis Discord screenshots for PR ${TARGET_PR}"
+            git -C "$artifacts_worktree" push --quiet origin HEAD:qa-artifacts
+          fi
+
+          encoded_artifact_root="${artifact_root// /%20}"
+          raw_base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/qa-artifacts/${encoded_artifact_root}"
+          baseline_status="$(jq -r '.baseline.status' "$root/comparison.json")"
+          candidate_status="$(jq -r '.candidate.status' "$root/comparison.json")"
+          pass="$(jq -r '.pass' "$root/comparison.json")"
+          comment_file="$(mktemp)"
+          cat > "$comment_file" <<EOF
+          <!-- mantis-discord-status-reactions -->
+          ## Mantis Discord Status Reactions QA
+
+          - Scenario: \`discord-status-reactions-tool-only\`
+          - Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - Artifact: ${ARTIFACT_URL}
+          - Baseline: \`${baseline_status}\` at \`${BASELINE_SHA}\`
+          - Candidate: \`${candidate_status}\` at \`${CANDIDATE_SHA}\`
+          - Overall: \`${pass}\`
+
+          | Baseline queued-only | Candidate queued -> thinking -> done |
+          | --- | --- |
+          | <img src="${raw_base}/baseline.png" width="420" alt="Baseline Discord status reaction timeline"> | <img src="${raw_base}/candidate.png" width="420" alt="Candidate Discord status reaction timeline"> |
+
+          Raw QA files: https://github.com/${GITHUB_REPOSITORY}/tree/qa-artifacts/${artifact_root}
+          EOF
+
+          comment_id="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TARGET_PR}/comments" \
+              --jq '.[] | select(.body | contains("<!-- mantis-discord-status-reactions -->")) | .id' \
+              | tail -n 1
+          )"
+
+          if [[ -n "$comment_id" ]]; then
+            comment_payload="$(mktemp)"
+            jq -n --rawfile body "$comment_file" '{ body: $body }' > "$comment_payload"
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" --input "$comment_payload" >/dev/null
+            echo "Updated Mantis QA screenshot comment on PR #${TARGET_PR}."
+          else
+            gh pr comment "$TARGET_PR" --body-file "$comment_file"
+            echo "Created Mantis QA screenshot comment on PR #${TARGET_PR}."
+          fi
