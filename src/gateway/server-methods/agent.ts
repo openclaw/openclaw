@@ -1072,10 +1072,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (request.deliver === true) {
         const sendPolicy = resolveSendPolicy({
           cfg,
-          entry,
+          entry: sessionEntry,
           sessionKey: canonicalKey,
-          channel: entry?.channel,
-          chatType: entry?.chatType,
+          channel: sessionEntry?.channel,
+          chatType: sessionEntry?.chatType,
         });
         if (sendPolicy === "deny") {
           respond(

@@ -2833,6 +2833,12 @@ describe("gateway agent handler", () => {
       undefined,
       expect.objectContaining({ message: "send blocked by session policy" }),
     );
+    expect(mocks.resolveSendPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ sessionId: "existing-session-id" }),
+        sessionKey: "agent:main:main",
+      }),
+    );
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
