@@ -300,7 +300,10 @@ function resolveInstallRoute(packageJson, status) {
       ? `: \`${install.npmSpec}\``
       : "";
   if (release?.publishToClawHub === true && release?.publishToNpm === true) {
-    return clawhubSpec ? `ClawHub${clawhubSpec}; npm${npmSpec}` : `ClawHub + npm${npmSpec}`;
+    if (install?.defaultChoice === "clawhub") {
+      return clawhubSpec ? `ClawHub${clawhubSpec}; npm${npmSpec}` : `ClawHub + npm${npmSpec}`;
+    }
+    return clawhubSpec ? `npm${npmSpec}; ClawHub${clawhubSpec}` : `npm${npmSpec}; ClawHub`;
   }
   if (release?.publishToClawHub === true) {
     return `ClawHub${clawhubSpec || npmSpec}`;
