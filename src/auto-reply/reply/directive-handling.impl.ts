@@ -544,8 +544,10 @@ export async function handleDirectiveOnly(
       directives.reasoningLevel === "off"
         ? formatDirectiveAck("Reasoning visibility disabled.")
         : directives.reasoningLevel === "stream"
-          ? formatDirectiveAck("Reasoning stream enabled (Telegram only).")
-          : formatDirectiveAck("Reasoning visibility enabled."),
+          ? formatDirectiveAck("Reasoning stream enabled.")
+          : directives.reasoningLevel === "verbose"
+            ? formatDirectiveAck("Verbose reasoning stream enabled (includes tool actions).")
+            : formatDirectiveAck("Reasoning visibility enabled."),
     );
   }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {

@@ -908,7 +908,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
-      reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+      reasoning === "on"
+        ? "reasoning"
+        : reasoning === "stream"
+          ? "reasoning:stream"
+          : reasoning === "verbose"
+            ? "reasoning:verbose"
+            : null;
     const footerParts = [
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
