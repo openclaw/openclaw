@@ -262,29 +262,29 @@ export async function resolveSlackMessageContent(params: {
     threadStarter: params.threadStarter,
   });
 
-  const media =
+  const mediaPromise =
     ownFiles && ownFiles.length > 0
-      ? await (async () => {
-          const { resolveSlackMedia } = await loadSlackMediaModule();
-          return resolveSlackMedia({
+      ? loadSlackMediaModule().then(({ resolveSlackMedia }) =>
+          resolveSlackMedia({
             files: ownFiles,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
-          });
-        })()
-      : null;
+          }),
+        )
+      : Promise.resolve(null);
 
-  const attachmentContent =
+  const attachmentContentPromise =
     params.message.attachments && params.message.attachments.length > 0
-      ? await (async () => {
-          const { resolveSlackAttachmentContent } = await loadSlackMediaModule();
-          return resolveSlackAttachmentContent({
+      ? loadSlackMediaModule().then(({ resolveSlackAttachmentContent }) =>
+          resolveSlackAttachmentContent({
             attachments: params.message.attachments,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
-          });
-        })()
-      : null;
+          }),
+        )
+      : Promise.resolve(null);
+
+  const [media, attachmentContent] = await Promise.all([mediaPromise, attachmentContentPromise]);
 
   const mergedMedia = [...(media ?? []), ...(attachmentContent?.media ?? [])];
   const effectiveDirectMedia = mergedMedia.length > 0 ? mergedMedia : null;
