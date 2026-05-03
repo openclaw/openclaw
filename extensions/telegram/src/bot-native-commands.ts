@@ -697,7 +697,11 @@ export const registerTelegramNativeCommands = ({
       return telegramCfg;
     }
   };
+  // User-defined customCommands come first so that Telegram's 100-command and
+  // 5700-char payload caps drop native/plugin entries (from the tail) before
+  // the operator's explicit intent. See openclaw/openclaw#68333.
   const allCommandsFull: Array<{ command: string; description: string }> = [
+    ...customCommands,
     ...nativeCommands
       .map((command) => {
         const normalized = normalizeTelegramCommandName(command.name);
@@ -716,7 +720,6 @@ export const registerTelegramNativeCommands = ({
       })
       .filter((cmd): cmd is { command: string; description: string } => cmd !== null),
     ...(nativeEnabled ? pluginCatalog.commands : []),
-    ...customCommands,
   ];
   const {
     commandsToRegister,

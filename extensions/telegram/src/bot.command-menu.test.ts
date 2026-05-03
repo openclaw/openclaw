@@ -116,7 +116,51 @@ describe("createTelegramBot command menu", () => {
       command: normalizeTelegramCommandName(command.name),
       description: command.description,
     }));
-    expect(registered.slice(0, native.length)).toEqual(native);
+    // Custom commands are registered before native ones so budget trimming drops
+    // native/plugin entries from the tail first. See openclaw/openclaw#68333.
+    expect(registered.slice(0, 2)).toEqual([
+      { command: "custom_backup", description: "Git backup" },
+      { command: "custom_generate", description: "Create an image" },
+    ]);
+    expect(registered.slice(2, 2 + native.length)).toEqual(native);
+  });
+
+  it("preserves customCommands when combined list exceeds the text budget", async () => {
+    const longDescription = "A".repeat(250);
+    const customCommandCount = 40;
+    const customCommands = Array.from({ length: customCommandCount }, (_, index) => ({
+      command: `custom_cmd_${index.toString().padStart(2, "0")}`,
+      description: longDescription,
+    }));
+    const config = {
+      commands: { native: true },
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          customCommands,
+        },
+      },
+    } satisfies OpenClawConfig;
+    loadConfig.mockReturnValue(config);
+    const commandsSynced = waitForNextSetMyCommands();
+
+    createTelegramBot({ token: "tok" });
+
+    await commandsSynced;
+
+    const registered = setMyCommandsSpy.mock.calls.at(-1)?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    for (const custom of customCommands) {
+      expect(registered.some((entry) => entry.command === custom.command)).toBe(true);
+    }
   });
 
   it("ignores custom commands that collide with native commands", async () => {
