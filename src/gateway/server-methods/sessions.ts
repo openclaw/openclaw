@@ -116,6 +116,88 @@ let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
 let loggedSlowSessionsListCatalog = false;
 
 const SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
+const SESSIONS_LIST_CACHE_TTL_MS = 15_000;
+const SESSIONS_LIST_CACHE_MAX_SIZE = 20;
+
+type SessionsListCacheEntry = {
+  updatedAt: number;
+  result: import("../session-utils.types.js").SessionsListResult;
+};
+
+const sessionsListResponseCache = new Map<string, SessionsListCacheEntry>();
+const sessionsListInFlight = new Map<string, Promise<import("../session-utils.types.js").SessionsListResult>>();
+
+function stableSessionsListCacheKey(
+  params: import("../protocol/index.js").SessionsListParams,
+): string {
+  return JSON.stringify({
+    agentId: params.agentId,
+    activeMinutes: params.activeMinutes,
+    includeDerivedTitles: params.includeDerivedTitles === true,
+    includeGlobal: params.includeGlobal === true,
+    includeLastMessage: params.includeLastMessage === true,
+    includeUnknown: params.includeUnknown === true,
+    label: params.label,
+    limit: params.limit,
+    search: params.search,
+    spawnedBy: params.spawnedBy,
+  });
+}
+
+function invalidateSessionsListCache(): void {
+  sessionsListResponseCache.clear();
+}
+
+async function loadSessionsListResultCached(
+  context: GatewayRequestContext,
+  params: import("../protocol/index.js").SessionsListParams,
+): Promise<import("../session-utils.types.js").SessionsListResult> {
+  const cacheKey = stableSessionsListCacheKey(params);
+  const now = Date.now();
+
+  const cached = sessionsListResponseCache.get(cacheKey);
+  if (cached && now - cached.updatedAt <= SESSIONS_LIST_CACHE_TTL_MS) {
+    return cached.result;
+  }
+  if (cached) {
+    sessionsListResponseCache.delete(cacheKey);
+  }
+
+  const inFlight = sessionsListInFlight.get(cacheKey);
+  if (inFlight) {
+    return await inFlight;
+  }
+
+  const promise = (async () => {
+    const cfg = context.getRuntimeConfig();
+    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+      agentId: params.agentId,
+    });
+    const result = await listSessionsFromStoreAsync({
+      cfg,
+      storePath,
+      store,
+      modelCatalog: await loadOptionalSessionsListModelCatalog(context),
+      opts: params,
+    });
+    sessionsListResponseCache.set(cacheKey, { updatedAt: Date.now(), result });
+    while (sessionsListResponseCache.size > SESSIONS_LIST_CACHE_MAX_SIZE) {
+      const oldestKey = sessionsListResponseCache.keys().next().value;
+      if (typeof oldestKey !== "string") break;
+      sessionsListResponseCache.delete(oldestKey);
+    }
+    return result;
+  })();
+
+  sessionsListInFlight.set(cacheKey, promise);
+  try {
+    return await promise;
+  } finally {
+    if (sessionsListInFlight.get(cacheKey) === promise) {
+      sessionsListInFlight.delete(cacheKey);
+    }
+  }
+}
 
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
@@ -230,6 +312,7 @@ function emitSessionsChanged(
   >,
   payload: { sessionKey?: string; reason: string; compacted?: boolean },
 ) {
+  invalidateSessionsListCache();
   const connIds = context.getSessionEventSubscriberConnIds();
   if (connIds.size === 0) {
     return;
@@ -667,16 +750,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const cfg = context.getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-    const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
-    const result = await listSessionsFromStoreAsync({
-      cfg,
-      storePath,
-      store,
-      modelCatalog,
-      opts: p,
-    });
+    const result = await loadSessionsListResultCached(context, p);
     respond(
       true,
       {
