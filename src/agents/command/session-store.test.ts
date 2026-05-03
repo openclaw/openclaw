@@ -1188,6 +1188,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: Date.now(),
           model: "gpt-5.4",
           modelProvider: "openai",
+          contextTokens: 256_000,
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
@@ -1208,6 +1209,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
             agentMeta: {
               provider: "anthropic",
               model: "claude-sonnet-4-20250514",
+              contextTokens: 200_000,
               usage: { input: 100, output: 50 },
             },
           },
@@ -1218,6 +1220,9 @@ describe("updateSessionStoreAfterAgentRun", () => {
       // The fallback model must NOT be persisted — session keeps its original model
       expect(persisted?.model).not.toBe("claude-sonnet-4-20250514");
       expect(persisted?.modelProvider).not.toBe("anthropic");
+      // contextTokens belongs to the runtime-model snapshot: must stay aligned
+      // with the preserved primary model rather than the fallback's window.
+      expect(persisted?.contextTokens).toBe(256_000);
     });
   });
 
@@ -1232,6 +1237,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: Date.now(),
           model: "gpt-5.4",
           modelProvider: "openai",
+          contextTokens: 256_000,
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
@@ -1253,6 +1259,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
             agentMeta: {
               provider: "anthropic",
               model: "claude-sonnet-4-20250514",
+              contextTokens: 200_000,
               usage: { input: 100, output: 50 },
             },
           },
@@ -1263,6 +1270,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
       // The auto-computed fallback detection should prevent persisting the fallback model
       expect(persisted?.model).not.toBe("claude-sonnet-4-20250514");
       expect(persisted?.modelProvider).not.toBe("anthropic");
+      // Auto-computed fallback path also preserves existing contextTokens.
+      expect(persisted?.contextTokens).toBe(256_000);
     });
   });
 });

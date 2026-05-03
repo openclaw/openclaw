@@ -814,8 +814,12 @@ async function finalizeCronRun(params: {
       provider: providerUsed,
       model: modelUsed,
     });
+    prepared.cronSession.sessionEntry.contextTokens = contextTokens;
   }
-  prepared.cronSession.sessionEntry.contextTokens = contextTokens;
+  // When isFromFallback is true, preserve the existing contextTokens alongside
+  // the existing model/provider so status %used and compaction heuristics stay
+  // aligned with the configured primary model rather than the transient
+  // fallback's context window.
   if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
     const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
     if (cliSessionId) {

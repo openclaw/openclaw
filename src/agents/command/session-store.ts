@@ -115,13 +115,20 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: now,
     sessionStartedAt: now,
   };
+  // Treat contextTokens as part of the runtime-model snapshot: when this run
+  // was served by a fallback we must not persist the fallback model's context
+  // window alongside the preserved primary model, otherwise status %used and
+  // compaction heuristics desync from the configured model.
+  const isFromFallback = preserveRuntimeModel
+    ? false
+    : (params.isFromFallback ?? (modelUsed !== defaultModel || providerUsed !== defaultProvider));
   const next: SessionEntry = {
     ...entry,
     sessionId,
     updatedAt: now,
     sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
-    ...(preserveRuntimeModel
+    ...(preserveRuntimeModel || isFromFallback
       ? {}
       : {
           contextTokens,
@@ -149,21 +156,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
     // When there is no prior runtime model, do nothing: a heartbeat turn
     // should not establish initial model state on an empty session.
-  } else {
+  } else if (isFromFallback) {
     // Do not persist a fallback model as the session's runtime model. If we did,
     // resolveSessionModelRef would return the fallback on every subsequent request
     // and the configured primary model would never be retried after it recovers.
     // The fallback is an in-flight transient choice, not a durable session setting.
-    // When callers omit `isFromFallback`, compute it from the model/provider actually
-    // used vs. the configured defaults so we never accidentally persist a fallback.
-    const isFromFallback =
-      params.isFromFallback ?? (modelUsed !== defaultModel || providerUsed !== defaultProvider);
-    if (!isFromFallback) {
-      setSessionRuntimeModel(next, {
-        provider: providerUsed,
-        model: modelUsed,
-      });
-    }
+    // Preserve the existing entry's contextTokens too so status/compaction stay
+    // aligned with the unchanged primary model.
+    next.contextTokens = entry.contextTokens;
+  } else {
+    setSessionRuntimeModel(next, {
+      provider: providerUsed,
+      model: modelUsed,
+    });
   }
   if (agentHarnessId) {
     next.agentHarnessId = agentHarnessId;

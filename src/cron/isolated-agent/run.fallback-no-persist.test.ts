@@ -17,7 +17,7 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 describe("runCronIsolatedAgentTurn — fallback model not persisted", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
-  it("does not overwrite session model/provider when a fallback was used", async () => {
+  it("does not overwrite session model/provider/contextTokens when a fallback was used", async () => {
     const cronSession = makeCronSession({
       sessionEntry: {
         sessionId: "test-session-id",
@@ -26,6 +26,7 @@ describe("runCronIsolatedAgentTurn — fallback model not persisted", () => {
         skillsSnapshot: undefined,
         model: "gpt-5.4",
         modelProvider: "openai",
+        contextTokens: 256_000,
       },
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
@@ -59,9 +60,15 @@ describe("runCronIsolatedAgentTurn — fallback model not persisted", () => {
     // setSessionRuntimeModel must NOT have been called because the run
     // was served by a fallback model, not the configured primary.
     expect(setSessionRuntimeModelMock).not.toHaveBeenCalled();
+    // contextTokens belongs to the runtime-model snapshot: when the run was a
+    // fallback we must preserve the existing entry value so status %used and
+    // compaction heuristics do not desync from the unchanged primary model.
+    expect(cronSession.sessionEntry.model).toBe("gpt-5.4");
+    expect(cronSession.sessionEntry.modelProvider).toBe("openai");
+    expect(cronSession.sessionEntry.contextTokens).toBe(256_000);
   });
 
-  it("calls setSessionRuntimeModel normally when primary model succeeds", async () => {
+  it("calls setSessionRuntimeModel and updates contextTokens when primary model succeeds", async () => {
     const cronSession = makeCronSession({
       sessionEntry: {
         sessionId: "test-session-id",
@@ -70,6 +77,7 @@ describe("runCronIsolatedAgentTurn — fallback model not persisted", () => {
         skillsSnapshot: undefined,
         model: "gpt-5.4",
         modelProvider: "openai",
+        contextTokens: 256_000,
       },
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
@@ -100,7 +108,9 @@ describe("runCronIsolatedAgentTurn — fallback model not persisted", () => {
 
     expect(result.status).toBe("ok");
 
-    // Primary was used — setSessionRuntimeModel should have been called.
+    // Primary was used — setSessionRuntimeModel should have been called and
+    // contextTokens should have been updated as part of the runtime snapshot.
     expect(setSessionRuntimeModelMock).toHaveBeenCalled();
+    expect(typeof cronSession.sessionEntry.contextTokens).toBe("number");
   });
 });
