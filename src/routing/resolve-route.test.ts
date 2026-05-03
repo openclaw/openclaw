@@ -1245,4 +1245,202 @@ describe("binding evaluation cache scalability", () => {
     expect(defaultRoute.agentId).toBe("main");
     expect(defaultRoute.matchedBy).toBe("default");
   });
+
+  describe("WhatsApp accountId-vs-peer.id misuse warning (#75211)", () => {
+    // The reporter on #75211 authored a binding with
+    //   match: { channel: "whatsapp", accountId: "+51987654321" }
+    // expecting that to filter inbound by sender phone. In OpenClaw's
+    // routing model `match.accountId` selects which CONNECTED WhatsApp
+    // account the binding applies to (the bot's own number/handle), not
+    // the sender; the correct shape is `match.peer = { kind: "direct",
+    // id: "..." }` per docs/concepts/multi-agent.md. Before this fix the
+    // misconfigured binding silently never matched and every inbound
+    // from that contact fell through to the default agent. The diagnostic
+    // surfaces the mistake at runtime without changing routing semantics.
+    function captureLogWarnFor<T>(fn: () => T): { result: T; warnings: string[] } {
+      const warnings: string[] = [];
+      // logWarn from src/logger.ts routes through runtime.log, which on
+      // defaultRuntime maps to console.log. Spying console.log captures
+      // the warning text the same way src/logger.test.ts does for its
+      // own runtime-output assertions.
+      const spy = vi
+        .spyOn(console, "log")
+        .mockImplementation((...args: unknown[]): void => {
+          warnings.push(args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" "));
+        });
+      try {
+        const result = fn();
+        return { result, warnings };
+      } finally {
+        spy.mockRestore();
+      }
+    }
+
+    test("emits a warning for the reporter's exact config shape", () => {
+      // The reporter's bug body used `+51XXXXXXXXX` as a redacted-for-
+      // privacy phone. The phone-shape detector
+      // (`looksLikeWhatsAppSenderPhone`) correctly requires digits only,
+      // so we use a fake-but-valid Peruvian E.164 here that exercises
+      // the same code path the reporter's real (unredacted) phone hit
+      // in production.
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "relay" }] },
+        bindings: [
+          {
+            type: "route",
+            agentId: "relay",
+            match: { channel: "whatsapp", accountId: "+51987654321" },
+          },
+        ],
+      } as unknown as OpenClawConfig;
+
+      const { warnings } = captureLogWarnFor(() =>
+        resolveAgentRoute({
+          cfg,
+          channel: "whatsapp",
+          accountId: "default",
+          peer: { kind: "direct", id: "+51987654321" },
+        }),
+      );
+
+      const joined = warnings.join("");
+      expect(joined).toMatch(/suspicious WhatsApp binding/i);
+      expect(joined).toContain('match.accountId="+51987654321"');
+      expect(joined).toContain('match.peer = { kind: "direct", id: "+51987654321" }');
+      expect(joined).toContain("#75211");
+    });
+
+    test("does NOT warn when match.peer is set explicitly (docs-shape config)", () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "relay" }] },
+        bindings: [
+          {
+            type: "route",
+            agentId: "relay",
+            match: {
+              channel: "whatsapp",
+              peer: { kind: "direct", id: "+15551230001" },
+            },
+          },
+        ],
+      } as unknown as OpenClawConfig;
+
+      const { warnings } = captureLogWarnFor(() =>
+        resolveAgentRoute({
+          cfg,
+          channel: "whatsapp",
+          accountId: "default",
+          peer: { kind: "direct", id: "+15551230001" },
+        }),
+      );
+
+      expect(warnings.join("")).not.toMatch(/suspicious WhatsApp binding/i);
+    });
+
+    test("does NOT warn for non-WhatsApp channels even with phone-shaped accountId", () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "relay" }] },
+        bindings: [
+          {
+            type: "route",
+            agentId: "relay",
+            match: { channel: "telegram", accountId: "+15551230001" },
+          },
+        ],
+      } as unknown as OpenClawConfig;
+
+      const { warnings } = captureLogWarnFor(() =>
+        resolveAgentRoute({
+          cfg,
+          channel: "telegram",
+          accountId: "+15551230001",
+          peer: { kind: "direct", id: "+15551230002" },
+        }),
+      );
+
+      expect(warnings.join("")).not.toMatch(/suspicious WhatsApp binding/i);
+    });
+
+    test("does NOT warn for WhatsApp bindings whose accountId is NOT phone-shaped", () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "relay" }] },
+        bindings: [
+          {
+            type: "route",
+            agentId: "relay",
+            match: { channel: "whatsapp", accountId: "work-account" },
+          },
+        ],
+      } as unknown as OpenClawConfig;
+
+      const { warnings } = captureLogWarnFor(() =>
+        resolveAgentRoute({
+          cfg,
+          channel: "whatsapp",
+          accountId: "work-account",
+          peer: { kind: "direct", id: "+15551230001" },
+        }),
+      );
+
+      expect(warnings.join("")).not.toMatch(/suspicious WhatsApp binding/i);
+    });
+
+    test("warns at most once per (config, accountId) pair across repeated route resolutions", () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "relay" }] },
+        bindings: [
+          {
+            type: "route",
+            agentId: "relay",
+            match: { channel: "whatsapp", accountId: "+15551239999" },
+          },
+        ],
+      } as unknown as OpenClawConfig;
+
+      const { warnings } = captureLogWarnFor(() => {
+        for (let i = 0; i < 5; i += 1) {
+          resolveAgentRoute({
+            cfg,
+            channel: "whatsapp",
+            accountId: "default",
+            peer: { kind: "direct", id: "+15551239999" },
+          });
+        }
+        return null;
+      });
+
+      const occurrences = warnings.join("").match(/suspicious WhatsApp binding/gi) ?? [];
+      expect(occurrences.length).toBe(1);
+    });
+
+    test("does not change routing semantics: misconfigured binding still falls through to default", () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "relay" }] },
+        bindings: [
+          {
+            type: "route",
+            agentId: "relay",
+            match: { channel: "whatsapp", accountId: "+51987654321" },
+          },
+        ],
+      } as unknown as OpenClawConfig;
+
+      const { result } = captureLogWarnFor(() =>
+        resolveAgentRoute({
+          cfg,
+          channel: "whatsapp",
+          accountId: "default",
+          peer: { kind: "direct", id: "+51987654321" },
+        }),
+      );
+
+      // The diagnostic warns; it intentionally does NOT auto-promote the
+      // accountId to peer.id because that would change routing semantics
+      // for any deployment that has deliberately named a connected
+      // WhatsApp account by phone number. The user is expected to fix
+      // their config based on the warning.
+      expect(result.agentId).toBe("main");
+      expect(result.matchedBy).toBe("default");
+    });
+  });
 });
