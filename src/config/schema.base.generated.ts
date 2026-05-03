@@ -5362,6 +5362,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     const: "stream",
                   },
+                  {
+                    type: "string",
+                    const: "verbose",
+                  },
                 ],
               },
               elevatedDefault: {
@@ -6361,10 +6365,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 reasoningDefault: {
                   type: "string",
-                  enum: ["on", "off", "stream"],
+                  enum: ["on", "off", "stream", "verbose"],
                   title: "Agent Reasoning Default",
                   description:
-                    "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+                    "Optional per-agent default reasoning visibility (on|off|stream|verbose). Applies when no per-message or session reasoning override is set. verbose streams reasoning with interleaved tool action summaries.",
                 },
                 fastModeDefault: {
                   type: "boolean",
@@ -24811,7 +24815,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.list[].reasoningDefault": {
       label: "Agent Reasoning Default",
-      help: "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+      help: "Optional per-agent default reasoning visibility (on|off|stream|verbose). Applies when no per-message or session reasoning override is set. verbose streams reasoning with interleaved tool action summaries.",
       tags: ["advanced"],
     },
     "agents.list[].fastModeDefault": {

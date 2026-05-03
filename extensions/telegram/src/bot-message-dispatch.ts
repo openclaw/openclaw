@@ -128,7 +128,7 @@ type DispatchTelegramMessageParams = {
   opts: Pick<TelegramBotOptions, "token">;
 };
 
-type TelegramReasoningLevel = "off" | "on" | "stream";
+type TelegramReasoningLevel = "off" | "on" | "stream" | "verbose";
 
 type TelegramReplyFenceState = {
   generation: number;
@@ -225,7 +225,7 @@ function resolveTelegramReasoningLevel(params: {
     });
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const level = entry?.reasoningLevel;
-    if (level === "on" || level === "stream" || level === "off") {
+    if (level === "on" || level === "stream" || level === "verbose" || level === "off") {
       return level;
     }
   } catch {
@@ -370,7 +370,9 @@ export const dispatchTelegramMessage = async ({
     telegramDeps,
   });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
-  const streamReasoningDraft = resolvedReasoningLevel === "stream";
+  const streamReasoningDraft =
+    resolvedReasoningLevel === "stream" || resolvedReasoningLevel === "verbose";
+  const verboseReasoningActions = resolvedReasoningLevel === "verbose";
   const previewStreamingEnabled = streamMode !== "off";
   const rawReplyQuoteText =
     ctxPayload.ReplyToIsQuote && typeof ctxPayload.ReplyToQuoteText === "string"
@@ -555,6 +557,18 @@ export const dispatchTelegramMessage = async ({
     if (alreadyStarted && progressDraftGate.hasStarted) {
       await renderProgressDraft();
     }
+  };
+  const activeVerboseActions = new Map<string, { name: string; startedAt: number }>();
+  const pushVerboseReasoningAction = (line: string) => {
+    if (!verboseReasoningActions || !reasoningLane.stream) {
+      return;
+    }
+    const current = reasoningLane.lastPartialText ?? "";
+    const separator = current && !current.endsWith("\n") ? "\n" : "";
+    const updated = `${current}${separator}${line}\n`;
+    reasoningLane.lastPartialText = updated;
+    reasoningLane.hasStreamedMessage = true;
+    reasoningLane.stream.update(updated);
   };
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
@@ -1192,6 +1206,11 @@ export const dispatchTelegramMessage = async ({
                       ),
                       { toolName },
                     );
+                    if (toolName) {
+                      const id = payload.phase ?? toolName;
+                      activeVerboseActions.set(id, { name: toolName, startedAt: Date.now() });
+                      pushVerboseReasoningAction(`⏳ ${toolName}…`);
+                    }
                   },
                   onItemEvent: async (payload) => {
                     await pushPreviewToolProgress(
@@ -1207,6 +1226,17 @@ export const dispatchTelegramMessage = async ({
                         meta: payload.meta,
                       }),
                     );
+                    if (payload.phase === "end" && payload.name) {
+                      const id = payload.itemId ?? payload.name;
+                      const active = activeVerboseActions.get(id);
+                      const durationMs = active ? Date.now() - active.startedAt : undefined;
+                      const durationStr = durationMs != null ? ` (${(durationMs / 1000).toFixed(1)}s)` : "";
+                      const statusIcon = payload.status === "failed" ? "✗" : "✓";
+                      activeVerboseActions.delete(id);
+                      pushVerboseReasoningAction(
+                        `${statusIcon} ${payload.summary ?? payload.name}${durationStr}`,
+                      );
+                    }
                   },
                   onPlanUpdate: async (payload) => {
                     if (payload.phase !== "update") {
@@ -1236,6 +1266,9 @@ export const dispatchTelegramMessage = async ({
                         message: payload.message,
                       }),
                     );
+                    pushVerboseReasoningAction(
+                      `⚠️ ${payload.command ? `approval: ${payload.command}` : "approval requested"}`,
+                    );
                   },
                   onCommandOutput: async (payload) => {
                     if (payload.phase !== "end") {
@@ -1250,6 +1283,12 @@ export const dispatchTelegramMessage = async ({
                         status: payload.status,
                         exitCode: payload.exitCode,
                       }),
+                    );
+                    const durationStr = payload.durationMs != null
+                      ? ` (${(payload.durationMs / 1000).toFixed(1)}s)`
+                      : "";
+                    pushVerboseReasoningAction(
+                      `${payload.exitCode === 0 ? "✓" : "✗"} ${payload.name ?? "command"}${durationStr}`,
                     );
                   },
                   onPatchSummary: async (payload) => {
@@ -1267,6 +1306,13 @@ export const dispatchTelegramMessage = async ({
                         deleted: payload.deleted,
                         summary: payload.summary,
                       }),
+                    );
+                    const fileCount =
+                      (payload.added?.length ?? 0) +
+                      (payload.modified?.length ?? 0) +
+                      (payload.deleted?.length ?? 0);
+                    pushVerboseReasoningAction(
+                      `✓ ${payload.summary ?? "patch applied"}${fileCount > 0 ? ` (${fileCount} file${fileCount !== 1 ? "s" : ""})` : ""}`,
                     );
                   },
                   onCompactionStart:

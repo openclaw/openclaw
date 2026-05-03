@@ -12,7 +12,8 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
 
   if (!params.sessionKey) {
     // Feishu preview only supports the "stream" variant; "on" (block-mode) has no preview equivalent.
-    return configDefault === "stream";
+    // "verbose" implies "stream" for channels that don't support action interleaving.
+    return configDefault === "stream" || configDefault === "verbose";
   }
 
   try {
@@ -20,8 +21,8 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
     const level =
       resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing
         ?.reasoningLevel;
-    if (level === "on" || level === "stream" || level === "off") {
-      return level === "stream";
+    if (level === "on" || level === "stream" || level === "verbose" || level === "off") {
+      return level === "stream" || level === "verbose";
     }
   } catch {
     // Fail closed: if the session store is unreadable we cannot confirm a
@@ -30,5 +31,6 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
   }
   // No persisted level found — fall back to config default.
   // Feishu preview only supports the "stream" variant; "on" (block-mode) has no preview equivalent.
-  return configDefault === "stream";
+  // "verbose" implies "stream" for channels that don't support action interleaving.
+  return configDefault === "stream" || configDefault === "verbose";
 }

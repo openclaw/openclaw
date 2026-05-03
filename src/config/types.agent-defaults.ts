@@ -323,7 +323,7 @@ export type AgentDefaultsConfig = {
    */
   toolProgressDetail?: "explain" | "raw";
   /** Default reasoning level when no /reasoning directive is present. */
-  reasoningDefault?: "off" | "on" | "stream";
+  reasoningDefault?: "off" | "on" | "stream" | "verbose";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Default block streaming level when no override is present. */
