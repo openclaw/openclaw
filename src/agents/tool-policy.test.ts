@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
+import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
@@ -141,7 +142,7 @@ describe("tool-policy", () => {
     expect(applyOwnerOnlyToolPolicy(tools, true)).toHaveLength(1);
   });
 
-  it("preserves explicit alsoAllow hints when allow is empty", () => {
+  it("collects explicit allowlist entries", () => {
     expect(
       collectExplicitAllowlist([
         {
@@ -149,6 +150,15 @@ describe("tool-policy", () => {
         },
       ]),
     ).toContain("optional-demo");
+  });
+
+  it("uses alsoAllow entries for plugin discovery without the synthetic allow-all", () => {
+    expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: ["lobster"] })])).toEqual([
+      "lobster",
+    ]);
+    expect(
+      collectExplicitAllowlist([pickSandboxToolPolicy({ allow: [], alsoAllow: ["lobster"] })]),
+    ).toEqual(["*", "lobster"]);
   });
 
   it("strips nodes for non-owner senders via fallback policy", () => {

@@ -180,6 +180,21 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("uses tools.alsoAllow for optional plugin discovery without widening to all plugins", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { alsoAllow: ["lobster"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginToolAllowlist: ["lobster"],
+      }),
+    );
+  });
+
   it("passes explicit denylist entries to OpenClaw tool factory planning", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
