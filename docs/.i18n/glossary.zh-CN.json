@@ -16,6 +16,10 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "Mantis",
+    "target": "Mantis"
+  },
+  {
     "source": "OpenClaw App SDK",
     "target": "OpenClaw 应用 SDK"
   },
