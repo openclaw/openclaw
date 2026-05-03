@@ -627,16 +627,16 @@ describe("whatsapp inbound dispatch", () => {
     expect(getCapturedReplyOptions()?.disableBlockStreaming).toBeUndefined();
   });
 
-  it("keeps WhatsApp direct replies automatic by default", async () => {
+  it("leaves WhatsApp direct reply mode unset by default", async () => {
     await dispatchBufferedReply({
       context: { Body: "hi", ChatType: "direct" },
       msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
     });
 
     expect(getCapturedReplyOptions()).toMatchObject({
-      sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
     });
+    expect(getCapturedReplyOptions()?.sourceReplyDeliveryMode).toBeUndefined();
   });
 
   it("defaults WhatsApp group replies to message-tool-only and disables source streaming", async () => {

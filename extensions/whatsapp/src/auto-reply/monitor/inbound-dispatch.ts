@@ -314,14 +314,18 @@ export async function dispatchWhatsAppBufferedReply(params: {
     accountId: params.route.accountId,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
-  const sourceReplyDeliveryMode = resolveChannelSourceReplyDeliveryMode({
-    cfg: params.cfg,
-    ctx: {
-      ChatType:
-        typeof params.context.ChatType === "string" ? params.context.ChatType : params.msg.chatType,
-      CommandSource: params.context.CommandSource === "native" ? "native" : undefined,
-    },
-  });
+  const sourceReplyChatType =
+    typeof params.context.ChatType === "string" ? params.context.ChatType : params.msg.chatType;
+  const sourceReplyDeliveryMode =
+    sourceReplyChatType === "group" || sourceReplyChatType === "channel"
+      ? resolveChannelSourceReplyDeliveryMode({
+          cfg: params.cfg,
+          ctx: {
+            ChatType: sourceReplyChatType,
+            CommandSource: params.context.CommandSource === "native" ? "native" : undefined,
+          },
+        })
+      : undefined;
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const disableBlockStreaming = sourceRepliesAreToolOnly
     ? true
@@ -413,7 +417,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     },
     replyOptions: {
       disableBlockStreaming,
-      sourceReplyDeliveryMode,
+      ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       onModelSelected: params.onModelSelected,
     },
   });
