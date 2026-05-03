@@ -256,6 +256,25 @@ export function updateWhatsAppMainLastRoute(params: {
     return;
   }
 
+  // Record last-route for per-contact session when using scoped dmScope
+  if (
+    params.dmRouteTarget &&
+    params.route.sessionKey !== params.route.mainSessionKey &&
+    shouldUpdateMainLastRoute
+  ) {
+    params.updateLastRoute({
+      cfg: params.cfg,
+      backgroundTasks: params.backgroundTasks,
+      storeAgentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+      channel: "whatsapp",
+      to: params.dmRouteTarget,
+      accountId: params.route.accountId,
+      ctx: params.ctx,
+      warn: params.warn,
+    });
+  }
+
   if (
     params.dmRouteTarget &&
     inboundLastRouteSessionKey === params.route.mainSessionKey &&
