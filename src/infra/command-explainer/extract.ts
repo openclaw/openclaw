@@ -149,6 +149,92 @@ function advancePosition(
   return { row, column };
 }
 
+function utf8ByteLengthForCodePoint(codePoint: number): number {
+  if (codePoint <= 0x7f) {
+    return 1;
+  }
+  if (codePoint <= 0x7ff) {
+    return 2;
+  }
+  if (codePoint <= 0xffff) {
+    return 3;
+  }
+  return 4;
+}
+
+function utf8ByteLength(text: string): number {
+  let length = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const codePoint = text.codePointAt(index);
+    if (codePoint === undefined) {
+      continue;
+    }
+    length += utf8ByteLengthForCodePoint(codePoint);
+    if (codePoint > 0xffff) {
+      index += 1;
+    }
+  }
+  return length;
+}
+
+function utf8ByteOffsetToStringIndex(text: string, byteOffset: number): number {
+  if (byteOffset <= 0) {
+    return 0;
+  }
+  let currentByteOffset = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const codePoint = text.codePointAt(index);
+    if (codePoint === undefined) {
+      return text.length;
+    }
+    const codePointLength = utf8ByteLengthForCodePoint(codePoint);
+    if (currentByteOffset + codePointLength > byteOffset) {
+      return index;
+    }
+    currentByteOffset += codePointLength;
+    if (currentByteOffset === byteOffset) {
+      return codePoint > 0xffff ? index + 2 : index + 1;
+    }
+    if (codePoint > 0xffff) {
+      index += 1;
+    }
+  }
+  return text.length;
+}
+
+function parserOffsetToStringIndex(
+  source: string,
+  rootNode: TreeSitterNode,
+): (offset: number) => number {
+  const utf8Length = utf8ByteLength(source);
+  if (utf8Length !== source.length && rootNode.endIndex === utf8Length) {
+    return (offset) => utf8ByteOffsetToStringIndex(source, offset);
+  }
+  return (offset) => offset;
+}
+
+function spanBaseForParserSource(
+  source: string,
+  rootNode: TreeSitterNode,
+  base: SpanBase,
+): SpanBase {
+  const offsetToStringIndex = parserOffsetToStringIndex(source, rootNode);
+  return {
+    startIndex: base.startIndex,
+    startPosition: base.startPosition,
+    mapOffset(offset) {
+      const sourceIndex = offsetToStringIndex(offset);
+      if (base.mapOffset) {
+        return base.mapOffset(sourceIndex);
+      }
+      return {
+        index: base.startIndex + sourceIndex,
+        position: advancePosition(base.startPosition, source.slice(0, sourceIndex)),
+      };
+    },
+  };
+}
+
 function valuePrefixLength(node: TreeSitterNode): number {
   if (node.type === "string" || node.type === "raw_string") {
     return 1;
@@ -1051,18 +1137,23 @@ async function walk(
         );
         if (wrapperPayload && state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
           const wrapperTree = await parseBashForCommandExplanation(wrapperPayload.command);
+          const wrapperSpanBase = spanBaseForParserSource(
+            wrapperPayload.command,
+            wrapperTree.rootNode,
+            wrapperPayload.spanBase,
+          );
           try {
             if (wrapperTree.rootNode.hasError) {
               output.hasParseError = true;
               output.risks.push({
                 kind: "syntax-error",
                 text: wrapperPayload.command,
-                span: spanFromNode(wrapperTree.rootNode, wrapperPayload.spanBase),
+                span: spanFromNode(wrapperTree.rootNode, wrapperSpanBase),
               });
             }
             await walk(wrapperTree.rootNode, output, "wrapper-payload", {
               wrapperPayloadDepth: state.wrapperPayloadDepth + 1,
-              spanBase: wrapperPayload.spanBase,
+              spanBase: wrapperSpanBase,
             });
           } finally {
             wrapperTree.delete();
@@ -1079,6 +1170,7 @@ async function walk(
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
   const tree = await parseBashForCommandExplanation(source);
   try {
+    const spanBase = spanBaseForParserSource(source, tree.rootNode, ROOT_SPAN_BASE);
     const output: MutableExplanation = {
       shapes: new Set(),
       commands: [],
@@ -1087,7 +1179,7 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
     };
     await walk(tree.rootNode, output, "top-level", {
       wrapperPayloadDepth: 0,
-      spanBase: ROOT_SPAN_BASE,
+      spanBase,
     });
     const topLevelCommands = output.commands.filter((command) => command.context === "top-level");
     return {
