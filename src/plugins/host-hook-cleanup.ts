@@ -31,15 +31,49 @@ function shouldCleanPlugin(pluginId: string, filterPluginId?: string): boolean {
   return !filterPluginId || pluginId === filterPluginId;
 }
 
+function collectStoredSessionEntrySlotKeys(entry: SessionEntry, pluginId?: string): Set<string> {
+  const slotKeys = new Set<string>();
+  const storedSlotKeys = entry.pluginExtensionSlotKeys;
+  if (!storedSlotKeys) {
+    return slotKeys;
+  }
+  const records =
+    pluginId === undefined
+      ? Object.values(storedSlotKeys)
+      : storedSlotKeys[pluginId]
+        ? [storedSlotKeys[pluginId]]
+        : [];
+  for (const record of records) {
+    for (const slotKey of Object.values(record)) {
+      const normalized = normalizeSessionEntrySlotKey(slotKey);
+      if (normalized.ok) {
+        slotKeys.add(normalized.key);
+      }
+    }
+  }
+  return slotKeys;
+}
+
+function collectPromotedSessionEntrySlotKeys(
+  entry: SessionEntry,
+  pluginId?: string,
+  sessionEntrySlotKeys?: ReadonlySet<string>,
+): Set<string> {
+  const slotKeys = collectStoredSessionEntrySlotKeys(entry, pluginId);
+  for (const slotKey of sessionEntrySlotKeys ?? []) {
+    slotKeys.add(slotKey);
+  }
+  return slotKeys;
+}
+
 function clearPromotedSessionEntrySlots(
   entry: SessionEntry,
+  pluginId?: string,
   sessionEntrySlotKeys?: ReadonlySet<string>,
 ): void {
-  if (!sessionEntrySlotKeys || sessionEntrySlotKeys.size === 0) {
-    return;
-  }
+  const slotKeys = collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
   const entryRecord = entry as Record<string, unknown>;
-  for (const slotKey of sessionEntrySlotKeys) {
+  for (const slotKey of slotKeys) {
     delete entryRecord[slotKey];
   }
 }
@@ -49,9 +83,10 @@ export function clearPluginOwnedSessionState(
   pluginId?: string,
   sessionEntrySlotKeys?: ReadonlySet<string>,
 ): void {
-  clearPromotedSessionEntrySlots(entry, sessionEntrySlotKeys);
+  clearPromotedSessionEntrySlots(entry, pluginId, sessionEntrySlotKeys);
   if (!pluginId) {
     delete entry.pluginExtensions;
+    delete entry.pluginExtensionSlotKeys;
     delete entry.pluginNextTurnInjections;
     return;
   }
@@ -59,6 +94,12 @@ export function clearPluginOwnedSessionState(
     delete entry.pluginExtensions[pluginId];
     if (Object.keys(entry.pluginExtensions).length === 0) {
       delete entry.pluginExtensions;
+    }
+  }
+  if (entry.pluginExtensionSlotKeys) {
+    delete entry.pluginExtensionSlotKeys[pluginId];
+    if (Object.keys(entry.pluginExtensionSlotKeys).length === 0) {
+      delete entry.pluginExtensionSlotKeys;
     }
   }
   if (entry.pluginNextTurnInjections) {
@@ -71,13 +112,15 @@ export function clearPluginOwnedSessionState(
 
 function hasPromotedSessionEntrySlot(
   entry: SessionEntry,
+  pluginId?: string,
   sessionEntrySlotKeys?: ReadonlySet<string>,
 ): boolean {
-  if (!sessionEntrySlotKeys || sessionEntrySlotKeys.size === 0) {
+  const slotKeys = collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
+  if (slotKeys.size === 0) {
     return false;
   }
   const entryRecord = entry as Record<string, unknown>;
-  for (const slotKey of sessionEntrySlotKeys) {
+  for (const slotKey of slotKeys) {
     if (Object.prototype.hasOwnProperty.call(entryRecord, slotKey)) {
       return true;
     }
@@ -90,13 +133,19 @@ function hasPluginOwnedSessionState(
   pluginId?: string,
   sessionEntrySlotKeys?: ReadonlySet<string>,
 ): boolean {
-  if (hasPromotedSessionEntrySlot(entry, sessionEntrySlotKeys)) {
+  if (hasPromotedSessionEntrySlot(entry, pluginId, sessionEntrySlotKeys)) {
     return true;
   }
   if (!pluginId) {
-    return Boolean(entry.pluginExtensions || entry.pluginNextTurnInjections);
+    return Boolean(
+      entry.pluginExtensions || entry.pluginExtensionSlotKeys || entry.pluginNextTurnInjections,
+    );
   }
-  return Boolean(entry.pluginExtensions?.[pluginId] || entry.pluginNextTurnInjections?.[pluginId]);
+  return Boolean(
+    entry.pluginExtensions?.[pluginId] ||
+    entry.pluginExtensionSlotKeys?.[pluginId] ||
+    entry.pluginNextTurnInjections?.[pluginId],
+  );
 }
 
 function matchesCleanupSession(
@@ -172,11 +221,11 @@ async function clearPromotedSessionEntrySlotStores(params: {
       for (const [entryKey, entry] of Object.entries(store)) {
         if (
           !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
-          !hasPromotedSessionEntrySlot(entry, params.sessionEntrySlotKeys)
+          !hasPromotedSessionEntrySlot(entry, params.pluginId, params.sessionEntrySlotKeys)
         ) {
           continue;
         }
-        clearPromotedSessionEntrySlots(entry, params.sessionEntrySlotKeys);
+        clearPromotedSessionEntrySlots(entry, params.pluginId, params.sessionEntrySlotKeys);
         entry.updatedAt = now;
         clearedInStore += 1;
       }

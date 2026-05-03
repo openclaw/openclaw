@@ -565,11 +565,72 @@ describe("plugin session extension SessionEntry projection", () => {
           const stored = loadSessionStore(storePath, { skipCache: true });
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toBeUndefined();
+          expect(entry.pluginExtensionSlotKeys).toEqual({
+            "restart-promoted-plugin": {
+              workflow: "approvalSnapshot",
+            },
+          });
           expect(entry.pluginExtensions).toEqual({
             "restart-promoted-plugin": {
               workflow: { state: "waiting" },
             },
           });
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears persisted promoted slots when registry metadata is unavailable", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-metadata-cleanup-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const tempConfig = { session: { store: storePath } };
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: tempConfig,
+        run: async () => {
+          await updateSessionStore(storePath, (store) => {
+            store["agent:main:main"] = {
+              sessionId: "session-id",
+              updatedAt: Date.now(),
+              pluginExtensions: {
+                "removed-promoted-plugin": {
+                  workflow: { state: "stale" },
+                },
+              },
+              pluginExtensionSlotKeys: {
+                "removed-promoted-plugin": {
+                  workflow: "approvalSnapshot",
+                },
+              },
+              approvalSnapshot: { state: "stale" },
+            } as unknown as SessionEntry;
+          });
+
+          await expect(
+            runPluginHostCleanup({
+              cfg: tempConfig as never,
+              pluginId: "removed-promoted-plugin",
+              reason: "delete",
+            }),
+          ).resolves.toMatchObject({ failures: [] });
+
+          const stored = loadSessionStore(storePath, { skipCache: true });
+          const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+          expect(entry.approvalSnapshot).toBeUndefined();
+          expect(entry.pluginExtensionSlotKeys).toBeUndefined();
+          expect(entry.pluginExtensions).toBeUndefined();
         },
       });
     } finally {

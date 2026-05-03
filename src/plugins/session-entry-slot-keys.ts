@@ -9,6 +9,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "heartbeatIsolatedBaseSessionKey",
   "heartbeatTaskState",
   "pluginExtensions",
+  "pluginExtensionSlotKeys",
   "pluginNextTurnInjections",
   "sessionId",
   "updatedAt",
