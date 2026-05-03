@@ -30,6 +30,14 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "../tasks/task-registry.js"');
     expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
     expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
+    const wsConnection = readSource("src/gateway/server/ws-connection.ts");
+    expect(wsConnection).not.toMatch(
+      /import\s+\{[^}]*attachGatewayWsMessageHandler[^}]*\}\s+from "\.\/ws-connection\/message-handler\.js"/s,
+    );
+    expect(wsConnection).toContain('import("./ws-connection/message-handler.js")');
+    expect(readSource("src/gateway/server-aux-handlers.ts")).not.toMatch(
+      /import\s+\{[^}]*create(?:Exec|Plugin|Secrets)[^}]*\}\s+from "\.\/server-methods\//s,
+    );
     expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
   });

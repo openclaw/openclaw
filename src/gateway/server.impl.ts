@@ -67,6 +67,7 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
+import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { bootstrapGatewayNetworkRuntime } from "./server-network-runtime.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
@@ -1016,7 +1017,7 @@ export async function startGatewayServer(
       stopChannel,
       logChannels,
     });
-    const attachedGatewayExtraHandlers = {
+    const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,
     };
