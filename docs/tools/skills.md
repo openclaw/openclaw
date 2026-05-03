@@ -426,6 +426,15 @@ when `SKILL.md` files change. Configure under `skills.load`:
 }
 ```
 
+If your filesystem sometimes misses native file events, you can force the skills
+watcher to use polling instead:
+
+```bash
+OPENCLAW_SKILLS_WATCH_POLLING=1 OPENCLAW_SKILLS_WATCH_POLL_INTERVAL_MS=1000 pnpm openclaw gateway
+```
+
+Invalid polling intervals are ignored. Values below `1` ms are treated as invalid.
+
 ### Remote macOS nodes (Linux gateway)
 
 If the Gateway runs on Linux but a **macOS node** is connected with
