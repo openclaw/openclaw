@@ -527,6 +527,7 @@ async function dispatchDiscordCommandInteraction(params: {
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
+      senderIsOwner: ownerOk,
       sessionKey: effectiveRoute.sessionKey,
       commandBody: prompt,
       config: cfg,

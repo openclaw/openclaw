@@ -228,6 +228,22 @@ function registerPairPlugin(params?: { discordNativeName?: string }) {
   ).toEqual({ ok: true });
 }
 
+function registerScopedPairPlugin(
+  handler = vi.fn(async ({ args }: { args?: string }) => ({ text: `paired:${args ?? ""}` })),
+) {
+  expect(
+    registerPluginCommand("demo-plugin", {
+      name: "pair",
+      description: "Pair device",
+      acceptsArgs: true,
+      requireAuth: false,
+      requiredScopes: ["operator.pairing"],
+      handler,
+    }),
+  ).toEqual({ ok: true });
+  return handler;
+}
+
 async function expectPairCommandReply(params: {
   cfg: OpenClawConfig;
   commandName: string;
@@ -387,6 +403,46 @@ describe("Discord native plugin command dispatch", () => {
       commandName: "pairdiscord",
       interaction,
     });
+  });
+
+  it("allows Discord command owners to run scoped plugin commands without gateway scopes", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open", allowFrom: ["user:owner"] },
+        },
+      },
+    } as OpenClawConfig;
+    const interaction = createInteraction();
+    interaction.options.getString.mockReturnValue("now");
+    const handler = registerScopedPairPlugin();
+    const command = await createPluginCommand({ cfg, name: "pair" });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "paired:now" }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("rejects authorized Discord non-owners for scoped plugin commands without gateway scopes", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction({ userId: "authorized-non-owner" });
+    interaction.options.getString.mockReturnValue("now");
+    const handler = registerScopedPairPlugin();
+    const command = await createPluginCommand({ cfg, name: "pair" });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "⚠️ This command requires gateway scope: operator.pairing.",
+      }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it("blocks unauthorized Discord senders before requireAuth:false plugin commands execute", async () => {
