@@ -237,11 +237,13 @@ async function tryInstallHookPackFromNpmSpec(params: {
   installMode: "install" | "update";
   spec: string;
   pin?: boolean;
+  expectedIntegrity?: string;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const result = await installHooksFromNpmSpec({
     spec: params.spec,
     mode: params.installMode,
+    ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
     logger: createHookPackInstallLogger(params.runtime),
   });
   if (!result.ok) {
@@ -315,6 +317,7 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
       installMode: params.installMode,
       spec: params.spec,
       pin: params.pin,
+      expectedIntegrity: params.expectedIntegrity,
       runtime: params.runtime,
     });
     if (hookFallback.ok) {

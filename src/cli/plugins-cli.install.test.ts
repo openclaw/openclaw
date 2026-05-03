@@ -712,6 +712,31 @@ describe("plugins cli install", () => {
     );
   });
 
+  it("passes official external catalog integrity to hook-pack fallback", async () => {
+    loadConfig.mockReturnValue(createEmptyPluginConfig());
+    findBundledPluginSourceMock.mockReturnValue(undefined);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.extensions",
+      code: "missing_openclaw_extensions",
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error:
+        "aborted: npm package integrity drift detected for @wecom/wecom-openclaw-plugin@2026.4.23",
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "wecom"])).rejects.toThrow("__exit__:1");
+
+    expect(installHooksFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@wecom/wecom-openclaw-plugin@2026.4.23",
+        expectedIntegrity:
+          "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
+      }),
+    );
+  });
+
   it("installs ordinary bare plugin specs through npm without ClawHub lookup", async () => {
     const cfg = createEmptyPluginConfig();
     const enabledCfg = createEnabledPluginConfig("demo");
