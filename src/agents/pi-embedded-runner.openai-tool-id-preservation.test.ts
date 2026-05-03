@@ -147,4 +147,41 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     const userMessage = result[2] as { role?: string };
     expect(userMessage.role).toBe("user");
   });
+
+  it("normalizes overlong responses call ids and malformed item ids for replay", async () => {
+    const longCallId = `call_${"x".repeat(120)}`;
+    const longItemId = `notfc_${"y".repeat(120)}`;
+    const rawToolCallId = `${longCallId}|${longItemId}`;
+
+    const result = await sanitizeSessionHistory({
+      messages: [
+        castAgentMessage({
+          role: "assistant",
+          content: [{ type: "toolCall", id: rawToolCallId, name: "noop", arguments: {} }],
+        }),
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: rawToolCallId,
+          toolName: "noop",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        }),
+      ],
+      modelApi: "openai-responses",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      sessionManager: makeSessionManager(),
+      sessionId: "test-session",
+    });
+
+    const assistant = result[0] as { content?: Array<{ type?: string; id?: string }> };
+    const toolCall = assistant.content?.find((block) => block.type === "toolCall");
+    expect(toolCall?.id).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+    expect(toolCall?.id).not.toBe(rawToolCallId);
+    expect(toolCall?.id).not.toContain("|");
+    expect(toolCall?.id?.length).toBeLessThanOrEqual(64);
+
+    const toolResult = result[1] as { toolCallId?: string };
+    expect(toolResult.toolCallId).toBe(toolCall?.id);
+  });
 });

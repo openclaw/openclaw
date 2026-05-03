@@ -1,6 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { sanitizeReplayToolCallIdsForStream } from "./attempt.tool-call-normalization.js";
+import {
+  sanitizeOpenAIResponsesReplayForStream,
+  sanitizeReplayToolCallIdsForStream,
+} from "./attempt.tool-call-normalization.js";
 
 describe("sanitizeReplayToolCallIdsForStream", () => {
   it("drops orphaned tool results after strict id sanitization", () => {
@@ -162,5 +165,66 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
         role: "user",
       },
     ]);
+  });
+});
+
+describe("sanitizeOpenAIResponsesReplayForStream", () => {
+  it("normalizes live responses continuations before pi-ai splits ids", () => {
+    const longCallId = `call_${"x".repeat(120)}`;
+    const longItemId = `notfc_${"y".repeat(120)}`;
+    const rawToolCallId = `${longCallId}|${longItemId}`;
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: rawToolCallId, name: "noop", arguments: {} }],
+      } as never,
+      {
+        role: "toolResult",
+        toolCallId: rawToolCallId,
+        toolName: "noop",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      } as never,
+    ];
+
+    const out = sanitizeOpenAIResponsesReplayForStream(messages);
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCall = assistant.content.find(
+      (block) =>
+        !!block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "toolCall" &&
+        typeof (block as { id?: unknown }).id === "string",
+    ) as { id: string } | undefined;
+
+    expect(toolCall?.id).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+    expect(toolCall?.id).not.toBe(rawToolCallId);
+    expect(toolCall?.id).not.toContain("|");
+    expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(toolCall?.id);
+  });
+
+  it("preserves canonical same-model reasoning pairs", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} },
+        ],
+      } as never,
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_123",
+        toolName: "noop",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      } as never,
+    ];
+
+    expect(sanitizeOpenAIResponsesReplayForStream(messages)).toBe(messages);
   });
 });
