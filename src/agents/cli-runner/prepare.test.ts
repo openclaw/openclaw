@@ -49,8 +49,33 @@ const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveMusicGenerationTaskPromptContextForSession,
 );
 
+function createTestMcpLoopbackServerConfig(port: number) {
+  return {
+    mcpServers: {
+      openclaw: {
+        type: "http",
+        url: `http://127.0.0.1:${port}/mcp`,
+        headers: {
+          Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+          "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+          "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
+          "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
+          "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+        },
+      },
+    },
+  };
+}
+
+async function createTestMcpLoopbackServer(port = 0) {
+  return {
+    port,
+    close: vi.fn(async () => undefined),
+  };
+}
+
 function createCliBackendConfig(
-  params: { systemPromptOverride?: string | null } = {},
+  params: { systemPromptOverride?: string | null; bundleMcp?: boolean } = {},
 ): OpenClawConfig {
   return {
     agents: {
@@ -67,6 +92,9 @@ function createCliBackendConfig(
             sessionMode: "existing",
             output: "text",
             input: "arg",
+            ...(params.bundleMcp
+              ? { bundleMcp: true, bundleMcpMode: "claude-config-file" as const }
+              : {}),
           },
         },
       },
@@ -127,6 +155,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         bootstrapFiles: [],
         contextFiles: [],
       })),
+      getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
@@ -275,6 +306,97 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           channelId: "telegram",
         }),
       );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks inter-session prompts after CLI prompt-build hook context is applied", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => ({
+          prependContext: "trusted hook context",
+        })),
+        runBeforeAgentStart: vi.fn(),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        trigger: "user",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "foreign reply text",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:slack:dm:U123",
+          sourceChannel: "slack",
+          sourceTool: "sessions_send",
+        },
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.params.prompt).toMatch(/^\[Inter-session message/);
+      expect(context.params.prompt).toContain("sourceSession=agent:main:slack:dm:U123");
+      expect(context.params.prompt).toContain("isUser=false");
+      expect(context.params.prompt).toContain("trusted hook context");
+      expect(context.params.prompt).toContain("foreign reply text");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies agent_turn_prepare-only context on the CLI path", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "agent_turn_prepare"),
+        runAgentTurnPrepare: vi.fn(async () => ({
+          prependContext: "turn prepend",
+          appendContext: "turn append",
+        })),
+        runBeforePromptBuild: vi.fn(),
+        runBeforeAgentStart: vi.fn(),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        trigger: "user",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-turn-prepare",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.params.prompt).toBe("turn prepend\n\nlatest ask\n\nturn append");
+      expect(hookRunner.runAgentTurnPrepare).toHaveBeenCalledWith(
+        {
+          prompt: "latest ask",
+          messages: [],
+          queuedInjections: [],
+        },
+        expect.objectContaining({
+          runId: "run-test-turn-prepare",
+          sessionKey: "agent:main:test",
+        }),
+      );
+      expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
+      expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -447,6 +569,101 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(mockBuildActiveVideoGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
         "agent:main:test",
       );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips bundle MCP preparation when tools are disabled", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      }));
+      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer,
+        createMcpLoopbackServerConfig,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-disable-tools",
+        config: createCliBackendConfig({ bundleMcp: true }),
+        disableTools: true,
+      });
+
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+      expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
+      expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
+      expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
+      expect(context.preparedBackend.env).toBeUndefined();
+      expect(context.preparedBackend.backend.args).toEqual(["--print"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for native tool-capable CLI backends when tools are disabled", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "codex-config-overrides",
+            nativeToolMode: "always-on",
+            config: {
+              command: "native-cli",
+              args: ["exec", "--sandbox", "workspace-write"],
+              resumeArgs: ["exec", "resume", "{sessionId}"],
+              output: "jsonl",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "native-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-disable-native-tools",
+          config: createCliBackendConfig(),
+          disableTools: true,
+        }),
+      ).rejects.toThrow(
+        "CLI backend native-cli cannot run with tools disabled because it exposes native tools",
+      );
+
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

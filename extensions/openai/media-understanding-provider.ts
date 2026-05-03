@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/media-understanding";
 import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "./default-models.js";
 
-export const DEFAULT_OPENAI_AUDIO_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_OPENAI_AUDIO_BASE_URL = "https://api.openai.com/v1";
 
 export async function transcribeOpenAiAudio(params: AudioTranscriptionRequest) {
   return await transcribeOpenAiCompatibleAudio({
@@ -35,6 +35,7 @@ export const openaiCodexMediaUnderstandingProvider: MediaUnderstandingProvider =
   id: "openai-codex",
   capabilities: ["image"],
   defaultModels: { image: "gpt-5.5" },
+  autoPriority: { image: 20 },
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
 };

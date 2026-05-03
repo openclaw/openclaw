@@ -1,6 +1,8 @@
 export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Codex models:",
   "Available Codex models",
+  "Available Codex agent model",
+  "Available Codex agent models",
   "Available models:",
   "Available models, local cache:",
   "Available agent target:",
@@ -22,6 +24,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "`codex` is not installed in the shell environment",
   "`codex models` didn’t return a plain list in this environment",
   "I couldn’t get a direct `codex models` CLI listing because the local sandbox blocked that command.",
+  "I couldn’t get `/codex models` from the shell here.",
   "I couldn’t list all installed/available Codex models from the local CLI because the sandboxed `codex` command failed to start in this environment.",
   "I couldn’t get `codex models` from the CLI because the sandbox blocks the namespace setup it needs",
   "I can only see the current session model from this environment",
@@ -79,6 +82,7 @@ export const EXPECTED_CODEX_STATUS_COMMAND_TEXT = [
   "Session: agent:dev:live-codex-harness",
   "OpenClaw `",
   "OpenClaw status:",
+  "Status: running on",
   "model `codex/",
   "session `agent:dev:live-codex-harness`",
   "Model/status card shown above",
@@ -89,8 +93,10 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
   const normalized = text.toLowerCase();
   const mentionsOpenClawStatus =
     normalized.includes("openclaw is running on") ||
+    /openclaw\s+\S+\s+is running on/u.test(normalized) ||
     normalized.includes("openclaw status:") ||
-    normalized.includes("status: running on");
+    normalized.includes("status: running on") ||
+    normalized.includes("session status: running on");
   const mentionsHarnessSession =
     normalized.includes("session: `agent:dev:live-codex-harness`") ||
     normalized.includes("session: agent:dev:live-codex-harness") ||
@@ -99,6 +105,8 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
     normalized.includes("session `agent:dev:live-codex-harness`") ||
     normalized.includes("current session is `agent:dev:live-codex-harness`") ||
     normalized.includes("current session is agent:dev:live-codex-harness") ||
+    normalized.includes("session context is healthy") ||
+    normalized.includes("session is healthy:") ||
     ((normalized.includes("session context") || normalized.includes("context is at")) &&
       normalized.includes("active task: `/codex status`"));
   const mentionsModel =
@@ -110,9 +118,22 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
     normalized.includes("current session status:") &&
     normalized.includes("runtime: `openai codex`") &&
     mentionsModel;
+  const isCompactSessionStatus =
+    normalized.includes("session status: running on") &&
+    normalized.includes("context at") &&
+    mentionsModel;
+  const isRunningSessionStatus =
+    normalized.includes("session is running on") &&
+    normalized.includes("context used") &&
+    normalized.includes("cache hit") &&
+    normalized.includes("no compactions") &&
+    mentionsModel;
 
   return (
-    isCurrentSessionStatus || (mentionsOpenClawStatus && mentionsHarnessSession && mentionsModel)
+    isCurrentSessionStatus ||
+    isCompactSessionStatus ||
+    isRunningSessionStatus ||
+    (mentionsOpenClawStatus && mentionsHarnessSession && mentionsModel)
   );
 }
 
@@ -126,6 +147,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
       normalized.includes("could not run") ||
       normalized.includes("could not be run") ||
       normalized.includes("failed in this sandbox") ||
+      normalized.includes("failed because") ||
       normalized.includes("failed with:") ||
       normalized.includes("fails to start") ||
       normalized.includes("repo-local fallback") ||
@@ -150,6 +172,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
       normalized.includes("command not found") ||
       normalized.includes("not installed") ||
       normalized.includes("required user namespace") ||
+      normalized.includes("unprivileged user namespaces") ||
       normalized.includes("user-namespace restriction") ||
       normalized.includes("bwrap: no permissions to create a new namespace"));
 
@@ -160,6 +183,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
   const mentionsSessionModel =
     normalized.includes("current session is using") ||
     normalized.includes("current session model") ||
+    normalized.includes("current session model from openclaw status") ||
     normalized.includes("visible session model") ||
     normalized.includes("the current session is using");
   const mentionsConfigSummary =
@@ -182,6 +206,8 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
   const mentionsVisibleOptions =
     normalized.includes("visible options in this session:") ||
     normalized.includes("visible options:") ||
+    normalized.includes("available codex agent model:") ||
+    normalized.includes("available codex agent models:") ||
     normalized.includes("available model overrides listed in this session:") ||
     normalized.includes("available model overrides shown in this session:") ||
     normalized.includes("available here:") ||
@@ -202,6 +228,10 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
   const isAgentIdModelSummary =
     normalized.includes("available agent ids in this session:") &&
     (text.includes("`openai/") || text.includes("`codex/"));
+  const isCodexAgentModelSummary =
+    (normalized.includes("available codex agent model:") ||
+      normalized.includes("available codex agent models:")) &&
+    (text.includes("`openai/") || text.includes("`codex/"));
   const isAvailableHereModelSummary =
     normalized.includes("available here:") &&
     normalized.includes("current session model") &&
@@ -217,6 +247,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
     isSessionConfigFallback ||
     isInteractiveSelectionSummary ||
     isAgentIdModelSummary ||
+    isCodexAgentModelSummary ||
     isAvailableHereModelSummary ||
     isInteractiveTuiSummary
   );

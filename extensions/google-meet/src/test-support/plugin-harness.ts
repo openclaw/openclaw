@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { vi } from "vitest";
-import { createTestPluginApi } from "../../../../test/helpers/plugins/plugin-api.ts";
 
 type GoogleMeetTestPluginEntry = {
   register(api: OpenClawPluginApi): void;
@@ -13,7 +13,7 @@ export const noopLogger = {
   debug: vi.fn(),
 };
 
-export type GoogleMeetTestNodeListResult = {
+type GoogleMeetTestNodeListResult = {
   nodes: Array<{
     nodeId: string;
     displayName?: string;
@@ -60,6 +60,7 @@ export function setupGoogleMeetPlugin(
       argv: string[],
       options?: { timeoutMs?: number },
     ) => Promise<CommandResult>;
+    registerPlatform?: NodeJS.Platform;
   } = {},
 ) {
   const methods = new Map<string, unknown>();
@@ -157,7 +158,16 @@ export function setupGoogleMeetPlugin(
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
   });
-  plugin.register(api);
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: options.registerPlatform ?? "darwin",
+  });
+  try {
+    plugin.register(api);
+  } finally {
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+  }
   return {
     cliRegistrations,
     methods,

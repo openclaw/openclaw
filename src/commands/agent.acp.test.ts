@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import "./agent-command.test-mocks.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
@@ -375,6 +375,16 @@ describe("agentCommand ACP runtime routing", () => {
         { text: "book", delta: "ok" },
       ]);
       expect(repeated.logLines.some((line) => line.includes("book"))).toBe(true);
+    });
+  });
+
+  it("keeps no-reply ACP turns silent", async () => {
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents(["NO_REPLY"]);
+
+      expect(assistantEvents.map((event) => event.text).filter(Boolean)).toEqual([]);
+      expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
+      expect(logLines).toEqual([]);
     });
   });
 

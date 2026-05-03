@@ -1,6 +1,9 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { collectDoctorPreviewWarnings } from "./preview-warnings.js";
+import {
+  collectDoctorPreviewWarnings,
+  collectVisibleReplyToolPolicyWarnings,
+} from "./preview-warnings.js";
 
 type TestManifestRecord = {
   id: string;
@@ -361,5 +364,129 @@ describe("doctor preview warnings", () => {
       ),
     ]);
     expect(warnings[0]).not.toContain("first-time setup mode");
+  });
+
+  it("keeps global plugin-disable blocker warnings but omits stale plugin cleanup warnings", async () => {
+    manifestState.plugins = [channelManifest("telegram", "telegram")];
+
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            groupPolicy: "allowlist",
+          },
+        },
+        plugins: {
+          enabled: false,
+          allow: ["acpx"],
+          entries: {
+            acpx: { enabled: true },
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
+      ),
+    ]);
+    expect(warnings.join("\n")).not.toContain("stale plugin reference");
+  });
+
+  it("warns softly when default group visible replies need an unavailable message tool", () => {
+    const warnings = collectVisibleReplyToolPolicyWarnings({
+      channels: {
+        slack: {},
+      },
+      tools: {
+        allow: ["read"],
+      },
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('messages.groupChat.visibleReplies defaults to "message_tool"'),
+    ]);
+    expect(warnings[0]).toContain("message tool is unavailable");
+    expect(warnings[0]).toContain("falls back to automatic group/channel replies");
+  });
+
+  it("warns strongly when explicit group visible replies require an unavailable message tool", () => {
+    const warnings = collectVisibleReplyToolPolicyWarnings({
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
+      tools: {
+        profile: "coding",
+      },
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('messages.groupChat.visibleReplies is set to "message_tool"'),
+    ]);
+    expect(warnings[0]).toContain("normal replies may post to the source chat");
+    expect(warnings[0]).toContain('set messages.groupChat.visibleReplies to "automatic"');
+  });
+
+  it("warns for direct chats when global visible replies are tool-only but groups override automatic", () => {
+    const warnings = collectVisibleReplyToolPolicyWarnings({
+      messages: {
+        visibleReplies: "message_tool",
+        groupChat: {
+          visibleReplies: "automatic",
+        },
+      },
+      tools: {
+        allow: ["read"],
+      },
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('messages.visibleReplies is set to "message_tool"'),
+    ]);
+    expect(warnings[0]).toContain("automatic direct-chat replies");
+  });
+
+  it("warns separately for explicit global and group visible reply policy mismatches", () => {
+    const warnings = collectVisibleReplyToolPolicyWarnings({
+      messages: {
+        visibleReplies: "message_tool",
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
+      tools: {
+        allow: ["read"],
+      },
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('messages.groupChat.visibleReplies is set to "message_tool"'),
+      expect.stringContaining('messages.visibleReplies is set to "message_tool"'),
+    ]);
+  });
+
+  it("skips visible reply tool warnings when the message tool is available or default groups are unused", () => {
+    expect(
+      collectVisibleReplyToolPolicyWarnings({
+        channels: {
+          slack: {},
+        },
+        tools: {
+          profile: "messaging",
+        },
+      }),
+    ).toEqual([]);
+    expect(
+      collectVisibleReplyToolPolicyWarnings({
+        tools: {
+          allow: ["read"],
+        },
+      }),
+    ).toEqual([]);
   });
 });

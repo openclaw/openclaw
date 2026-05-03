@@ -1,6 +1,6 @@
+import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
@@ -179,6 +179,22 @@ describe("createTelegramBot", () => {
     expect(throttlerSpy).toHaveBeenCalledTimes(1);
     expect(useSpy).toHaveBeenCalledWith("throttler");
   });
+
+  it("logs middleware errors through grammY catch without rethrowing", () => {
+    const runtime = {
+      error: vi.fn(),
+    } as unknown as NonNullable<TelegramBotOptions["runtime"]>;
+    const bot = createTelegramBot({ token: "tok", runtime });
+    const catchMock = bot.catch as unknown as {
+      mock: { calls: Array<[(err: unknown) => void]> };
+    };
+    const errorHandler = catchMock.mock.calls[0]?.[0];
+
+    expect(errorHandler).toBeTypeOf("function");
+    expect(() => errorHandler?.(new Error("handler boom"))).not.toThrow();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("telegram bot error:"));
+  });
+
   it("uses wrapped fetch when global fetch is available", () => {
     const originalFetch = globalThis.fetch;
     const fetchSpy = vi.fn() as unknown as typeof fetch;
@@ -231,6 +247,58 @@ describe("createTelegramBot", () => {
       }),
     );
   });
+
+  it("keeps low timeoutSeconds above the outbound request guard", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 10 },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 60 }),
+      }),
+    );
+  });
+
+  it("keeps polling client timeout above the outbound request guard", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 10 },
+      },
+    });
+    createTelegramBot({ token: "tok", minimumClientTimeoutSeconds: 45 });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 60 }),
+      }),
+    );
+  });
+
+  it("normalizes full Telegram bot endpoint apiRoot before passing it to grammY", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          apiRoot: "https://api.telegram.org/bot123456:ABC/",
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
+      }),
+    );
+  });
+
   it("sequentializes updates by chat and thread", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
@@ -318,7 +386,7 @@ describe("createTelegramBot", () => {
 
     replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onReplyStart?.();
-      const body = String(ctx.Body ?? "");
+      const body = ctx.Body ?? "";
       startedBodies.push(body);
       if (body.includes("first message")) {
         await firstTurnGate;
@@ -428,7 +496,7 @@ describe("createTelegramBot", () => {
 
     replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onReplyStart?.();
-      const body = String(ctx.Body ?? "");
+      const body = ctx.Body ?? "";
       startedBodies.push(body);
       if (body.includes("first")) {
         await firstRunGate;
@@ -1634,10 +1702,12 @@ describe("createTelegramBot", () => {
             work: {
               botToken: "tok-work",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
           },
         },
@@ -1743,10 +1813,12 @@ describe("createTelegramBot", () => {
             work: {
               botToken: "tok-work",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
           },
         },
@@ -2165,6 +2237,9 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
 
     expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
+    expect(setMyCommandsSpy).toHaveBeenCalledWith([], {
+      scope: { type: "all_group_chats" },
+    });
   });
   it("handles requireMention when mentions do and do not resolve", async () => {
     const cases = [
@@ -3091,7 +3166,7 @@ describe("createTelegramBot", () => {
   it("retries reaction updates after a bubbled enqueue failure", async () => {
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 
@@ -3667,7 +3742,7 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(String(editMessageTextSpy.mock.calls.at(-1)?.[2] ?? "")).toContain(
-      "This model will be used for your next message.",
+      "Session-only selection. The agent default in openclaw.json is unchanged",
     );
     expect(
       editMessageTextSpy.mock.calls.some((call) =>

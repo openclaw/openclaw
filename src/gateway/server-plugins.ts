@@ -2,9 +2,8 @@ import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -44,17 +43,40 @@ const getFallbackGatewayContextState = () =>
     resolveContext: undefined,
   }));
 
-export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
+export function setFallbackGatewayContext(ctx: GatewayRequestContext): () => void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.context = ctx;
   fallbackGatewayContextState.resolveContext = undefined;
+  return () => {
+    const currentFallbackGatewayContextState = getFallbackGatewayContextState();
+    if (
+      currentFallbackGatewayContextState.context === ctx &&
+      currentFallbackGatewayContextState.resolveContext === undefined
+    ) {
+      currentFallbackGatewayContextState.context = undefined;
+    }
+  };
 }
 
 export function setFallbackGatewayContextResolver(
   resolveContext: () => GatewayRequestContext | undefined,
-): void {
+): () => void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
+  fallbackGatewayContextState.context = undefined;
   fallbackGatewayContextState.resolveContext = resolveContext;
+  return () => {
+    const currentFallbackGatewayContextState = getFallbackGatewayContextState();
+    if (currentFallbackGatewayContextState.resolveContext === resolveContext) {
+      currentFallbackGatewayContextState.context = undefined;
+      currentFallbackGatewayContextState.resolveContext = undefined;
+    }
+  };
+}
+
+export function clearFallbackGatewayContext(): void {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
+  fallbackGatewayContextState.context = undefined;
+  fallbackGatewayContextState.resolveContext = undefined;
 }
 
 function getFallbackGatewayContext(): GatewayRequestContext | undefined {
@@ -508,7 +530,6 @@ export function loadGatewayPlugins(params: {
   pluginLookUpTable?: PluginLookUpTable;
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
-  bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
 }) {
   const activationAutoEnabled =
     params.activationSourceConfig !== undefined
@@ -554,6 +575,7 @@ export function loadGatewayPlugins(params: {
     ).startup.pluginIds,
   ];
   if (pluginIds.length === 0) {
+    clearActivatedPluginRuntimeState();
     const pluginRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
     return {
@@ -580,7 +602,10 @@ export function loadGatewayPlugins(params: {
       allowGatewaySubagentBinding: true,
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
-    bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
+    preferBuiltPluginArtifacts: true,
+    ...(params.pluginLookUpTable?.manifestRegistry
+      ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
+      : {}),
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));

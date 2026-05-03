@@ -32,12 +32,14 @@ type SessionActionContext = {
   updateAutocompleteProvider: () => void;
   setActivityStatus: (text: string) => void;
   clearLocalRunIds?: () => void;
+  rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
 };
 
 type SessionInfoDefaults = {
   model?: string | null;
   modelProvider?: string | null;
   contextTokens?: number | null;
+  thinkingLevels?: Array<{ id: string; label: string }>;
 };
 
 type SessionInfoEntry = SessionInfo & {
@@ -62,6 +64,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
+    rememberSessionKey,
   } = context;
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
@@ -167,6 +170,9 @@ export function createSessionActions(context: SessionActionContext) {
     const next = { ...state.sessionInfo };
     if (entry?.thinkingLevel !== undefined) {
       next.thinkingLevel = entry.thinkingLevel;
+    }
+    if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
+      next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
     }
     if (entry?.fastMode !== undefined) {
       next.fastMode = entry.fastMode;
@@ -358,6 +364,7 @@ export function createSessionActions(context: SessionActionContext) {
         }
       }
       state.historyLoaded = true;
+      void rememberSessionKey?.(state.currentSessionKey);
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }

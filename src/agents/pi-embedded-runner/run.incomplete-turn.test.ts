@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "./delivery-evidence.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -18,7 +19,6 @@ import {
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   EMPTY_RESPONSE_RETRY_INSTRUCTION,
   extractPlanningOnlyPlanDetails,
-  hasCommittedUserVisibleToolDelivery,
   isLikelyExecutionAckPrompt,
   PLANNING_ONLY_RETRY_INSTRUCTION,
   REASONING_ONLY_RETRY_INSTRUCTION,
@@ -437,6 +437,9 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    const onlyCall = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as { prompt?: string };
+    expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(mockedLog.warn).not.toHaveBeenCalledWith(
       expect.stringContaining("reasoning-only assistant turn detected"),
     );
@@ -1342,20 +1345,30 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toContain("verify before retrying");
   });
 
-  it("does not treat empty committed messaging arrays as user-visible delivery", () => {
+  it("does not treat empty committed messaging arrays as delivery", () => {
     expect(
-      hasCommittedUserVisibleToolDelivery({
+      hasCommittedMessagingToolDeliveryEvidence({
         messagingToolSentTexts: ["  "],
         messagingToolSentMediaUrls: [],
       }),
     ).toBe(false);
   });
 
-  it("treats committed messaging media as user-visible delivery", () => {
+  it("treats committed messaging media as delivery", () => {
     expect(
-      hasCommittedUserVisibleToolDelivery({
+      hasCommittedMessagingToolDeliveryEvidence({
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+      }),
+    ).toBe(true);
+  });
+
+  it("treats committed messaging targets as delivery", () => {
+    expect(
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
       }),
     ).toBe(true);
   });
@@ -1378,6 +1391,18 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         didSendViaMessagingTool: false,
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("treats committed messaging targets as replay-invalid side effect metadata", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
       }),
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
@@ -1681,6 +1706,9 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    const onlyCall = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as { prompt?: string };
+    expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
     expect(result.meta.terminalReplyKind).toBe("silent-empty");
     expect(result.meta.livenessState).toBe("working");
@@ -1871,7 +1899,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
       }),
-      clientToolCall: null,
+      clientToolCalls: undefined,
       yieldDetected: false,
       didSendDeterministicApprovalPrompt: false,
       didSendViaMessagingTool: false,

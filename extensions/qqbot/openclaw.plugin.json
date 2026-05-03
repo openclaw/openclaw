@@ -1,6 +1,12 @@
 {
   "id": "qqbot",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["qqbot"],
+  "contracts": {
+    "tools": ["qqbot_channel_api", "qqbot_remind"]
+  },
   "channelEnvVars": {
     "qqbot": ["QQBOT_APP_ID", "QQBOT_CLIENT_SECRET"]
   },

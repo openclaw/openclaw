@@ -124,13 +124,43 @@ export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   queueDepth?: number;
 };
 
-export type DiagnosticSessionStuckEvent = DiagnosticBaseEvent & {
-  type: "session.stuck";
+export type DiagnosticSessionActiveWorkKind = "embedded_run" | "model_call" | "tool_call";
+
+export type DiagnosticSessionAttentionClassification =
+  | "long_running"
+  | "blocked_tool_call"
+  | "stalled_agent_run"
+  | "stale_session_state";
+
+type DiagnosticSessionAttentionBaseEvent = DiagnosticBaseEvent & {
   sessionKey?: string;
   sessionId?: string;
   state: DiagnosticSessionState;
   ageMs: number;
   queueDepth?: number;
+  reason?: string;
+  classification: DiagnosticSessionAttentionClassification;
+  activeWorkKind?: DiagnosticSessionActiveWorkKind;
+  lastProgressAgeMs?: number;
+  lastProgressReason?: string;
+  activeToolName?: string;
+  activeToolCallId?: string;
+  activeToolAgeMs?: number;
+};
+
+export type DiagnosticSessionLongRunningEvent = DiagnosticSessionAttentionBaseEvent & {
+  type: "session.long_running";
+  classification: "long_running";
+};
+
+export type DiagnosticSessionStalledEvent = DiagnosticSessionAttentionBaseEvent & {
+  type: "session.stalled";
+  classification: "blocked_tool_call" | "stalled_agent_run";
+};
+
+export type DiagnosticSessionStuckEvent = DiagnosticSessionAttentionBaseEvent & {
+  type: "session.stuck";
+  classification: "stale_session_state";
 };
 
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
@@ -154,6 +184,14 @@ export type DiagnosticRunAttemptEvent = DiagnosticBaseEvent & {
   attempt: number;
 };
 
+export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
+  type: "run.progress";
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  reason: string;
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -161,6 +199,24 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
     processed: number;
     errors: number;
   };
+  active: number;
+  waiting: number;
+  queued: number;
+};
+
+export type DiagnosticLivenessWarningReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
+
+export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
+  type: "diagnostic.liveness.warning";
+  reasons: DiagnosticLivenessWarningReason[];
+  intervalMs: number;
+  eventLoopDelayP99Ms?: number;
+  eventLoopDelayMaxMs?: number;
+  eventLoopUtilization?: number;
+  cpuUserMs?: number;
+  cpuSystemMs?: number;
+  cpuTotalMs?: number;
+  cpuCoreRatio?: number;
   active: number;
   waiting: number;
   queued: number;
@@ -213,6 +269,12 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   durationMs: number;
   errorCategory: string;
   errorCode?: string;
+};
+
+export type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.blocked";
+  deniedReason: string;
+  reason: string;
 };
 
 export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
@@ -430,15 +492,20 @@ export type DiagnosticEventPayload =
   | DiagnosticMessageDeliveryCompletedEvent
   | DiagnosticMessageDeliveryErrorEvent
   | DiagnosticSessionStateEvent
+  | DiagnosticSessionLongRunningEvent
+  | DiagnosticSessionStalledEvent
   | DiagnosticSessionStuckEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
+  | DiagnosticRunProgressEvent
   | DiagnosticHeartbeatEvent
+  | DiagnosticLivenessWarningEvent
   | DiagnosticToolLoopEvent
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
   | DiagnosticToolExecutionErrorEvent
+  | DiagnosticToolExecutionBlockedEvent
   | DiagnosticExecProcessCompletedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
@@ -499,6 +566,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "run.progress",
   "harness.run.started",
   "harness.run.completed",
   "harness.run.error",

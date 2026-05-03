@@ -47,10 +47,25 @@ Notes:
 - `models list` is read-only: it reads config, auth profiles, existing catalog
   state, and provider-owned catalog rows, but it does not rewrite
   `models.json`.
+- The `Auth` column is provider-level and read-only. It is computed from local
+  auth profile metadata, env markers, configured provider keys, local-provider
+  markers, AWS Bedrock env/profile markers, and plugin synthetic-auth metadata;
+  it does not load provider runtime, read keychain secrets, call provider
+  APIs, or prove exact per-model execution readiness.
 - `models list --all --provider <id>` can include provider-owned static catalog
   rows from plugin manifests or bundled provider catalog metadata even when you
   have not authenticated with that provider yet. Those rows still show as
   unavailable until matching auth is configured.
+- `models list` keeps the control plane responsive while provider catalog
+  discovery is slow. The default and configured views fall back to configured or
+  synthetic model rows after a short wait and let discovery finish in the
+  background. Use `--all` when you need the exact full discovered catalog and
+  are willing to wait for provider discovery.
+- Broad `models list --all` merges manifest catalog rows over registry rows
+  without loading provider runtime supplement hooks. Provider-filtered manifest
+  fast paths use only providers marked `static`; providers marked `refreshable`
+  stay registry/cache-backed and append manifest rows as supplements, while
+  providers marked `runtime` stay on registry/runtime discovery.
 - `models list` keeps native model metadata and runtime caps distinct. In table
   output, `Ctx` shows `contextTokens/contextWindow` when an effective runtime
   cap differs from the native context window; JSON rows include `contextTokens`

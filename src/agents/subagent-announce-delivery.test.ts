@@ -498,7 +498,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "steered",
       }),
     );
-    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith("requester-session-1", "child done");
+    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith("requester-session-1", "child done", {
+      steeringMode: "all",
+      debounceMs: 500,
+    });
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -704,7 +707,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "direct-fallback",
       }),
     );
-    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith("requester-session-telegram", "child done");
+    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith(
+      "requester-session-telegram",
+      "child done",
+      {
+        steeringMode: "all",
+        debounceMs: 500,
+      },
+    );
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -817,6 +827,45 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-dm-fallback-empty",
       }),
     );
+  });
+
+  it("does not fallback when announce-agent delivered media through the message tool", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentMediaUrls: ["/tmp/generated-night-drive.mp3"],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music through the message tool.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("uses a direct channel fallback when announce-agent returns no visible output", async () => {

@@ -13,19 +13,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planManifestModelCatalogRows, type ModelCatalogCost } from "../model-catalog/index.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
   PluginManifestModelPricingModelIdTransform,
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
-import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
-import {
-  loadPluginRegistrySnapshot,
-  type PluginRegistrySnapshot,
-} from "../plugins/plugin-registry.js";
-import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
@@ -35,6 +31,7 @@ import {
   type CachedModelPricing,
   type CachedPricingTier,
 } from "./model-pricing-cache-state.js";
+import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
 
 type OpenRouterPricingEntry = {
   id: string;
@@ -53,6 +50,17 @@ type OpenRouterModelPayload = {
   pricing?: unknown;
 };
 
+type GatewayModelPricingRefreshParams = {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  pluginLookUpTable?: PluginMetadataRegistryView;
+  manifestRegistry?: PluginManifestRegistry;
+  signal?: AbortSignal;
+};
+
 type ExternalPricingPolicy = {
   external: boolean;
   openRouter?: ExternalPricingSourcePolicy;
@@ -66,6 +74,11 @@ type ExternalPricingSourcePolicy = {
 };
 
 export { getCachedGatewayModelPricing };
+
+type PricingModelNormalizationOptions = {
+  allowManifestNormalization: boolean;
+  allowPluginNormalization: boolean;
+};
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const LITELLM_PRICING_URL =
@@ -84,6 +97,16 @@ function clearRefreshTimer(): void {
   }
   clearTimeout(refreshTimer);
   refreshTimer = null;
+}
+
+function getPricingModelNormalizationOptions(
+  config: OpenClawConfig,
+): PricingModelNormalizationOptions {
+  const allowPluginBackedNormalization = config.plugins?.enabled !== false;
+  return {
+    allowManifestNormalization: allowPluginBackedNormalization,
+    allowPluginNormalization: allowPluginBackedNormalization,
+  };
 }
 
 function listLikeFallbacks(value: ModelListLike): string[] {
@@ -129,6 +152,11 @@ function isTimeoutError(error: unknown): boolean {
     return true;
   }
   return /\bTimeoutError\b/u.test(String(error));
+}
+
+function createPricingFetchSignal(signal: AbortSignal | undefined): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
 
 function formatPricingFetchFailure(source: "LiteLLM" | "OpenRouter", error: unknown): string {
@@ -314,10 +342,13 @@ function parseLiteLLMPricing(entry: LiteLLMModelEntry): CachedModelPricing | nul
 
 type LiteLLMPricingCatalog = Map<string, CachedModelPricing>;
 
-async function fetchLiteLLMPricingCatalog(fetchImpl: typeof fetch): Promise<LiteLLMPricingCatalog> {
+async function fetchLiteLLMPricingCatalog(
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<LiteLLMPricingCatalog> {
   const response = await fetchImpl(LITELLM_PRICING_URL, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    signal: createPricingFetchSignal(signal),
   });
   if (!response.ok) {
     throw new Error(`LiteLLM pricing fetch failed: HTTP ${response.status}`);
@@ -385,15 +416,19 @@ function filterActiveManifestRegistry(params: {
 
 function resolveModelPricingManifestMetadata(params: {
   config: OpenClawConfig;
-  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  pluginLookUpTable?: PluginMetadataRegistryView;
   manifestRegistry?: PluginManifestRegistry;
 }): ModelPricingManifestMetadata {
-  if (params.pluginLookUpTable) {
+  const metadataSnapshot = params.pluginMetadataSnapshot ?? params.pluginLookUpTable;
+  if (metadataSnapshot) {
     return {
-      allRegistry: params.pluginLookUpTable.manifestRegistry,
+      allRegistry: metadataSnapshot.manifestRegistry,
       activeRegistry: filterActiveManifestRegistry({
-        registry: params.pluginLookUpTable.manifestRegistry,
-        index: params.pluginLookUpTable.index,
+        registry: metadataSnapshot.manifestRegistry,
+        index: metadataSnapshot.index,
         config: params.config,
       }),
     };
@@ -404,17 +439,23 @@ function resolveModelPricingManifestMetadata(params: {
       activeRegistry: params.manifestRegistry,
     };
   }
-  const index = loadPluginRegistrySnapshot({ config: params.config });
-  const allRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
+  if (params.config.plugins?.enabled === false) {
+    const emptyRegistry: PluginManifestRegistry = { plugins: [], diagnostics: [] };
+    return {
+      allRegistry: emptyRegistry,
+      activeRegistry: emptyRegistry,
+    };
+  }
+  const snapshot = loadPluginMetadataSnapshot({
     config: params.config,
-    includeDisabled: true,
+    env: params.env ?? process.env,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   return {
-    allRegistry,
+    allRegistry: snapshot.manifestRegistry,
     activeRegistry: filterActiveManifestRegistry({
-      registry: allRegistry,
-      index,
+      registry: snapshot.manifestRegistry,
+      index: snapshot.index,
       config: params.config,
     }),
   };
@@ -472,7 +513,13 @@ function applyModelIdTransforms(
   return [...variants];
 }
 
-function canonicalizeOpenRouterLookupId(id: string): string {
+function canonicalizeOpenRouterLookupId(
+  id: string,
+  options: PricingModelNormalizationOptions = {
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+  },
+): string {
   const trimmed = id.trim();
   if (!trimmed) {
     return "";
@@ -481,19 +528,18 @@ function canonicalizeOpenRouterLookupId(id: string): string {
   if (slash === -1) {
     return trimmed;
   }
-  const provider = normalizeModelRef(trimmed.slice(0, slash), "placeholder").provider;
+  const provider = normalizeModelRef(trimmed.slice(0, slash), "placeholder", {
+    allowManifestNormalization: options.allowManifestNormalization,
+    allowPluginNormalization: options.allowPluginNormalization,
+  }).provider;
   const model = trimmed.slice(slash + 1).trim();
   if (!model) {
     return provider;
   }
-  const normalizedModel =
-    normalizeProviderModelIdWithPlugin({
-      provider,
-      context: {
-        provider,
-        modelId: model,
-      },
-    }) ?? model;
+  const normalizedModel = normalizeModelRef(provider, model, {
+    allowManifestNormalization: options.allowManifestNormalization,
+    allowPluginNormalization: options.allowPluginNormalization,
+  }).model;
   return modelKey(provider, normalizedModel);
 }
 
@@ -502,6 +548,8 @@ function buildExternalCatalogCandidates(params: {
   source: "openRouter" | "liteLLM";
   policies: ReadonlyMap<string, ExternalPricingPolicy>;
   seen?: Set<string>;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
 }): string[] {
   const { ref, source, policies } = params;
   const refKey = modelKey(ref.provider, ref.model);
@@ -529,17 +577,29 @@ function buildExternalCatalogCandidates(params: {
 
   for (const model of applyModelIdTransforms(ref.model, transforms)) {
     const candidate = modelKey(provider, model);
-    candidates.add(source === "openRouter" ? canonicalizeOpenRouterLookupId(candidate) : candidate);
+    candidates.add(
+      source === "openRouter"
+        ? canonicalizeOpenRouterLookupId(candidate, {
+            allowManifestNormalization: params.allowManifestNormalization ?? true,
+            allowPluginNormalization: params.allowPluginNormalization ?? true,
+          })
+        : candidate,
+    );
   }
 
   if (sourcePolicy?.passthroughProviderModel && ref.model.includes("/")) {
-    const nestedRef = parseModelRef(ref.model, DEFAULT_PROVIDER);
+    const nestedRef = parseModelRef(ref.model, DEFAULT_PROVIDER, {
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
     if (nestedRef) {
       for (const candidate of buildExternalCatalogCandidates({
         ref: nestedRef,
         source,
         policies,
         seen: nextSeen,
+        allowManifestNormalization: params.allowManifestNormalization,
+        allowPluginNormalization: params.allowPluginNormalization,
       })) {
         candidates.add(candidate);
       }
@@ -553,6 +613,8 @@ function addResolvedModelRef(params: {
   raw: string | undefined;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   refs: Map<string, ModelRef>;
+  allowManifestNormalization: boolean;
+  allowPluginNormalization: boolean;
 }): void {
   const raw = params.raw?.trim();
   if (!raw) {
@@ -562,11 +624,16 @@ function addResolvedModelRef(params: {
     raw,
     defaultProvider: DEFAULT_PROVIDER,
     aliasIndex: params.aliasIndex,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
   if (!resolved) {
     return;
   }
-  const normalized = normalizeModelRef(resolved.ref.provider, resolved.ref.model);
+  const normalized = normalizeModelRef(resolved.ref.provider, resolved.ref.model, {
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
+  });
   params.refs.set(modelKey(normalized.provider, normalized.model), normalized);
 }
 
@@ -574,17 +641,23 @@ function addModelListLike(params: {
   value: ModelListLike;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   refs: Map<string, ModelRef>;
+  allowManifestNormalization: boolean;
+  allowPluginNormalization: boolean;
 }): void {
   addResolvedModelRef({
     raw: resolvePrimaryStringValue(params.value),
     aliasIndex: params.aliasIndex,
     refs: params.refs,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
   for (const fallback of listLikeFallbacks(params.value)) {
     addResolvedModelRef({
       raw: fallback,
       aliasIndex: params.aliasIndex,
       refs: params.refs,
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
     });
   }
 }
@@ -593,13 +666,18 @@ function addProviderModelPair(params: {
   provider: string | undefined;
   model: string | undefined;
   refs: Map<string, ModelRef>;
+  allowManifestNormalization: boolean;
+  allowPluginNormalization: boolean;
 }): void {
   const provider = params.provider?.trim();
   const model = params.model?.trim();
   if (!provider || !model) {
     return;
   }
-  const normalized = normalizeModelRef(provider, model);
+  const normalized = normalizeModelRef(provider, model, {
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
+  });
   params.refs.set(modelKey(normalized.provider, normalized.model), normalized);
 }
 
@@ -608,6 +686,8 @@ function addConfiguredWebSearchPluginModels(params: {
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   refs: Map<string, ModelRef>;
   manifestRegistry: PluginManifestRegistry;
+  allowManifestNormalization: boolean;
+  allowPluginNormalization: boolean;
 }): void {
   for (const pluginId of params.manifestRegistry.plugins
     .filter((plugin) => (plugin.contracts?.webSearchProviders ?? []).length > 0)
@@ -617,6 +697,8 @@ function addConfiguredWebSearchPluginModels(params: {
       raw: resolvePluginWebSearchConfig(params.config, pluginId)?.model as string | undefined,
       aliasIndex: params.aliasIndex,
       refs: params.refs,
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
     });
   }
 }
@@ -660,10 +742,17 @@ function isPrivateOrLoopbackBaseUrl(baseUrl: string | undefined): boolean {
 function findConfiguredProviderModel(
   config: OpenClawConfig,
   ref: ModelRef,
+  options: PricingModelNormalizationOptions = {
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+  },
 ): ModelDefinitionConfig | undefined {
   const providerConfig = config.models?.providers?.[ref.provider];
   return providerConfig?.models?.find((model) => {
-    const normalized = normalizeModelRef(ref.provider, model.id);
+    const normalized = normalizeModelRef(ref.provider, model.id, {
+      allowManifestNormalization: options.allowManifestNormalization,
+      allowPluginNormalization: options.allowPluginNormalization,
+    });
     return modelKey(normalized.provider, normalized.model) === modelKey(ref.provider, ref.model);
   });
 }
@@ -671,13 +760,24 @@ function findConfiguredProviderModel(
 function getConfiguredModelPricing(
   config: OpenClawConfig,
   ref: ModelRef,
+  options: PricingModelNormalizationOptions = {
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+  },
 ): CachedModelPricing | undefined {
-  return toCachedModelPricing(findConfiguredProviderModel(config, ref)?.cost);
+  return toCachedModelPricing(findConfiguredProviderModel(config, ref, options)?.cost);
 }
 
-function hasPrivateOrLoopbackConfiguredEndpoint(config: OpenClawConfig, ref: ModelRef): boolean {
+function hasPrivateOrLoopbackConfiguredEndpoint(
+  config: OpenClawConfig,
+  ref: ModelRef,
+  options: PricingModelNormalizationOptions = {
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+  },
+): boolean {
   const providerConfig = config.models?.providers?.[ref.provider];
-  const model = findConfiguredProviderModel(config, ref);
+  const model = findConfiguredProviderModel(config, ref, options);
   return (
     isPrivateOrLoopbackBaseUrl(model?.baseUrl) ||
     isPrivateOrLoopbackBaseUrl(providerConfig?.baseUrl)
@@ -689,11 +789,18 @@ function shouldFetchExternalPricingForRef(params: {
   ref: ModelRef;
   policies: ReadonlyMap<string, ExternalPricingPolicy>;
   seededPricing: ReadonlyMap<string, CachedModelPricing>;
+  allowManifestNormalization: boolean;
+  allowPluginNormalization: boolean;
 }): boolean {
   if (params.seededPricing.has(modelKey(params.ref.provider, params.ref.model))) {
     return false;
   }
-  if (hasPrivateOrLoopbackConfiguredEndpoint(params.config, params.ref)) {
+  if (
+    hasPrivateOrLoopbackConfiguredEndpoint(params.config, params.ref, {
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
+    })
+  ) {
     return false;
   }
   if (params.policies.get(params.ref.provider)?.external === false) {
@@ -707,6 +814,8 @@ function filterExternalPricingRefs(params: {
   refs: ModelRef[];
   policies: ReadonlyMap<string, ExternalPricingPolicy>;
   seededPricing: ReadonlyMap<string, CachedModelPricing>;
+  allowManifestNormalization: boolean;
+  allowPluginNormalization: boolean;
 }): ModelRef[] {
   return params.refs.filter((ref) =>
     shouldFetchExternalPricingForRef({
@@ -714,6 +823,8 @@ function filterExternalPricingRefs(params: {
       ref,
       policies: params.policies,
       seededPricing: params.seededPricing,
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
     }),
   );
 }
@@ -724,29 +835,104 @@ export function collectConfiguredModelPricingRefs(
 ): ModelRef[] {
   const manifestRegistry =
     options.manifestRegistry ?? resolveModelPricingManifestMetadata({ config }).allRegistry;
+  const normalizationOptions = getPricingModelNormalizationOptions(config);
   const refs = new Map<string, ModelRef>();
   const aliasIndex = buildModelAliasIndex({
     cfg: config,
     defaultProvider: DEFAULT_PROVIDER,
+    allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+    allowPluginNormalization: normalizationOptions.allowPluginNormalization,
   });
 
-  addModelListLike({ value: config.agents?.defaults?.model, aliasIndex, refs });
-  addModelListLike({ value: config.agents?.defaults?.imageModel, aliasIndex, refs });
-  addModelListLike({ value: config.agents?.defaults?.pdfModel, aliasIndex, refs });
-  addResolvedModelRef({ raw: config.agents?.defaults?.compaction?.model, aliasIndex, refs });
-  addResolvedModelRef({ raw: config.agents?.defaults?.heartbeat?.model, aliasIndex, refs });
-  addModelListLike({ value: config.tools?.subagents?.model, aliasIndex, refs });
-  addResolvedModelRef({ raw: config.messages?.tts?.summaryModel, aliasIndex, refs });
-  addResolvedModelRef({ raw: config.hooks?.gmail?.model, aliasIndex, refs });
+  addModelListLike({
+    value: config.agents?.defaults?.model,
+    aliasIndex,
+    refs,
+    allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+    allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+  });
+  addModelListLike({
+    value: config.agents?.defaults?.imageModel,
+    aliasIndex,
+    refs,
+    allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+    allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+  });
+  addModelListLike({
+    value: config.agents?.defaults?.pdfModel,
+    aliasIndex,
+    refs,
+    allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+    allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+  });
+  addResolvedModelRef({
+    raw: config.agents?.defaults?.compaction?.model,
+    aliasIndex,
+    refs,
+    allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+    allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+  });
+  addResolvedModelRef({
+    raw: config.agents?.defaults?.heartbeat?.model,
+    aliasIndex,
+    refs,
+    allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+    allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+  });
+  addModelListLike({
+    value: config.tools?.subagents?.model,
+    aliasIndex,
+    refs,
+    allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+    allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+  });
+  addResolvedModelRef({
+    raw: config.messages?.tts?.summaryModel,
+    aliasIndex,
+    refs,
+    allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+    allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+  });
+  addResolvedModelRef({
+    raw: config.hooks?.gmail?.model,
+    aliasIndex,
+    refs,
+    allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+    allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+  });
 
   for (const agent of config.agents?.list ?? []) {
-    addModelListLike({ value: agent.model, aliasIndex, refs });
-    addModelListLike({ value: agent.subagents?.model, aliasIndex, refs });
-    addResolvedModelRef({ raw: agent.heartbeat?.model, aliasIndex, refs });
+    addModelListLike({
+      value: agent.model,
+      aliasIndex,
+      refs,
+      allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+      allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+    });
+    addModelListLike({
+      value: agent.subagents?.model,
+      aliasIndex,
+      refs,
+      allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+      allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+    });
+    addResolvedModelRef({
+      raw: agent.heartbeat?.model,
+      aliasIndex,
+      refs,
+      allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+      allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+    });
   }
 
   for (const mapping of config.hooks?.mappings ?? []) {
-    addResolvedModelRef({ raw: mapping.model, aliasIndex, refs });
+    addResolvedModelRef({
+      raw: mapping.model,
+      aliasIndex,
+      refs,
+      allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+      allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+    });
   }
 
   for (const channelMap of Object.values(config.channels?.modelByChannel ?? {})) {
@@ -758,23 +944,56 @@ export function collectConfiguredModelPricingRefs(
         raw: typeof raw === "string" ? raw : undefined,
         aliasIndex,
         refs,
+        allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+        allowPluginNormalization: normalizationOptions.allowPluginNormalization,
       });
     }
   }
 
-  addConfiguredWebSearchPluginModels({ config, aliasIndex, refs, manifestRegistry });
+  addConfiguredWebSearchPluginModels({
+    config,
+    aliasIndex,
+    refs,
+    manifestRegistry,
+    allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+    allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+  });
 
   for (const entry of config.tools?.media?.models ?? []) {
-    addProviderModelPair({ provider: entry.provider, model: entry.model, refs });
+    addProviderModelPair({
+      provider: entry.provider,
+      model: entry.model,
+      refs,
+      allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+      allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+    });
   }
   for (const entry of config.tools?.media?.image?.models ?? []) {
-    addProviderModelPair({ provider: entry.provider, model: entry.model, refs });
+    addProviderModelPair({
+      provider: entry.provider,
+      model: entry.model,
+      refs,
+      allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+      allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+    });
   }
   for (const entry of config.tools?.media?.audio?.models ?? []) {
-    addProviderModelPair({ provider: entry.provider, model: entry.model, refs });
+    addProviderModelPair({
+      provider: entry.provider,
+      model: entry.model,
+      refs,
+      allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+      allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+    });
   }
   for (const entry of config.tools?.media?.video?.models ?? []) {
-    addProviderModelPair({ provider: entry.provider, model: entry.model, refs });
+    addProviderModelPair({
+      provider: entry.provider,
+      model: entry.model,
+      refs,
+      allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+      allowPluginNormalization: normalizationOptions.allowPluginNormalization,
+    });
   }
 
   return Array.from(refs.values());
@@ -782,10 +1001,11 @@ export function collectConfiguredModelPricingRefs(
 
 async function fetchOpenRouterPricingCatalog(
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<Map<string, OpenRouterPricingEntry>> {
   const response = await fetchImpl(OPENROUTER_MODELS_URL, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    signal: createPricingFetchSignal(signal),
   });
   if (!response.ok) {
     throw new Error(`OpenRouter /models failed: HTTP ${response.status}`);
@@ -810,11 +1030,15 @@ function resolveCatalogPricingForRef(params: {
   policies: ReadonlyMap<string, ExternalPricingPolicy>;
   catalogById: Map<string, OpenRouterPricingEntry>;
   catalogByNormalizedId: Map<string, OpenRouterPricingEntry>;
+  allowManifestNormalization: boolean;
+  allowPluginNormalization: boolean;
 }): CachedModelPricing | undefined {
   const candidates = buildExternalCatalogCandidates({
     ref: params.ref,
     source: "openRouter",
     policies: params.policies,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
   for (const candidate of candidates) {
     const exact = params.catalogById.get(candidate);
@@ -823,7 +1047,10 @@ function resolveCatalogPricingForRef(params: {
     }
   }
   for (const candidate of candidates) {
-    const normalized = canonicalizeOpenRouterLookupId(candidate);
+    const normalized = canonicalizeOpenRouterLookupId(candidate, {
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
     if (!normalized) {
       continue;
     }
@@ -839,11 +1066,15 @@ function resolveLiteLLMPricingForRef(params: {
   ref: ModelRef;
   policies: ReadonlyMap<string, ExternalPricingPolicy>;
   catalog: LiteLLMPricingCatalog;
+  allowManifestNormalization: boolean;
+  allowPluginNormalization: boolean;
 }): CachedModelPricing | undefined {
   for (const candidate of buildExternalCatalogCandidates({
     ref: params.ref,
     source: "liteLLM",
     policies: params.policies,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   })) {
     const pricing = params.catalog.get(candidate);
     if (pricing) {
@@ -853,25 +1084,39 @@ function resolveLiteLLMPricingForRef(params: {
   return undefined;
 }
 
-function scheduleRefresh(params: { config: OpenClawConfig; fetchImpl: typeof fetch }): void {
+function scheduleRefresh(
+  params: GatewayModelPricingRefreshParams & { fetchImpl: typeof fetch },
+): void {
   clearRefreshTimer();
+  if (params.signal?.aborted) {
+    return;
+  }
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
+    if (params.signal?.aborted) {
+      return;
+    }
     void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
       log.warn(`pricing refresh failed: ${String(error)}`);
     });
   }, CACHE_TTL_MS);
+  refreshTimer.unref?.();
 }
 
 function collectSeededPricing(params: {
   config: OpenClawConfig;
   refs: readonly ModelRef[];
   catalogPricing: ReadonlyMap<string, CachedModelPricing>;
+  allowManifestNormalization: boolean;
+  allowPluginNormalization: boolean;
 }): Map<string, CachedModelPricing> {
   const seeded = new Map<string, CachedModelPricing>();
   for (const ref of params.refs) {
     const key = modelKey(ref.provider, ref.model);
-    const configuredPricing = getConfiguredModelPricing(params.config, ref);
+    const configuredPricing = getConfiguredModelPricing(params.config, ref, {
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
     if (configuredPricing) {
       seeded.set(key, configuredPricing);
       continue;
@@ -884,12 +1129,16 @@ function collectSeededPricing(params: {
   return seeded;
 }
 
-export async function refreshGatewayModelPricingCache(params: {
-  config: OpenClawConfig;
-  fetchImpl?: typeof fetch;
-  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
-  manifestRegistry?: PluginManifestRegistry;
-}): Promise<void> {
+export async function refreshGatewayModelPricingCache(
+  params: GatewayModelPricingRefreshParams,
+): Promise<void> {
+  if (!isGatewayModelPricingEnabled(params.config)) {
+    clearRefreshTimer();
+    return;
+  }
+  if (params.signal?.aborted) {
+    return;
+  }
   if (inFlightRefresh) {
     return await inFlightRefresh;
   }
@@ -897,9 +1146,13 @@ export async function refreshGatewayModelPricingCache(params: {
   inFlightRefresh = (async () => {
     const manifestMetadata = resolveModelPricingManifestMetadata({
       config: params.config,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       pluginLookUpTable: params.pluginLookUpTable,
       manifestRegistry: params.manifestRegistry,
     });
+    const normalizationOptions = getPricingModelNormalizationOptions(params.config);
     const pricingContext = loadManifestPricingContext(manifestMetadata.activeRegistry);
     const allRefs = collectConfiguredModelPricingRefs(params.config, {
       manifestRegistry: manifestMetadata.allRegistry,
@@ -908,14 +1161,21 @@ export async function refreshGatewayModelPricingCache(params: {
       config: params.config,
       refs: allRefs,
       catalogPricing: pricingContext.catalogPricing,
+      allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+      allowPluginNormalization: normalizationOptions.allowPluginNormalization,
     });
     const refs = filterExternalPricingRefs({
       config: params.config,
       refs: allRefs,
       policies: pricingContext.policies,
       seededPricing,
+      allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+      allowPluginNormalization: normalizationOptions.allowPluginNormalization,
     });
     if (refs.length === 0) {
+      if (params.signal?.aborted) {
+        return;
+      }
       replaceGatewayModelPricingCache(seededPricing);
       clearRefreshTimer();
       return;
@@ -926,21 +1186,25 @@ export async function refreshGatewayModelPricingCache(params: {
     let openRouterFailed = false;
     let litellmFailed = false;
     const [catalogById, litellmCatalog] = await Promise.all([
-      fetchOpenRouterPricingCatalog(fetchImpl).catch((error: unknown) => {
+      fetchOpenRouterPricingCatalog(fetchImpl, params.signal).catch((error: unknown) => {
         log.warn(formatPricingFetchFailure("OpenRouter", error));
         openRouterFailed = true;
         return new Map<string, OpenRouterPricingEntry>();
       }),
-      fetchLiteLLMPricingCatalog(fetchImpl).catch((error: unknown) => {
+      fetchLiteLLMPricingCatalog(fetchImpl, params.signal).catch((error: unknown) => {
         log.warn(formatPricingFetchFailure("LiteLLM", error));
         litellmFailed = true;
         return new Map<string, CachedModelPricing>() as LiteLLMPricingCatalog;
       }),
     ]);
 
+    if (params.signal?.aborted) {
+      return;
+    }
+
     const catalogByNormalizedId = new Map<string, OpenRouterPricingEntry>();
     for (const entry of catalogById.values()) {
-      const normalizedId = canonicalizeOpenRouterLookupId(entry.id);
+      const normalizedId = canonicalizeOpenRouterLookupId(entry.id, normalizationOptions);
       if (!normalizedId || catalogByNormalizedId.has(normalizedId)) {
         continue;
       }
@@ -955,6 +1219,8 @@ export async function refreshGatewayModelPricingCache(params: {
         policies: pricingContext.policies,
         catalogById,
         catalogByNormalizedId,
+        allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+        allowPluginNormalization: normalizationOptions.allowPluginNormalization,
       });
 
       // 2. Try LiteLLM (may contain tiered pricing)
@@ -962,6 +1228,8 @@ export async function refreshGatewayModelPricingCache(params: {
         ref,
         policies: pricingContext.policies,
         catalog: litellmCatalog,
+        allowManifestNormalization: normalizationOptions.allowManifestNormalization,
+        allowPluginNormalization: normalizationOptions.allowPluginNormalization,
       });
 
       // Merge strategy: OpenRouter provides the base flat pricing;
@@ -991,7 +1259,7 @@ export async function refreshGatewayModelPricingCache(params: {
       if (nextPricing.size === 0 && existingMeta.size > 0) {
         // Both sources failed — retain the entire existing cache.
         log.warn("Both pricing sources returned empty data — retaining existing cache");
-        scheduleRefresh({ config: params.config, fetchImpl });
+        scheduleRefresh({ ...params, fetchImpl });
         return;
       }
       // Partial failure — back-fill missing models from the existing cache.
@@ -1009,8 +1277,11 @@ export async function refreshGatewayModelPricingCache(params: {
       }
     }
 
+    if (params.signal?.aborted) {
+      return;
+    }
     replaceGatewayModelPricingCache(nextPricing);
-    scheduleRefresh({ config: params.config, fetchImpl });
+    scheduleRefresh({ ...params, fetchImpl });
   })();
 
   try {
@@ -1020,33 +1291,30 @@ export async function refreshGatewayModelPricingCache(params: {
   }
 }
 
-export function startGatewayModelPricingRefresh(params: {
-  config: OpenClawConfig;
-  fetchImpl?: typeof fetch;
-  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
-  manifestRegistry?: PluginManifestRegistry;
-}): () => void {
+export function startGatewayModelPricingRefresh(
+  params: GatewayModelPricingRefreshParams,
+): () => void {
+  if (!isGatewayModelPricingEnabled(params.config)) {
+    clearRefreshTimer();
+    return () => {};
+  }
   let stopped = false;
+  const abortController = new AbortController();
   queueMicrotask(() => {
     if (stopped) {
       return;
     }
-    void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
-      log.warn(`pricing bootstrap failed: ${String(error)}`);
-    });
+    void refreshGatewayModelPricingCache({ ...params, signal: abortController.signal }).catch(
+      (error: unknown) => {
+        log.warn(`pricing bootstrap failed: ${String(error)}`);
+      },
+    );
   });
   return () => {
     stopped = true;
+    abortController.abort();
     clearRefreshTimer();
   };
-}
-
-export function getGatewayModelPricingCacheMeta(): {
-  cachedAt: number;
-  ttlMs: number;
-  size: number;
-} {
-  return { ...getGatewayModelPricingCacheMetaState(), ttlMs: CACHE_TTL_MS };
 }
 
 export function __resetGatewayModelPricingCacheForTest(): void {

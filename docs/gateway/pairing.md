@@ -69,6 +69,8 @@ Notes:
   metadata and the latest allowlisted declared command snapshot for operator visibility.
 - Approval **always** generates a fresh token; no token is ever returned from
   `node.pair.request`.
+- Operator scope levels and approval-time checks are summarized in
+  [Operator scopes](/gateway/operator-scopes).
 - Requests may include `silent: true` as a hint for auto-approval flows.
 - `node.pair.approve` uses the pending request's declared commands to enforce
   extra approval scopes:
@@ -82,7 +84,8 @@ Node pairing is a trust and identity flow plus token issuance. It does **not** p
 
 - Live node commands come from what the node declares on connect after the gateway's global node command policy (`gateway.nodes.allowCommands` and `denyCommands`) is applied.
 - Per-node `system.run` allow and ask policy lives on the node in `exec.approvals.node.*`, not in the pairing record.
-  </Warning>
+
+</Warning>
 
 ## Node command gating (2026.3.31+)
 
@@ -104,6 +107,11 @@ This means:
 </Warning>
 
 Node-originated summaries and related session events are restricted to the intended trusted surface. Notification-driven or node-triggered flows that previously relied on broader host or session tool access may need adjustment. This hardening ensures that node events cannot escalate into host-level tool access beyond what the node's trust boundary permits.
+
+Durable node presence updates follow the same identity boundary. The `node.presence.alive` event is
+accepted only from authenticated node device sessions and updates pairing metadata only when the
+device/node identity is already paired. Self-declared `client.id` values are not enough to write
+last-seen state.
 
 ## Auto-approval (macOS app)
 

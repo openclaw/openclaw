@@ -1,4 +1,4 @@
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
 

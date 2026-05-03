@@ -1,12 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import webPush from "web-push";
 import { resolveStateDir } from "../config/paths.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 
 // --- Types ---
 
-export type WebPushSubscription = {
+type WebPushSubscription = {
   subscriptionId: string;
   endpoint: string;
   keys: { p256dh: string; auth: string };
@@ -14,17 +13,17 @@ export type WebPushSubscription = {
   updatedAtMs: number;
 };
 
-export type WebPushRegistrationState = {
+type WebPushRegistrationState = {
   subscriptionsByEndpointHash: Record<string, WebPushSubscription>;
 };
 
-export type VapidKeyPair = {
+type VapidKeyPair = {
   publicKey: string;
   privateKey: string;
   subject: string;
 };
 
-export type WebPushSendResult = {
+type WebPushSendResult = {
   ok: boolean;
   subscriptionId: string;
   statusCode?: number;
@@ -40,6 +39,18 @@ const MAX_KEY_LENGTH = 512;
 const DEFAULT_VAPID_SUBJECT = "mailto:openclaw@localhost";
 
 const withLock = createAsyncLock();
+
+type WebPushRuntime = typeof import("web-push");
+type WebPushRuntimeModule = WebPushRuntime & { default?: WebPushRuntime };
+
+let webPushRuntimePromise: Promise<WebPushRuntime> | undefined;
+
+async function loadWebPushRuntime(): Promise<WebPushRuntime> {
+  webPushRuntimePromise ??= import("web-push").then(
+    (mod: WebPushRuntimeModule) => mod.default ?? mod,
+  );
+  return await webPushRuntimePromise;
+}
 
 // --- Helpers ---
 
@@ -115,6 +126,7 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
       };
     }
 
+    const webPush = await loadWebPushRuntime();
     const keys = webPush.generateVAPIDKeys();
     const pair: VapidKeyPair = {
       publicKey: keys.publicKey,
@@ -130,17 +142,17 @@ function resolveVapidSubjectFromEnv(): string {
   return process.env.OPENCLAW_VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT;
 }
 
-export function resolveVapidPublicKeyFromEnv(): string | undefined {
+function resolveVapidPublicKeyFromEnv(): string | undefined {
   return process.env.OPENCLAW_VAPID_PUBLIC_KEY || undefined;
 }
 
-export function resolveVapidPrivateKeyFromEnv(): string | undefined {
+function resolveVapidPrivateKeyFromEnv(): string | undefined {
   return process.env.OPENCLAW_VAPID_PRIVATE_KEY || undefined;
 }
 
 // --- Subscription CRUD ---
 
-export type RegisterWebPushParams = {
+type RegisterWebPushParams = {
   endpoint: string;
   keys: { p256dh: string; auth: string };
   baseDir?: string;
@@ -231,14 +243,14 @@ export async function clearWebPushSubscriptionByEndpoint(
 
 // --- Sending ---
 
-export type WebPushPayload = {
+type WebPushPayload = {
   title: string;
   body?: string;
   tag?: string;
   url?: string;
 };
 
-function applyVapidDetails(keys: VapidKeyPair): void {
+function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
   webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
 }
 
@@ -248,12 +260,14 @@ export async function sendWebPushNotification(
   vapidKeys?: VapidKeyPair,
 ): Promise<WebPushSendResult> {
   const keys = vapidKeys ?? (await resolveVapidKeys());
-  applyVapidDetails(keys);
+  const webPush = await loadWebPushRuntime();
+  applyVapidDetails(webPush, keys);
 
-  return sendPreparedWebPushNotification(subscription, payload);
+  return sendPreparedWebPushNotification(webPush, subscription, payload);
 }
 
 async function sendPreparedWebPushNotification(
+  webPush: WebPushRuntime,
   subscription: WebPushSubscription,
   payload: WebPushPayload,
 ): Promise<WebPushSendResult> {
@@ -300,12 +314,13 @@ export async function broadcastWebPush(
   }
 
   const vapidKeys = await resolveVapidKeys(baseDir);
+  const webPush = await loadWebPushRuntime();
 
   // Set VAPID details once before fanning out concurrent sends.
-  applyVapidDetails(vapidKeys);
+  applyVapidDetails(webPush, vapidKeys);
 
   const results = await Promise.allSettled(
-    subscriptions.map((sub) => sendPreparedWebPushNotification(sub, payload)),
+    subscriptions.map((sub) => sendPreparedWebPushNotification(webPush, sub, payload)),
   );
 
   const mapped = results.map((r, i) =>

@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
+import { resetAgentEventsForTest } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
-} from "../../../../src/plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerEventProjector,
   type CodexAppServerToolTelemetry,
@@ -780,6 +780,7 @@ describe("CodexAppServerEventProjector", () => {
 
   it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {
     const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks();
+    const openSpy = vi.spyOn(SessionManager, "open");
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -791,6 +792,7 @@ describe("CodexAppServerEventProjector", () => {
         item: { type: "contextCompaction", id: "compact-1" },
       }),
     );
+    expect(openSpy).not.toHaveBeenCalled();
 
     expect(beforeCompaction).toHaveBeenCalledWith(
       expect.objectContaining({

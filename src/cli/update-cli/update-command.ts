@@ -9,18 +9,22 @@ import {
 } from "../../commands/doctor-completion.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
+  ConfigMutationConflictError,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayPort,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
+import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
@@ -48,13 +52,18 @@ import {
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
-import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
+import {
+  syncPluginsForUpdateChannel,
+  updateNpmInstalledPlugins,
+  type PluginUpdateIntegrityDriftParams,
+  type PluginUpdateOutcome,
+} from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
-import { pathExists } from "../../utils.js";
+import { resolveUserPath } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
@@ -93,11 +102,18 @@ const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
 const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
+const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
+const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
+] as const;
+const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
+  ...SERVICE_REFRESH_PATH_ENV_KEYS,
+  "OPENCLAW_PROFILE",
 ] as const;
 
 const UPDATE_QUIPS = [
@@ -127,12 +143,76 @@ type PostCorePluginUpdateResult = NonNullable<
   NonNullable<UpdateRunResult["postUpdate"]>["plugins"]
 >;
 
+type MissingPluginInstallPayload = {
+  pluginId: string;
+  installPath?: string;
+  reason: "missing-install-path" | "missing-package-dir" | "missing-package-json";
+};
+
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
 }
 
 function isPackageManagerUpdateMode(mode: UpdateRunResult["mode"]): mode is "npm" | "pnpm" | "bun" {
   return mode === "npm" || mode === "pnpm" || mode === "bun";
+}
+
+function isTrackedPackageInstallRecord(record: PluginInstallRecord): boolean {
+  return (
+    record.source === "npm" ||
+    record.source === "clawhub" ||
+    record.source === "git" ||
+    record.source === "marketplace"
+  );
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function collectMissingPluginInstallPayloads(params: {
+  records: Record<string, PluginInstallRecord>;
+  env?: NodeJS.ProcessEnv;
+}): Promise<MissingPluginInstallPayload[]> {
+  const env = params.env ?? process.env;
+  const missing: MissingPluginInstallPayload[] = [];
+  for (const [pluginId, record] of Object.entries(params.records).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (!isTrackedPackageInstallRecord(record)) {
+      continue;
+    }
+    const rawInstallPath = normalizeOptionalString(record.installPath);
+    if (!rawInstallPath) {
+      missing.push({ pluginId, reason: "missing-install-path" });
+      continue;
+    }
+    const installPath = resolveUserPath(rawInstallPath, env);
+    if (!(await pathExists(installPath))) {
+      missing.push({ pluginId, installPath, reason: "missing-package-dir" });
+      continue;
+    }
+    const packageJsonPath = path.join(installPath, "package.json");
+    if (!(await pathExists(packageJsonPath))) {
+      missing.push({ pluginId, installPath, reason: "missing-package-json" });
+    }
+  }
+  return missing;
+}
+
+function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): string {
+  if (entry.reason === "missing-install-path") {
+    return "installPath is missing";
+  }
+  if (entry.reason === "missing-package-json") {
+    return `package.json is missing under ${entry.installPath}`;
+  }
+  return `package directory is missing: ${entry.installPath}`;
 }
 
 export function shouldPrepareUpdatedInstallRestart(params: {
@@ -152,6 +232,147 @@ export function shouldUseLegacyProcessRestartAfterUpdate(params: {
   return !isPackageManagerUpdateMode(params.updateMode);
 }
 
+type PrePackageServiceStop = {
+  stopped: boolean;
+  inspected: boolean;
+  runtimeInspected: boolean;
+  running: boolean;
+  blockMessage?: string;
+  serviceEnv?: NodeJS.ProcessEnv;
+};
+
+function formatGatewayAncestryBlockMessage(pid: number): string {
+  return `openclaw update detected it is running inside the gateway process tree.
+Gateway PID ${pid} is an ancestor of this process, so this updater cannot safely stop or restart the gateway that owns it.
+Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`;
+}
+
+function isGatewayAncestorPid(pid: unknown): pid is number {
+  return typeof pid === "number" && pid > 0 && getSelfAndAncestorPidsSync().has(pid);
+}
+
+function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
+  return isGatewayAncestorPid(pid) ? formatGatewayAncestryBlockMessage(pid) : undefined;
+}
+
+function gatewayRuntimeAncestryBlockMessage(
+  runtime: { pid?: unknown } | null | undefined,
+): string | undefined {
+  return gatewayAncestryBlockMessage(runtime?.pid);
+}
+
+async function maybeStopManagedServiceBeforePackageUpdate(params: {
+  shouldRestart: boolean;
+  jsonMode: boolean;
+}): Promise<PrePackageServiceStop> {
+  let service: ReturnType<typeof resolveGatewayService>;
+  let serviceState: Awaited<ReturnType<typeof readGatewayServiceState>>;
+  try {
+    service = resolveGatewayService();
+    serviceState = await readGatewayServiceState(service, { env: process.env });
+  } catch {
+    return { stopped: false, inspected: false, runtimeInspected: false, running: false };
+  }
+
+  const runtimeStatus = serviceState.runtime?.status;
+  const runtimeInspected = runtimeStatus === "running" || runtimeStatus === "stopped";
+  if (!serviceState.installed) {
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected,
+      running: serviceState.running,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  if (!params.shouldRestart) {
+    if (!params.jsonMode && serviceState.running) {
+      defaultRuntime.log(
+        theme.warn(
+          "--no-restart is set while the managed gateway service is running; the package update will not stop or restart that process.",
+        ),
+      );
+    }
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected,
+      running: serviceState.running,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  if (!runtimeInspected) {
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: false,
+      running: false,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  if (!serviceState.running) {
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      running: false,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  const blockMessage = gatewayRuntimeAncestryBlockMessage(serviceState.runtime);
+  if (blockMessage) {
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      running: true,
+      blockMessage,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  if (!params.jsonMode) {
+    defaultRuntime.log(theme.muted("Stopping managed gateway service before package update..."));
+  }
+  await service.stop({ env: serviceState.env, stdout: process.stdout });
+  return {
+    stopped: true,
+    inspected: true,
+    runtimeInspected: true,
+    running: true,
+    serviceEnv: serviceState.env,
+  };
+}
+
+async function maybeRestartServiceAfterFailedPackageUpdate(params: {
+  prePackageServiceStop: PrePackageServiceStop | undefined;
+  jsonMode: boolean;
+}): Promise<void> {
+  if (!params.prePackageServiceStop?.stopped || !params.prePackageServiceStop.serviceEnv) {
+    return;
+  }
+  try {
+    await resolveGatewayService().restart({
+      env: params.prePackageServiceStop.serviceEnv,
+      stdout: process.stdout,
+    });
+    if (!params.jsonMode) {
+      defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
+    }
+  } catch (err) {
+    const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
+    if (params.jsonMode) {
+      defaultRuntime.error(message);
+    } else {
+      defaultRuntime.log(theme.warn(message));
+    }
+  }
+}
+
 function isRunningInsideGatewayService(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
@@ -160,6 +381,25 @@ function isRunningInsideGatewayService(
   }
   const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
   return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
+}
+
+function shouldBlockPackageUpdateFromGatewayServiceEnv(params: {
+  prePackageServiceStop: PrePackageServiceStop | undefined;
+}): boolean {
+  if (!isRunningInsideGatewayService()) {
+    return false;
+  }
+  const stopState = params.prePackageServiceStop;
+  if (!stopState?.inspected) {
+    return true;
+  }
+  if (stopState.stopped) {
+    return false;
+  }
+  if (!stopState.runtimeInspected) {
+    return true;
+  }
+  return stopState.running;
 }
 
 function formatCommandFailure(stdout: string, stderr: string): string {
@@ -231,6 +471,55 @@ function resolveServiceRefreshEnv(
     resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
   }
   return resolvedEnv;
+}
+
+function disableUpdatedPackageCompileCacheEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+  };
+}
+
+function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const resolvedEnv = { ...env };
+  delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
+  delete resolvedEnv.OPENCLAW_SERVICE_KIND;
+  return resolvedEnv;
+}
+
+function resolveUpdatedInstallCommandEnv(
+  env: NodeJS.ProcessEnv,
+  invocationCwd?: string,
+): NodeJS.ProcessEnv {
+  return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
+}
+
+export function resolvePostInstallDoctorEnv(params?: {
+  baseEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}): NodeJS.ProcessEnv {
+  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  if (!params?.serviceEnv) {
+    return resolvedEnv;
+  }
+
+  const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
+  for (const key of POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS) {
+    const value = serviceEnv[key]?.trim();
+    if (value) {
+      resolvedEnv[key] = serviceEnv[key];
+    }
+  }
+  return resolvedEnv;
+}
+
+export function resolveUpdatedGatewayRestartPort(params: {
+  config?: OpenClawConfig;
+  processEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+}): number {
+  return resolveGatewayPort(params.config, params.serviceEnv ?? params.processEnv ?? process.env);
 }
 
 type UpdateDryRunPreview = {
@@ -307,7 +596,7 @@ async function refreshGatewayServiceEnv(params: {
   if (entrypoint) {
     const res = await runCommandWithTimeout([resolveNodeRunner(), entrypoint, ...args], {
       cwd: params.result.root,
-      env: resolveServiceRefreshEnv(params.env ?? process.env, params.invocationCwd),
+      env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
       timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
     });
     if (res.code === 0) {
@@ -346,7 +635,7 @@ async function runUpdatedInstallGatewayRestart(params: {
   }
   const res = await runCommandWithTimeout([resolveNodeRunner(), entrypoint, ...args], {
     cwd: params.result.root,
-    env: resolveServiceRefreshEnv(params.env ?? process.env, params.invocationCwd),
+    env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
     timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
   });
   if (res.code === 0) {
@@ -420,6 +709,8 @@ async function runPackageInstallUpdate(params: {
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   jsonMode: boolean;
+  managedServiceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
 }): Promise<UpdateRunResult> {
   const manager = await resolveGlobalManager({
     root: params.root,
@@ -484,8 +775,12 @@ async function runPackageInstallUpdate(params: {
           name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
           env: {
-            ...process.env,
+            ...resolvePostInstallDoctorEnv({
+              serviceEnv: params.managedServiceEnv,
+              invocationCwd: params.invocationCwd,
+            }),
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
           },
           timeoutMs: params.timeoutMs,
           progress: params.progress,
@@ -654,39 +949,98 @@ async function updatePluginsAfterCoreUpdate(params: {
   });
   let pluginConfig = syncResult.config;
   const integrityDrifts: PostCorePluginUpdateResult["integrityDrifts"] = [];
+  const pluginUpdateOutcomes: PluginUpdateOutcome[] = [];
+  let pluginsChanged = syncResult.changed;
+  let npmPluginsChanged = false;
+
+  const onPluginIntegrityDrift = async (drift: PluginUpdateIntegrityDriftParams) => {
+    integrityDrifts.push({
+      pluginId: drift.pluginId,
+      spec: drift.spec,
+      expectedIntegrity: drift.expectedIntegrity,
+      actualIntegrity: drift.actualIntegrity,
+      ...(drift.resolvedSpec ? { resolvedSpec: drift.resolvedSpec } : {}),
+      ...(drift.resolvedVersion ? { resolvedVersion: drift.resolvedVersion } : {}),
+      action: "aborted",
+    });
+    if (!params.opts.json) {
+      const specLabel = drift.resolvedSpec ?? drift.spec;
+      defaultRuntime.log(
+        theme.warn(
+          `Integrity drift detected for "${drift.pluginId}" (${specLabel})` +
+            `\nExpected: ${drift.expectedIntegrity}` +
+            `\nActual:   ${drift.actualIntegrity}` +
+            "\nPlugin update aborted. Reinstall the plugin only if you trust the new artifact.",
+        ),
+      );
+    }
+    return false;
+  };
+
+  const repairMissingPayloads = async (
+    records: Record<string, PluginInstallRecord>,
+  ): Promise<readonly string[]> => {
+    const missing = await collectMissingPluginInstallPayloads({ records });
+    if (missing.length === 0) {
+      return [];
+    }
+    const missingIds = missing.map((entry) => entry.pluginId);
+    if (!params.opts.json) {
+      defaultRuntime.log(
+        theme.warn(
+          `Recovering missing plugin install payloads: ${missing
+            .map((entry) => `${entry.pluginId} (${formatMissingPluginPayloadReason(entry)})`)
+            .join(", ")}.`,
+        ),
+      );
+    }
+    const repairResult = await updateNpmInstalledPlugins({
+      config: pluginConfig,
+      pluginIds: missingIds,
+      timeoutMs: params.timeoutMs,
+      updateChannel: params.channel,
+      logger: pluginLogger,
+      onIntegrityDrift: onPluginIntegrityDrift,
+    });
+    pluginConfig = repairResult.config;
+    pluginsChanged ||= repairResult.changed;
+    npmPluginsChanged ||= repairResult.changed;
+    pluginUpdateOutcomes.push(...repairResult.outcomes);
+    return missingIds;
+  };
+
+  const repairedMissingPayloadIds = await repairMissingPayloads(
+    pluginConfig.plugins?.installs ?? {},
+  );
 
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
-    skipIds: new Set(syncResult.summary.switchedToNpm),
+    updateChannel: params.channel,
+    skipIds: new Set([...syncResult.summary.switchedToNpm, ...repairedMissingPayloadIds]),
+    skipDisabledPlugins: true,
     logger: pluginLogger,
-    onIntegrityDrift: async (drift) => {
-      integrityDrifts.push({
-        pluginId: drift.pluginId,
-        spec: drift.spec,
-        expectedIntegrity: drift.expectedIntegrity,
-        actualIntegrity: drift.actualIntegrity,
-        ...(drift.resolvedSpec ? { resolvedSpec: drift.resolvedSpec } : {}),
-        ...(drift.resolvedVersion ? { resolvedVersion: drift.resolvedVersion } : {}),
-        action: "aborted",
-      });
-      if (!params.opts.json) {
-        const specLabel = drift.resolvedSpec ?? drift.spec;
-        defaultRuntime.log(
-          theme.warn(
-            `Integrity drift detected for "${drift.pluginId}" (${specLabel})` +
-              `\nExpected: ${drift.expectedIntegrity}` +
-              `\nActual:   ${drift.actualIntegrity}` +
-              "\nPlugin update aborted. Reinstall the plugin only if you trust the new artifact.",
-          ),
-        );
-      }
-      return false;
-    },
+    onIntegrityDrift: onPluginIntegrityDrift,
   });
   pluginConfig = npmResult.config;
+  pluginsChanged ||= npmResult.changed;
+  npmPluginsChanged ||= npmResult.changed;
+  pluginUpdateOutcomes.push(...npmResult.outcomes);
 
-  if (syncResult.changed || npmResult.changed) {
+  const remainingMissingPayloads = await collectMissingPluginInstallPayloads({
+    records: pluginConfig.plugins?.installs ?? {},
+  });
+  pluginUpdateOutcomes.push(
+    ...remainingMissingPayloads.map(
+      (entry): PluginUpdateOutcome => ({
+        pluginId: entry.pluginId,
+        status: "error",
+        message: `Plugin install payload missing after update: ${formatMissingPluginPayloadReason(entry)}.`,
+      }),
+    ),
+  );
+
+  if (pluginsChanged) {
     const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
     const nextConfig = withoutPluginInstallRecords(pluginConfig);
     await commitPluginInstallRecordsWithConfig({
@@ -708,10 +1062,10 @@ async function updatePluginsAfterCoreUpdate(params: {
     return {
       status:
         syncResult.summary.errors.length > 0 ||
-        npmResult.outcomes.some((outcome) => outcome.status === "error")
+        pluginUpdateOutcomes.some((outcome) => outcome.status === "error")
           ? "error"
           : "ok",
-      changed: syncResult.changed || npmResult.changed,
+      changed: pluginsChanged,
       sync: {
         changed: syncResult.changed,
         switchedToBundled: syncResult.summary.switchedToBundled,
@@ -720,8 +1074,8 @@ async function updatePluginsAfterCoreUpdate(params: {
         errors: syncResult.summary.errors,
       },
       npm: {
-        changed: npmResult.changed,
-        outcomes: npmResult.outcomes,
+        changed: npmPluginsChanged,
+        outcomes: pluginUpdateOutcomes,
       },
       integrityDrifts,
     };
@@ -753,12 +1107,12 @@ async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.error(error));
   }
 
-  const updated = npmResult.outcomes.filter((entry) => entry.status === "updated").length;
-  const unchanged = npmResult.outcomes.filter((entry) => entry.status === "unchanged").length;
-  const failed = npmResult.outcomes.filter((entry) => entry.status === "error").length;
-  const skipped = npmResult.outcomes.filter((entry) => entry.status === "skipped").length;
+  const updated = pluginUpdateOutcomes.filter((entry) => entry.status === "updated").length;
+  const unchanged = pluginUpdateOutcomes.filter((entry) => entry.status === "unchanged").length;
+  const failed = pluginUpdateOutcomes.filter((entry) => entry.status === "error").length;
+  const skipped = pluginUpdateOutcomes.filter((entry) => entry.status === "skipped").length;
 
-  if (npmResult.outcomes.length === 0) {
+  if (pluginUpdateOutcomes.length === 0) {
     defaultRuntime.log(theme.muted("No plugin updates needed."));
   } else {
     const parts = [`${updated} updated`, `${unchanged} unchanged`];
@@ -771,7 +1125,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.muted(`npm plugins: ${parts.join(", ")}.`));
   }
 
-  for (const outcome of npmResult.outcomes) {
+  for (const outcome of pluginUpdateOutcomes) {
     if (outcome.status !== "error") {
       continue;
     }
@@ -781,10 +1135,10 @@ async function updatePluginsAfterCoreUpdate(params: {
   return {
     status:
       syncResult.summary.errors.length > 0 ||
-      npmResult.outcomes.some((outcome) => outcome.status === "error")
+      pluginUpdateOutcomes.some((outcome) => outcome.status === "error")
         ? "error"
         : "ok",
-    changed: syncResult.changed || npmResult.changed,
+    changed: pluginsChanged,
     sync: {
       changed: syncResult.changed,
       switchedToBundled: syncResult.summary.switchedToBundled,
@@ -793,8 +1147,8 @@ async function updatePluginsAfterCoreUpdate(params: {
       errors: syncResult.summary.errors,
     },
     npm: {
-      changed: npmResult.changed,
-      outcomes: npmResult.outcomes,
+      changed: npmPluginsChanged,
+      outcomes: pluginUpdateOutcomes,
     },
     integrityDrifts,
   };
@@ -855,7 +1209,7 @@ async function maybeRestartService(params: {
     const diagnosticLines = [
       "Gateway did not become healthy after restart.",
       ...renderRestartDiagnostics(health),
-      `Restart log: ${resolveGatewayRestartLogPath(process.env)}`,
+      `Restart log: ${resolveGatewayRestartLogPath(params.serviceEnv ?? process.env)}`,
       `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
     ];
     if (params.opts.json) {
@@ -946,6 +1300,7 @@ async function maybeRestartService(params: {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
         defaultRuntime.log("");
         process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+        process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
         try {
           const interactiveDoctor =
             process.stdin.isTTY && !params.opts.json && params.opts.yes !== true;
@@ -956,6 +1311,7 @@ async function maybeRestartService(params: {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
         } finally {
           delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+          delete process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
         }
       }
     } catch (err) {
@@ -1009,6 +1365,77 @@ async function runPostCorePluginUpdate(params: {
   });
 }
 
+async function persistRequestedUpdateChannel(params: {
+  configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  requestedChannel: "stable" | "beta" | "dev" | null;
+}): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
+  if (!params.requestedChannel || !params.configSnapshot.valid) {
+    return params.configSnapshot;
+  }
+  const storedChannel = normalizeUpdateChannel(params.configSnapshot.config.update?.channel);
+  if (params.requestedChannel === storedChannel) {
+    return params.configSnapshot;
+  }
+
+  const next = {
+    ...params.configSnapshot.sourceConfig,
+    update: {
+      ...params.configSnapshot.sourceConfig.update,
+      channel: params.requestedChannel,
+    },
+  };
+  try {
+    await replaceConfigFile({
+      nextConfig: next,
+      baseHash: params.configSnapshot.hash,
+    });
+    return createUpdatedChannelSnapshot(params.configSnapshot, next);
+  } catch (error) {
+    if (!(error instanceof ConfigMutationConflictError)) {
+      throw error;
+    }
+  }
+
+  const refreshed = await readConfigFileSnapshot();
+  if (!refreshed.valid) {
+    return refreshed;
+  }
+  const refreshedChannel = normalizeUpdateChannel(refreshed.config.update?.channel);
+  if (refreshedChannel === params.requestedChannel) {
+    return refreshed;
+  }
+  const refreshedNext = {
+    ...refreshed.sourceConfig,
+    update: {
+      ...refreshed.sourceConfig.update,
+      channel: params.requestedChannel,
+    },
+  };
+  await replaceConfigFile({
+    nextConfig: refreshedNext,
+    baseHash: refreshed.hash,
+  });
+  return createUpdatedChannelSnapshot(refreshed, refreshedNext);
+}
+
+function createUpdatedChannelSnapshot(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  next: OpenClawConfig,
+): Awaited<ReturnType<typeof readConfigFileSnapshot>> {
+  if (!snapshot.valid) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    hash: undefined,
+    parsed: next,
+    sourceConfig: asResolvedSourceConfig(next),
+    resolved: asResolvedSourceConfig(next),
+    runtimeConfig: asRuntimeConfig(next),
+    config: asRuntimeConfig(next),
+  };
+}
+
 async function writePostCorePluginUpdateResultFile(
   filePath: string | undefined,
   result: PostCorePluginUpdateResult,
@@ -1041,10 +1468,11 @@ async function readPostCorePluginUpdateResultFile(
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
+  requestedChannel: "stable" | "beta" | "dev" | null;
   opts: UpdateCommandOptions;
 }): Promise<{ resumed: boolean; pluginUpdate?: PostCorePluginUpdateResult }> {
-  const entryPath = path.join(params.root, "dist", "entry.js");
-  if (!(await pathExists(entryPath))) {
+  const entryPath = await resolveGatewayInstallEntrypoint(params.root);
+  if (!entryPath) {
     return { resumed: false };
   }
 
@@ -1071,9 +1499,12 @@ async function continuePostCoreUpdateInFreshProcess(params: {
     const child = spawn(resolveNodeRunner(), argv, {
       stdio: "inherit",
       env: {
-        ...process.env,
+        ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
+        ...(params.requestedChannel
+          ? { [POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]: params.requestedChannel }
+          : {}),
         ...(resultPath ? { [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath } : {}),
       },
     });
@@ -1111,7 +1542,23 @@ function shouldResumePostCoreUpdateInFreshProcess(params: {
   result: UpdateRunResult;
   downgradeRisk: boolean;
 }): boolean {
-  return isPackageManagerUpdateMode(params.result.mode) && !params.downgradeRisk;
+  if (params.downgradeRisk) {
+    return false;
+  }
+  if (isPackageManagerUpdateMode(params.result.mode)) {
+    return true;
+  }
+  if (params.result.mode !== "git") {
+    return false;
+  }
+  const beforeSha = normalizeOptionalString(params.result.before?.sha);
+  const afterSha = normalizeOptionalString(params.result.after?.sha);
+  if (beforeSha && afterSha && beforeSha !== afterSha) {
+    return true;
+  }
+  const beforeVersion = normalizeOptionalString(params.result.before?.version);
+  const afterVersion = normalizeOptionalString(params.result.after?.version);
+  return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
 }
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
@@ -1119,6 +1566,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const invocationCwd = tryResolveInvocationCwd();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
   const postCoreUpdateChannel = process.env[POST_CORE_UPDATE_CHANNEL_ENV]?.trim();
+  const postCoreRequestedChannelInput =
+    process.env[POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]?.trim() ?? "";
 
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
@@ -1139,10 +1588,24 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       return;
     }
 
+    const postCoreRequestedChannel = postCoreRequestedChannelInput
+      ? normalizeUpdateChannel(postCoreRequestedChannelInput)
+      : null;
+    if (postCoreRequestedChannelInput && !postCoreRequestedChannel) {
+      defaultRuntime.error("Invalid post-core requested update channel context.");
+      defaultRuntime.exit(1);
+      return;
+    }
+
+    const postCoreConfigSnapshot = await persistRequestedUpdateChannel({
+      configSnapshot: await readConfigFileSnapshot(),
+      requestedChannel: postCoreRequestedChannel,
+    });
+
     const pluginUpdate = await runPostCorePluginUpdate({
       root,
       channel: postCoreUpdateChannel,
-      configSnapshot: await readConfigFileSnapshot(),
+      configSnapshot: postCoreConfigSnapshot,
       opts,
       timeoutMs: updateStepTimeoutMs,
     });
@@ -1320,18 +1783,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  if (updateInstallKind === "package" && isRunningInsideGatewayService()) {
-    defaultRuntime.error(
-      [
-        "Package updates cannot run from inside the gateway service process.",
-        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
-        `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
-      ].join("\n"),
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
-
   if (downgradeRisk && !opts.yes) {
     if (!process.stdin.isTTY || opts.json) {
       defaultRuntime.error(
@@ -1386,31 +1837,78 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const { progress, stop } = createUpdateProgress(showProgress);
   const startedAt = Date.now();
 
-  const result =
-    updateInstallKind === "package"
-      ? await runPackageInstallUpdate({
-          root,
-          installKind,
-          tag,
-          timeoutMs: updateStepTimeoutMs,
-          startedAt,
-          progress,
-          jsonMode: Boolean(opts.json),
-        })
-      : await runGitUpdate({
-          root,
-          switchToGit,
-          installKind,
-          timeoutMs,
-          startedAt,
-          progress,
-          channel,
-          tag,
-          showProgress,
-          opts,
-          stop,
-          devTargetRef,
-        });
+  let prePackageServiceStop: PrePackageServiceStop | undefined;
+  if (updateInstallKind === "package") {
+    try {
+      prePackageServiceStop = await maybeStopManagedServiceBeforePackageUpdate({
+        shouldRestart,
+        jsonMode: Boolean(opts.json),
+      });
+    } catch (err) {
+      stop();
+      defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
+      defaultRuntime.exit(1);
+      return;
+    }
+
+    if (prePackageServiceStop?.blockMessage) {
+      stop();
+      defaultRuntime.error(prePackageServiceStop.blockMessage);
+      defaultRuntime.exit(1);
+      return;
+    }
+
+    if (shouldBlockPackageUpdateFromGatewayServiceEnv({ prePackageServiceStop })) {
+      stop();
+      defaultRuntime.error(
+        [
+          "Package updates cannot run from inside the gateway service process.",
+          "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+          `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
+        ].join("\n"),
+      );
+      defaultRuntime.exit(1);
+      return;
+    }
+  }
+
+  let result: UpdateRunResult;
+  try {
+    result =
+      updateInstallKind === "package"
+        ? await runPackageInstallUpdate({
+            root,
+            installKind,
+            tag,
+            timeoutMs: updateStepTimeoutMs,
+            startedAt,
+            progress,
+            jsonMode: Boolean(opts.json),
+            managedServiceEnv: prePackageServiceStop?.serviceEnv,
+            invocationCwd,
+          })
+        : await runGitUpdate({
+            root,
+            switchToGit,
+            installKind,
+            timeoutMs,
+            startedAt,
+            progress,
+            channel,
+            tag,
+            showProgress,
+            opts,
+            stop,
+            devTargetRef,
+          });
+  } catch (err) {
+    stop();
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
+    throw err;
+  }
 
   stop();
   if (!opts.json || result.status !== "ok") {
@@ -1418,11 +1916,19 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   if (result.status === "error") {
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
     defaultRuntime.exit(1);
     return;
   }
 
   if (result.status === "skipped") {
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
     if (result.reason === "dirty") {
       defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
       defaultRuntime.log(
@@ -1450,46 +1956,45 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
+  const shouldResumePostCoreInFreshProcess = shouldResumePostCoreUpdateInFreshProcess({
+    result,
+    downgradeRisk,
+  });
+
   let postUpdateConfigSnapshot = configSnapshot;
-  if (requestedChannel && configSnapshot.valid && requestedChannel !== storedChannel) {
-    const next = {
-      ...configSnapshot.sourceConfig,
-      update: {
-        ...configSnapshot.sourceConfig.update,
-        channel: requestedChannel,
-      },
-    };
-    await replaceConfigFile({
-      nextConfig: next,
-      baseHash: configSnapshot.hash,
+  if (!shouldResumePostCoreInFreshProcess) {
+    postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
+      configSnapshot,
+      requestedChannel,
     });
-    postUpdateConfigSnapshot = {
-      ...configSnapshot,
-      hash: undefined,
-      parsed: next,
-      sourceConfig: asResolvedSourceConfig(next),
-      resolved: asResolvedSourceConfig(next),
-      runtimeConfig: asRuntimeConfig(next),
-      config: asRuntimeConfig(next),
-    };
-    if (!opts.json) {
-      defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
-    }
+  }
+  if (
+    requestedChannel &&
+    configSnapshot.valid &&
+    requestedChannel !== storedChannel &&
+    !shouldResumePostCoreInFreshProcess &&
+    !opts.json
+  ) {
+    defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
+  } else if (
+    requestedChannel &&
+    configSnapshot.valid &&
+    requestedChannel !== storedChannel &&
+    shouldResumePostCoreInFreshProcess &&
+    !opts.json
+  ) {
+    defaultRuntime.log(theme.muted(`Update channel will be set to ${requestedChannel}.`));
   }
 
   const postUpdateRoot = result.root ?? root;
 
   let postCorePluginUpdate: PostCorePluginUpdateResult | undefined;
   let pluginsUpdatedInFreshProcess = false;
-  if (
-    shouldResumePostCoreUpdateInFreshProcess({
-      result,
-      downgradeRisk,
-    })
-  ) {
+  if (shouldResumePostCoreInFreshProcess) {
     const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
       root: postUpdateRoot,
       channel,
+      requestedChannel,
       opts,
     });
     pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
@@ -1497,6 +2002,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   if (!pluginsUpdatedInFreshProcess) {
+    if (shouldResumePostCoreInFreshProcess) {
+      postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
+        configSnapshot,
+        requestedChannel,
+      });
+    }
     postCorePluginUpdate = await runPostCorePluginUpdate({
       root: postUpdateRoot,
       channel,
@@ -1524,6 +2035,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } else {
       defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
     }
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
     defaultRuntime.exit(1);
     return;
   }
@@ -1531,10 +2046,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
-  const gatewayPort = resolveGatewayPort(
-    postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
-    process.env,
-  );
+  let gatewayPort = resolveUpdatedGatewayRestartPort({
+    config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+    processEnv: process.env,
+  });
   if (shouldRestart) {
     try {
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
@@ -1548,6 +2063,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         })
       ) {
         gatewayServiceEnv = serviceState.env;
+        gatewayPort = resolveUpdatedGatewayRestartPort({
+          config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+          processEnv: process.env,
+          serviceEnv: gatewayServiceEnv,
+        });
         restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
         refreshGatewayServiceEnv = true;
       }

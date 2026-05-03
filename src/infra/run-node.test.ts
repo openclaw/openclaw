@@ -2,18 +2,22 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  bundledDistPluginFile,
+  bundledPluginFile,
+  bundledPluginRoot,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import {
+  BUILD_STAMP_FILE,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+} from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
   runNodeMain,
 } from "../../scripts/run-node.mjs";
-import {
-  bundledDistPluginFile,
-  bundledPluginFile,
-  bundledPluginRoot,
-} from "../../test/helpers/bundled-plugin-paths.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const ROOT_SRC = "src/index.ts";
@@ -23,8 +27,8 @@ const ROOT_TSDOWN = "tsdown.config.ts";
 const GENERATED_A2UI_BUNDLE = "src/canvas-host/a2ui/a2ui.bundle.js";
 const GENERATED_A2UI_BUNDLE_HASH = "src/canvas-host/a2ui/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
-const BUILD_STAMP = "dist/.buildstamp";
-const RUNTIME_POSTBUILD_STAMP = "dist/.runtime-postbuildstamp";
+const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
+const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
 const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");
@@ -444,6 +448,55 @@ describe("run-node script", () => {
     });
   });
 
+  it("adds Node CPU profiling flags to the launched OpenClaw child when requested", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const profileDir = path.join(tmp, ".artifacts", "profiles");
+      const spawnCalls: Array<{ args: string[]; env: Record<string, string | undefined> }> = [];
+      const spawn = (_cmd: string, args: string[], options?: unknown) => {
+        const opts = options as { env?: NodeJS.ProcessEnv } | undefined;
+        spawnCalls.push({ args, env: { ...opts?.env } });
+        return createExitedProcess(0);
+      };
+      const { spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUN_NODE_CPU_PROF_DIR: ".artifacts/profiles",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+        process: createFakeProcess(),
+      });
+
+      expect(exitCode).toBe(0);
+      const childArgs = spawnCalls.at(-1)?.args ?? [];
+      expect(childArgs[0]).toBe("--cpu-prof");
+      expect(childArgs[1]).toBe(`--cpu-prof-dir=${profileDir}`);
+      expect(childArgs[2]).toMatch(
+        /^--cpu-prof-name=openclaw-status-4242-\d{4}-\d{2}-\d{2}T.*\.cpuprofile$/,
+      );
+      expect(childArgs.slice(3)).toEqual(["openclaw.mjs", "status"]);
+      expect(spawnCalls.at(-1)?.env.OPENCLAW_RUN_NODE_CPU_PROF_DIR).toBe(profileDir);
+      expect(fsSync.existsSync(profileDir)).toBe(true);
+    });
+  });
+
   it("surfaces generic output log stream errors", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp);
@@ -690,6 +743,94 @@ describe("run-node script", () => {
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
       expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reruns runtime postbuild for dirty extension package metadata in watch mode", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.ts"]}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_PACKAGE,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${EXTENSION_PACKAGE}\n`,
+      });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        env: { OPENCLAW_WATCH_MODE: "1" },
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([statusCommandSpawn()]);
+      expect(runRuntimePostBuild).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("runs QA parity report from source without rebuilding private QA dist", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          "extensions/qa-lab/src/cli.runtime.ts": "export {};\n",
+        },
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: [
+          "qa",
+          "parity-report",
+          "--candidate-summary",
+          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          "--baseline-summary",
+          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+        ],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        [
+          process.execPath,
+          "--import",
+          "tsx",
+          path.join(tmp, "scripts", "qa-parity-report.ts"),
+          "--candidate-summary",
+          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          "--baseline-summary",
+          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+        ],
+      ]);
     });
   });
 

@@ -4,7 +4,8 @@
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
   "contracts": {
-    "mediaUnderstandingProviders": ["codex"]
+    "mediaUnderstandingProviders": ["codex"],
+    "migrationProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
     "codex": {
@@ -18,6 +19,7 @@
   "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
+    "onStartup": false,
     "onAgentHarnesses": ["codex"]
   },
   "commandAliases": [
@@ -31,6 +33,16 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "codexDynamicToolsProfile": {
+        "type": "string",
+        "enum": ["native-first", "openclaw-compat"],
+        "default": "native-first"
+      },
+      "codexDynamicToolsExclude": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": []
+      },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
@@ -109,6 +121,10 @@
             "type": "object",
             "additionalProperties": { "type": "string" }
           },
+          "clearEnv": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -135,6 +151,16 @@
     }
   },
   "uiHints": {
+    "codexDynamicToolsProfile": {
+      "label": "Dynamic Tools Profile",
+      "help": "Select which OpenClaw dynamic tools are exposed to Codex app-server. native-first omits tools Codex already owns.",
+      "advanced": true
+    },
+    "codexDynamicToolsExclude": {
+      "label": "Dynamic Tool Excludes",
+      "help": "Additional OpenClaw dynamic tool names to omit from Codex app-server turns.",
+      "advanced": true
+    },
     "discovery": {
       "label": "Model Discovery",
       "help": "Plugin-owned controls for discovering Codex app-server models."
@@ -232,6 +258,11 @@
     "appServer.headers": {
       "label": "Headers",
       "help": "Additional headers sent to the WebSocket app-server.",
+      "advanced": true
+    },
+    "appServer.clearEnv": {
+      "label": "Clear Environment",
+      "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {

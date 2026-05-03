@@ -46,6 +46,7 @@ import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
 import { collectBlueBubblesStatusIssues } from "./status-issues.js";
 import {
+  buildBlueBubblesChatContextFromTarget,
   extractHandleFromChatGuid,
   inferBlueBubblesTargetChatType,
   looksLikeBlueBubblesExplicitTargetId,
@@ -128,6 +129,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
         },
       },
       messaging: {
+        targetPrefixes: ["bluebubbles"],
         normalizeTarget: normalizeBlueBubblesMessagingTarget,
         inferTargetChatType: ({ to }) => inferBlueBubblesTargetChatType(to),
         resolveOutboundSessionRoute: (params) => resolveBlueBubblesOutboundSessionRoute(params),
@@ -320,7 +322,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           const runtime = await loadBlueBubblesChannelRuntime();
           const rawReplyToId = normalizeOptionalString(replyToId) ?? "";
           const replyToMessageGuid = rawReplyToId
-            ? runtime.resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
+            ? runtime.resolveBlueBubblesMessageId(rawReplyToId, {
+                requireKnownShortId: true,
+                chatContext: buildBlueBubblesChatContextFromTarget(to),
+              })
             : "";
           return await runtime.sendMessageBlueBubbles(to, text, {
             cfg: cfg,

@@ -7,7 +7,7 @@ read_when:
 title: "Pairing"
 ---
 
-“Pairing” is OpenClaw’s explicit **owner approval** step.
+“Pairing” is OpenClaw’s explicit access approval step.
 It is used in two places:
 
 1. **DM pairing** (who is allowed to talk to the bot)
@@ -20,6 +20,11 @@ Security context: [Security](/gateway/security)
 When a channel is configured with DM policy `pairing`, unknown senders get a short code and their message is **not processed** until you approve.
 
 Default DM policies are documented in: [Security](/gateway/security)
+
+`dmPolicy: "open"` is public only when the effective DM allowlist includes `"*"`.
+Setup and validation require that wildcard for public-open configs. If existing
+state contains `open` with concrete `allowFrom` entries, runtime still admits
+only those senders, and pairing-store approvals do not widen `open` access.
 
 Pairing codes:
 
@@ -34,7 +39,42 @@ openclaw pairing list telegram
 openclaw pairing approve telegram <CODE>
 ```
 
+If no command owner is configured yet, approving a DM pairing code also bootstraps
+`commands.ownerAllowFrom` to the approved sender, such as `telegram:123456789`.
+That gives first-time setups an explicit owner for privileged commands and exec
+approval prompts. After an owner exists, later pairing approvals only grant DM
+access; they do not add more owners.
+
 Supported channels: `bluebubbles`, `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `openclaw-weixin`, `signal`, `slack`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+
+### Reusable sender groups
+
+Use top-level `accessGroups` when the same trusted sender set should apply to
+multiple message channels or to both DM and group allowlists.
+
+Static groups use `type: "message.senders"` and are referenced with
+`accessGroup:<name>` from channel allowlists:
+
+```json5
+{
+  accessGroups: {
+    operators: {
+      type: "message.senders",
+      members: {
+        discord: ["discord:123456789012345678"],
+        telegram: ["987654321"],
+        whatsapp: ["+15551234567"],
+      },
+    },
+  },
+  channels: {
+    telegram: { dmPolicy: "allowlist", allowFrom: ["accessGroup:operators"] },
+    whatsapp: { groupPolicy: "allowlist", groupAllowFrom: ["accessGroup:operators"] },
+  },
+}
+```
+
+Access groups are documented in detail here: [Access groups](/channels/access-groups)
 
 ### Where the state lives
 
@@ -53,7 +93,12 @@ Account scoping behavior:
 Treat these as sensitive (they gate access to your assistant).
 
 <Note>
-This store is for DM access. Group authorization is separate. Approving a DM pairing code does not automatically allow that sender to run group commands or control the bot in groups. For group access, configure the channel's explicit group allowlists (for example `groupAllowFrom`, `groups`, or per-group or per-topic overrides depending on the channel).
+The pairing allowlist store is for DM access. Group authorization is separate.
+Approving a DM pairing code does not automatically allow that sender to run group
+commands or control the bot in groups. First-owner bootstrap is separate config
+state in `commands.ownerAllowFrom`, and group chat delivery still follows the
+channel's group allowlists (for example `groupAllowFrom`, `groups`, or per-group
+or per-topic overrides depending on the channel).
 </Note>
 
 ## 2) Node device pairing (iOS/Android/macOS/headless nodes)

@@ -45,6 +45,7 @@ vi.mock("../channels/registry.js", () => ({
     meta: Parameters<FormatChannelSelectionLine>[0],
     docsLink: Parameters<FormatChannelSelectionLine>[1],
   ) => formatChannelSelectionLine(meta, docsLink),
+  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
 }));
 
 vi.mock("../commands/channel-setup/discovery.js", () => ({
@@ -59,6 +60,17 @@ vi.mock("../config/channel-configured.js", () => ({
     cfg: Parameters<IsChannelConfigured>[0],
     channelId: Parameters<IsChannelConfigured>[1],
   ) => isChannelConfigured(cfg, channelId),
+}));
+
+// Avoid touching the real `extensions/<id>` tree from unit tests. Status
+// rendering for installable catalog entries asks `bundled-sources` whether
+// a plugin already lives in-tree to decide between
+// "install plugin to enable" vs "bundled · enable to use". For these tests
+// we want the installable-catalog branch unconditionally, so we stub the
+// bundled lookup to "nothing is bundled".
+vi.mock("../plugins/bundled-sources.js", () => ({
+  resolveBundledPluginSources: () => new Map(),
+  findBundledPluginSourceInMap: () => undefined,
 }));
 
 import {

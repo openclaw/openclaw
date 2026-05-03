@@ -102,6 +102,7 @@ const BrowserRealtimeWebRtcSdpSessionSchema = Type.Object(
     transport: Type.Optional(Type.Literal("webrtc-sdp")),
     clientSecret: NonEmptyString,
     offerUrl: Type.Optional(Type.String()),
+    offerHeaders: Type.Optional(Type.Record(Type.String(), Type.String())),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
     expiresAt: Type.Optional(Type.Number()),
@@ -286,6 +287,25 @@ export const ChannelUiMetaSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChannelEventLoopHealthSchema = Type.Object(
+  {
+    degraded: Type.Boolean(),
+    reasons: Type.Array(
+      Type.Union([
+        Type.Literal("event_loop_delay"),
+        Type.Literal("event_loop_utilization"),
+        Type.Literal("cpu"),
+      ]),
+    ),
+    intervalMs: Type.Integer({ minimum: 0 }),
+    delayP99Ms: Type.Number({ minimum: 0 }),
+    delayMaxMs: Type.Number({ minimum: 0 }),
+    utilization: Type.Number({ minimum: 0 }),
+    cpuCoreRatio: Type.Number({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 export const ChannelsStatusResultSchema = Type.Object(
   {
     ts: Type.Integer({ minimum: 0 }),
@@ -297,11 +317,20 @@ export const ChannelsStatusResultSchema = Type.Object(
     channels: Type.Record(NonEmptyString, Type.Unknown()),
     channelAccounts: Type.Record(NonEmptyString, Type.Array(ChannelAccountSnapshotSchema)),
     channelDefaultAccountId: Type.Record(NonEmptyString, NonEmptyString),
+    eventLoop: Type.Optional(ChannelEventLoopHealthSchema),
   },
   { additionalProperties: false },
 );
 
 export const ChannelsLogoutParamsSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    accountId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const ChannelsStopParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
     accountId: Type.Optional(Type.String()),

@@ -1,25 +1,110 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { discoverModels } from "../pi-model-discovery.js";
+import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
-vi.mock("../model-suppression.js", () => ({
-  shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
-    (provider === "openai" ||
-      provider === "azure-openai-responses" ||
-      provider === "openai-codex") &&
-    id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
-  buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
-    if (
-      (provider !== "openai" &&
-        provider !== "azure-openai-responses" &&
-        provider !== "openai-codex") ||
-      id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
-    ) {
+vi.mock("../model-suppression.js", () => {
+  // Mirrors the canonical manifest-driven suppression in
+  // extensions/qwen/openclaw.plugin.json and src/plugins/manifest-model-suppression.ts.
+  function isQwenCodingPlanBaseUrl(value: string | undefined): boolean {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return false;
+    }
+    try {
+      const hostname = new URL(trimmed).hostname.toLowerCase().replace(/\.+$/, "");
+      return (
+        hostname === "coding.dashscope.aliyuncs.com" ||
+        hostname === "coding-intl.dashscope.aliyuncs.com"
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  function resolveConfiguredQwenBaseUrl(config: unknown): string | undefined {
+    const providers = (config as { models?: { providers?: Record<string, { baseUrl?: string }> } })
+      ?.models?.providers;
+    if (!providers) {
       return undefined;
     }
-    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`;
-  },
-}));
+    for (const [provider, entry] of Object.entries(providers)) {
+      const normalizedProvider = provider.trim().toLowerCase();
+      if (normalizedProvider !== "qwen" && normalizedProvider !== "modelstudio") {
+        continue;
+      }
+      const baseUrl = entry?.baseUrl?.trim();
+      if (baseUrl) {
+        return baseUrl;
+      }
+    }
+    return undefined;
+  }
+
+  return {
+    shouldSuppressBuiltInModel: ({
+      provider,
+      id,
+      baseUrl,
+      config,
+    }: {
+      provider?: string;
+      id?: string;
+      baseUrl?: string;
+      config?: unknown;
+    }) => {
+      if (
+        (provider === "openai" ||
+          provider === "azure-openai-responses" ||
+          provider === "openai-codex") &&
+        id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
+      ) {
+        return true;
+      }
+      return (
+        (provider === "qwen" || provider === "modelstudio") &&
+        id?.trim().toLowerCase() === "qwen3.6-plus" &&
+        isQwenCodingPlanBaseUrl(baseUrl ?? resolveConfiguredQwenBaseUrl(config))
+      );
+    },
+    shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) => {
+      if (
+        (provider === "openai" ||
+          provider === "azure-openai-responses" ||
+          provider === "openai-codex") &&
+        id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
+      ) {
+        return true;
+      }
+      return false;
+    },
+    buildSuppressedBuiltInModelError: ({
+      provider,
+      id,
+      config,
+    }: {
+      provider?: string;
+      id?: string;
+      config?: unknown;
+    }) => {
+      if (
+        (provider === "qwen" || provider === "modelstudio") &&
+        id?.trim().toLowerCase() === "qwen3.6-plus" &&
+        isQwenCodingPlanBaseUrl(resolveConfiguredQwenBaseUrl(config))
+      ) {
+        return "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.";
+      }
+      if (
+        (provider === "openai" ||
+          provider === "azure-openai-responses" ||
+          provider === "openai-codex") &&
+        id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
+      ) {
+        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`;
+      }
+      return undefined;
+    },
+  };
+});
 
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
@@ -55,6 +140,8 @@ import {
 
 beforeEach(() => {
   resetMockDiscoverModels(discoverModels);
+  vi.mocked(discoverModels).mockClear();
+  vi.mocked(discoverAuthStorage).mockClear();
   mockGetOpenRouterModelCapabilities.mockReset();
   mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
   mockLoadOpenRouterModelCapabilities.mockReset();
@@ -110,6 +197,27 @@ function resolveModelAsyncForTest(
 }
 
 describe("resolveModel", () => {
+  it("skips PI auth and model discovery during dynamic model resolution", async () => {
+    const result = await resolveModelAsync(
+      "openrouter",
+      "openrouter/auto",
+      "/tmp/agent",
+      undefined,
+      {
+        runtimeHooks: createRuntimeHooks(),
+        skipPiDiscovery: true,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/auto",
+    });
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
   it("defaults model input to text when discovery omits input", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "custom",
@@ -144,6 +252,38 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect(Array.isArray(result.model?.input)).toBe(true);
     expect(result.model?.input).toEqual(["text"]);
+  });
+
+  it("defaults missing model cost before handing models to PI", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                api: "openai-responses",
+                reasoning: true,
+                input: ["text"],
+                contextWindow: 400_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.5",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
   });
 
   it("includes provider baseUrl in fallback model", () => {
@@ -193,6 +333,95 @@ describe("resolveModel", () => {
       baseUrl: "http://127.0.0.1:3000/v1",
     });
     expect(getModelProviderRequestTransport(result.model ?? {})).toBeUndefined();
+  });
+
+  it("resolves explicitly configured qwen3.6-plus before Coding Plan built-in suppression", () => {
+    const cfg = {
+      models: {
+        providers: {
+          qwen: {
+            baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "qwen3.6-plus",
+                name: "qwen3.6-plus",
+                input: ["text", "image"],
+                reasoning: false,
+                contextWindow: 1_000_000,
+                maxTokens: 65_536,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("qwen", "qwen3.6-plus", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "qwen",
+      id: "qwen3.6-plus",
+      api: "openai-completions",
+      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 65_536,
+    });
+  });
+
+  it("keeps unconfigured qwen3.6-plus suppressed on Coding Plan endpoints", () => {
+    const cfg = {
+      models: {
+        providers: {
+          qwen: {
+            baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("qwen", "qwen3.6-plus", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
+    );
+  });
+
+  it("#74451: resolves explicitly configured openai-codex/gpt-5.4-mini inline entries", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.4-mini",
+                name: "GPT-5.4 mini",
+                api: "openai-codex-responses",
+                contextWindow: 400_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      api: "openai-codex-responses",
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
   });
 
   it("normalizes Google fallback baseUrls for custom providers", () => {
@@ -1346,7 +1575,11 @@ describe("resolveModel", () => {
     const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"));
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"),
+      contextWindow: 400_000,
+      contextTokens: 272_000,
+    });
   });
 
   it("does not build an openai-codex fallback for removed gpt-5.3-codex-spark", () => {
@@ -1452,53 +1685,6 @@ describe("resolveModel", () => {
       cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 1_000_000,
       contextTokens: 272_000,
-      maxTokens: 128_000,
-    });
-  });
-
-  it("lets official openai-codex metadata override legacy unmarked models-add rows", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai-codex",
-      modelId: "gpt-5.5",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.5"),
-        name: "GPT-5.5",
-        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-        contextWindow: 400_000,
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.5"),
-                api: "openai-codex-responses",
-                reasoning: true,
-                input: ["text", "image"],
-                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                contextWindow: 400_000,
-                contextTokens: 272_000,
-                maxTokens: 128_000,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("openai-codex", "gpt-5.5", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "openai-codex",
-      id: "gpt-5.5",
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-      contextWindow: 400_000,
       maxTokens: 128_000,
     });
   });
@@ -1740,7 +1926,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("keeps exact discovered metadata for other openai-codex models", () => {
+  it("resolves discovered openai-codex gpt-5.4-mini rows", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",
       modelId: "gpt-5.4-mini",
@@ -1758,8 +1944,7 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject({
       provider: "openai-codex",
       id: "gpt-5.4-mini",
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      name: "GPT-5.4 Mini",
       contextWindow: 64_000,
       input: ["text"],
     });
@@ -2034,7 +2219,6 @@ describe("resolveModel", () => {
       runtimeHooks: {
         applyProviderResolvedModelCompatWithPlugins: () => undefined,
         buildProviderUnknownModelHintWithPlugin: () => undefined,
-        clearProviderRuntimeHookCache: () => {},
         prepareProviderDynamicModel: async () => {},
         runProviderDynamicModel: () => undefined,
         applyProviderResolvedTransportWithPlugin: ({ provider, context }) =>

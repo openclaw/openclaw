@@ -34,7 +34,7 @@ const mockReadWindowsProcessArgsResult = vi.hoisted(() =>
 const mockReadFileSync = vi.hoisted(() => vi.fn());
 
 vi.mock("node:fs", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:fs")>("node:fs"),
     (actual) => ({
@@ -51,7 +51,7 @@ vi.mock("node:fs", async () => {
 });
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
@@ -88,6 +88,15 @@ vi.mock("./windows-port-pids.js", () => ({
     mockReadWindowsProcessArgs(pid, timeoutMs),
   readWindowsProcessArgsResultSync: (pid: number, timeoutMs?: number) =>
     mockReadWindowsProcessArgsResult(pid, timeoutMs),
+}));
+
+vi.mock("./windows-install-roots.js", () => ({
+  getWindowsInstallRoots: () => ({
+    systemRoot: "C:\\Windows",
+    programFiles: "C:\\Program Files",
+    programFilesX86: "C:\\Program Files (x86)",
+    programW6432: null,
+  }),
 }));
 
 import { resolveLsofCommandSync } from "./ports-lsof.js";
@@ -980,8 +989,10 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
 
     it("does not report Windows pids as killed when taskkill fails", () => {
       const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const originalSystemRoot = process.env.SystemRoot;
       const stalePid = process.pid + 911;
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      process.env.SystemRoot = "C:\\PoisonedWindows";
       try {
         let fakeNow = 0;
         __testing.setDateNowOverride(() => fakeNow);
@@ -1012,12 +1023,17 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
 
         expect(cleanStaleGatewayProcessesSync()).toEqual([]);
         expect(mockSpawnSync).toHaveBeenCalledWith(
-          expect.stringContaining("taskkill.exe"),
+          "C:\\Windows\\System32\\taskkill.exe",
           ["/T", "/PID", String(stalePid)],
           expect.objectContaining({ timeout: 5000 }),
         );
       } finally {
         __testing.setDateNowOverride(null);
+        if (originalSystemRoot === undefined) {
+          delete process.env.SystemRoot;
+        } else {
+          process.env.SystemRoot = originalSystemRoot;
+        }
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
         }
@@ -1063,13 +1079,13 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         expect(cleanStaleGatewayProcessesSync()).toEqual([]);
         expect(mockSpawnSync).toHaveBeenNthCalledWith(
           1,
-          expect.stringContaining("taskkill.exe"),
+          "C:\\Windows\\System32\\taskkill.exe",
           ["/T", "/PID", String(stalePid)],
           expect.objectContaining({ timeout: 5000 }),
         );
         expect(mockSpawnSync).toHaveBeenNthCalledWith(
           2,
-          expect.stringContaining("taskkill.exe"),
+          "C:\\Windows\\System32\\taskkill.exe",
           ["/F", "/T", "/PID", String(stalePid)],
           expect.objectContaining({ timeout: 5000 }),
         );

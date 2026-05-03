@@ -30,6 +30,7 @@ import {
   type PortUsageStatus,
 } from "../../infra/ports.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
@@ -81,43 +82,39 @@ type ResolvedGatewayStatus = {
   probeUrlOverride: string | null;
 };
 
-let gatewayProbeAuthModulePromise:
-  | Promise<typeof import("../../gateway/probe-auth.js")>
-  | undefined;
-let daemonInspectModulePromise: Promise<typeof import("../../daemon/inspect.js")> | undefined;
-let serviceAuditModulePromise: Promise<typeof import("../../daemon/service-audit.js")> | undefined;
-let gatewayTlsModulePromise: Promise<typeof import("../../infra/tls/gateway.js")> | undefined;
-let daemonProbeModulePromise: Promise<typeof import("./probe.js")> | undefined;
-let restartHealthModulePromise: Promise<typeof import("./restart-health.js")> | undefined;
+const gatewayProbeAuthModuleLoader = createLazyImportLoader(
+  () => import("../../gateway/probe-auth.js"),
+);
+const daemonInspectModuleLoader = createLazyImportLoader(() => import("../../daemon/inspect.js"));
+const serviceAuditModuleLoader = createLazyImportLoader(
+  () => import("../../daemon/service-audit.js"),
+);
+const gatewayTlsModuleLoader = createLazyImportLoader(() => import("../../infra/tls/gateway.js"));
+const daemonProbeModuleLoader = createLazyImportLoader(() => import("./probe.js"));
+const restartHealthModuleLoader = createLazyImportLoader(() => import("./restart-health.js"));
 
 function loadGatewayProbeAuthModule() {
-  gatewayProbeAuthModulePromise ??= import("../../gateway/probe-auth.js");
-  return gatewayProbeAuthModulePromise;
+  return gatewayProbeAuthModuleLoader.load();
 }
 
 function loadDaemonInspectModule() {
-  daemonInspectModulePromise ??= import("../../daemon/inspect.js");
-  return daemonInspectModulePromise;
+  return daemonInspectModuleLoader.load();
 }
 
 function loadServiceAuditModule() {
-  serviceAuditModulePromise ??= import("../../daemon/service-audit.js");
-  return serviceAuditModulePromise;
+  return serviceAuditModuleLoader.load();
 }
 
 function loadGatewayTlsModule() {
-  gatewayTlsModulePromise ??= import("../../infra/tls/gateway.js");
-  return gatewayTlsModulePromise;
+  return gatewayTlsModuleLoader.load();
 }
 
 function loadDaemonProbeModule() {
-  daemonProbeModulePromise ??= import("./probe.js");
-  return daemonProbeModulePromise;
+  return daemonProbeModuleLoader.load();
 }
 
 function loadRestartHealthModule() {
-  restartHealthModulePromise ??= import("./restart-health.js");
-  return restartHealthModulePromise;
+  return restartHealthModuleLoader.load();
 }
 
 function resolveSnapshotRuntimeConfig(snapshot: ConfigFileSnapshot | null): OpenClawConfig | null {
@@ -478,7 +475,9 @@ export async function gatherDaemonStatus(
         .catch(() => [])
     : [];
 
-  const timeoutMs = parseStrictPositiveInteger(opts.rpc.timeout ?? "10000") ?? 10_000;
+  const timeoutMs =
+    parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
+    Math.max(10_000, daemonCfg.gateway?.handshakeTimeoutMs ?? 0);
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
@@ -513,10 +512,12 @@ export async function gatherDaemonStatus(
           url: gateway.probeUrl,
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
+          config: daemonCfg,
           tlsFingerprint:
             shouldUseLocalTlsRuntime && tlsRuntime?.enabled
               ? tlsRuntime.fingerprintSha256
               : undefined,
+          preauthHandshakeTimeoutMs: daemonCfg.gateway?.handshakeTimeoutMs,
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,

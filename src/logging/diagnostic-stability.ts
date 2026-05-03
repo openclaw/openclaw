@@ -4,8 +4,8 @@ import {
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 
-export const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
-export const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
+const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
+const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
 export const MAX_DIAGNOSTIC_STABILITY_LIMIT = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
@@ -27,6 +27,7 @@ export type DiagnosticStabilityEventRecord = {
   detector?: string;
   deliveryKind?: string;
   toolName?: string;
+  activeWorkKind?: string;
   pairedToolName?: string;
   provider?: string;
   model?: string;
@@ -45,6 +46,10 @@ export type DiagnosticStabilityEventRecord = {
   thresholdBytes?: number;
   rssGrowthBytes?: number;
   windowMs?: number;
+  eventLoopDelayP99Ms?: number;
+  eventLoopDelayMaxMs?: number;
+  eventLoopUtilization?: number;
+  cpuCoreRatio?: number;
   ageMs?: number;
   queueDepth?: number;
   queueSize?: number;
@@ -99,19 +104,13 @@ export type DiagnosticStabilitySnapshot = {
   };
 };
 
-export type DiagnosticStabilityQuery = {
-  limit?: number;
-  type?: string;
-  sinceSeq?: number;
-};
-
-export type DiagnosticStabilityQueryInput = {
+type DiagnosticStabilityQueryInput = {
   limit?: unknown;
   type?: unknown;
   sinceSeq?: unknown;
 };
 
-export type NormalizedDiagnosticStabilityQuery = {
+type NormalizedDiagnosticStabilityQuery = {
   limit: number;
   type: string | undefined;
   sinceSeq: number | undefined;
@@ -233,10 +232,22 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason);
       record.queueDepth = event.queueDepth;
       break;
+    case "session.long_running":
+    case "session.stalled":
     case "session.stuck":
       record.outcome = event.state;
+      if (event.type === "session.stuck") {
+        record.level = "warning";
+      }
+      assignReasonCode(record, event.reason);
       record.ageMs = event.ageMs;
       record.queueDepth = event.queueDepth;
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      if (event.activeToolName) {
+        record.toolName = event.activeToolName;
+      }
       break;
     case "queue.lane.enqueue":
       record.source = event.lane;
@@ -250,6 +261,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "run.attempt":
       record.count = event.attempt;
       break;
+    case "run.progress":
+      assignReasonCode(record, event.reason);
+      break;
     case "context.assembled":
       record.channel = event.channel;
       record.provider = event.provider;
@@ -262,6 +276,19 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "diagnostic.heartbeat":
       record.webhooks = { ...event.webhooks };
+      record.active = event.active;
+      record.waiting = event.waiting;
+      record.queued = event.queued;
+      break;
+    case "diagnostic.liveness.warning":
+      record.level = event.active > 0 || event.waiting > 0 || event.queued > 0 ? "warning" : "info";
+      record.durationMs = event.intervalMs;
+      record.count = event.reasons.length;
+      assignReasonCode(record, event.reasons[0]);
+      record.eventLoopDelayP99Ms = event.eventLoopDelayP99Ms;
+      record.eventLoopDelayMaxMs = event.eventLoopDelayMaxMs;
+      record.eventLoopUtilization = event.eventLoopUtilization;
+      record.cpuCoreRatio = event.cpuCoreRatio;
       record.active = event.active;
       record.waiting = event.waiting;
       record.queued = event.queued;
@@ -285,6 +312,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.toolName = event.toolName;
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
+      break;
+    case "tool.execution.blocked":
+      record.toolName = event.toolName;
+      record.outcome = "blocked";
+      assignReasonCode(record, event.deniedReason);
       break;
     case "exec.process.completed":
       record.target = event.target;

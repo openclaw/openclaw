@@ -1,43 +1,10 @@
 import net from "node:net";
-import {
-  abortEmbeddedPiRun,
-  getActiveEmbeddedRunCount,
-  waitForActiveEmbeddedRuns,
-} from "../../agents/pi-embedded-runner/runs.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
-import {
-  respawnGatewayProcessForUpdate,
-  restartGatewayProcessWithFreshPid,
-} from "../../infra/process-respawn.js";
-import { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
-import {
-  consumeGatewaySigusr1RestartAuthorization,
-  consumeGatewayRestartIntentSync,
-  isGatewaySigusr1RestartExternallyAllowed,
-  markGatewaySigusr1RestartHandled,
-  peekGatewaySigusr1RestartReason,
-  resetGatewayRestartStateForInProcessRestart,
-  scheduleGatewaySigusr1Restart,
-} from "../../infra/restart.js";
-import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
-import { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  getActiveBundledRuntimeDepsInstallCount,
-  waitForBundledRuntimeDepsInstallIdle,
-} from "../../plugins/bundled-runtime-deps-activity.js";
-import {
-  getActiveTaskCount,
-  markGatewayDraining,
-  resetAllLanes,
-  waitForActiveTasks,
-} from "../../process/command-queue.js";
-import { createRestartIterationHook } from "../../process/restart-recovery.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
@@ -48,6 +15,30 @@ const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
+type RestartIntentOptions = {
+  force?: boolean;
+  waitMs?: number;
+};
+
+type GatewayLifecycleRuntimeModule = typeof import("./lifecycle.runtime.js");
+
+const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRuntimeModule>(
+  () => import("./lifecycle.runtime.js"),
+);
+
+const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
+
+function createRestartIterationHook(onRestart: () => Promise<void> | void): () => Promise<boolean> {
+  let isFirstIteration = true;
+  return async () => {
+    if (isFirstIteration) {
+      isFirstIteration = false;
+      return false;
+    }
+    await onRestart();
+    return true;
+  };
+}
 
 async function waitForGatewayPortReady(host: string, port: number): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
@@ -114,7 +105,9 @@ export async function runGatewayLoop(params: {
     cleanupSignals();
     params.runtime.exit(code);
   };
-  const writeStabilityBundle = (reason: string, error?: unknown) => {
+  const writeStabilityBundle = async (reason: string, error?: unknown) => {
+    const { writeDiagnosticStabilityBundleForFailureSync } =
+      await loadGatewayLifecycleRuntimeModule();
     const result = writeDiagnosticStabilityBundleForFailureSync(reason, error);
     if ("message" in result) {
       gatewayLog.warn(result.message);
@@ -142,6 +135,12 @@ export async function runGatewayLoop(params: {
   const handleRestartAfterServerClose = async (restartReason?: string) => {
     const hadLock = await releaseLockIfHeld();
     const isUpdateRestart = restartReason === "update.run";
+    const {
+      detectRespawnSupervisor,
+      markUpdateRestartSentinelFailure,
+      respawnGatewayProcessForUpdate,
+      restartGatewayProcessWithFreshPid,
+    } = await loadGatewayLifecycleRuntimeModule();
 
     if (isUpdateRestart) {
       const respawn = respawnGatewayProcessForUpdate();
@@ -228,7 +227,7 @@ export async function runGatewayLoop(params: {
       return;
     }
     if (respawn.mode === "failed") {
-      writeStabilityBundle("gateway.restart_respawn_failed");
+      await writeStabilityBundle("gateway.restart_respawn_failed");
       gatewayLog.warn(
         `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
       );
@@ -250,25 +249,37 @@ export async function runGatewayLoop(params: {
 
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
-  const resolveRestartDrainTimeoutMs = (): RestartDrainTimeoutMs => {
+  const resolveRestartDrainTimeoutMs = async (
+    restartIntent?: RestartIntentOptions,
+  ): Promise<RestartDrainTimeoutMs> => {
+    if (restartIntent?.force) {
+      return 0;
+    }
+    if (typeof restartIntent?.waitMs === "number" && Number.isFinite(restartIntent.waitMs)) {
+      return restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
+    }
     try {
+      const { getRuntimeConfig, resolveGatewayRestartDeferralTimeoutMs } =
+        await loadGatewayLifecycleRuntimeModule();
       const timeoutMs = getRuntimeConfig().gateway?.reload?.deferralTimeoutMs;
-      return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? timeoutMs
-        : undefined;
+      return resolveGatewayRestartDeferralTimeoutMs(timeoutMs);
     } catch {
       return DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
     }
   };
 
-  const request = (action: GatewayRunSignalAction, signal: string, restartReason?: string) => {
+  const request = (
+    action: GatewayRunSignalAction,
+    signal: string,
+    restartReason?: string,
+    restartIntent?: RestartIntentOptions,
+  ) => {
     if (shuttingDown) {
       gatewayLog.info(`received ${signal} during shutdown; ignoring`);
       return;
     }
     shuttingDown = true;
     const isRestart = action === "restart";
-    const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs() : 0;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -278,13 +289,18 @@ export async function runGatewayLoop(params: {
       }
       forceExitTimer = setTimeout(() => {
         gatewayLog.error("shutdown timed out; exiting without full cleanup");
-        writeStabilityBundle(
-          isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
-        );
-        // Keep the in-process watchdog below the supervisor stop budget so this
-        // path wins before launchd/systemd escalates to a hard kill. Exit
-        // non-zero on any timeout so supervised installs restart cleanly.
-        exitProcess(1);
+        void (async () => {
+          try {
+            await writeStabilityBundle(
+              isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
+            );
+          } finally {
+            // Keep the in-process watchdog below the supervisor stop budget so this
+            // path wins before launchd/systemd escalates to a hard kill. Exit
+            // non-zero on any timeout so supervised installs restart cleanly.
+            exitProcess(1);
+          }
+        })();
       }, forceExitMs);
     };
     const clearForceExitTimer = () => {
@@ -295,41 +311,74 @@ export async function runGatewayLoop(params: {
       forceExitTimer = null;
     };
 
-    if (!isRestart) {
-      armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
-    } else if (restartDrainTimeoutMs !== undefined) {
-      // Allow extra time for draining active turns on explicitly capped restarts.
-      armForceExitTimer(restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS);
-    }
-
-    const formatRestartDrainBudget = () =>
-      restartDrainTimeoutMs === undefined
-        ? "without a timeout"
-        : `with timeout ${restartDrainTimeoutMs}ms`;
-    const createStillPendingDrainLogger = () =>
-      setInterval(() => {
-        gatewayLog.warn(
-          `still draining ${getActiveTaskCount()} active task(s), ${getActiveEmbeddedRunCount()} active embedded run(s), and ${getActiveBundledRuntimeDepsInstallCount()} runtime deps install(s) before restart`,
-        );
-      }, RESTART_DRAIN_STILL_PENDING_WARN_MS);
-
-    const armCloseForceExitTimerForIndefiniteRestart = () => {
-      if (isRestart && restartDrainTimeoutMs === undefined) {
-        armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
-      }
-    };
-
     void (async () => {
+      const restartDrainTimeoutMs = isRestart
+        ? await resolveRestartDrainTimeoutMs(restartIntent)
+        : 0;
+      if (!isRestart) {
+        armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
+      } else if (restartDrainTimeoutMs !== undefined) {
+        // Allow extra time for draining active turns on explicitly capped restarts.
+        armForceExitTimer(restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS);
+      }
+
+      const formatRestartDrainBudget = () =>
+        restartDrainTimeoutMs === undefined
+          ? "without a timeout"
+          : `with timeout ${restartDrainTimeoutMs}ms`;
+      const armCloseForceExitTimerForIndefiniteRestart = () => {
+        if (isRestart && restartDrainTimeoutMs === undefined) {
+          armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
+        }
+      };
+
       try {
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
+          const {
+            abortEmbeddedPiRun,
+            getInspectableActiveTaskRestartBlockers,
+            getActiveEmbeddedRunCount,
+            getActiveTaskCount,
+            markGatewayDraining,
+            waitForActiveEmbeddedRuns,
+            waitForActiveTasks,
+          } = await loadGatewayLifecycleRuntimeModule();
+          const formatTaskBlockers = () => {
+            const blockers = getInspectableActiveTaskRestartBlockers();
+            if (blockers.length === 0) {
+              return null;
+            }
+            const shown = blockers
+              .slice(0, 8)
+              .map((task) =>
+                [
+                  `taskId=${task.taskId}`,
+                  task.runId ? `runId=${task.runId}` : null,
+                  `status=${task.status}`,
+                  `runtime=${task.runtime}`,
+                  task.label ? `label=${task.label}` : null,
+                  task.title ? `title=${task.title.slice(0, 80)}` : null,
+                ]
+                  .filter((value): value is string => Boolean(value))
+                  .join(" "),
+              );
+            const omitted = blockers.length - shown.length;
+            return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
+          };
+          const createStillPendingDrainLogger = () =>
+            setInterval(() => {
+              gatewayLog.warn(
+                `still draining ${getActiveTaskCount()} active task(s) and ${getActiveEmbeddedRunCount()} active embedded run(s) before restart`,
+              );
+            }, RESTART_DRAIN_STILL_PENDING_WARN_MS);
+
           // Reject new enqueues immediately during the drain window so
           // sessions get an explicit restart error instead of silent task loss.
           markGatewayDraining();
           const activeTasks = getActiveTaskCount();
           const activeRuns = getActiveEmbeddedRunCount();
-          const activeRuntimeDepsInstalls = getActiveBundledRuntimeDepsInstallCount();
 
           // Best-effort abort for compacting runs so long compaction operations
           // don't hold session write locks across restart boundaries.
@@ -337,29 +386,35 @@ export async function runGatewayLoop(params: {
             abortEmbeddedPiRun(undefined, { mode: "compacting" });
           }
 
-          if (activeTasks > 0 || activeRuns > 0 || activeRuntimeDepsInstalls > 0) {
+          if (activeTasks > 0 || activeRuns > 0) {
+            const taskBlockers = formatTaskBlockers();
             gatewayLog.info(
-              `draining ${activeTasks} active task(s), ${activeRuns} active embedded run(s), and ${activeRuntimeDepsInstalls} runtime deps install(s) before restart ${formatRestartDrainBudget()}`,
+              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart ${formatRestartDrainBudget()}`,
             );
-            const stillPendingDrainLogger = createStillPendingDrainLogger();
-            const [tasksDrain, runsDrain, runtimeDepsDrain] = await Promise.all([
-              activeTasks > 0
-                ? waitForActiveTasks(restartDrainTimeoutMs)
-                : Promise.resolve({ drained: true }),
-              activeRuns > 0
-                ? waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
-                : Promise.resolve({ drained: true }),
-              activeRuntimeDepsInstalls > 0
-                ? waitForBundledRuntimeDepsInstallIdle(restartDrainTimeoutMs)
-                : Promise.resolve({ drained: true }),
-            ]).finally(() => clearInterval(stillPendingDrainLogger));
-            if (tasksDrain.drained && runsDrain.drained && runtimeDepsDrain.drained) {
-              gatewayLog.info("all active work drained");
-            } else {
-              gatewayLog.warn("drain timeout reached; proceeding with restart");
-              // Final best-effort abort to avoid carrying active runs into the
-              // next lifecycle when drain time budget is exhausted.
+            if (taskBlockers) {
+              gatewayLog.warn(`restart blocked by active task run(s): ${taskBlockers}`);
+            }
+            if (restartIntent?.force) {
+              gatewayLog.warn("forced restart requested; skipping active work drain");
               abortEmbeddedPiRun(undefined, { mode: "all" });
+            } else {
+              const stillPendingDrainLogger = createStillPendingDrainLogger();
+              const [tasksDrain, runsDrain] = await Promise.all([
+                activeTasks > 0
+                  ? waitForActiveTasks(restartDrainTimeoutMs)
+                  : Promise.resolve({ drained: true }),
+                activeRuns > 0
+                  ? waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
+                  : Promise.resolve({ drained: true }),
+              ]).finally(() => clearInterval(stillPendingDrainLogger));
+              if (tasksDrain.drained && runsDrain.drained) {
+                gatewayLog.info("all active work drained");
+              } else {
+                gatewayLog.warn("drain timeout reached; proceeding with restart");
+                // Final best-effort abort to avoid carrying active runs into the
+                // next lifecycle when drain time budget is exhausted.
+                abortEmbeddedPiRun(undefined, { mode: "all" });
+              }
             }
           }
         }
@@ -385,7 +440,11 @@ export async function runGatewayLoop(params: {
 
   const onSigterm = () => {
     gatewayLog.info("signal SIGTERM received");
-    request(consumeGatewayRestartIntentSync() ? "restart" : "stop", "SIGTERM");
+    void (async () => {
+      const { consumeGatewayRestartIntentPayloadSync } = await loadGatewayLifecycleRuntimeModule();
+      const restartIntent = consumeGatewayRestartIntentPayloadSync();
+      request(restartIntent ? "restart" : "stop", "SIGTERM", undefined, restartIntent ?? undefined);
+    })();
   };
   const onSigint = () => {
     gatewayLog.info("signal SIGINT received");
@@ -393,26 +452,41 @@ export async function runGatewayLoop(params: {
   };
   const onSigusr1 = () => {
     gatewayLog.info("signal SIGUSR1 received");
-    const authorized = consumeGatewaySigusr1RestartAuthorization();
-    if (!authorized) {
-      if (!isGatewaySigusr1RestartExternallyAllowed()) {
-        gatewayLog.warn(
-          "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
-        );
+    void (async () => {
+      const {
+        consumeGatewayRestartIntentPayloadSync,
+        consumeGatewaySigusr1RestartAuthorization,
+        isGatewaySigusr1RestartExternallyAllowed,
+        markGatewaySigusr1RestartHandled,
+        peekGatewaySigusr1RestartReason,
+        scheduleGatewaySigusr1Restart,
+      } = await loadGatewayLifecycleRuntimeModule();
+      const restartIntent = consumeGatewayRestartIntentPayloadSync();
+      if (restartIntent) {
+        request("restart", "SIGUSR1", "gateway.restart", restartIntent);
         return;
       }
-      if (shuttingDown) {
-        gatewayLog.info("received SIGUSR1 during shutdown; ignoring");
+      const authorized = consumeGatewaySigusr1RestartAuthorization();
+      if (!authorized) {
+        if (!isGatewaySigusr1RestartExternallyAllowed()) {
+          gatewayLog.warn(
+            "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+          );
+          return;
+        }
+        if (shuttingDown) {
+          gatewayLog.info("received SIGUSR1 during shutdown; ignoring");
+          return;
+        }
+        // External SIGUSR1 requests should still reuse the in-process restart
+        // scheduler so idle drain and restart coalescing stay consistent.
+        scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
         return;
       }
-      // External SIGUSR1 requests should still reuse the in-process restart
-      // scheduler so idle drain and restart coalescing stay consistent.
-      scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
-      return;
-    }
-    const restartReason = peekGatewaySigusr1RestartReason();
-    markGatewaySigusr1RestartHandled();
-    request("restart", "SIGUSR1", restartReason);
+      const restartReason = peekGatewaySigusr1RestartReason();
+      markGatewaySigusr1RestartHandled();
+      request("restart", "SIGUSR1", restartReason);
+    })();
   };
 
   process.on("SIGTERM", onSigterm);
@@ -420,13 +494,18 @@ export async function runGatewayLoop(params: {
   process.on("SIGUSR1", onSigusr1);
 
   try {
-    const onIteration = createRestartIterationHook(() => {
+    const onIteration = createRestartIterationHook(async () => {
       // After an in-process restart (SIGUSR1), reset command-queue lane state.
       // Interrupted tasks from the previous lifecycle may have left `active`
       // counts elevated (their finally blocks never ran), permanently blocking
       // new work from draining. The same boundary also discards stale restart
       // deferral timers and reloads the task registry from durable state so
       // cancelled/completed work is not kept alive by old in-memory maps.
+      const {
+        reloadTaskRegistryFromStore,
+        resetAllLanes,
+        resetGatewayRestartStateForInProcessRestart,
+      } = await loadGatewayLifecycleRuntimeModule();
       resetAllLanes();
       resetGatewayRestartStateForInProcessRestart();
       reloadTaskRegistryFromStore();
@@ -436,7 +515,7 @@ export async function runGatewayLoop(params: {
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstStart = true;
     for (;;) {
-      onIteration();
+      await onIteration();
       try {
         server = await params.start({ startupStartedAt });
         isFirstStart = false;
@@ -456,7 +535,7 @@ export async function runGatewayLoop(params: {
         await releaseLockIfHeld();
         const errMsg = formatErrorMessage(err);
         const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
-        writeStabilityBundle("gateway.restart_startup_failed", err);
+        await writeStabilityBundle("gateway.restart_startup_failed", err);
         gatewayLog.error(
           `gateway startup failed: ${errMsg}. ` +
             `Process will stay alive; fix the issue and restart.${errStack}`,

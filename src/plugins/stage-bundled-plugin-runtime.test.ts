@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
-import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -93,7 +93,7 @@ afterEach(() => {
 });
 
 describe("stageBundledPluginRuntime", () => {
-  it("stages bundled dist plugins as runtime wrappers and links staged dist node_modules", () => {
+  it("stages bundled dist plugins as runtime wrappers without linking plugin node_modules", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-");
     const distPluginDir = createDistPluginDir(repoRoot, "diffs");
     fs.mkdirSync(path.join(repoRoot, "dist"), { recursive: true });
@@ -124,10 +124,7 @@ describe("stageBundledPluginRuntime", () => {
       pluginId: "diffs",
       expectedImport: distRuntimeImportPath("diffs"),
     });
-    expect(fs.lstatSync(path.join(runtimePluginDir, "node_modules")).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(path.join(runtimePluginDir, "node_modules"))).toBe(
-      fs.realpathSync(path.join(distPluginDir, "node_modules")),
-    );
+    expect(fs.existsSync(path.join(runtimePluginDir, "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(distPluginDir, "node_modules"))).toBe(true);
     expect(
       fs
@@ -454,11 +451,9 @@ describe("stageBundledPluginRuntime", () => {
     };
     const discovery = discoverOpenClawPlugins({
       env,
-      cache: false,
     });
     const manifestRegistry = loadPluginManifestRegistry({
       env,
-      cache: false,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
     });

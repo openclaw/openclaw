@@ -8,7 +8,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -34,6 +34,7 @@ import {
 } from "../infra/session-delivery-queue.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { recordInboundSessionAndDispatchReply } from "../plugin-sdk/inbound-reply-dispatch.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import {
@@ -79,7 +80,7 @@ function enqueueRestartSentinelWake(
     sessionKey,
     ...(deliveryContext ? { deliveryContext } : {}),
   });
-  requestHeartbeatNow({ reason: "wake", sessionKey });
+  requestHeartbeat({ source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey });
 }
 
 async function waitForOutboundRetry(delayMs: number) {
@@ -234,7 +235,12 @@ async function deliverQueuedSessionDelivery(params: {
           }
         : {}),
     });
-    requestHeartbeatNow({ reason: "wake", sessionKey: canonicalKey });
+    requestHeartbeat({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: canonicalKey,
+    });
     return;
   }
 
@@ -249,7 +255,12 @@ async function deliverQueuedSessionDelivery(params: {
           }
         : {}),
     });
-    requestHeartbeatNow({ reason: "wake", sessionKey: canonicalKey });
+    requestHeartbeat({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: canonicalKey,
+    });
     return;
   }
 
@@ -462,7 +473,7 @@ async function loadRestartSentinelStartupTask(params: {
     const threadId =
       payload.threadId ??
       sessionThreadId ??
-      (origin?.threadId != null ? String(origin.threadId) : undefined);
+      (origin?.threadId != null ? stringifyRouteThreadId(origin.threadId) : undefined);
     let resolvedTo: string | undefined;
     let replyToId: string | undefined;
     let resolvedThreadId = threadId;
@@ -488,7 +499,7 @@ async function loadRestartSentinelStartupTask(params: {
         resolvedThreadId =
           replyTransport && Object.hasOwn(replyTransport, "threadId")
             ? replyTransport.threadId != null
-              ? String(replyTransport.threadId)
+              ? stringifyRouteThreadId(replyTransport.threadId)
               : undefined
             : threadId;
       }

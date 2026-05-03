@@ -22,6 +22,7 @@ import {
   resolveEmbeddedAgentStreamFn,
   resolveUnknownToolGuardThreshold,
   shouldCreateBundleMcpRuntimeForAttempt,
+  resolveAttemptToolPolicyMessageProvider,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldStripBootstrapFromEmbeddedContext,
@@ -30,6 +31,7 @@ import {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
+import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;
@@ -71,6 +73,32 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     expect(
       applyEmbeddedAttemptToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name),
     ).toEqual(["exec", "read"]);
+  });
+
+  it("normalizes explicit toolsAllow entries before filtering", () => {
+    const tools = [{ name: "cron" }, { name: "read" }, { name: "message" }];
+
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, [" cron ", "READ"]).map((tool) => tool.name),
+    ).toEqual(["cron", "read"]);
+  });
+});
+
+describe("buildEmbeddedAttemptToolRunContext", () => {
+  it("carries runtime toolsAllow into coding tool construction", () => {
+    expect(
+      buildEmbeddedAttemptToolRunContext({
+        trigger: "manual",
+        jobId: "job-1",
+        memoryFlushWritePath: "memory/log.md",
+        toolsAllow: ["memory_search", "memory_get"],
+      }),
+    ).toMatchObject({
+      trigger: "manual",
+      jobId: "job-1",
+      memoryFlushWritePath: "memory/log.md",
+      runtimeToolAllowlist: ["memory_search", "memory_get"],
+    });
   });
 });
 
@@ -168,12 +196,32 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
   });
 });
 
+describe("resolveAttemptToolPolicyMessageProvider", () => {
+  it("prefers explicit tool-policy provider over transport channel", () => {
+    expect(
+      resolveAttemptToolPolicyMessageProvider({
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+      }),
+    ).toBe("discord-voice");
+  });
+
+  it("falls back to message channel when provider is omitted", () => {
+    expect(resolveAttemptToolPolicyMessageProvider({ messageChannel: "discord" })).toBe("discord");
+  });
+});
+
 describe("resolvePromptBuildHookResult", () => {
   function createLegacyOnlyHookRunner() {
     return {
       hasHooks: vi.fn(
-        (hookName: "before_prompt_build" | "before_agent_start") =>
-          hookName === "before_agent_start",
+        (
+          hookName:
+            | "agent_turn_prepare"
+            | "heartbeat_prompt_contribution"
+            | "before_prompt_build"
+            | "before_agent_start",
+        ) => hookName === "before_agent_start",
       ),
       runBeforePromptBuild: vi.fn(async () => undefined),
       runBeforeAgentStart: vi.fn(async () => ({ prependContext: "from-hook" })),
@@ -183,6 +231,7 @@ describe("resolvePromptBuildHookResult", () => {
   it("reuses precomputed legacy before_agent_start result without invoking hook again", async () => {
     const hookRunner = createLegacyOnlyHookRunner();
     const result = await resolvePromptBuildHookResult({
+      config: {},
       prompt: "hello",
       messages: [],
       hookCtx: {},
@@ -193,6 +242,7 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     expect(result).toEqual({
       prependContext: "from-cache",
+      appendContext: undefined,
       systemPrompt: "legacy-system",
       prependSystemContext: undefined,
       appendSystemContext: undefined,
@@ -203,6 +253,7 @@ describe("resolvePromptBuildHookResult", () => {
     const hookRunner = createLegacyOnlyHookRunner();
     const messages = [{ role: "user", content: "ctx" }];
     const result = await resolvePromptBuildHookResult({
+      config: {},
       prompt: "hello",
       messages,
       hookCtx: {},
@@ -219,17 +270,20 @@ describe("resolvePromptBuildHookResult", () => {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({
         prependContext: "prompt context",
+        appendContext: "prompt append context",
         prependSystemContext: "prompt prepend",
         appendSystemContext: "prompt append",
       })),
       runBeforeAgentStart: vi.fn(async () => ({
         prependContext: "legacy context",
+        appendContext: "legacy append context",
         prependSystemContext: "legacy prepend",
         appendSystemContext: "legacy append",
       })),
     };
 
     const result = await resolvePromptBuildHookResult({
+      config: {},
       prompt: "hello",
       messages: [],
       hookCtx: {},
@@ -237,8 +291,46 @@ describe("resolvePromptBuildHookResult", () => {
     });
 
     expect(result.prependContext).toBe("prompt context\n\nlegacy context");
+    expect(result.appendContext).toBe("prompt append context\n\nlegacy append context");
     expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
     expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+
+  it("applies heartbeat prompt contributions only during heartbeat turns", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "heartbeat_prompt_contribution"),
+      runHeartbeatPromptContribution: vi.fn(async () => ({
+        prependContext: "heartbeat prepend",
+        appendContext: "heartbeat append",
+      })),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+
+    const heartbeatResult = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hello",
+      messages: [],
+      hookCtx: { trigger: "heartbeat", sessionKey: "agent:main:main" },
+      hookRunner,
+    });
+
+    expect(hookRunner.runHeartbeatPromptContribution).toHaveBeenCalledTimes(1);
+    expect(heartbeatResult.prependContext).toBe("heartbeat prepend");
+    expect(heartbeatResult.appendContext).toBe("heartbeat append");
+
+    hookRunner.runHeartbeatPromptContribution.mockClear();
+    const userResult = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hello",
+      messages: [],
+      hookCtx: { trigger: "user", sessionKey: "agent:main:main" },
+      hookRunner,
+    });
+
+    expect(hookRunner.runHeartbeatPromptContribution).not.toHaveBeenCalled();
+    expect(userResult.prependContext).toBeUndefined();
+    expect(userResult.appendContext).toBeUndefined();
   });
 });
 

@@ -85,16 +85,32 @@ export async function prepareRestartScript(
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
+exec 3>&2
 ${logSetup}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
-if systemctl --user restart '${escaped}'; then
-  status=0
-  printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
+if systemctl --user is-active --quiet '${escaped}' || systemctl --user is-enabled --quiet '${escaped}'; then
+  if systemctl --user restart '${escaped}'; then
+    status=0
+    printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
+  else
+    status=$?
+    printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  fi
+elif systemctl is-active --quiet '${escaped}' || systemctl is-enabled --quiet '${escaped}'; then
+  status=78
+  printf '[%s] system-scoped openclaw gateway unit detected; update cannot restart it without sudo. Run: sudo systemctl restart %s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
+  printf '[%s] system-scoped openclaw gateway unit detected; update cannot restart it without sudo. Run: sudo systemctl restart %s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&3 2>/dev/null || true
 else
-  status=$?
-  printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  if systemctl --user restart '${escaped}'; then
+    status=0
+    printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
+  else
+    status=$?
+    printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  fi
 fi
 # Self-cleanup
+exec 3>&-
 rm -f "$0"
 exit "$status"
 `;
@@ -281,6 +297,23 @@ function Get-OpenClawListenerPids {
   $listenerPids | Sort-Object -Unique
 }
 
+function Invoke-OpenClawStartupLauncher {
+  $launcherPath = Join-Path $env:USERPROFILE ".openclaw\\gateway.cmd"
+  if (-not (Test-Path -LiteralPath $launcherPath)) {
+    Write-RestartLog "openclaw restart startup launcher missing source=update path=$launcherPath"
+    return 1
+  }
+
+  try {
+    Start-Process -FilePath $launcherPath -WindowStyle Hidden | Out-Null
+    Write-RestartLog "openclaw restart launched startup fallback source=update path=$launcherPath"
+    return 0
+  } catch {
+    Write-RestartLog "openclaw restart startup fallback failed source=update error=$($_.Exception.Message)"
+    return 1
+  }
+}
+
 $taskName = ${quotedTaskName}
 $port = ${port}
 Write-RestartLog "openclaw restart attempt source=update target=$taskName"
@@ -317,6 +350,9 @@ for ($attempt = 1; $attempt -le 10; $attempt++) {
 }
 
 $status = Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $taskName) -TimeoutSeconds 30
+if ($status -ne 0) {
+  $status = Invoke-OpenClawStartupLauncher
+}
 if ($status -eq 0) {
   Write-RestartLog "openclaw restart done source=update"
 } else {

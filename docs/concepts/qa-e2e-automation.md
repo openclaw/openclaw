@@ -32,7 +32,7 @@ script aliases; both forms are supported.
 | `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                       |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                 |
 | `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                          |
-| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity-gate report.                                                                                    |
+| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report.                                                                                         |
 | `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                           |
 | `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                         |
 | `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                   |
@@ -128,11 +128,11 @@ The doctor checks Convex broker env, validates endpoint settings, and verifies a
 
 Live transport lanes share one contract instead of each inventing their own scenario list shape. `qa-channel` is the broad synthetic product-behavior suite and is not part of the live transport coverage matrix.
 
-| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
-| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
-| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |                             |
-| Telegram | x      | x              |                 |                 |                |                  |                  |                      | x            |                             |
-| Discord  | x      | x              |                 |                 |                |                  |                  |                      |              | x                           |
+| Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
+| -------- | ------ | -------------- | ---------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
+| Matrix   | x      | x              | x          | x               | x               | x              | x                | x                | x                    |              |                             |
+| Telegram | x      | x              | x          |                 |                 |                |                  |                  |                      | x            |                             |
+| Discord  | x      | x              | x          |                 |                 |                |                  |                  |                      |              | x                           |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and future live transports share one explicit transport-contract

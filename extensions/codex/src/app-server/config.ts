@@ -1,13 +1,16 @@
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
-export type CodexAppServerTransportMode = "stdio" | "websocket";
-export type CodexAppServerPolicyMode = "yolo" | "guardian";
+const START_OPTIONS_KEY_SECRET = randomBytes(32);
+
+type CodexAppServerTransportMode = "stdio" | "websocket";
+type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
-export type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
+type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
+type CodexDynamicToolsProfile = "native-first" | "openclaw-compat";
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;
@@ -53,6 +56,8 @@ export type CodexAppServerRuntimeOptions = {
 };
 
 export type CodexPluginConfig = {
+  codexDynamicToolsProfile?: CodexDynamicToolsProfile;
+  codexDynamicToolsExclude?: string[];
   discovery?: {
     enabled?: boolean;
     timeoutMs?: number;
@@ -66,6 +71,7 @@ export type CodexPluginConfig = {
     url?: string;
     authToken?: string;
     headers?: Record<string, string>;
+    clearEnv?: string[];
     requestTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
@@ -83,6 +89,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "url",
   "authToken",
   "headers",
+  "clearEnv",
   "requestTimeoutMs",
   "approvalPolicy",
   "sandbox",
@@ -102,9 +109,9 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "mcpServerName",
 ] as const;
 
-export const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
-export const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
-export const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
+const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
+const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
@@ -116,13 +123,18 @@ const codexAppServerApprovalPolicySchema = z.enum([
 ]);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
-const codexAppServerServiceTierSchema = z.preprocess(
-  (value) => (value === null ? null : resolveServiceTier(value)),
-  z.enum(["fast", "flex"]).nullable().optional(),
-);
+const codexDynamicToolsProfileSchema = z.enum(["native-first", "openclaw-compat"]);
+const codexAppServerServiceTierSchema = z
+  .preprocess(
+    (value) => (value === null ? null : resolveServiceTier(value)),
+    z.enum(["fast", "flex"]).nullable().optional(),
+  )
+  .optional();
 
 const codexPluginConfigSchema = z
   .object({
+    codexDynamicToolsProfile: codexDynamicToolsProfileSchema.optional(),
+    codexDynamicToolsExclude: z.array(z.string()).optional(),
     discovery: z
       .object({
         enabled: z.boolean().optional(),
@@ -152,6 +164,7 @@ const codexPluginConfigSchema = z
         url: z.string().optional(),
         authToken: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
+        clearEnv: z.array(z.string()).optional(),
         requestTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
@@ -188,6 +201,7 @@ export function resolveCodexAppServerRuntimeOptions(
       : "managed";
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
+  const clearEnv = normalizeStringList(config.clearEnv);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
   const policyMode =
@@ -210,6 +224,7 @@ export function resolveCodexAppServerRuntimeOptions(
       ...(url ? { url } : {}),
       ...(authToken ? { authToken } : {}),
       headers,
+      ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     approvalPolicy:
@@ -287,7 +302,7 @@ export function resolveCodexComputerUseConfig(
 
 export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
-  params: { authProfileId?: string } = {},
+  params: { authProfileId?: string; agentDir?: string } = {},
 ): string {
   return JSON.stringify({
     transport: options.transport,
@@ -295,13 +310,16 @@ export function codexAppServerStartOptionsKey(
     commandSource: options.commandSource ?? null,
     args: options.args,
     url: options.url ?? null,
-    authToken: hashSecretForKey(options.authToken),
+    authToken: hashSecretForKey(options.authToken, "authToken"),
     headers: Object.entries(options.headers).toSorted(([left], [right]) =>
       left.localeCompare(right),
     ),
-    env: Object.entries(options.env ?? {}).toSorted(([left], [right]) => left.localeCompare(right)),
+    env: Object.entries(options.env ?? {})
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
+    agentDir: params.agentDir ?? null,
   });
 }
 
@@ -373,6 +391,15 @@ function normalizeHeaders(value: unknown): Record<string, string> {
   );
 }
 
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => readNonEmptyString(entry))
+    .filter((entry): entry is string => entry !== undefined);
+}
+
 function readBooleanEnv(value: string | undefined): boolean | undefined {
   if (value === undefined) {
     return undefined;
@@ -415,11 +442,15 @@ function readNonEmptyString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function hashSecretForKey(value: string | undefined): string | null {
+function hashSecretForKey(value: string | undefined, label: string): string | null {
   if (!value) {
     return null;
   }
-  return createHash("sha256").update(value).digest("hex");
+  return createHmac("sha256", START_OPTIONS_KEY_SECRET)
+    .update(label)
+    .update("\0")
+    .update(value)
+    .digest("hex");
 }
 
 function splitShellWords(value: string): string[] {

@@ -55,6 +55,11 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         },
         list: [{ id: "main", workspace: "/tmp/workspace-main" }],
       },
+      session: {
+        threadBindings: {
+          defaultSpawnContext: "isolated",
+        },
+      },
     });
     currentSessionBindingService = { listBySession: () => [] };
     currentDeliveryTargetResolver = (params) => ({
@@ -134,6 +139,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         agentId: "bot-alpha",
         thread: true,
         mode: "session",
+        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -201,6 +207,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         task: "reply with a marker",
         thread: true,
         mode: "session",
+        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",

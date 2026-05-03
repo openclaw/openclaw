@@ -4,7 +4,10 @@ import type {
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
   ImageGenerationResult,
-  ImageGenerationSourceImage,
+} from "openclaw/plugin-sdk/image-generation";
+import {
+  parseOpenAiCompatibleImageResponse,
+  toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
@@ -388,11 +391,6 @@ function inferImageUploadFileName(params: {
   return `image-${params.index + 1}.${ext}`;
 }
 
-function toOpenAIDataUrl(image: ImageGenerationSourceImage): string {
-  const mimeType = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
-  return `data:${mimeType};base64,${Buffer.from(image.buffer).toString("base64")}`;
-}
-
 async function readResponseBodyText(response: Response): Promise<string> {
   if (!response.body) {
     const text = await response.text();
@@ -539,6 +537,7 @@ function createOpenAIImageGenerationProviderBase(params: {
 }): ImageGenerationProvider {
   return {
     id: params.id,
+    aliases: ["openai-codex"],
     label: params.label,
     defaultModel: DEFAULT_OPENAI_IMAGE_MODEL,
     models: [...OPENAI_IMAGE_MODELS],
@@ -643,7 +642,7 @@ async function generateOpenAICodexImage(params: {
     { type: "input_text", text: req.prompt },
     ...inputImages.map((image) => ({
       type: "input_image",
-      image_url: toOpenAIDataUrl(image),
+      image_url: toImageDataUrl({ buffer: image.buffer, mimeType: image.mimeType }),
       detail: "auto",
     })),
   ];
@@ -876,21 +875,13 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
 
         const data = (await response.json()) as OpenAIImageApiResponse;
         const output = resolveOutputMime(req.outputFormat);
-        const images = (data.data ?? [])
-          .map((entry, index) => {
-            if (!entry.b64_json) {
-              return null;
-            }
-            return Object.assign(
-              {
-                buffer: Buffer.from(entry.b64_json, `base64`),
-                mimeType: output.mimeType,
-                fileName: `image-${index + 1}.${output.extension}`,
-              },
-              entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {},
-            );
-          })
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+        const images = parseOpenAiCompatibleImageResponse(data, {
+          defaultMimeType: output.mimeType,
+        }).map((image, index) =>
+          Object.assign(image, {
+            fileName: `image-${index + 1}.${output.extension}`,
+          }),
+        );
 
         return {
           images,

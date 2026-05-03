@@ -2,7 +2,7 @@ import {
   describeBundledMetadataOnlyChannelCatalogContract,
   describeChannelCatalogEntryContract,
   describeOfficialFallbackChannelCatalogContract,
-} from "../../../../test/helpers/channels/channel-catalog-contract.js";
+} from "./test-helpers/channel-catalog-contract.js";
 
 describeChannelCatalogEntryContract({
   channelId: "msteams",
@@ -44,7 +44,7 @@ describeChannelCatalogEntryContract({
 });
 
 describeChannelCatalogEntryContract({
-  channelId: "openclaw-plugin-yuanbao",
+  channelId: "yuanbao",
   npmSpec: "openclaw-plugin-yuanbao@2.11.0",
   alias: "yb",
 });

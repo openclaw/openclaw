@@ -3,7 +3,7 @@ import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
@@ -29,12 +29,11 @@ function collectPluginRegistryState(
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const registry = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
-    env,
-    includeDisabled: true,
-  });
+    env: env ?? process.env,
+  }).manifestRegistry;
   const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
   const installedIds = new Set<string>();
   for (const pluginId of Object.keys(cfg.plugins?.installs ?? {})) {
@@ -74,6 +73,9 @@ export function isStalePluginAutoRepairBlocked(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): boolean {
+  if (cfg.plugins?.enabled === false) {
+    return false;
+  }
   return collectPluginRegistryState(cfg, env).hasDiscoveryErrors;
 }
 
@@ -81,6 +83,9 @@ export function scanStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): StalePluginConfigHit[] {
+  if (cfg.plugins?.enabled === false) {
+    return [];
+  }
   return scanStalePluginConfigWithState(cfg, collectPluginRegistryState(cfg, env));
 }
 
@@ -99,7 +104,7 @@ function scanStalePluginConfigWithState(
       continue;
     }
     const pluginId = normalizePluginId(rawPluginId);
-    if (!pluginId || knownIds.has(pluginId)) {
+    if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
       continue;
     }
     hits.push({
@@ -114,7 +119,7 @@ function scanStalePluginConfigWithState(
   if (entries) {
     for (const rawPluginId of Object.keys(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
-      if (!pluginId || knownIds.has(pluginId)) {
+      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
         continue;
       }
       hits.push({
@@ -268,6 +273,9 @@ export function maybeRepairStalePluginConfig(
   config: OpenClawConfig;
   changes: string[];
 } {
+  if (cfg.plugins?.enabled === false) {
+    return { config: cfg, changes: [] };
+  }
   const registryState = collectPluginRegistryState(cfg, env);
   if (registryState.hasDiscoveryErrors) {
     return { config: cfg, changes: [] };

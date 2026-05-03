@@ -72,6 +72,8 @@ export type AcpSessionRuntimeOptions = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
+  forceReuse?: boolean;
   authProfileId?: string;
   authEpoch?: string;
   authEpochVersion?: number;
@@ -112,6 +114,39 @@ export type SessionPluginDebugEntry = {
   lines: string[];
 };
 
+export type SessionPluginJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SessionPluginJsonValue[]
+  | { [key: string]: SessionPluginJsonValue };
+
+export type SessionPluginNextTurnInjection = {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+  text: string;
+  idempotencyKey?: string;
+  placement: "prepend_context" | "append_context";
+  ttlMs?: number;
+  createdAt: number;
+  metadata?: SessionPluginJsonValue;
+};
+
+export type SubagentRecoveryState = {
+  /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
+  automaticAttempts?: number;
+  /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
+  lastAttemptAt?: number;
+  /** Registry run id that triggered the latest automatic orphan-recovery resume. */
+  lastRunId?: string;
+  /** Timestamp (ms) when automatic recovery was tombstoned for this session. */
+  wedgedAt?: number;
+  /** Human-readable reason automatic recovery was tombstoned. */
+  wedgedReason?: string;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -128,6 +163,10 @@ export type SessionEntry = {
   heartbeatIsolatedBaseSessionKey?: string;
   /** Heartbeat task state (task name -> last run timestamp ms). */
   heartbeatTaskState?: Record<string, number>;
+  /** Plugin-owned session state, grouped by plugin id then extension namespace. */
+  pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Durable one-shot prompt additions drained before the next agent turn. */
+  pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -149,6 +188,8 @@ export type SessionEntry = {
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Durable guard state for automatic subagent orphan recovery. */
+  subagentRecovery?: SubagentRecoveryState;
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
@@ -489,6 +530,14 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /**
+   * Runtime-only, never persisted. Carries the full parsed Skill[] (including
+   * each SKILL.md body) so the embedded runner can skip a workspace skill
+   * scan within a turn. Stripped from sessions.json on every read and write
+   * via normalizeSessionStore — see store-load.ts. On a cold session resume
+   * this is undefined and src/agents/pi-embedded-runner/skills-runtime.ts
+   * rebuilds it by reloading skill entries from disk.
+   */
   resolvedSkills?: Skill[];
   version?: number;
 };

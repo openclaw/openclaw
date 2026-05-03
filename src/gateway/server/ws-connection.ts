@@ -11,7 +11,7 @@ import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
-import { getPreauthHandshakeTimeoutMsFromEnv } from "../handshake-timeouts.js";
+import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
 import { isLoopbackAddress } from "../net.js";
 import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
 import { clearNodeWakeState } from "../server-methods/nodes-wake-state.js";
@@ -131,6 +131,8 @@ export type GatewayWsSharedHandlerParams = {
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
+  preauthHandshakeTimeoutMs?: number;
+  isStartupPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -167,6 +169,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       resolveSharedGatewaySessionGeneration(getResolvedAuth()),
     rateLimiter,
     browserRateLimiter,
+    isStartupPending,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -264,12 +267,17 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       payload: { nonce: connectNonce, ts: Date.now() },
     });
 
+    let pingTimer: ReturnType<typeof setInterval> | undefined;
+
     const close = (code = 1000, reason?: string) => {
       if (closed) {
         return;
       }
       closed = true;
       clearTimeout(handshakeTimer);
+      if (pingTimer !== undefined) {
+        clearInterval(pingTimer);
+      }
       releasePreauthBudget();
       if (client) {
         clients.delete(client);
@@ -365,7 +373,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       close();
     });
 
-    const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
+    const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
+      configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
+    });
     const handshakeTimer = setTimeout(() => {
       if (!client) {
         handshakeState = "failed";
@@ -400,6 +410,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       getRequiredSharedGatewaySessionGeneration,
       rateLimiter,
       browserRateLimiter,
+      isStartupPending,
       gatewayMethods,
       events,
       extraHandlers,
@@ -417,6 +428,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         releasePreauthBudget();
         client = next;
         clients.add(next);
+        pingTimer = setInterval(() => {
+          try {
+            socket.ping();
+          } catch {
+            // close() clears the timer; ping can race with a socket already entering CLOSING.
+          }
+        }, 25_000);
         return true;
       },
       setHandshakeState: (next) => {
