@@ -600,6 +600,17 @@ function normalizeCompletionIntegrityText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function hasIncompleteCompletionPrefixBoundary(value: string): boolean {
+  const trimmed = value.replace(/[\s"')\]]+$/g, "");
+  if (!trimmed) {
+    return false;
+  }
+  if (/[.!?]$/.test(trimmed)) {
+    return false;
+  }
+  return /[:;,]$/.test(trimmed);
+}
+
 function hasIncompleteCompletionPrefix(response: unknown, completionFallbackText: string): boolean {
   const result = getGatewayAgentResult(response);
   if (!result || hasMessagingToolDeliveryEvidence(result)) {
@@ -616,7 +627,7 @@ function hasIncompleteCompletionPrefix(response: unknown, completionFallbackText
   ) {
     return false;
   }
-  return expected.startsWith(visible);
+  return expected.startsWith(visible) && hasIncompleteCompletionPrefixBoundary(visible);
 }
 
 function shouldSendCompletionFallback(response: unknown, completionFallbackText: string): boolean {

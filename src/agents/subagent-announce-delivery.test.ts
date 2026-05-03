@@ -673,6 +673,45 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("keeps copied complete-sentence requester summaries primary", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build." }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-copied-summary-primary",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses a direct thread fallback when announce-agent delivery fails", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("UNAVAILABLE: gateway lost final output");
