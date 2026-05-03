@@ -196,6 +196,10 @@ describe("slack preview streaming eligibility", () => {
   });
 
   it("allows top-level DM draft previews without a reply thread", () => {
+    // The earlier carve-out kept DM-without-thread off, which prevented
+    // the bullet preview from kicking in for the most common Slack
+    // scenario (DM with the bot, replies don't auto-thread). Non-off
+    // mode now always enables preview streaming.
     expect(
       shouldEnableSlackPreviewStreaming({
         mode: "partial",
