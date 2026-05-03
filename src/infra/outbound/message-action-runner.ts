@@ -1015,6 +1015,39 @@ export async function runMessageAction(
 
   const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
+  // Peer-aware binding lookup — strictly more specific than agent-keyed
+  // lookup, so it runs first. Bindings that pin (channel, peer.id, accountId)
+  // should deterministically route outbound sends to that account regardless
+  // of which agent's CLI subprocess is doing the sending.
+  if (!accountId) {
+    const peerTarget =
+      readStringParam(params, "to") ??
+      readStringParam(params, "channelId") ??
+      readStringParam(params, "target");
+    if (peerTarget) {
+      const channelLc = typeof channel === "string" ? channel.trim().toLowerCase() : "";
+      const rawBindings = Array.isArray((cfg as { bindings?: unknown })?.bindings)
+        ? ((cfg as { bindings?: unknown[] }).bindings as unknown[])
+        : [];
+      for (const b of rawBindings) {
+        const m = b && typeof b === "object" ? (b as { match?: unknown }).match : null;
+        if (!m || typeof m !== "object") continue;
+        const match = m as { channel?: unknown; peer?: unknown; accountId?: unknown };
+        const bCh = typeof match.channel === "string" ? match.channel.trim().toLowerCase() : "";
+        if (bCh !== channelLc) continue;
+        const peer = match.peer && typeof match.peer === "object"
+          ? (match.peer as { id?: unknown })
+          : null;
+        const bPeerId = peer && typeof peer.id === "string" ? peer.id.trim() : "";
+        if (!bPeerId || bPeerId !== peerTarget.trim()) continue;
+        const bAcc = typeof match.accountId === "string" ? match.accountId.trim() : "";
+        if (bAcc && bAcc !== "*") {
+          accountId = bAcc;
+          break;
+        }
+      }
+    }
+  }
   if (!accountId && resolvedAgentId) {
     accountId = resolveTargetBoundAccountId({
       cfg,
