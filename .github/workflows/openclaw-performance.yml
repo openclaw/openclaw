@@ -92,6 +92,7 @@ jobs:
     env:
       KOVA_REF: ${{ inputs.kova_ref || 'b63b6f9e20efb23641df00487e982230d81a90ac' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
+      PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
       BUNDLE_DIR: ${{ github.workspace }}/.artifacts/kova/bundles/${{ matrix.lane }}
       SUMMARY_DIR: ${{ github.workspace }}/.artifacts/kova/summaries
@@ -146,6 +147,15 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ inputs.target_ref || github.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout performance workflow helpers
+        if: steps.lane.outputs.run == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: .artifacts/performance-workflow
           fetch-depth: 1
           persist-credentials: false
 
@@ -310,7 +320,7 @@ jobs:
             report_url="https://github.com/openclaw/clawgrit-reports/tree/main/openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
           fi
           summary_path="$SUMMARY_DIR/${LANE_ID}.md"
-          summary_args=(node scripts/kova-ci-summary.mjs --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
+          summary_args=(node "$PERFORMANCE_HELPER_DIR/scripts/kova-ci-summary.mjs" --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
           if [[ -n "$report_url" ]]; then
             summary_args+=(--report-url "$report_url")
           fi
@@ -349,6 +359,24 @@ jobs:
           fi
 
           mkdir -p "$SOURCE_PERF_DIR/mock-hello"
+          if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:gateway:cpu-scenarios'] && scripts.openclaw && fs.existsSync('scripts/bench-cli-startup.ts') ? 0 : 1)"; then
+            cat > "$SOURCE_PERF_DIR/index.md" <<EOF
+          # OpenClaw Source Performance
+
+          Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          Source probes skipped for this tested ref because one or more probe entry points are not present in the checked-out source tree.
+
+          ## Test scope
+
+          - Tested ref: ${TESTED_REF}
+          - Tested SHA: ${TESTED_SHA}
+          - Required scripts: test:gateway:cpu-scenarios, openclaw, scripts/bench-cli-startup.ts
+          EOF
+            cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           pnpm build
 
           pnpm test:gateway:cpu-scenarios \
@@ -432,7 +460,7 @@ jobs:
           cleanup_gateway
           trap - EXIT
 
-          pnpm perf:source:summary \
+          node "$PERFORMANCE_HELPER_DIR/scripts/openclaw-performance-source-summary.mjs" \
             --source-dir "$SOURCE_PERF_DIR" \
             --output "$SOURCE_PERF_DIR/index.md"
 
