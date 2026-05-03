@@ -785,6 +785,8 @@ function renderSessionsCard(
       case "tokens":
         return getSessionMetricValue(s, "tokens");
     }
+    const exhaustiveSort: never = sessionSort;
+    return exhaustiveSort;
   };
 
   const sortedSessions = [...sessions].toSorted((a, b) => {

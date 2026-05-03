@@ -17,6 +17,7 @@ import {
   loadSessionCostSummaryFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
+  requestCostUsageCacheRefresh,
   refreshCostUsageCache,
 } from "./session-cost-usage.js";
 
@@ -798,6 +799,70 @@ describe("session cost usage", () => {
         ]);
         return firstWarm.summary?.totalTokens === 10 && secondWarm.summary?.totalTokens === 20;
       });
+    });
+  });
+
+  it("preserves full refreshes when queued with session summary refreshes", async () => {
+    const root = await makeSessionCostRoot("cost-cache-full-plus-session");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const firstSessionFile = path.join(sessionsDir, "sess-cache-full-plus-session-a.jsonl");
+    const secondSessionFile = path.join(sessionsDir, "sess-cache-full-plus-session-b.jsonl");
+    const entry = (timestamp: string, totalTokens: number) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        usage: {
+          input: totalTokens,
+          output: 0,
+          totalTokens,
+          cost: { total: totalTokens / 1000 },
+        },
+      },
+    });
+
+    await Promise.all([
+      fs.writeFile(
+        firstSessionFile,
+        JSON.stringify(entry("2026-02-05T12:00:00.000Z", 10)),
+        "utf-8",
+      ),
+      fs.writeFile(
+        secondSessionFile,
+        JSON.stringify(entry("2026-02-05T12:01:00.000Z", 20)),
+        "utf-8",
+      ),
+    ]);
+
+    await withStateDir(root, async () => {
+      requestCostUsageCacheRefresh();
+      requestCostUsageCacheRefresh({ sessionFiles: [firstSessionFile] });
+
+      await waitFor(async () => {
+        const summary = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+        const sessionSummary = await loadSessionCostSummaryFromCache({
+          sessionId: "sess-cache-full-plus-session-a",
+          sessionFile: firstSessionFile,
+          requestRefresh: false,
+        });
+        return (
+          summary.cacheStatus?.status === "fresh" && sessionSummary.summary?.totalTokens === 10
+        );
+      });
+
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        files: Record<string, { sessionSummary?: unknown }>;
+      };
+      expect(cache.files[firstSessionFile]).toBeDefined();
+      expect(cache.files[secondSessionFile]).toBeDefined();
+      expect(cache.files[firstSessionFile]?.sessionSummary).toBeDefined();
+      expect(cache.files[secondSessionFile]?.sessionSummary).toBeUndefined();
     });
   });
 

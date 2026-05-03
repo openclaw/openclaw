@@ -1327,20 +1327,23 @@ async function runQueuedUsageCostRefresh(
   try {
     while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
       const fullRefreshRequested = state.fullRefreshRequested;
-      const sessionFiles = [...state.pendingSessionFiles];
-      state.pendingSessionFiles.clear();
+      const sessionFiles = fullRefreshRequested ? [] : [...state.pendingSessionFiles];
+      if (!fullRefreshRequested) {
+        state.pendingSessionFiles.clear();
+      }
       state.fullRefreshRequested = false;
       const result = await refreshCostUsageCache({
         config: state.config,
         agentId: state.agentId,
-        sessionFiles,
+        sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
       });
       if (result === "busy") {
         if (fullRefreshRequested) {
           state.fullRefreshRequested = true;
-        }
-        for (const sessionFile of sessionFiles) {
-          state.pendingSessionFiles.add(sessionFile);
+        } else {
+          for (const sessionFile of sessionFiles) {
+            state.pendingSessionFiles.add(sessionFile);
+          }
         }
         retryDelayMs = 50;
         break;
