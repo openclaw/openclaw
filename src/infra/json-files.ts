@@ -84,22 +84,55 @@ export function readJsonFileSync(filePath: string): unknown {
 export async function writeJsonAtomic(
   filePath: string,
   value: unknown,
-  options?: { mode?: number; trailingNewline?: boolean; ensureDirMode?: number },
+  options?: {
+    mode?: number;
+    trailingNewline?: boolean;
+    ensureDirMode?: number;
+    /**
+     * When `false`, skip the post-write `fsync` on the temp file and the
+     * parent-directory `fsync`. The atomic-rename guarantee against partial
+     * reads is preserved (replace-with-tmp-then-rename), but the on-disk
+     * write may not survive an OS-level crash mid-write.
+     *
+     * Defaults to `true`. Hot-path callers whose payload is recoverable
+     * from another durable source (e.g. the session-store registry, which
+     * can be reconstructed from per-session JSONL transcripts) can opt out
+     * to avoid event-loop starvation under concurrent write load.
+     * See https://github.com/openclaw/openclaw/issues/73655.
+     */
+    durable?: boolean;
+  },
 ) {
   const text = JSON.stringify(value, null, 2);
   await writeTextAtomic(filePath, text, {
     mode: options?.mode,
     ensureDirMode: options?.ensureDirMode,
     appendTrailingNewline: options?.trailingNewline,
+    durable: options?.durable,
   });
 }
 
 export async function writeTextAtomic(
   filePath: string,
   content: string,
-  options?: { mode?: number; ensureDirMode?: number; appendTrailingNewline?: boolean },
+  options?: {
+    mode?: number;
+    ensureDirMode?: number;
+    appendTrailingNewline?: boolean;
+    /**
+     * When `false`, skip the post-write `fsync` on the temp file and the
+     * parent-directory `fsync`. The atomic-rename guarantee against partial
+     * reads is preserved (replace-with-tmp-then-rename), but the on-disk
+     * write may not survive an OS-level crash mid-write.
+     *
+     * Defaults to `true`. See `writeJsonAtomic` for full rationale and
+     * issue #73655.
+     */
+    durable?: boolean;
+  },
 ) {
   const mode = options?.mode ?? 0o600;
+  const durable = options?.durable ?? true;
   const payload =
     options?.appendTrailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
   const mkdirOptions: { recursive: true; mode?: number } = { recursive: true };
@@ -113,7 +146,9 @@ export async function writeTextAtomic(
     const tmpHandle = await fs.open(tmp, "w", mode);
     try {
       await tmpHandle.writeFile(payload, { encoding: "utf8" });
-      await tmpHandle.sync();
+      if (durable) {
+        await tmpHandle.sync();
+      }
     } finally {
       await tmpHandle.close().catch(() => undefined);
     }
@@ -123,15 +158,17 @@ export async function writeTextAtomic(
       // best-effort; ignore on platforms without chmod
     }
     await replaceFileWithWindowsFallback(tmp, filePath, mode);
-    try {
-      const dirHandle = await fs.open(parentDir, "r");
+    if (durable) {
       try {
-        await dirHandle.sync();
-      } finally {
-        await dirHandle.close().catch(() => undefined);
+        const dirHandle = await fs.open(parentDir, "r");
+        try {
+          await dirHandle.sync();
+        } finally {
+          await dirHandle.close().catch(() => undefined);
+        }
+      } catch {
+        // best-effort; some platforms/filesystems do not support syncing directories.
       }
-    } catch {
-      // best-effort; some platforms/filesystems do not support syncing directories.
     }
     try {
       await fs.chmod(filePath, mode);
