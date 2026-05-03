@@ -2363,7 +2363,7 @@ export async function runEmbeddedPiAgent(
             !attempt.yieldDetected &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
-            !hasMessagingToolDeliveryEvidence(attempt) &&
+            !resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects &&
             compactionContinuationRetryAttempts < 1
           ) {
             compactionContinuationRetryAttempts += 1;

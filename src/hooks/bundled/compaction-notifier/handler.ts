@@ -1,21 +1,28 @@
-const handler = async (event: any) => {
+import type { HookHandler } from "../../hooks.js";
+
+function readOptionalNumber(context: Record<string, unknown>, key: string): number | undefined {
+  const value = context[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+const handler: HookHandler = async (event) => {
   try {
-    if (!event || !Array.isArray(event.messages)) return;
-    const context = event.context ?? {};
+    const context = event.context;
 
     if (event.type === "session" && event.action === "compact:before") {
-      const messageCount = typeof context.messageCount === "number" && context.messageCount >= 0
-        ? ` (${context.messageCount} messages)`
+      const messageCount = readOptionalNumber(context, "messageCount");
+      const messageSuffix = messageCount !== undefined && messageCount >= 0
+        ? ` (${messageCount} messages)`
         : "";
-      event.messages.push(`🧹 Compacting context${messageCount} so I can continue without losing history…`);
+      event.messages.push(`🧹 Compacting context${messageSuffix} so I can continue without losing history…`);
       return;
     }
 
     if (event.type === "session" && event.action === "compact:after") {
-      const before = typeof context.tokensBefore === "number" ? context.tokensBefore : undefined;
-      const after = typeof context.tokensAfter === "number" ? context.tokensAfter : undefined;
-      const tokenDelta = before !== undefined && after !== undefined
-        ? ` (${before.toLocaleString()} → ${after.toLocaleString()} tokens)`
+      const tokensBefore = readOptionalNumber(context, "tokensBefore");
+      const tokensAfter = readOptionalNumber(context, "tokensAfter");
+      const tokenDelta = tokensBefore !== undefined && tokensAfter !== undefined
+        ? ` (${tokensBefore.toLocaleString()} → ${tokensAfter.toLocaleString()} tokens)`
         : "";
       event.messages.push(`✅ Context compacted${tokenDelta}. Continuing from where I left off.`);
     }
