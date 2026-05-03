@@ -173,10 +173,10 @@ Docs: https://docs.openclaw.ai
 - Memory-core: treat exhausted file watcher limits as non-fatal for builtin memory auto-sync while preserving fatal handling for unrelated disk-full errors. (#73357) Thanks @solodmd.
 - Providers/Ollama: restore catalog context-window forwarding as `num_ctx` for native `/api/chat` requests; fixes tool selection and context truncation regressions on models with catalog entries (qwen3, llama3, gemma3, …) when no explicit `params.num_ctx` was configured. Fixes #76117. (#76181) Thanks @openperf.
 - Plugins/install: pin npm plugin installs to the verified resolved version and reject package-lock version or integrity drift, so mutable tags cannot race integrity checks into accepting a different artifact. Thanks @Lucenx9.
-
 - Plugins/providers: preserve scoped cold-load fallback for enabled external manifest-contract capability providers missing from the startup registry, so providers such as Fish Audio can resolve on request without requiring `activation.onStartup` for correctness. (#76536) Thanks @Conan-Scott.
 - Gateway/update: carry `continuationMessage` from `update.run` into successful restart sentinels so session-scoped self-updates can resume one follow-up turn after the Gateway restarts. Refs #71178. (#74362) Thanks @100menotu001, @HeilbronAILabs, and @artnking.
 - Agents/fallback: suppress duplicate current-turn user-message transcript writes after embedded fallback retries while still sending the retry prompt to the model. (#63696) Thanks @dashhuang.
+- Plugins/memory-lancedb: add configurable `embedding.timeoutMs` and `embedding.maxRetries` for OpenAI-compatible embedding requests, validated and clamped to safe ranges with silent fallback to SDK defaults on out-of-bounds input. (#56532) Thanks @amittell.
 
 ## 2026.5.2
 

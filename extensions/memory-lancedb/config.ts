@@ -9,6 +9,8 @@ export type MemoryConfig = {
     apiKey?: string;
     baseUrl?: string;
     dimensions?: number;
+    timeoutMs?: number;
+    maxRetries?: number;
   };
   dreaming?: Record<string, unknown>;
   dbPath?: string;
@@ -58,7 +60,15 @@ const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
 };
-const EMBEDDING_CONFIG_KEYS = ["provider", "apiKey", "model", "baseUrl", "dimensions"] as const;
+const EMBEDDING_CONFIG_KEYS = [
+  "provider",
+  "apiKey",
+  "model",
+  "baseUrl",
+  "dimensions",
+  "timeoutMs",
+  "maxRetries",
+] as const;
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
@@ -170,6 +180,28 @@ export const memoryConfigSchema = {
       }
     }
 
+    // Clamp timeoutMs to [1000, 60000]; fall back to undefined (uses SDK default) if invalid
+    const rawTimeoutMs = typeof embedding.timeoutMs === "number" ? embedding.timeoutMs : undefined;
+    const timeoutMs =
+      rawTimeoutMs !== undefined &&
+      Number.isFinite(rawTimeoutMs) &&
+      rawTimeoutMs >= 1000 &&
+      rawTimeoutMs <= 60_000
+        ? rawTimeoutMs
+        : undefined;
+
+    // Clamp maxRetries to integer in [0, 5]; fall back to undefined (uses SDK default) if invalid
+    const rawMaxRetries =
+      typeof embedding.maxRetries === "number" ? embedding.maxRetries : undefined;
+    const maxRetries =
+      rawMaxRetries !== undefined &&
+      Number.isFinite(rawMaxRetries) &&
+      Number.isInteger(rawMaxRetries) &&
+      rawMaxRetries >= 0 &&
+      rawMaxRetries <= 5
+        ? rawMaxRetries
+        : undefined;
+
     return {
       embedding: {
         provider,
@@ -178,6 +210,8 @@ export const memoryConfigSchema = {
         baseUrl:
           typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
         dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
+        timeoutMs,
+        maxRetries,
       },
       dreaming,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
@@ -216,6 +250,18 @@ export const memoryConfigSchema = {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
       help: "OpenAI embedding model to use",
+    },
+    "embedding.timeoutMs": {
+      label: "Timeout (ms)",
+      placeholder: "10000",
+      help: "Timeout for embedding API requests in milliseconds",
+      advanced: true,
+    },
+    "embedding.maxRetries": {
+      label: "Max Retries",
+      placeholder: "1",
+      help: "Maximum number of retries for failed embedding requests",
+      advanced: true,
     },
     dbPath: {
       label: "Database Path",
