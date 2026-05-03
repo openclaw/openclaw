@@ -27,6 +27,14 @@ export interface StageTraceParams {
   provider?: string;
   model?: string;
   gatewayPort?: number;
+  /**
+   * The Paperclip heartbeat run UUID, when this gateway run was dispatched by
+   * Paperclip. Stored as Langfuse trace metadata so external tools (like the
+   * agentos-smoke-test skill) can correlate Paperclip runs with their gateway
+   * stage timings. Populated from the `PAPERCLIP_RUN_ID` env var by the
+   * embedded runner; absent for non-Paperclip-driven runs.
+   */
+  paperclipRunId?: string;
   summary: StageSummary;
 }
 
@@ -125,6 +133,7 @@ export function traceStartupStages(params: StageTraceParams): void {
         model: params.model,
         startupTotalMs: params.summary.totalMs,
         gatewayPort: params.gatewayPort,
+        ...(params.paperclipRunId ? { paperclipRunId: params.paperclipRunId } : {}),
       },
     });
 
@@ -193,6 +202,7 @@ export function tracePrepStages(params: StageTraceParams): void {
         prepTotalMs: params.summary.totalMs,
         gatewayPort: params.gatewayPort,
         ...(startupEntry ? { correlatedStartupTraceId: startupEntry.traceId } : {}),
+        ...(params.paperclipRunId ? { paperclipRunId: params.paperclipRunId } : {}),
       },
     });
 

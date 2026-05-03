@@ -1886,15 +1886,14 @@ export async function runEmbeddedAttempt(
       emitPrepStageSummary("stream-ready");
       // Emit prep-stage timings to Langfuse (fire-and-forget)
       try {
-        const traceMod = await import("../../../infra/langfuse-stage-traces.js").catch(
-          () => null,
-        );
+        const traceMod = await import("../../../infra/langfuse-stage-traces.js").catch(() => null);
         traceMod?.tracePrepStages({
           runId: params.runId,
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           provider: params.provider,
           model: params.modelId,
+          paperclipRunId: process.env.PAPERCLIP_RUN_ID || undefined,
           summary: prepStages.snapshot(),
         });
       } catch {

@@ -1020,6 +1020,7 @@ export async function runEmbeddedPiAgent(
                 agentId: workspaceResolution.agentId,
                 provider,
                 model: modelId,
+                paperclipRunId: process.env.PAPERCLIP_RUN_ID || undefined,
                 summary: startupStages.snapshot(),
               });
             } catch {
