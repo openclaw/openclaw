@@ -1665,7 +1665,7 @@ describe("oversized transcript line guards", () => {
     storePath = nextStorePath;
   });
 
-  test("readRecentSessionMessagesAsync skips oversized JSONL lines", async () => {
+  test("readRecentSessionMessagesAsync replaces oversized JSONL lines with placeholders", async () => {
     const sessionId = "test-oversized-recent";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const oversizedContent = "x".repeat(300 * 1024);
@@ -1681,9 +1681,10 @@ describe("oversized transcript line guards", () => {
       maxMessages: 10,
     });
 
-    const contents = out.map((m) => (typeof m.content === "string" ? m.content : ""));
-    expect(contents).not.toContain(oversizedContent);
-    expect(contents).toContain("after oversized");
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain(oversizedContent);
+    expect(serialized).toContain("[chat.history omitted: message too large]");
+    expect(serialized).toContain("after oversized");
   });
 
   test("readRecentSessionUsageFromTranscriptAsync skips oversized lines", async () => {
@@ -1728,7 +1729,11 @@ describe("oversized transcript line guards", () => {
 
   test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {
     const sessionId = "test-async-title-bounded";
-    writeTranscript(tmpDir, sessionId, buildBasicSessionTranscript(sessionId, "User says hi", "Bot says hello"));
+    writeTranscript(
+      tmpDir,
+      sessionId,
+      buildBasicSessionTranscript(sessionId, "User says hi", "Bot says hello"),
+    );
 
     const syncResult = readSessionTitleFieldsFromTranscript(sessionId, storePath);
     const asyncResult = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
