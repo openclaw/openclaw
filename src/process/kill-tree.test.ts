@@ -100,7 +100,7 @@ describe("killProcessTree", () => {
     });
   });
 
-  it("on Unix sends SIGTERM first and skips SIGKILL when process exits", async () => {
+  it("on Unix sends SIGTERM first and skips SIGKILL when process exits (detached:true)", async () => {
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
       if (pid === -3333 && signal === 0) {
         throw new Error("ESRCH");
@@ -112,7 +112,7 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withPlatform("linux", async () => {
-      killProcessTree(3333, { graceMs: 10 });
+      killProcessTree(3333, { graceMs: 10, detached: true });
 
       await vi.advanceTimersByTimeAsync(10);
 
@@ -122,7 +122,7 @@ describe("killProcessTree", () => {
     });
   });
 
-  it("on Unix sends SIGKILL after grace period when process is still alive", async () => {
+  it("on Unix sends SIGKILL after grace period when process is still alive (detached:true)", async () => {
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
       if (pid === -4444 && signal === 0) {
         return true;
@@ -131,7 +131,7 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withPlatform("linux", async () => {
-      killProcessTree(4444, { graceMs: 5 });
+      killProcessTree(4444, { graceMs: 5, detached: true });
 
       await vi.advanceTimersByTimeAsync(5);
 
@@ -161,11 +161,8 @@ describe("killProcessTree", () => {
     });
   });
 
-  it("on Unix uses group kill by default (detached:true preserved as the existing behavior)", async () => {
+  it("on Unix defaults to direct-pid kill (no group kill) when detached is omitted (#76259)", async () => {
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
-      if (pid === -6666 && signal === 0) {
-        throw new Error("ESRCH");
-      }
       if (pid === 6666 && signal === 0) {
         throw new Error("ESRCH");
       }
@@ -176,7 +173,30 @@ describe("killProcessTree", () => {
       killProcessTree(6666, { graceMs: 10 });
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(killSpy).toHaveBeenCalledWith(-6666, "SIGTERM");
+      // Default must be safe: direct pid kill only. Group kill (-pid) would
+      // SIGTERM the gateway's own process group when the child was not detached.
+      expect(killSpy).toHaveBeenCalledWith(6666, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-6666, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-6666, "SIGKILL");
+    });
+  });
+
+  it("on Unix uses group kill when detached:true is explicit", async () => {
+    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -7777 && signal === 0) {
+        throw new Error("ESRCH");
+      }
+      if (pid === 7777 && signal === 0) {
+        throw new Error("ESRCH");
+      }
+      return true;
+    }) as typeof process.kill);
+
+    await withPlatform("linux", async () => {
+      killProcessTree(7777, { graceMs: 10, detached: true });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(killSpy).toHaveBeenCalledWith(-7777, "SIGTERM");
     });
   });
 });
