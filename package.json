@@ -1689,6 +1689,7 @@
     "jszip": "^3.10.1",
     "linkedom": "^0.18.12",
     "markdown-it": "14.1.1",
+    "microsoft-cognitiveservices-speech-sdk": "^1.49.0",
     "minimatch": "10.2.5",
     "node-edge-tts": "^1.2.10",
     "openai": "^6.35.0",
