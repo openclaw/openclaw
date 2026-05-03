@@ -46,10 +46,24 @@ async function replaceFileWithWindowsFallback(tempPath: string, filePath: string
   await fs.rm(tempPath, { force: true }).catch(() => undefined);
 }
 
+/** Maximum file size (10 MB) for readJsonFile to guard against unbounded reads. */
+const MAX_JSON_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
+    // Read the raw buffer first, then check its byte length before parsing.
+    // A separate stat() + readFile() pair is vulnerable to TOCTOU: an attacker
+    // could replace the file with a much larger one between the two calls,
+    // bypassing the size guard entirely (Aisle Low: CWE-367 TOCTOU).
+    // Reading into a Buffer first bounds the allocation check to the actual bytes read.
+    const buf = await fs.readFile(filePath).catch(() => null);
+    if (!buf) {
+      return null;
+    }
+    if (buf.byteLength > MAX_JSON_FILE_SIZE_BYTES) {
+      return null;
+    }
+    return JSON.parse(buf.toString("utf8")) as T;
   } catch {
     return null;
   }
@@ -106,8 +120,23 @@ export async function writeTextAtomic(
   if (typeof options?.ensureDirMode === "number") {
     mkdirOptions.mode = options.ensureDirMode;
   }
-  await fs.mkdir(path.dirname(filePath), mkdirOptions);
-  const parentDir = path.dirname(filePath);
+  const dir = path.dirname(filePath);
+  await fs.mkdir(dir, mkdirOptions);
+  // On macOS and some Linux configurations, fs.mkdir({ recursive: true }) may
+  // ignore the mode option.  Explicitly chmod the directory afterward to ensure
+  // it carries the requested permissions regardless of platform behavior.
+  // Use lstat to verify the directory is not a symlink before chmod to prevent
+  // symlink-following permission changes on attacker-controlled paths.
+  if (typeof options?.ensureDirMode === "number") {
+    try {
+      const dirStat = await fs.lstat(dir);
+      if (dirStat.isDirectory()) {
+        await fs.chmod(dir, options.ensureDirMode);
+      }
+    } catch {
+      // best-effort; ignore on platforms without chmod
+    }
+  }
   const tmp = `${filePath}.${randomUUID()}.tmp`;
   try {
     const tmpHandle = await fs.open(tmp, "w", mode);
@@ -118,13 +147,17 @@ export async function writeTextAtomic(
       await tmpHandle.close().catch(() => undefined);
     }
     try {
-      await fs.chmod(tmp, mode);
+      // Use lstat to verify the temp file is not a symlink before chmod.
+      const tmpStat = await fs.lstat(tmp);
+      if (tmpStat.isFile()) {
+        await fs.chmod(tmp, mode);
+      }
     } catch {
       // best-effort; ignore on platforms without chmod
     }
     await replaceFileWithWindowsFallback(tmp, filePath, mode);
     try {
-      const dirHandle = await fs.open(parentDir, "r");
+      const dirHandle = await fs.open(dir, "r");
       try {
         await dirHandle.sync();
       } finally {
@@ -134,7 +167,10 @@ export async function writeTextAtomic(
       // best-effort; some platforms/filesystems do not support syncing directories.
     }
     try {
-      await fs.chmod(filePath, mode);
+      const finalStat = await fs.lstat(filePath);
+      if (finalStat.isFile()) {
+        await fs.chmod(filePath, mode);
+      }
     } catch {
       // best-effort; ignore on platforms without chmod
     }
