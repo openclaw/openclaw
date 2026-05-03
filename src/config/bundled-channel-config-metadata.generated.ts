@@ -4222,6 +4222,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         streaming: {
           type: "boolean",
         },
+        streamingSearchFallback: {
+          type: "boolean",
+        },
         tools: {
           type: "object",
           properties: {
@@ -4848,6 +4851,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 enum: ["auto", "raw", "card"],
               },
               streaming: {
+                type: "boolean",
+              },
+              streamingSearchFallback: {
                 type: "boolean",
               },
               tools: {

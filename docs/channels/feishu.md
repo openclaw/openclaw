@@ -273,6 +273,7 @@ Feishu/Lark supports streaming replies via interactive cards. When enabled, the 
   channels: {
     feishu: {
       streaming: true, // enable streaming card output (default: true)
+      streamingSearchFallback: false, // also send final plain text for Feishu search (default: false)
       blockStreaming: true, // enable block-level streaming (default: true)
     },
   },
@@ -280,6 +281,8 @@ Feishu/Lark supports streaming replies via interactive cards. When enabled, the 
 ```
 
 Set `streaming: false` to send the complete reply in one message.
+
+Feishu conversation search may only index the initial interactive card content, so completed streaming card text may not appear in "search conversation content" results. Set `streamingSearchFallback: true` to also send the final streamed reply as a plain text message after the card closes. This makes the content searchable, but users will see an additional final text message.
 
 ### Quota optimization
 
@@ -428,6 +431,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.textChunkLimit`                  | Message chunk size                                                               | `2000`           |
 | `channels.feishu.mediaMaxMb`                      | Media size limit                                                                 | `30`             |
 | `channels.feishu.streaming`                       | Streaming card output                                                            | `true`           |
+| `channels.feishu.streamingSearchFallback`         | Send final streamed text as a searchable plain text fallback                     | `false`          |
 | `channels.feishu.blockStreaming`                  | Block-level streaming                                                            | `true`           |
 | `channels.feishu.typingIndicator`                 | Send typing reactions                                                            | `true`           |
 | `channels.feishu.resolveSenderNames`              | Resolve sender display names                                                     | `true`           |

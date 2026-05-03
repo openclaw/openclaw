@@ -316,6 +316,75 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("sends searchable plain-text fallback after streaming close when enabled", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+        streamingSearchFallback: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+    });
+    await options.deliver({ text: "```ts\nconst searchableKeyword = 1\n```" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+      cfg: {},
+      to: "oc_chat",
+      text: "```ts\nconst searchableKeyword = 1\n```",
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+      mentions: undefined,
+      accountId: undefined,
+    });
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps searchable fallback text mention formatting separate from streaming card markup", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+        streamingSearchFallback: true,
+      },
+    });
+
+    const mentionTargets = [{ openId: "ou_user", name: "Ada", key: "@Ada" }];
+    const { options } = createDispatcherHarness({
+      mentionTargets,
+    });
+    await options.deliver({ text: "```md\nhello Ada\n```" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "<at id=ou_user></at> ```md\nhello Ada\n```",
+      { note: "Agent: agent" },
+    );
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "```md\nhello Ada\n```",
+        mentions: mentionTargets,
+      }),
+    );
+  });
+
   it("closes streaming with block text when final reply is missing", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
