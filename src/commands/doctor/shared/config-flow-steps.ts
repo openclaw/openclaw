@@ -23,7 +23,7 @@ export function applyLegacyCompatibilityStep(params: {
   }
 
   const issueLines = formatConfigIssueLines(params.snapshot.legacyIssues, "-");
-  const { config: migrated, changes } = migrateLegacyConfig(params.snapshot.parsed);
+  const { config: migrated, changes, partiallyValid } = migrateLegacyConfig(params.snapshot.parsed);
   if (!migrated) {
     return {
       state: {
@@ -45,6 +45,9 @@ export function applyLegacyCompatibilityStep(params: {
     state: {
       // Doctor should keep using the best-effort migrated shape in memory even
       // during preview mode; confirmation only controls whether we write it.
+      // When partiallyValid, the migration succeeded but unrelated validation issues
+      // remain — still commit the migration so doctor --fix always applies safe migrations
+      // even when other problems prevent full validation from passing.
       cfg: migrated,
       candidate: migrated,
       // The read path can normalize legacy config into the snapshot before
@@ -55,7 +58,7 @@ export function applyLegacyCompatibilityStep(params: {
         ? params.state.fixHints
         : [
             ...params.state.fixHints,
-            `Run "${params.doctorFixCommand}" to migrate legacy config keys.`,
+            `Run "${params.doctorFixCommand}" to ${partiallyValid ? "finish fixing" : "migrate"} legacy config keys.`,
           ],
     },
     issueLines,
