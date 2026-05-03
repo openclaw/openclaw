@@ -90,6 +90,10 @@ function allowlistIncludesDefaultPluginTools(allowlist: Set<string>): boolean {
   return allowlist.size === 0 || allowlist.has(DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY);
 }
 
+function isManifestToolOptional(plugin: PluginManifestRecord, toolName: string): boolean {
+  return plugin.toolMetadata?.[toolName]?.optional === true;
+}
+
 function isOptionalToolAllowed(params: {
   toolName: string;
   pluginId: string;
@@ -299,43 +303,50 @@ function pluginToolNamesMatchAllowlist(params: {
   return isOptionalToolEntryPotentiallyAllowed(params);
 }
 
-function manifestToolContractMatchesAllowlist(params: {
-  toolNames: readonly string[];
-  pluginId: string;
-  allowlist: Set<string>;
-}): boolean {
-  if (params.toolNames.length === 0) {
-    return false;
-  }
-  if (allowlistIncludesDefaultPluginTools(params.allowlist)) {
-    return true;
-  }
-  if (params.allowlist.has("*") || params.allowlist.has("group:plugins")) {
-    return true;
-  }
-  const pluginKey = normalizeToolName(params.pluginId);
-  if (params.allowlist.has(pluginKey)) {
-    return true;
-  }
-  return params.toolNames.some((name) => params.allowlist.has(normalizeToolName(name)));
-}
-
-function listManifestToolNamesForAvailability(params: {
+function listManifestToolNamesForAllowlist(params: {
+  plugin: PluginManifestRecord;
   toolNames: readonly string[];
   pluginId: string;
   allowlist: Set<string>;
 }): string[] {
-  if (
-    allowlistIncludesDefaultPluginTools(params.allowlist) ||
-    params.allowlist.has("*") ||
-    params.allowlist.has("group:plugins")
-  ) {
+  if (params.toolNames.length === 0) {
+    return [];
+  }
+  if (params.allowlist.has("*") || params.allowlist.has("group:plugins")) {
     return [...params.toolNames];
   }
-  if (params.allowlist.has(normalizeToolName(params.pluginId))) {
+  const pluginKey = normalizeToolName(params.pluginId);
+  if (params.allowlist.has(pluginKey)) {
     return [...params.toolNames];
   }
-  return params.toolNames.filter((name) => params.allowlist.has(normalizeToolName(name)));
+  const matchedToolNames = params.toolNames.filter((name) =>
+    params.allowlist.has(normalizeToolName(name)),
+  );
+  if (!allowlistIncludesDefaultPluginTools(params.allowlist)) {
+    return matchedToolNames;
+  }
+  const defaultToolNames = params.toolNames.filter(
+    (name) => !isManifestToolOptional(params.plugin, name),
+  );
+  return [...new Set([...defaultToolNames, ...matchedToolNames])];
+}
+
+function manifestToolContractMatchesAllowlist(params: {
+  plugin: PluginManifestRecord;
+  toolNames: readonly string[];
+  pluginId: string;
+  allowlist: Set<string>;
+}): boolean {
+  return listManifestToolNamesForAllowlist(params).length > 0;
+}
+
+function listManifestToolNamesForAvailability(params: {
+  plugin: PluginManifestRecord;
+  toolNames: readonly string[];
+  pluginId: string;
+  allowlist: Set<string>;
+}): string[] {
+  return listManifestToolNamesForAllowlist(params);
 }
 
 function resolvePluginToolRuntimePluginIds(params: {
@@ -376,6 +387,7 @@ function resolvePluginToolRuntimePluginIds(params: {
     const toolNames = plugin.contracts?.tools ?? [];
     if (
       manifestToolContractMatchesAllowlist({
+        plugin,
         toolNames,
         pluginId: plugin.id,
         allowlist,
@@ -384,6 +396,7 @@ function resolvePluginToolRuntimePluginIds(params: {
         plugin,
         toolNames: listManifestToolNamesForAvailability({
           toolNames,
+          plugin,
           pluginId: plugin.id,
           allowlist,
         }),
@@ -534,6 +547,7 @@ function resolveCachedPluginTools(params: {
     }
     const contractToolNames = plugin.contracts?.tools ?? [];
     const availableToolNames = listManifestToolNamesForAvailability({
+      plugin,
       toolNames: contractToolNames,
       pluginId: plugin.id,
       allowlist: params.allowlist,
@@ -1011,6 +1025,7 @@ export function resolvePluginTools(params: {
       continue;
     }
     const availableToolNames = listManifestToolNamesForAvailability({
+      plugin: manifestPlugin,
       toolNames: manifestPlugin.contracts?.tools ?? [],
       pluginId,
       allowlist,

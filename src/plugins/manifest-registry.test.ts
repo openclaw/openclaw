@@ -1382,6 +1382,7 @@ describe("loadPluginManifestRegistry", () => {
       },
       toolMetadata: {
         image_generate: {
+          optional: true,
           authSignals: [
             {
               provider: "openai-codex",
@@ -1450,6 +1451,7 @@ describe("loadPluginManifestRegistry", () => {
     });
     expect(registry.plugins[0]?.toolMetadata).toEqual({
       image_generate: {
+        optional: true,
         authSignals: [
           {
             provider: "openai-codex",

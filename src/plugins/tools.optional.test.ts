@@ -112,6 +112,13 @@ function setRegistry(entries: MockRegistryToolEntry[]) {
         contracts: {
           tools: entry.declaredNames ?? entry.names,
         },
+        ...(entry.optional
+          ? {
+              toolMetadata: Object.fromEntries(
+                (entry.declaredNames ?? entry.names).map((name) => [name, { optional: true }]),
+              ),
+            }
+          : {}),
       }))
       .filter((plugin) => plugin.contracts.tools.length > 0),
   });
@@ -363,6 +370,14 @@ function expectLoaderCall(overrides: Record<string, unknown>) {
   expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
 }
 
+function expectLoaderSelectedOnlyPluginIds(expectedPluginIds: readonly string[]) {
+  const selectedPluginIds = loadOpenClawPluginsMock.mock.calls.map(
+    ([params]) => (params as { onlyPluginIds?: string[] }).onlyPluginIds,
+  );
+  expect(selectedPluginIds.length).toBeGreaterThan(0);
+  expect(selectedPluginIds).toEqual(selectedPluginIds.map(() => expectedPluginIds));
+}
+
 function expectSingleDiagnosticMessage(
   diagnostics: Array<{ message: string }>,
   messageFragment: string,
@@ -500,13 +515,7 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activate: false,
-        onlyPluginIds: ["optional-demo"],
-        toolDiscovery: true,
-      }),
-    );
+    expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
   });
 
   it("auto-loads cold registry for path-based config-origin plugins without pre-warming (#76598)", () => {
@@ -550,13 +559,7 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activate: false,
-        onlyPluginIds: ["optional-demo"],
-        toolDiscovery: true,
-      }),
-    );
+    expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
   });
 
   it("does not reuse a partial active registry for wildcard-selected plugin tools", () => {
@@ -592,6 +595,11 @@ describe("resolvePluginTools optional tools", () => {
           providers: [],
           contracts: {
             tools: ["optional_tool"],
+          },
+          toolMetadata: {
+            optional_tool: {
+              optional: true,
+            },
           },
         },
       ],
@@ -964,6 +972,176 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["other_tool", "optional_tool"]);
+  });
+
+  it("cold-loads default plugin tools when alsoAllow opts into optional tools", () => {
+    const context = createContext();
+    const config = context.config;
+    const defaultEntry: MockRegistryToolEntry = {
+      pluginId: "multi",
+      optional: false,
+      source: "/tmp/multi.js",
+      names: ["other_tool"],
+      declaredNames: ["other_tool"],
+      factory: () => makeTool("other_tool"),
+    };
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([defaultEntry, createOptionalDemoEntry()]),
+    );
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "multi",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["other_tool"],
+          },
+        },
+        {
+          id: "optional-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["optional_tool"],
+          },
+        },
+      ],
+    });
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context,
+        toolAllowlist: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "optional_tool"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["other_tool", "optional_tool"]);
+    expectLoaderSelectedOnlyPluginIds(["multi", "optional-demo"]);
+  });
+
+  it("does not cold-load unrelated manifest-optional plugins when alsoAllow opts into one optional tool", () => {
+    const context = createContext();
+    const config = context.config;
+    const explicitOptionalEntry = createOptionalDemoEntry();
+    loadOpenClawPluginsMock.mockReturnValue(createToolRegistry([explicitOptionalEntry]));
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "optional-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["optional_tool"],
+          },
+          toolMetadata: {
+            optional_tool: {
+              optional: true,
+            },
+          },
+        },
+        {
+          id: "unrelated-optional",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["unrelated_optional_tool"],
+          },
+          toolMetadata: {
+            unrelated_optional_tool: {
+              optional: true,
+            },
+          },
+        },
+      ],
+    });
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context,
+        toolAllowlist: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "optional_tool"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
+  });
+
+  it("does not materialize manifest-unavailable default tools from warm registries under alsoAllow", () => {
+    const config = createContext().config;
+    installToolManifestSnapshots({
+      config,
+      env: {},
+      plugins: [
+        createXaiToolManifest(),
+        {
+          id: "optional-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["optional_tool"],
+          },
+          toolMetadata: {
+            optional_tool: {
+              optional: true,
+            },
+          },
+        },
+      ],
+    });
+    const unavailableFactory = vi.fn(() => makeTool("x_search"));
+    const optionalFactory = vi.fn(() => makeTool("optional_tool"));
+    setActivePluginRegistry(
+      createToolRegistry([
+        {
+          pluginId: "xai",
+          optional: false,
+          source: "/tmp/xai.js",
+          names: ["x_search"],
+          declaredNames: ["x_search"],
+          factory: unavailableFactory,
+        },
+        {
+          pluginId: "optional-demo",
+          optional: true,
+          source: "/tmp/optional-demo.js",
+          names: ["optional_tool"],
+          declaredNames: ["optional_tool"],
+          factory: optionalFactory,
+        },
+      ]) as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          config,
+        },
+        env: {},
+        toolAllowlist: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "optional_tool"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(optionalFactory).toHaveBeenCalledTimes(1);
+    expect(unavailableFactory).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("rejects plugin id collisions with core tool names", () => {
