@@ -302,6 +302,25 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "external-hook-capability",
+        channels: [],
+        activation: {
+          onCapabilities: ["hook"],
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "external-hook-policy",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "lossless-claw",
         kind: "context-engine",
         channels: [],
@@ -844,6 +863,41 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads explicit hook-capability plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-hook-capability"],
+        allowPluginIds: ["external-hook-capability"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-hook-capability"],
+    });
+  });
+
+  it("loads explicit hook-policy plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            browser: {
+              enabled: false,
+            },
+            "external-hook-policy": {
+              hooks: {
+                allowConversationAccess: true,
+                allowPromptInjection: true,
+              },
+            },
+          },
+        },
+      },
+      expected: ["external-hook-policy"],
     });
   });
 
