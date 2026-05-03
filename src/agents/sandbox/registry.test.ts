@@ -172,6 +172,22 @@ async function seedContainerRegistry(entries: SandboxRegistryEntry[]) {
   await fs.writeFile(SANDBOX_REGISTRY_PATH, `${JSON.stringify({ entries }, null, 2)}\n`, "utf-8");
 }
 
+async function seedBrowserRegistry(entries: SandboxBrowserRegistryEntry[]) {
+  await fs.writeFile(
+    SANDBOX_BROWSER_REGISTRY_PATH,
+    `${JSON.stringify({ entries }, null, 2)}\n`,
+    "utf-8",
+  );
+}
+
+async function seedStaleLock(lockPath: string) {
+  await fs.writeFile(
+    lockPath,
+    `${JSON.stringify({ pid: 999_999_999, createdAt: "2000-01-01T00:00:00.000Z" })}\n`,
+    "utf-8",
+  );
+}
+
 describe("registry race safety", () => {
   it("does not migrate legacy registry files from runtime reads", async () => {
     await seedContainerRegistry([containerEntry({ containerName: "legacy-container" })]);
@@ -202,6 +218,60 @@ describe("registry race safety", () => {
         configLabelKind: "Image",
       }),
     ]);
+  });
+
+  it("migrates legacy container and browser registry files after explicit repair", async () => {
+    await seedContainerRegistry([
+      containerEntry({
+        containerName: "legacy-container",
+        sessionKey: "agent:legacy",
+        lastUsedAtMs: 7,
+        configHash: "legacy-container-hash",
+      }),
+    ]);
+    await seedBrowserRegistry([
+      browserEntry({
+        containerName: "legacy-browser",
+        sessionKey: "agent:legacy",
+        cdpPort: 9333,
+        noVncPort: 6081,
+        configHash: "legacy-browser-hash",
+      }),
+    ]);
+    await seedStaleLock(`${SANDBOX_REGISTRY_PATH}.lock`);
+    await seedStaleLock(`${SANDBOX_BROWSER_REGISTRY_PATH}.lock`);
+
+    await expect(migrateLegacySandboxRegistryFiles()).resolves.toEqual([
+      expect.objectContaining({ kind: "containers", status: "migrated", entries: 1 }),
+      expect.objectContaining({ kind: "browsers", status: "migrated", entries: 1 }),
+    ]);
+
+    await expect(fs.access(SANDBOX_REGISTRY_PATH)).rejects.toThrow();
+    await expect(fs.access(SANDBOX_BROWSER_REGISTRY_PATH)).rejects.toThrow();
+    await expect(fs.access(`${SANDBOX_REGISTRY_PATH}.lock`)).rejects.toThrow();
+    await expect(fs.access(`${SANDBOX_BROWSER_REGISTRY_PATH}.lock`)).rejects.toThrow();
+    await expect(readRegistry()).resolves.toEqual({
+      entries: [
+        expect.objectContaining({
+          containerName: "legacy-container",
+          backendId: "docker",
+          runtimeLabel: "legacy-container",
+          sessionKey: "agent:legacy",
+          configHash: "legacy-container-hash",
+        }),
+      ],
+    });
+    await expect(readBrowserRegistry()).resolves.toEqual({
+      entries: [
+        expect.objectContaining({
+          containerName: "legacy-browser",
+          sessionKey: "agent:legacy",
+          cdpPort: 9333,
+          noVncPort: 6081,
+          configHash: "legacy-browser-hash",
+        }),
+      ],
+    });
   });
 
   it("does not overwrite newer sharded entries during legacy migration", async () => {
