@@ -6,29 +6,8 @@ import {
 } from "../shared/live-transport-scenarios.js";
 import { __testing } from "./discord-live.runtime.js";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() =>
-  vi.fn(async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => ({
-    response: await fetch(params.url, {
-      ...params.init,
-      signal: params.signal,
-    }),
-    release: async () => {},
-  })),
-);
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
-    "openclaw/plugin-sdk/ssrf-runtime",
-  );
-  return {
-    ...actual,
-    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-  };
-});
-
 describe("discord live qa runtime", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockClear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -502,7 +481,7 @@ describe("discord live qa runtime", () => {
     }
   });
 
-  it("adds an abort deadline to Discord API requests", async () => {
+  it("uses the Discord API helper timeout for identity probes", async () => {
     const controller = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
     let signal: AbortSignal | undefined;
@@ -519,16 +498,10 @@ describe("discord live qa runtime", () => {
       }),
     );
 
-    await expect(
-      __testing.callDiscordApi({
-        token: "token",
-        path: "/users/@me",
-        timeoutMs: 25,
-      }),
-    ).resolves.toEqual({
+    await expect(__testing.getCurrentDiscordUser("token")).resolves.toEqual({
       id: "423456789012345678",
     });
-    expect(timeoutSpy).toHaveBeenCalledWith(25);
+    expect(timeoutSpy).toHaveBeenCalledWith(15_000);
     expect(signal).toBe(controller.signal);
     expect(signal?.aborted).toBe(false);
     controller.abort();
@@ -558,30 +531,10 @@ describe("discord live qa runtime", () => {
         ),
     );
 
-    await expect(
-      __testing.callDiscordApi({
-        token: "token",
-        path: "/users/@me",
-      }),
-    ).resolves.toEqual({
+    await expect(__testing.getCurrentDiscordUser("token")).resolves.toEqual({
       id: "423456789012345678",
     });
     expect(fetch).toHaveBeenCalledTimes(2);
-  });
-
-  it("resolves Discord rate-limit retry delay from payload before headers", () => {
-    const response = new Response("{}", {
-      status: 429,
-      headers: {
-        "retry-after": "10",
-      },
-    });
-
-    expect(
-      __testing.resolveDiscordRateLimitRetryAfterMs(response, {
-        retry_after: 0.25,
-      }),
-    ).toBe(250);
   });
 
   it("redacts observed message content by default in artifacts", () => {

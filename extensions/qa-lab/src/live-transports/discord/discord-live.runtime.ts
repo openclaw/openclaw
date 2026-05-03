@@ -5,9 +5,9 @@ import { pathToFileURL } from "node:url";
 import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
+import { requestDiscord } from "../../../../discord/api.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
@@ -192,7 +192,6 @@ type DiscordStatusReactionTimeline = {
   triggerMessageId: string;
 };
 
-const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 const DISCORD_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_DISCORD_CAPTURE_CONTENT";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const DISCORD_QA_ENV_KEYS = [
@@ -416,105 +415,32 @@ function buildDiscordQaConfig(
   };
 }
 
-async function callDiscordApi<T>(params: {
-  token: string;
-  path: string;
-  init?: RequestInit;
-  timeoutMs?: number;
-}): Promise<T> {
-  const maxAttempts = 4;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const headers = new Headers(params.init?.headers);
-    headers.set("authorization", `Bot ${params.token}`);
-    if (params.init?.body) {
-      headers.set("content-type", "application/json");
-    }
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${DISCORD_API_BASE_URL}${params.path}`,
-      init: {
-        ...params.init,
-        headers,
-      },
-      signal: AbortSignal.timeout(params.timeoutMs ?? 15_000),
-      policy: { hostnameAllowlist: ["discord.com"] },
-      auditContext: "qa-lab-discord-live",
-    });
-    let retryAfterMs: number | null = null;
-    try {
-      const text = await response.text();
-      const payload = text.trim() ? (JSON.parse(text) as unknown) : undefined;
-      if (response.status === 429 && attempt < maxAttempts) {
-        retryAfterMs = resolveDiscordRateLimitRetryAfterMs(response, payload);
-      } else if (!response.ok) {
-        const message =
-          typeof payload === "object" &&
-          payload !== null &&
-          typeof (payload as { message?: unknown }).message === "string"
-            ? (payload as { message: string }).message
-            : text.trim();
-        throw new Error(
-          message || `Discord API ${params.path} failed with status ${response.status}`,
-        );
-      } else {
-        return payload as T;
-      }
-    } finally {
-      await release();
-    }
-    if (retryAfterMs !== null) {
-      await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
-    }
-  }
-  throw new Error(`Discord API ${params.path} stayed rate limited after ${maxAttempts} attempts`);
-}
-
-function resolveDiscordRateLimitRetryAfterMs(response: Response, payload: unknown) {
-  const payloadRetryAfter =
-    typeof payload === "object" &&
-    payload !== null &&
-    typeof (payload as { retry_after?: unknown }).retry_after === "number"
-      ? (payload as { retry_after: number }).retry_after
-      : undefined;
-  const headerRetryAfter =
-    Number(response.headers.get("retry-after")) ||
-    Number(response.headers.get("x-ratelimit-reset-after"));
-  const seconds =
-    typeof payloadRetryAfter === "number" && Number.isFinite(payloadRetryAfter)
-      ? payloadRetryAfter
-      : Number.isFinite(headerRetryAfter)
-        ? headerRetryAfter
-        : 1;
-  return Math.max(0, Math.ceil(seconds * 1000));
-}
-
 async function getCurrentDiscordUser(token: string) {
-  return await callDiscordApi<DiscordUser>({
-    token,
-    path: "/users/@me",
+  return await requestDiscord<DiscordUser>("/users/@me", token, {
+    timeoutMs: 15_000,
   });
 }
 
 async function sendChannelMessage(token: string, channelId: string, content: string) {
-  return await callDiscordApi<DiscordMessage>({
-    token,
-    path: `/channels/${channelId}/messages`,
-    init: {
-      method: "POST",
-      body: JSON.stringify({
-        content,
-        allowed_mentions: {
-          parse: ["users"],
-        },
-      }),
+  return await requestDiscord<DiscordMessage>(`/channels/${channelId}/messages`, token, {
+    body: {
+      content,
+      allowed_mentions: {
+        parse: ["users"],
+      },
     },
+    timeoutMs: 15_000,
   });
 }
 
 async function getChannelMessage(params: { token: string; channelId: string; messageId: string }) {
-  return await callDiscordApi<DiscordMessage>({
-    token: params.token,
-    path: `/channels/${params.channelId}/messages/${params.messageId}`,
-  });
+  return await requestDiscord<DiscordMessage>(
+    `/channels/${params.channelId}/messages/${params.messageId}`,
+    params.token,
+    {
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 async function listChannelMessagesAfter(params: {
@@ -526,10 +452,13 @@ async function listChannelMessagesAfter(params: {
     after: params.afterSnowflake,
     limit: "50",
   });
-  return await callDiscordApi<DiscordMessage[]>({
-    token: params.token,
-    path: `/channels/${params.channelId}/messages?${query.toString()}`,
-  });
+  return await requestDiscord<DiscordMessage[]>(
+    `/channels/${params.channelId}/messages?${query.toString()}`,
+    params.token,
+    {
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 function reactionEmojiName(reaction: DiscordReaction) {
@@ -725,10 +654,13 @@ async function observeStatusReactionTimeline(params: {
 }
 
 async function listApplicationCommands(params: { token: string; applicationId: string }) {
-  return await callDiscordApi<DiscordApplicationCommand[]>({
-    token: params.token,
-    path: `/applications/${params.applicationId}/commands`,
-  });
+  return await requestDiscord<DiscordApplicationCommand[]>(
+    `/applications/${params.applicationId}/commands`,
+    params.token,
+    {
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 function compareDiscordSnowflakes(a: string, b: string) {
@@ -1364,8 +1296,8 @@ export const __testing = {
   assertDiscordApplicationCommandsRegistered,
   buildDiscordQaConfig,
   buildObservedMessagesArtifact,
-  callDiscordApi,
   findScenario,
+  getCurrentDiscordUser,
   getChannelMessage,
   listApplicationCommands,
   matchesDiscordScenarioReply,
@@ -1373,7 +1305,6 @@ export const __testing = {
   normalizeDiscordObservedMessage,
   parseDiscordQaCredentialPayload,
   renderDiscordStatusReactionHtml,
-  resolveDiscordRateLimitRetryAfterMs,
   resolveDiscordQaRuntimeEnv,
   waitForDiscordChannelRunning,
 };
