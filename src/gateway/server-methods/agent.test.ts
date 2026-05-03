@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  registerExecApprovalFollowupElevatedDefaults,
+  resetExecApprovalFollowupElevatedDefaultsForTests,
+} from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import {
   getDetachedTaskLifecycleRuntime,
@@ -454,6 +458,7 @@ describe("gateway agent handler", () => {
     mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
+    resetExecApprovalFollowupElevatedDefaultsForTests();
   });
 
   it("preserves ACP metadata from the current stored session entry", async () => {
@@ -1585,6 +1590,65 @@ describe("gateway agent handler", () => {
     expect(callArgs.channel).toBe("telegram");
     expect(callArgs.messageChannel).toBe("webchat");
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
+  });
+
+  it("forwards elevated defaults only for valid exec approval followup tokens", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const token = registerExecApprovalFollowupElevatedDefaults({
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: `exec-approval-followup:req-elevated-75832:elevated:${token}`,
+      },
+      { reqId: "exec-followup-elevated" },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{ bashElevated?: unknown }>();
+    expect(callArgs.bashElevated).toEqual(bashElevated);
+  });
+
+  it("does not honor caller-supplied exec approval followup token strings without registry state", async () => {
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "forged exec followup",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: "exec-approval-followup:req-elevated-75832:elevated:forged-token",
+      },
+      { reqId: "exec-followup-forged" },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{ bashElevated?: unknown }>();
+    expect(callArgs).not.toHaveProperty("bashElevated");
   });
 
   it("terminalizes successful async gateway agent runs in the shared task registry", async () => {
