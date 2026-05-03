@@ -19,8 +19,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Plugins/externalization: pin beta-only official launch packages for ACPX, Google Chat, and LINE to explicit npm beta specs so catalog-driven installs do not trip the prerelease safety guard while npm `latest` still points at beta. Thanks @vincentkoc.
-- CLI/doctor: keep missing-plugin repair from overriding official catalog metadata with runtime fallbacks, so ACPX repairs preserve the beta npm spec during the externalization rollout. Thanks @vincentkoc.
+- Plugins/externalization: keep official ACPX, Google Chat, and LINE install specs on production package names, leaving beta-tag probing to the explicit OpenClaw beta update channel. Thanks @vincentkoc.
+- CLI/doctor: keep missing-plugin repair from overriding official catalog metadata with runtime fallbacks, so ACPX repairs preserve the official npm spec during the externalization rollout. Thanks @vincentkoc.
 - Plugins/catalog: preserve ClawHub install specs when generating the packaged channel catalog so future storepack-first channel plugins keep their remote source instead of becoming npm-only. Thanks @vincentkoc.
 - Plugins/update: treat catalog-matched official npm updates and OpenClaw-authored externalized-bundled npm bridges as trusted official installs so launch-code plugins can update or migrate out of the bundled tree without scanner false positives. Thanks @vincentkoc.
 - Plugins/onboarding: fall back from ClawHub to npm only for missing package/version errors, keeping integrity and verification failures fail-closed during storepack rollout. Thanks @vincentkoc.
