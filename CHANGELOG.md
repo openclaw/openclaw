@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - Channels: keep Matrix and Mattermost bundled in the core package instead of advertising external npm installs before those channels are cut over. Thanks @vincentkoc.
 - Bonjour: disable LAN mDNS advertising after a repeated stuck-announcing recovery instead of repeatedly restarting ciao and saturating the Gateway event loop.
 - Channels/setup: label installable channel picker hints as remote npm installs and hide remote install hints for bundled plugins that already ship with OpenClaw.
+- CLI/update: refuse package updates launched from the active gateway process tree before stopping the managed Gateway service, avoiding self-terminated in-lane updates that leave old Gateway code running. Fixes #75691. (#75819) Thanks @ai-hpc.
 - CLI/plugins: stop treating the non-plugin `auth` command root as a bundled plugin id, so restrictive `plugins.allow` configs no longer tell users to add stale `auth` plugin entries.
 - Doctor/plugins: update configured plugin installs whose stale manifests still declare channels without `channelConfigs`, so beta upgrades repair old Discord-style package payloads during `doctor --fix`.
 - Doctor/plugins: repair configured external plugin installs whose persisted install record points at a missing package directory, so upgrades reconcile phantom npm metadata before plugin runtime validation. Thanks @vincentkoc.
