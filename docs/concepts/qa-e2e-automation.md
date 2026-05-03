@@ -225,7 +225,7 @@ Output artifacts:
 pnpm openclaw qa discord
 ```
 
-Targets one real private Discord guild channel with two bots: a driver bot controlled by the harness and a SUT bot started by the child OpenClaw gateway through the bundled Discord plugin. Verifies channel mention handling and that the SUT bot has registered the native `/help` command with Discord.
+Targets one real private Discord guild channel with two bots: a driver bot controlled by the harness and a SUT bot started by the child OpenClaw gateway through the bundled Discord plugin. Verifies channel mention handling, that the SUT bot has registered the native `/help` command with Discord, and opt-in Mantis evidence scenarios.
 
 Required env when `--credential-source env`:
 
@@ -244,12 +244,25 @@ Scenarios (`extensions/qa-lab/src/live-transports/discord/discord-live.runtime.t
 - `discord-canary`
 - `discord-mention-gating`
 - `discord-native-help-command-registration`
+- `discord-status-reactions-tool-only` — opt-in Mantis scenario. Runs by itself because it switches the SUT to always-on, tool-only guild replies with `messages.statusReactions.enabled=true`, then captures a REST reaction timeline plus an HTML/PNG visual artifact.
+
+Run the Mantis status-reaction scenario explicitly:
+
+```bash
+pnpm openclaw qa discord \
+  --scenario discord-status-reactions-tool-only \
+  --provider-mode live-frontier \
+  --model openai/gpt-5.4 \
+  --alt-model openai/gpt-5.4 \
+  --fast
+```
 
 Output artifacts:
 
 - `discord-qa-report.md`
 - `discord-qa-summary.json`
 - `discord-qa-observed-messages.json` — bodies redacted unless `OPENCLAW_QA_DISCORD_CAPTURE_CONTENT=1`.
+- `discord-qa-reaction-timelines.json` and `discord-status-reactions-tool-only-timeline.png` when the status-reaction scenario runs.
 
 ### Convex credential pool
 
