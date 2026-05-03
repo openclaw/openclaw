@@ -1,0 +1,8 @@
+seating-reupholstery - new draft
+
+Recommended draft
+• Form: reupholsteryType=sofa; scope=full; seatStyle=tight; backStyle=loose-back-cushion
+• Pricing: materials; need labor hours
+• Questions: project name; condition; labor hours
+
+Approve?

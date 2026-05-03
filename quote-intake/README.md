@@ -44,6 +44,7 @@ It uses synthetic fixtures only:
 
 ```bash
 npm run qa
+npm run qa:responses
 ```
 
 The harness verifies behavior-level rules:
@@ -57,3 +58,8 @@ The harness verifies behavior-level rules:
 
 Fixtures live in `fixtures/`. The runner lives in `qa/`. These tests are meant
 to catch quote-intake regressions before using real client requests.
+
+`npm run qa` checks the intake/evaluator behavior. `npm run qa:responses`
+checks compact Stitch-style response cards stored under
+`fixtures/stitch-responses/` so wall-of-text, wrong-workflow, and unsafe-action
+regressions are easier to catch.

@@ -4,6 +4,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "node --test index.test.js",
-    "qa": "node qa/run-quote-intake-cases.js"
+    "qa": "node qa/run-quote-intake-cases.js",
+    "qa:responses": "node qa/run-stitch-response-cases.js"
   }
 }

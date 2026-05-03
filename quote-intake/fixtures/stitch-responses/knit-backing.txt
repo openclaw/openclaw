@@ -1,0 +1,8 @@
+knit-backing - special workflow
+
+Recommended draft
+• Form: approval workflow, not generic quote builder
+• Pricing: knit-backing-pricing-model
+• Questions: approval workflow confirmation
+
+Approve?

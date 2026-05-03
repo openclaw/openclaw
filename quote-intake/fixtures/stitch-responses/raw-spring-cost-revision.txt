@@ -1,0 +1,8 @@
+repairs - revise existing quote
+
+Recommended draft
+• Form: reupholsteryType=chair; newSprings=true
+• Pricing: springs raw cost; confirm raw cost calculation
+• Questions: confirm raw cost calculation
+
+Approve?
