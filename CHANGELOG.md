@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/messaging: stop assistant commentary from being silently dropped after a `message` tool delivery when the commentary text is shorter than ~50% of the sent payload — short closing remarks such as "V2EX hot topics sent 😂" were falsely matched as substrings of the longer tool content and suppressed before reaching the channel. Fixes #76915. Thanks @hclsys.
 - Channels/streaming: add unified `streaming.mode: "progress"` drafts with auto single-word status labels and shared progress configuration across Discord, Telegram, Matrix, Slack, and Microsoft Teams.
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
 - Agents/tools: skip optional media and PDF tool factories when the effective tool denylist already blocks them, avoiding unnecessary hot-path setup for tools that will be filtered out before model use. (#76773) Thanks @dorukardahan.
