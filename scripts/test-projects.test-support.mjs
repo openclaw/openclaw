@@ -405,13 +405,13 @@ const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "300000";
 const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
-const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = [
+const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = new Set([
   "src/gateway/embeddings-http.test.ts",
   "src/gateway/models-http.test.ts",
   "src/gateway/openai-http.test.ts",
   "src/gateway/openresponses-http.test.ts",
   "src/gateway/probe.auth.integration.test.ts",
-];
+]);
 const GATEWAY_SERVER_EXCLUDED_TEST_TARGETS = new Set([
   "src/gateway/gateway.test.ts",
   "src/gateway/server.startup-matrix-migration.integration.test.ts",
@@ -490,7 +490,7 @@ function isGatewayServerFullSuiteTarget(relative) {
     return false;
   }
   return (
-    GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS.includes(relative) ||
+    GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS.has(relative) ||
     (relative.startsWith("src/gateway/") &&
       path.posix.basename(relative).includes("server") &&
       relative.endsWith(".test.ts"))
@@ -504,7 +504,7 @@ function resolveGatewayServerFullSuiteTargets(cwd) {
   }
   return listRepoFilesRecursive(gatewayDir, cwd)
     .filter(isGatewayServerFullSuiteTarget)
-    .sort((a, b) => a.localeCompare(b));
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function splitTargetChunks(targets, chunkCount) {
