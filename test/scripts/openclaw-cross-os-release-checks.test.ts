@@ -33,6 +33,7 @@ import {
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   isImmutableReleaseRef,
+  isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
@@ -674,6 +675,59 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         { candidateVersion: "2026.4.27" },
       ),
     ).toThrow(/Packaged upgrade failed/u);
+  });
+
+  it("recognizes the shipped Windows updater native-module backup cleanup failure", () => {
+    expect(
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "error",
+            reason: "global install swap",
+            after: { version: "2026.5.2" },
+            steps: [
+              {
+                name: "global install swap",
+                exitCode: 1,
+                stderrTail:
+                  "EPERM: operation not permitted, unlink 'C:\\Users\\runner\\prefix\\node_modules\\.openclaw-5748-1777776287462\\node_modules\\@mariozechner\\clipboard-win32-x64-msvc\\clipboard.win32-x64-msvc.node'",
+              },
+            ],
+          }),
+          stderr: "",
+        },
+        "win32",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not recover unrelated packaged update failures", () => {
+    expect(
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "error",
+            reason: "global install swap",
+            steps: [{ name: "global install swap", exitCode: 1, stderrTail: "ENOENT: missing" }],
+          }),
+          stderr: "",
+        },
+        "win32",
+      ),
+    ).toBe(false);
+    expect(
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+        {
+          exitCode: 1,
+          stdout:
+            "EPERM: operation not permitted, unlink '/tmp/prefix/node_modules/.openclaw-1-2/native.node'",
+          stderr: "",
+        },
+        "linux",
+      ),
+    ).toBe(false);
   });
 
   it("only treats pinned baseline specs as exact installer version assertions", () => {
