@@ -18,7 +18,11 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import {
+  buildMattermostToolStatusText,
+  createMattermostDraftPreviewBoundaryController,
+  createMattermostDraftStream,
+} from "./draft-stream.js";
 import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -1628,6 +1632,23 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           warn: logVerboseMessage,
         });
         let lastPartialText = "";
+        // When `streaming.mode === "block"`, the draft preview is split at
+        // turn boundaries (assistant-message start, reasoning end, tool start)
+        // so prior content stays visible instead of being overwritten in
+        // place. The boundary controller tracks whether the current preview
+        // post has any user-visible content yet, so we never call
+        // forceNewMessage() twice in a row without something between them
+        // (which would just produce empty preview posts).
+        const previewBoundary = createMattermostDraftPreviewBoundaryController({
+          draftStream,
+          splitAtBoundaries: account.previewStreamMode === "block",
+          onSplit: () => {
+            // Reset partial-text dedupe state so the next partial reply
+            // lands as a fresh post body rather than being filtered as a
+            // "prefix already sent" duplicate.
+            lastPartialText = "";
+          },
+        });
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1684,6 +1705,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           }
           lastPartialText = cleaned;
           draftStream.update(cleaned);
+          previewBoundary.markStreamedContent();
         };
 
         const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
@@ -1818,18 +1840,64 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             updateDraftFromPartial(payload.text);
                           },
                           onAssistantMessageStart: () => {
+                            // Boundary: a brand-new assistant message is
+                            // about to start. In block mode, split the
+                            // preview now so this message lands in its own
+                            // post and any prior thinking/tool/partial
+                            // content is preserved.
+                            previewBoundary.signalBoundary();
                             lastPartialText = "";
                           },
                           onReasoningEnd: () => {
+                            // Boundary: leaving the thinking phase. In
+                            // block mode, freeze the "Thinking…" preview
+                            // post and start a new post for whatever comes
+                            // next (partial reply, tool status, etc.).
+                            previewBoundary.signalBoundary();
                             lastPartialText = "";
                           },
                           onReasoningStream: async () => {
                             if (!lastPartialText) {
                               draftStream.update("Thinking…");
+                              previewBoundary.markStreamedContent();
                             }
                           },
                           onToolStart: async (payload) => {
-                            draftStream.update(buildMattermostToolStatusText(payload));
+                            // The agent runtime fires this callback for both
+                            // "start" and "update" tool phases (see
+                            // agent-runner-execution.ts). For preview
+                            // splitting we only want to treat "start" as a
+                            // turn boundary - a single tool call should
+                            // produce a single preview post, even if the
+                            // runtime emits multiple update events as the
+                            // tool progresses. "update" events also typically
+                            // arrive without args, so re-rendering the
+                            // status would replace the rich "Running `exec`\n
+                            // ...command..." preview with a bare
+                            // "Running `exec`…".
+                            if (payload.phase !== "start") {
+                              return;
+                            }
+                            // Boundary: a tool is about to run. In block
+                            // mode, split before the tool status replaces
+                            // any partial reply / thinking content the
+                            // user may already have read.
+                            previewBoundary.signalBoundary();
+                            // Suppress args from the rendered status when
+                            // the account is configured for the bare
+                            // "Running \`tool\`…" preview. We still receive
+                            // them from the agent runtime; we just don't
+                            // expose them in chat.
+                            const renderArgs =
+                              account.toolPreviewMode === "args" ? payload.args : undefined;
+                            draftStream.update(
+                              buildMattermostToolStatusText({
+                                name: payload.name,
+                                phase: payload.phase,
+                                args: renderArgs,
+                              }),
+                            );
+                            previewBoundary.markStreamedContent();
                           },
                         },
                       }),

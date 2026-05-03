@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import {
+  buildMattermostToolStatusText,
+  createMattermostDraftPreviewBoundaryController,
+  createMattermostDraftStream,
+  summarizeMattermostToolArgs,
+} from "./draft-stream.js";
 
 type RequestRecord = {
   path: string;
@@ -243,11 +248,217 @@ describe("createMattermostDraftStream", () => {
 });
 
 describe("buildMattermostToolStatusText", () => {
-  it("renders a status with the tool name", () => {
+  it("renders a bare status with the tool name when no args are given", () => {
     expect(buildMattermostToolStatusText({ name: "read" })).toBe("Running `read`…");
   });
 
-  it("falls back to a generic running tool status", () => {
-    expect(buildMattermostToolStatusText({ name: "exec" })).toBe("Running `exec`…");
+  it("falls back to a generic running tool status when no name is given", () => {
+    expect(buildMattermostToolStatusText({})).toBe("Running tool…");
+  });
+
+  it("renders the exec command in a bash-tagged code block", () => {
+    expect(
+      buildMattermostToolStatusText({
+        name: "exec",
+        args: { command: "ls -la /tmp" },
+      }),
+    ).toBe("Running `exec`\n```bash\nls -la /tmp\n```");
+  });
+
+  it("renders the read path in an untagged code block", () => {
+    expect(
+      buildMattermostToolStatusText({
+        name: "read",
+        args: { path: "/etc/hosts" },
+      }),
+    ).toBe("Running `read`\n```\n/etc/hosts\n```");
+  });
+
+  it("renders single non-canonical args as key=value in a code block", () => {
+    expect(
+      buildMattermostToolStatusText({
+        name: "web_search",
+        args: { query: "openclaw streaming bug" },
+      }),
+    ).toBe("Running `web_search`\n```\nquery=openclaw streaming bug\n```");
+  });
+
+  it("renders multi-arg payloads as one key=value per line", () => {
+    expect(
+      buildMattermostToolStatusText({
+        name: "edit",
+        args: { path: "/tmp/x", oldText: "a", newText: "b" },
+      }),
+    ).toBe("Running `edit`\n```\npath=/tmp/x\noldText=a\nnewText=b\n```");
+  });
+
+  it("preserves multi-line shell commands inside the code block", () => {
+    const status = buildMattermostToolStatusText({
+      name: "exec",
+      args: {
+        command: "python3 -c \"import json\nprint('hi')\"\necho done",
+      },
+    });
+    expect(status).toContain("```bash");
+    expect(status).toContain('python3 -c "import json');
+    expect(status).toContain("echo done");
+    expect(status).toContain("```");
+  });
+});
+
+describe("summarizeMattermostToolArgs", () => {
+  it("returns undefined for missing or empty args", () => {
+    expect(summarizeMattermostToolArgs(undefined)).toBeUndefined();
+    expect(summarizeMattermostToolArgs({})).toBeUndefined();
+    expect(summarizeMattermostToolArgs({ ignored: undefined })).toBeUndefined();
+  });
+
+  it("unwraps a single canonical key", () => {
+    expect(summarizeMattermostToolArgs({ command: "ls" })).toBe("ls");
+    expect(summarizeMattermostToolArgs({ path: "/x" })).toBe("/x");
+    expect(summarizeMattermostToolArgs({ input: "hi" })).toBe("hi");
+    expect(summarizeMattermostToolArgs({ text: "abc" })).toBe("abc");
+  });
+
+  it("prefixes other single keys with key=", () => {
+    expect(summarizeMattermostToolArgs({ url: "https://example.com" })).toBe(
+      "url=https://example.com",
+    );
+  });
+
+  it("serializes object/array values as pretty-printed JSON", () => {
+    expect(summarizeMattermostToolArgs({ args: { a: 1, b: ["x", "y"] } })).toBe(
+      `args=${JSON.stringify({ a: 1, b: ["x", "y"] }, null, 2)}`,
+    );
+  });
+
+  it("preserves newlines inside command args so multi-line shells render verbatim", () => {
+    expect(summarizeMattermostToolArgs({ command: "echo one\necho two" })).toBe(
+      "echo one\necho two",
+    );
+  });
+
+  it("trims leading/trailing whitespace without collapsing internal newlines", () => {
+    expect(summarizeMattermostToolArgs({ command: "  ls\n\n  " })).toBe("ls");
+  });
+
+  it("truncates with an ellipsis once the limit is exceeded", () => {
+    const summary = summarizeMattermostToolArgs({ command: "x".repeat(500) }, { maxChars: 50 });
+    expect(summary?.length).toBe(50);
+    expect(summary?.endsWith("…")).toBe(true);
+  });
+});
+
+describe("createMattermostDraftPreviewBoundaryController", () => {
+  function createDraftStreamStub() {
+    return {
+      forceNewMessage: vi.fn(),
+    };
+  }
+
+  it("is a no-op when splitAtBoundaries is false", () => {
+    const draftStream = createDraftStreamStub();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: false,
+    });
+
+    controller.markStreamedContent();
+    expect(controller.signalBoundary()).toBe(false);
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not split when no streamed content has been marked", () => {
+    const draftStream = createDraftStreamStub();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+
+    expect(controller.signalBoundary()).toBe(false);
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("splits at boundary when streamed content has been marked", () => {
+    const draftStream = createDraftStreamStub();
+    const onSplit = vi.fn();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+      onSplit,
+    });
+
+    controller.markStreamedContent();
+    expect(controller.signalBoundary()).toBe(true);
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(onSplit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not split twice in a row without new content", () => {
+    const draftStream = createDraftStreamStub();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+
+    controller.markStreamedContent();
+    expect(controller.signalBoundary()).toBe(true);
+    expect(controller.signalBoundary()).toBe(false);
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("splits again after fresh content is marked", () => {
+    const draftStream = createDraftStreamStub();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+
+    controller.markStreamedContent();
+    expect(controller.signalBoundary()).toBe(true);
+
+    controller.markStreamedContent();
+    expect(controller.signalBoundary()).toBe(true);
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports whether it is splitting at boundaries", () => {
+    const draftStream = createDraftStreamStub();
+    const splitting = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+    const nonSplitting = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: false,
+    });
+
+    expect(splitting.isSplittingAtBoundaries()).toBe(true);
+    expect(nonSplitting.isSplittingAtBoundaries()).toBe(false);
+  });
+
+  it("models a thinking → tool → partial reply → final turn without overwrites", () => {
+    const draftStream = createDraftStreamStub();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+
+    // Phase 1: "Thinking…" appears in the preview post.
+    controller.markStreamedContent();
+
+    // Phase 2: tool starts → boundary BEFORE the new tool status update.
+    expect(controller.signalBoundary()).toBe(true);
+    // Tool status is now in a fresh post.
+    controller.markStreamedContent();
+
+    // Phase 3: assistant message starts → boundary BEFORE partial reply.
+    expect(controller.signalBoundary()).toBe(true);
+    controller.markStreamedContent();
+
+    // Three distinct posts created (one initial, two splits) for the
+    // three phases. Only the two boundaries call forceNewMessage().
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(2);
   });
 });

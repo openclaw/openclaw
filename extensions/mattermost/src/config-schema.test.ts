@@ -79,4 +79,71 @@ describe("MattermostConfigSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("accepts streaming.mode='block'", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { mode: "block" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts streaming.mode='partial'", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { mode: "partial" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts streaming.mode on a per-account override", () => {
+    const result = MattermostConfigSchema.safeParse({
+      accounts: {
+        main: {
+          streaming: { mode: "block" },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown streaming.mode values", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { mode: "firehose" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown properties on streaming", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { mode: "block", unknownProp: "bad" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts streaming.toolPreview='args'", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { toolPreview: "args" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts streaming.toolPreview='name'", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { toolPreview: "name" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts streaming.mode and streaming.toolPreview together", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { mode: "block", toolPreview: "args" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown streaming.toolPreview values", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { toolPreview: "verbose" },
+    });
+    expect(result.success).toBe(false);
+  });
 });

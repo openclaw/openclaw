@@ -12,7 +12,9 @@ import type {
   MattermostAccountConfig,
   MattermostChatMode,
   MattermostChatTypeKey,
+  MattermostPreviewStreamMode,
   MattermostReplyToMode,
+  MattermostToolPreviewMode,
 } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -36,7 +38,61 @@ export type ResolvedMattermostAccount = {
   chunkMode?: MattermostAccountConfig["chunkMode"];
   blockStreaming?: boolean;
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
+  /**
+   * Effective draft preview stream mode for this account. Defaults to
+   * "partial" when not configured, matching the historical Mattermost
+   * behavior (single preview post edited in place). Use "block" to split
+   * the preview at turn boundaries so prior content stays visible.
+   */
+  previewStreamMode: MattermostPreviewStreamMode;
+  /**
+   * Effective tool-status preview verbosity for this account. Defaults to
+   * "name" (just the tool name in the preview post) for backward
+   * compatibility and to avoid leaking sensitive input by default.
+   */
+  toolPreviewMode: MattermostToolPreviewMode;
 };
+
+const DEFAULT_MATTERMOST_PREVIEW_STREAM_MODE: MattermostPreviewStreamMode = "partial";
+const DEFAULT_MATTERMOST_TOOL_PREVIEW_MODE: MattermostToolPreviewMode = "name";
+
+/**
+ * Resolve the effective Mattermost preview stream mode for an account config.
+ *
+ * Resolution order (highest precedence first):
+ * 1. `streaming.mode` on the account config ("partial" | "block")
+ * 2. Default: "partial" (historical edit-in-place behavior)
+ *
+ * Note: This setting only controls how the preview is shaped when it is
+ * created. To suppress the preview entirely, use `blockStreaming: true`
+ * on the account config. The two settings are intentionally orthogonal.
+ */
+export function resolveMattermostPreviewStreamMode(
+  config: Pick<MattermostAccountConfig, "streaming">,
+): MattermostPreviewStreamMode {
+  const explicit = config.streaming?.mode;
+  if (explicit === "partial" || explicit === "block") {
+    return explicit;
+  }
+  return DEFAULT_MATTERMOST_PREVIEW_STREAM_MODE;
+}
+
+/**
+ * Resolve the effective Mattermost tool-status preview verbosity.
+ *
+ * Resolution order:
+ * 1. `streaming.toolPreview` on the account config ("name" | "args")
+ * 2. Default: "name" (matches historical behavior - just the tool name).
+ */
+export function resolveMattermostToolPreviewMode(
+  config: Pick<MattermostAccountConfig, "streaming">,
+): MattermostToolPreviewMode {
+  const explicit = config.streaming?.toolPreview;
+  if (explicit === "name" || explicit === "args") {
+    return explicit;
+  }
+  return DEFAULT_MATTERMOST_TOOL_PREVIEW_MODE;
+}
 
 const mattermostAccountHelpers = createAccountListHelpers("mattermost");
 
@@ -123,6 +179,8 @@ export function resolveMattermostAccount(params: {
     blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
     blockStreamingCoalesce:
       resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,
+    previewStreamMode: resolveMattermostPreviewStreamMode(merged),
+    toolPreviewMode: resolveMattermostToolPreviewMode(merged),
   };
 }
 
