@@ -38,7 +38,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: 51947110f5cacb6ab2c0947594ea9628031c9fcf
+        default: b63b6f9e20efb23641df00487e982230d81a90ac
         type: string
 
 permissions:
@@ -85,7 +85,7 @@ jobs:
             live: "true"
             include_filters: "scenario:agent-cold-warm-message"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || '51947110f5cacb6ab2c0947594ea9628031c9fcf' }}
+      KOVA_REF: ${{ inputs.kova_ref || 'b63b6f9e20efb23641df00487e982230d81a90ac' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
       BUNDLE_DIR: ${{ github.workspace }}/.artifacts/kova/bundles/${{ matrix.lane }}
