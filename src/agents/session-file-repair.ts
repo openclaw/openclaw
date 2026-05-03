@@ -144,9 +144,11 @@ function isToolCallBlock(block: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
-/** Trailing assistant without tool calls — safe to trim from disk.
- * Assistant turns with tool calls are kept so transcript repair can
- * synthesize missing tool results (mirrors the outbound guard). */
+/** Trailing incomplete assistant without tool calls — safe to trim from disk.
+ * Completed assistant turns are valid conversation history for the next
+ * inbound message and must stay on disk. Assistant turns with tool calls are
+ * kept so transcript repair can synthesize missing tool results (mirrors the
+ * outbound guard). */
 function isTrimmableTrailingAssistantEntry(entry: unknown): boolean {
   if (!entry || typeof entry !== "object") {
     return false;
@@ -155,8 +157,11 @@ function isTrimmableTrailingAssistantEntry(entry: unknown): boolean {
   if (record.type !== "message" || !record.message || typeof record.message !== "object") {
     return false;
   }
-  const message = record.message as { role?: unknown; content?: unknown };
+  const message = record.message as { role?: unknown; content?: unknown; stopReason?: unknown };
   if (message.role !== "assistant") {
+    return false;
+  }
+  if (typeof message.stopReason === "string" && message.stopReason.length > 0) {
     return false;
   }
   const content = message.content;

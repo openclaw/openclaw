@@ -312,7 +312,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(after).toBe(original);
   });
 
-  it("trims trailing assistant messages from the session file", async () => {
+  it("preserves completed trailing assistant messages in the session file", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
     const assistantEntry = {
@@ -332,16 +332,15 @@ describe("repairSessionFileIfNeeded", () => {
     const warn = vi.fn();
     const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
 
-    expect(result.repaired).toBe(true);
-    expect(result.trimmedTrailingAssistantMessages).toBe(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("trimmed 1 trailing assistant message(s)");
+    expect(result.repaired).toBe(false);
+    expect(result.trimmedTrailingAssistantMessages ?? 0).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
 
-    const repaired = await fs.readFile(file, "utf-8");
-    const repairedLines = repaired.trim().split("\n");
-    expect(repairedLines).toHaveLength(2);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(original);
   });
 
-  it("trims multiple consecutive trailing assistant messages", async () => {
+  it("trims multiple consecutive incomplete trailing assistant messages", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
     const assistantEntry1 = {
@@ -352,7 +351,6 @@ describe("repairSessionFileIfNeeded", () => {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "first" }],
-        stopReason: "stop",
       },
     };
     const assistantEntry2 = {
@@ -363,7 +361,6 @@ describe("repairSessionFileIfNeeded", () => {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "second" }],
-        stopReason: "stop",
       },
     };
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantEntry1)}\n${JSON.stringify(assistantEntry2)}\n`;
@@ -437,7 +434,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(after).toBe(original);
   });
 
-  it("trims non-tool-call assistant but stops at tool-call assistant", async () => {
+  it("trims incomplete non-tool-call assistant but stops at tool-call assistant", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
     const toolCallAssistant = {
@@ -459,7 +456,6 @@ describe("repairSessionFileIfNeeded", () => {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "stale" }],
-        stopReason: "stop",
       },
     };
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(plainAssistant)}\n`;
@@ -487,7 +483,6 @@ describe("repairSessionFileIfNeeded", () => {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "orphan" }],
-        stopReason: "stop",
       },
     };
     const original = `${JSON.stringify(header)}\n${JSON.stringify(assistantEntry)}\n`;
