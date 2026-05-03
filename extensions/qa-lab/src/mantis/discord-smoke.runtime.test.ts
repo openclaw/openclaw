@@ -189,9 +189,8 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
-    await expect(fs.readFile(path.join(result.outputDir, "error.txt"), "utf8")).resolves.toContain(
-      "Missing OPENCLAW_QA_DISCORD_GUILD_ID",
-    );
+    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    expect(errorText).toContain("Missing OPENCLAW_QA_DISCORD_GUILD_ID");
   });
 
   it("fails when the channel is not in the configured guild", async () => {
@@ -243,9 +242,8 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
-    await expect(fs.readFile(path.join(result.outputDir, "error.txt"), "utf8")).resolves.toContain(
-      "is not in guild",
-    );
+    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    expect(errorText).toContain("is not in guild");
     expect(fetchWithSsrFGuard).not.toHaveBeenCalledWith(
       expect.objectContaining({
         init: expect.objectContaining({ method: "POST" }),
