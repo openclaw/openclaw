@@ -889,4 +889,27 @@ describe("resolveCliNoOutputTimeoutMs", () => {
     });
     expect(timeoutMs).toBe(42_000);
   });
+
+  it("lets explicit cron timeouts raise the default resume watchdog budget", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: {
+        command: "codex",
+      },
+      timeoutMs: 600_000,
+      trigger: "cron",
+      useResume: true,
+    });
+    expect(timeoutMs).toBe(480_000);
+  });
+
+  it("keeps non-cron resume runs on the shorter no-output watchdog profile", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: {
+        command: "codex",
+      },
+      timeoutMs: 600_000,
+      useResume: true,
+    });
+    expect(timeoutMs).toBe(180_000);
+  });
 });

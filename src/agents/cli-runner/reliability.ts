@@ -59,6 +59,7 @@ export function resolveCliNoOutputTimeoutMs(params: {
   backend: CliBackendConfig;
   timeoutMs: number;
   useResume: boolean;
+  trigger?: string;
 }): number {
   const profile = pickWatchdogProfile(params.backend, params.useResume);
   // Keep watchdog below global timeout in normal cases.
@@ -66,8 +67,13 @@ export function resolveCliNoOutputTimeoutMs(params: {
   if (profile.noOutputTimeoutMs !== undefined) {
     return Math.min(profile.noOutputTimeoutMs, cap);
   }
-  const computed = Math.floor(params.timeoutMs * profile.noOutputTimeoutRatio);
-  const bounded = Math.min(profile.maxMs, Math.max(profile.minMs, computed));
+  const isCronRun = params.trigger === "cron";
+  const noOutputTimeoutRatio = isCronRun
+    ? Math.max(profile.noOutputTimeoutRatio, CLI_FRESH_WATCHDOG_DEFAULTS.noOutputTimeoutRatio)
+    : profile.noOutputTimeoutRatio;
+  const maxMs = isCronRun ? Math.max(profile.maxMs, cap) : profile.maxMs;
+  const computed = Math.floor(params.timeoutMs * noOutputTimeoutRatio);
+  const bounded = Math.min(maxMs, Math.max(profile.minMs, computed));
   return Math.min(bounded, cap);
 }
 

@@ -30,6 +30,10 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000 })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
+  it("lets explicit cron run timeouts raise the model idle watchdog budget", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(600_000);
+  });
+
   it("uses an explicit run timeout override when shorter than the default idle watchdog", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 30_000 })).toBe(30_000);
   });
