@@ -1,4 +1,9 @@
 import {
+  summarizeCommandSegmentsForDisplay,
+  type CommandExplanationSummary,
+} from "../../infra/command-analysis/explain.js";
+import { analyzeCommandForPolicy } from "../../infra/command-analysis/policy.js";
+import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
@@ -41,6 +46,43 @@ const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
   reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
 } as const;
 const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
+
+function sanitizeCommandAnalysisSummary(
+  summary: CommandExplanationSummary,
+): CommandExplanationSummary {
+  return {
+    commandCount: summary.commandCount,
+    nestedCommandCount: summary.nestedCommandCount,
+    riskKinds: summary.riskKinds.map((kind) => sanitizeExecApprovalWarningText(kind)),
+    warningLines: summary.warningLines.map((line) => sanitizeExecApprovalWarningText(line)),
+  };
+}
+
+function resolveExecApprovalCommandAnalysis(params: {
+  host: string;
+  commandText: string;
+  commandArgv?: string[];
+  cwd?: string | null;
+}): CommandExplanationSummary | null {
+  const analysis =
+    Array.isArray(params.commandArgv) && params.commandArgv.length > 0
+      ? analyzeCommandForPolicy({
+          source: "argv",
+          argv: params.commandArgv,
+          cwd: params.cwd ?? undefined,
+        })
+      : params.host === "node"
+        ? null
+        : analyzeCommandForPolicy({
+            source: "shell",
+            command: params.commandText,
+            cwd: params.cwd ?? undefined,
+          });
+  if (!analysis?.ok) {
+    return null;
+  }
+  return sanitizeCommandAnalysisSummary(summarizeCommandSegmentsForDisplay(analysis.segments));
+}
 
 type ExecApprovalIosPushDelivery = {
   handleRequested?: (request: ExecApprovalRequest) => Promise<boolean>;
@@ -207,6 +249,12 @@ export function createExecApprovalHandlers(
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const warningText = normalizeOptionalString(p.warningText);
+      const commandAnalysis = resolveExecApprovalCommandAnalysis({
+        host,
+        commandText: effectiveCommandText,
+        commandArgv: effectiveCommandArgv,
+        cwd: effectiveCwd,
+      });
       const systemRunBinding =
         host === "node"
           ? buildSystemRunApprovalBinding({
@@ -241,6 +289,7 @@ export function createExecApprovalHandlers(
         security: p.security ?? null,
         ask: p.ask ?? null,
         warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
+        commandAnalysis,
         allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: p.ask ?? null }),
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,

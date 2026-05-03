@@ -16,6 +16,7 @@ import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
+import { extractShellWrapperInlineCommand } from "../infra/shell-wrapper-resolution.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -1141,7 +1142,6 @@ function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
 function rejectUnsafeControlShellCommand(command: string): void {
   const isEnvAssignmentToken = (token: string): boolean =>
     /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
-  const shellWrappers = new Set(["bash", "dash", "fish", "ksh", "sh", "zsh"]);
   const commandStandaloneOptions = new Set(["-p", "-v", "-V"]);
   const envOptionsWithValues = new Set([
     "-C",
@@ -1310,35 +1310,19 @@ function rejectUnsafeControlShellCommand(command: string): void {
     }
     return remaining;
   };
-  const extractShellWrapperPayload = (argv: string[]): string[] => {
-    const [commandName, ...rest] = argv;
-    if (!commandName || !shellWrappers.has(path.basename(commandName))) {
-      return [];
-    }
-    for (let i = 0; i < rest.length; i += 1) {
-      const token = rest[i];
-      if (!token) {
-        continue;
-      }
-      if (token === "-c" || token === "-lc" || token === "-ic" || token === "-xc") {
-        return rest[i + 1] ? [rest[i + 1]] : [];
-      }
-      if (/^-[^-]*c[^-]*$/u.test(token)) {
-        return rest[i + 1] ? [rest[i + 1]] : [];
-      }
-    }
-    return [];
-  };
   const buildCandidates = (argv: string[]): string[] => {
     const envSplitCandidates = extractEnvSplitStringPayload(argv).flatMap((payload) => {
       const innerArgv = splitShellArgs(payload);
       return innerArgv ? buildCandidates(innerArgv) : [payload];
     });
     const stripped = stripApprovalCommandPrefixes(argv);
-    const shellWrapperCandidates = extractShellWrapperPayload(stripped).flatMap((payload) => {
-      const innerArgv = splitShellArgs(payload);
-      return innerArgv ? buildCandidates(innerArgv) : [payload];
-    });
+    const shellWrapperPayload = extractShellWrapperInlineCommand(stripped);
+    const shellWrapperCandidates = shellWrapperPayload
+      ? (() => {
+          const innerArgv = splitShellArgs(shellWrapperPayload);
+          return innerArgv ? buildCandidates(innerArgv) : [shellWrapperPayload];
+        })()
+      : [];
     return [
       ...(stripped.length > 0 ? [stripped.join(" ")] : []),
       ...envSplitCandidates,
