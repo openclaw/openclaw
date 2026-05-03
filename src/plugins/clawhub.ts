@@ -268,16 +268,36 @@ function normalizeArtifactResolverFiles(
 function resolveTopLevelNpmPackArtifact(
   artifact: ClawHubResolvedArtifact | null | undefined,
 ): ClawHubPackageArtifactSummary | null {
-  if (artifact?.artifactKind !== "npm-pack") {
+  // The live ClawHub artifact resolver currently emits `kind`/`sha256` on the
+  // top-level artifact, while the typed contract uses `artifactKind`/
+  // `artifactSha256`. Accept either spelling so installs unblock before the
+  // server catches up.
+  const raw = artifact as
+    | {
+        artifactKind?: string | null;
+        kind?: string | null;
+        artifactSha256?: string | null;
+        sha256?: string | null;
+        npmIntegrity?: string | null;
+        npmShasum?: string | null;
+        downloadUrl?: string | null;
+      }
+    | null
+    | undefined;
+  const artifactKind = raw?.artifactKind ?? raw?.kind;
+  if (artifactKind !== "npm-pack") {
+    return null;
+  }
+  if (typeof raw?.npmIntegrity !== "string") {
     return null;
   }
   return {
     kind: "npm-pack",
     format: "tgz",
-    sha256: artifact.artifactSha256 ?? null,
-    npmIntegrity: artifact.npmIntegrity,
-    npmShasum: artifact.npmShasum ?? null,
-    downloadUrl: artifact.downloadUrl ?? null,
+    sha256: raw.artifactSha256 ?? raw.sha256 ?? null,
+    npmIntegrity: raw.npmIntegrity,
+    npmShasum: raw.npmShasum ?? null,
+    downloadUrl: raw.downloadUrl ?? null,
   };
 }
 
