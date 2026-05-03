@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
-import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
@@ -662,7 +662,7 @@ export async function createChatSession(state: AppViewState) {
 
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: 0,
+    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,
