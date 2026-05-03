@@ -104,6 +104,10 @@ function isDynamicContextFile(pathValue: string): boolean {
   return DYNAMIC_CONTEXT_FILE_BASENAMES.has(getContextFileBasename(pathValue));
 }
 
+function isBootstrapContextFile(pathValue: string): boolean {
+  return /(^|[\\/])BOOTSTRAP\.md$/iu.test(pathValue.trim());
+}
+
 function sanitizeContextFileContentForPrompt(content: string): string {
   // Claude Code subscription mode rejects this exact prompt-policy quote when it
   // appears in system context. The live heartbeat user turn still carries the
@@ -253,6 +257,53 @@ export function buildAgentBootstrapSystemContext(params: {
     }),
     "",
   ];
+}
+
+export function buildAgentBootstrapSystemPromptSupplement(params: {
+  bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
+  contextFiles?: EmbeddedContextFile[];
+}): string | undefined {
+  const bootstrapFiles =
+    params.bootstrapMode === "full"
+      ? sortContextFilesForPrompt(params.contextFiles ?? []).filter((file) =>
+          isBootstrapContextFile(file.path),
+        )
+      : [];
+  const lines = [
+    ...buildAgentBootstrapSystemContext({
+      bootstrapMode: params.bootstrapMode,
+      hasBootstrapFileInProjectContext: bootstrapFiles.length > 0,
+    }),
+  ];
+  const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
+  if (bootstrapTruncationNotice) {
+    lines.push("## Bootstrap Context Notice", bootstrapTruncationNotice, "");
+  }
+  if (bootstrapFiles.length > 0) {
+    lines.push(
+      ...buildProjectContextSection({
+        files: bootstrapFiles,
+        heading: "# Project Context",
+        dynamic: false,
+      }),
+    );
+  }
+  const supplement = lines.join("\n").trim();
+  return supplement.length > 0 ? supplement : undefined;
+}
+
+export function appendAgentBootstrapSystemPromptSupplement(params: {
+  systemPrompt: string;
+  bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
+  contextFiles?: EmbeddedContextFile[];
+}): string {
+  const supplement = buildAgentBootstrapSystemPromptSupplement(params);
+  if (!supplement) {
+    return params.systemPrompt;
+  }
+  return `${params.systemPrompt.trimEnd()}\n\n${supplement}`;
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
@@ -769,7 +820,7 @@ export function buildAgentSystemPrompt(params: {
   const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
   const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
   const hasBootstrapFileInProjectContext = orderedContextFiles.some((file) =>
-    /(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()),
+    isBootstrapContextFile(file.path),
   );
   const bootstrapSystemContext = buildAgentBootstrapSystemContext({
     bootstrapMode: params.bootstrapMode,

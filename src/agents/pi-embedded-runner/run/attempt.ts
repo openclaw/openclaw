@@ -155,6 +155,7 @@ import {
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { appendAgentBootstrapSystemPromptSupplement } from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   buildEmptyExplicitToolAllowlistError,
@@ -1283,50 +1284,59 @@ export async function runEmbeddedAttempt(
         context: promptContributionContext,
       });
 
-    const builtAppendPrompt =
-      resolveSystemPromptOverride({
-        config: params.config,
-        agentId: sessionAgentId,
-      }) ??
-      buildEmbeddedSystemPrompt({
-        workspaceDir: effectiveWorkspace,
-        defaultThinkLevel: params.thinkLevel,
-        reasoningLevel: params.reasoningLevel ?? "off",
-        extraSystemPrompt: params.extraSystemPrompt,
-        ownerNumbers: params.ownerNumbers,
-        ownerDisplay: ownerDisplay.ownerDisplay,
-        ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-        reasoningTagHint,
-        heartbeatPrompt,
-        skillsPrompt: effectiveSkillsPrompt,
-        docsPath: openClawReferences.docsPath ?? undefined,
-        sourcePath: openClawReferences.sourcePath ?? undefined,
-        ttsHint,
-        workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
-        reactionGuidance,
-        promptMode: effectivePromptMode,
-        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-        silentReplyPromptMode: params.silentReplyPromptMode,
-        acpEnabled: isAcpRuntimeSpawnAvailable({
-          config: params.config,
-          sandboxed: sandboxInfo?.enabled === true,
-        }),
-        nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
-        runtimeInfo,
-        messageToolHints,
-        sandboxInfo,
-        tools: effectiveTools,
-        modelAliasLines: buildModelAliasLines(params.config),
-        userTimezone,
-        userTime,
-        userTimeFormat,
-        contextFiles,
-        bootstrapMode,
-        bootstrapTruncationNotice: buildBootstrapPromptWarningNotice(bootstrapPromptWarning.lines),
-        includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
-        memoryCitationsMode: params.config?.memory?.citations,
-        promptContribution,
-      });
+    const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
+      bootstrapPromptWarning.lines,
+    );
+    const systemPromptOverrideText = resolveSystemPromptOverride({
+      config: params.config,
+      agentId: sessionAgentId,
+    });
+    const builtAppendPrompt = systemPromptOverrideText
+      ? appendAgentBootstrapSystemPromptSupplement({
+          systemPrompt: systemPromptOverrideText,
+          bootstrapMode,
+          bootstrapTruncationNotice,
+          contextFiles,
+        })
+      : buildEmbeddedSystemPrompt({
+          workspaceDir: effectiveWorkspace,
+          defaultThinkLevel: params.thinkLevel,
+          reasoningLevel: params.reasoningLevel ?? "off",
+          extraSystemPrompt: params.extraSystemPrompt,
+          ownerNumbers: params.ownerNumbers,
+          ownerDisplay: ownerDisplay.ownerDisplay,
+          ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
+          reasoningTagHint,
+          heartbeatPrompt,
+          skillsPrompt: effectiveSkillsPrompt,
+          docsPath: openClawReferences.docsPath ?? undefined,
+          sourcePath: openClawReferences.sourcePath ?? undefined,
+          ttsHint,
+          workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
+          reactionGuidance,
+          promptMode: effectivePromptMode,
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          silentReplyPromptMode: params.silentReplyPromptMode,
+          acpEnabled: isAcpRuntimeSpawnAvailable({
+            config: params.config,
+            sandboxed: sandboxInfo?.enabled === true,
+          }),
+          nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
+          runtimeInfo,
+          messageToolHints,
+          sandboxInfo,
+          tools: effectiveTools,
+          modelAliasLines: buildModelAliasLines(params.config),
+          userTimezone,
+          userTime,
+          userTimeFormat,
+          contextFiles,
+          bootstrapMode,
+          bootstrapTruncationNotice,
+          includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
+          memoryCitationsMode: params.config?.memory?.citations,
+          promptContribution,
+        });
     const appendPrompt = isRawModelRun
       ? ""
       : transformProviderSystemPrompt({
