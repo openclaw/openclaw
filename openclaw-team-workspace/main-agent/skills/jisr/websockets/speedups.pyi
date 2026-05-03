@@ -1,0 +1,3 @@
+from .typing import BytesLike
+
+def apply_mask(data: BytesLike, mask: bytes | bytearray) -> bytes: ...
