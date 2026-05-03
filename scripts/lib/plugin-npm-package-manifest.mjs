@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
+import { resolvePluginNpmRuntimeBuildPlan } from "./plugin-npm-runtime-build.mjs";
 
 const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
   "src/config/bundled-channel-config-metadata.generated.ts";
@@ -17,6 +18,103 @@ function writeJsonFile(filePath, value) {
 
 function resolvePackageDir(repoRoot, packageDir) {
   return path.isAbsolute(packageDir) ? packageDir : path.resolve(repoRoot, packageDir);
+}
+
+function resolvePackageJsonPath(packageDir) {
+  return path.join(packageDir, "package.json");
+}
+
+function packageRelativePathExists(packageDir, relativePath) {
+  return fs.existsSync(path.join(packageDir, relativePath));
+}
+
+function mergePackageFiles(packageDir, files) {
+  const merged = new Set(
+    Array.isArray(files) ? files.filter((entry) => typeof entry === "string") : [],
+  );
+  merged.add("dist/**");
+  if (packageRelativePathExists(packageDir, "openclaw.plugin.json")) {
+    merged.add("openclaw.plugin.json");
+  }
+  if (packageRelativePathExists(packageDir, "README.md")) {
+    merged.add("README.md");
+  }
+  if (packageRelativePathExists(packageDir, "SKILL.md")) {
+    merged.add("SKILL.md");
+  }
+  if (packageRelativePathExists(packageDir, "skills")) {
+    merged.add("skills/**");
+  }
+  return [...merged];
+}
+
+function listRuntimeBuildOutputs(plan) {
+  return Object.keys(plan.entry)
+    .map((entryKey) => `./dist/${entryKey}.js`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function assertPluginNpmRuntimeBuildExists(plan) {
+  const missing = listRuntimeBuildOutputs(plan).filter(
+    (runtimePath) => !packageRelativePathExists(plan.packageDir, runtimePath.replace(/^\.\//u, "")),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      [
+        `package-local plugin runtime is missing for ${plan.pluginDir}: ${missing.join(", ")}`,
+        `Run node scripts/lib/plugin-npm-runtime-build.mjs ${path.relative(plan.repoRoot, plan.packageDir) || plan.packageDir} before publishing ${plan.packageJson.name ?? plan.pluginDir}.`,
+      ].join("\n"),
+    );
+  }
+}
+
+export function resolveAugmentedPluginNpmPackageJson(params) {
+  const repoRoot = path.resolve(params.repoRoot ?? ".");
+  const packageDir = resolvePackageDir(repoRoot, params.packageDir);
+  const packageJsonPath = resolvePackageJsonPath(packageDir);
+  if (!fs.existsSync(packageJsonPath)) {
+    return {
+      packageJsonPath,
+      packageDir,
+      repoRoot,
+      changed: false,
+      packageJson: undefined,
+      reason: "missing-package-json",
+    };
+  }
+
+  const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir });
+  if (!plan) {
+    return {
+      packageJsonPath,
+      packageDir,
+      repoRoot,
+      changed: false,
+      packageJson: undefined,
+      reason: "no-runtime-build",
+    };
+  }
+  assertPluginNpmRuntimeBuildExists(plan);
+
+  const packageJson = {
+    ...plan.packageJson,
+    files: mergePackageFiles(packageDir, plan.packageJson.files),
+    openclaw: {
+      ...plan.packageJson.openclaw,
+      runtimeExtensions: plan.runtimeExtensions,
+      ...(plan.runtimeSetupEntry ? { runtimeSetupEntry: plan.runtimeSetupEntry } : {}),
+    },
+  };
+  const changed = JSON.stringify(packageJson) !== JSON.stringify(plan.packageJson);
+  return {
+    packageJsonPath,
+    packageDir,
+    repoRoot,
+    changed,
+    packageJson,
+    pluginDir: plan.pluginDir,
+    reason: changed ? "package-local-runtime" : "unchanged",
+  };
 }
 
 function readGeneratedBundledChannelConfigs(repoRoot) {
@@ -133,34 +231,63 @@ export function resolveAugmentedPluginNpmManifest(params) {
 export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
-  const resolved = resolveAugmentedPluginNpmManifest({
+  const resolvedManifest = resolveAugmentedPluginNpmManifest({
+    repoRoot,
+    packageDir,
+  });
+  const resolvedPackageJson = resolveAugmentedPluginNpmPackageJson({
     repoRoot,
     packageDir,
   });
 
-  if (!resolved.changed || !resolved.manifest) {
+  if (
+    (!resolvedManifest.changed || !resolvedManifest.manifest) &&
+    (!resolvedPackageJson.changed || !resolvedPackageJson.packageJson)
+  ) {
     return callback({
-      ...resolved,
+      ...resolvedManifest,
       packageDir,
       repoRoot,
       applied: false,
+      packageJsonApplied: false,
     });
   }
 
-  const originalManifest = fs.readFileSync(resolved.manifestPath, "utf8");
-  console.error(
-    `[plugin-npm-publish] overlaying generated channel config metadata for ${resolved.pluginId}`,
-  );
-  writeJsonFile(resolved.manifestPath, resolved.manifest);
+  const originalManifest =
+    resolvedManifest.changed && resolvedManifest.manifest
+      ? fs.readFileSync(resolvedManifest.manifestPath, "utf8")
+      : undefined;
+  const originalPackageJson =
+    resolvedPackageJson.changed && resolvedPackageJson.packageJson
+      ? fs.readFileSync(resolvedPackageJson.packageJsonPath, "utf8")
+      : undefined;
+  if (resolvedManifest.changed && resolvedManifest.manifest) {
+    console.error(
+      `[plugin-npm-publish] overlaying generated channel config metadata for ${resolvedManifest.pluginId}`,
+    );
+    writeJsonFile(resolvedManifest.manifestPath, resolvedManifest.manifest);
+  }
+  if (resolvedPackageJson.changed && resolvedPackageJson.packageJson) {
+    console.error(
+      `[plugin-npm-publish] overlaying package-local runtime metadata for ${resolvedPackageJson.pluginDir}`,
+    );
+    writeJsonFile(resolvedPackageJson.packageJsonPath, resolvedPackageJson.packageJson);
+  }
   try {
     return callback({
-      ...resolved,
+      ...resolvedManifest,
       packageDir,
       repoRoot,
-      applied: true,
+      applied: resolvedManifest.changed && Boolean(resolvedManifest.manifest),
+      packageJsonApplied: resolvedPackageJson.changed && Boolean(resolvedPackageJson.packageJson),
     });
   } finally {
-    fs.writeFileSync(resolved.manifestPath, originalManifest, "utf8");
+    if (originalManifest !== undefined) {
+      fs.writeFileSync(resolvedManifest.manifestPath, originalManifest, "utf8");
+    }
+    if (originalPackageJson !== undefined) {
+      fs.writeFileSync(resolvedPackageJson.packageJsonPath, originalPackageJson, "utf8");
+    }
   }
 }
 
