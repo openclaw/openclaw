@@ -2705,7 +2705,7 @@ describe("matrix monitor handler draft streaming", () => {
     await vi.waitFor(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
-    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toMatch(/\n- `tool: read_file`$/);
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toMatch(/\n`🧩 Read File`$/);
 
     await deliver({ text: "Done" }, { kind: "final" });
 

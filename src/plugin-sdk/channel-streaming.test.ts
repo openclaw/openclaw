@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createChannelProgressDraftGate,
   DEFAULT_PROGRESS_DRAFT_LABELS,
+  formatChannelProgressDraftLine,
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
@@ -177,6 +178,36 @@ describe("channel-streaming", () => {
         formatLine: (line) => `\`${line}\``,
       }),
     ).toBe("Shelling\n• `patch applied`\n• `tests done`");
+    expect(
+      formatChannelProgressDraftText({
+        entry,
+        lines: ["🛠️ Exec", "plain update"],
+      }),
+    ).toBe("Shelling\n🛠️ Exec\n• plain update");
+  });
+
+  it("formats progress draft lines with shared tool display labels", () => {
+    expect(
+      formatChannelProgressDraftLine({
+        event: "tool",
+        name: "write",
+        args: { path: "/tmp/demo/index.html" },
+      }),
+    ).toBe("✍️ Write: to /tmp/demo/index.html");
+    expect(
+      formatChannelProgressDraftLine({
+        event: "item",
+        itemKind: "tool",
+        name: "write",
+        meta: "/tmp/demo/style.css",
+      }),
+    ).toBe("✍️ Write: /tmp/demo/style.css");
+    expect(
+      formatChannelProgressDraftLine({
+        event: "patch",
+        modified: ["/tmp/demo/index.html", "/tmp/demo/style.css"],
+      }),
+    ).toBe("🩹 Apply Patch: /tmp/demo/{index.html, style.css}");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

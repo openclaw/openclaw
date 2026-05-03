@@ -1524,7 +1524,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: exec\n• exec done");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• exec done");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
     expect(editMessageDiscord).toHaveBeenCalledWith(
       "c1",
@@ -1557,7 +1557,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: first\n• tool: second");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🧩 First\n🧩 Second");
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 

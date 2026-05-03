@@ -8,6 +8,7 @@ import {
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   createChannelProgressDraftGate,
+  formatChannelProgressDraftLine,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
@@ -1172,13 +1173,29 @@ export const dispatchTelegramMessage = async ({
                     if (statusReactionController && toolName) {
                       await statusReactionController.setTool(toolName);
                     }
-                    await pushPreviewToolProgress(toolName ? `tool: ${toolName}` : "tool running", {
-                      toolName,
-                    });
+                    await pushPreviewToolProgress(
+                      formatChannelProgressDraftLine({
+                        event: "tool",
+                        name: toolName,
+                        phase: payload.phase,
+                        args: payload.args,
+                      }),
+                      { toolName },
+                    );
                   },
                   onItemEvent: async (payload) => {
                     await pushPreviewToolProgress(
-                      payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+                      formatChannelProgressDraftLine({
+                        event: "item",
+                        itemKind: payload.kind,
+                        title: payload.title,
+                        name: payload.name,
+                        phase: payload.phase,
+                        status: payload.status,
+                        summary: payload.summary,
+                        progressText: payload.progressText,
+                        meta: payload.meta,
+                      }),
                     );
                   },
                   onPlanUpdate: async (payload) => {
@@ -1186,7 +1203,13 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushPreviewToolProgress(
-                      payload.explanation ?? payload.steps?.[0] ?? "planning",
+                      formatChannelProgressDraftLine({
+                        event: "plan",
+                        phase: payload.phase,
+                        title: payload.title,
+                        explanation: payload.explanation,
+                        steps: payload.steps,
+                      }),
                     );
                   },
                   onApprovalEvent: async (payload) => {
@@ -1194,7 +1217,14 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushPreviewToolProgress(
-                      payload.command ? `approval: ${payload.command}` : "approval requested",
+                      formatChannelProgressDraftLine({
+                        event: "approval",
+                        phase: payload.phase,
+                        title: payload.title,
+                        command: payload.command,
+                        reason: payload.reason,
+                        message: payload.message,
+                      }),
                     );
                   },
                   onCommandOutput: async (payload) => {
@@ -1202,9 +1232,14 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushPreviewToolProgress(
-                      payload.name
-                        ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
-                        : payload.title,
+                      formatChannelProgressDraftLine({
+                        event: "command-output",
+                        phase: payload.phase,
+                        title: payload.title,
+                        name: payload.name,
+                        status: payload.status,
+                        exitCode: payload.exitCode,
+                      }),
                     );
                   },
                   onPatchSummary: async (payload) => {
@@ -1212,7 +1247,16 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushPreviewToolProgress(
-                      payload.summary ?? payload.title ?? "patch applied",
+                      formatChannelProgressDraftLine({
+                        event: "patch",
+                        phase: payload.phase,
+                        title: payload.title,
+                        name: payload.name,
+                        added: payload.added,
+                        modified: payload.modified,
+                        deleted: payload.deleted,
+                        summary: payload.summary,
+                      }),
                     );
                   },
                   onCompactionStart:

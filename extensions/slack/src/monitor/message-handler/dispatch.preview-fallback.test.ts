@@ -267,6 +267,12 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
       .filter((line): line is string => Boolean(line))
       .join("\n");
   },
+  formatChannelProgressDraftLine: (params: {
+    progressText?: string;
+    summary?: string;
+    title?: string;
+    name?: string;
+  }) => params.progressText ?? params.summary ?? params.title ?? params.name,
   resolveChannelProgressDraftMaxLines: (entry?: {
     streaming?: { progress?: { maxLines?: number } };
   }) => entry?.streaming?.progress?.maxLines ?? 8,

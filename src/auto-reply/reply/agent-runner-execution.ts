@@ -1548,6 +1548,7 @@ export async function runAgentTurnWithFallback(params: {
                       status: readStringValue(evt.data.status),
                       summary: readStringValue(evt.data.summary),
                       progressText: readStringValue(evt.data.progressText),
+                      meta: readStringValue(evt.data.meta),
                       approvalId: readStringValue(evt.data.approvalId),
                       approvalSlug: readStringValue(evt.data.approvalSlug),
                     });

@@ -96,6 +96,7 @@ export type GetReplyOptions = {
     status?: string;
     summary?: string;
     progressText?: string;
+    meta?: string;
     approvalId?: string;
     approvalSlug?: string;
   }) => Promise<void> | void;

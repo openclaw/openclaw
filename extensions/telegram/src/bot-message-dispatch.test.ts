@@ -827,7 +827,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      expect.stringMatching(/\n• `tool: exec`\n• `exec ls ~\/Desktop`$/),
+      expect.stringMatching(/\n`🛠️ Exec`\n• `exec ls ~\/Desktop`$/),
     );
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -897,7 +897,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     const lastPreviewText = draftStream.update.mock.calls.at(-1)?.[0];
-    expect(lastPreviewText).toMatch(/\n• `tool: exec`\n• `read \[label\]\(tg:\/\/user\?id=123\)`$/);
+    expect(lastPreviewText).toMatch(/\n`🛠️ Exec`\n• `read \[label\]\(tg:\/\/user\?id=123\)`$/);
     expect(renderTelegramHtmlText(lastPreviewText ?? "")).not.toContain("<a ");
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({

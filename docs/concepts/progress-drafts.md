@@ -51,15 +51,16 @@ progress chatter for that turn.
 
 A progress draft has two parts:
 
-| Part           | Purpose                                                           |
-| -------------- | ----------------------------------------------------------------- |
-| Label          | A short title such as `Thinking...` or `Shelling...`.             |
-| Progress lines | Compact run updates such as tool calls, task steps, or approvals. |
+| Part           | Purpose                                                                     |
+| -------------- | --------------------------------------------------------------------------- |
+| Label          | A short title such as `Thinking...` or `Shelling...`.                       |
+| Progress lines | Compact run updates using the same tool labels and icons as verbose output. |
 
 The label appears after the agent starts meaningful work and either remains busy
 for five seconds or emits a second work event. Plain text-only replies do not
 show a progress draft. Progress lines are added only when the agent emits useful
-work updates. The final answer replaces the draft when possible; otherwise
+work updates, for example `🛠️ Exec`, `🔎 Web Search`, or `✍️ Write: to /tmp/file`.
+The final answer replaces the draft when possible; otherwise
 OpenClaw sends the final answer normally and cleans up or stops updating the
 draft according to the channel's transport.
 

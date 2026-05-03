@@ -11,7 +11,10 @@ import {
   createChannelReplyPipeline,
   resolveChannelSourceReplyDeliveryMode,
 } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
+import {
+  formatChannelProgressDraftLine,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   hasFinalInboundReplyDispatch,
@@ -665,13 +668,28 @@ export async function processDiscordMessage(
                   await maybeBindStatusReactionsToToolReaction(payload);
                   await statusReactions.setTool(payload.name);
                   await draftPreview.pushToolProgress(
-                    payload.name ? `tool: ${payload.name}` : "tool running",
+                    formatChannelProgressDraftLine({
+                      event: "tool",
+                      name: payload.name,
+                      phase: payload.phase,
+                      args: payload.args,
+                    }),
                     { toolName: payload.name },
                   );
                 },
                 onItemEvent: async (payload) => {
                   await draftPreview.pushToolProgress(
-                    payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+                    formatChannelProgressDraftLine({
+                      event: "item",
+                      itemKind: payload.kind,
+                      title: payload.title,
+                      name: payload.name,
+                      phase: payload.phase,
+                      status: payload.status,
+                      summary: payload.summary,
+                      progressText: payload.progressText,
+                      meta: payload.meta,
+                    }),
                   );
                 },
                 onPlanUpdate: async (payload) => {
@@ -679,7 +697,13 @@ export async function processDiscordMessage(
                     return;
                   }
                   await draftPreview.pushToolProgress(
-                    payload.explanation ?? payload.steps?.[0] ?? "planning",
+                    formatChannelProgressDraftLine({
+                      event: "plan",
+                      phase: payload.phase,
+                      title: payload.title,
+                      explanation: payload.explanation,
+                      steps: payload.steps,
+                    }),
                   );
                 },
                 onApprovalEvent: async (payload) => {
@@ -687,7 +711,14 @@ export async function processDiscordMessage(
                     return;
                   }
                   await draftPreview.pushToolProgress(
-                    payload.command ? `approval: ${payload.command}` : "approval requested",
+                    formatChannelProgressDraftLine({
+                      event: "approval",
+                      phase: payload.phase,
+                      title: payload.title,
+                      command: payload.command,
+                      reason: payload.reason,
+                      message: payload.message,
+                    }),
                   );
                 },
                 onCommandOutput: async (payload) => {
@@ -695,9 +726,14 @@ export async function processDiscordMessage(
                     return;
                   }
                   await draftPreview.pushToolProgress(
-                    payload.name
-                      ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
-                      : payload.title,
+                    formatChannelProgressDraftLine({
+                      event: "command-output",
+                      phase: payload.phase,
+                      title: payload.title,
+                      name: payload.name,
+                      status: payload.status,
+                      exitCode: payload.exitCode,
+                    }),
                   );
                 },
                 onPatchSummary: async (payload) => {
@@ -705,7 +741,16 @@ export async function processDiscordMessage(
                     return;
                   }
                   await draftPreview.pushToolProgress(
-                    payload.summary ?? payload.title ?? "patch applied",
+                    formatChannelProgressDraftLine({
+                      event: "patch",
+                      phase: payload.phase,
+                      title: payload.title,
+                      name: payload.name,
+                      added: payload.added,
+                      modified: payload.modified,
+                      deleted: payload.deleted,
+                      summary: payload.summary,
+                    }),
                   );
                 },
                 onCompactionStart: async () => {

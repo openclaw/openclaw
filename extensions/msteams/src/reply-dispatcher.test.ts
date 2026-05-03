@@ -351,7 +351,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
 
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledWith(
-      "Working\n- tool: web_search\n- tool: exec",
+      "Working\n🔎 Web Search\n🛠️ Exec",
     );
   });
 

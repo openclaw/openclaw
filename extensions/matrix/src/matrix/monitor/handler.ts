@@ -1,5 +1,6 @@
 import {
   createChannelProgressDraftGate,
+  formatChannelProgressDraftLine,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
@@ -374,23 +375,6 @@ function formatMatrixToolProgressMarkdownCode(text: string): string {
       : `${text.slice(0, MATRIX_TOOL_PROGRESS_MAX_CHARS - 1).trimEnd()}...`;
   const safe = clipped.replaceAll("`", "'");
   return `\`${safe}\``;
-}
-
-function formatMatrixCommandOutputToolProgress(payload: {
-  exitCode?: number | null;
-  name?: string;
-  title?: string;
-}) {
-  if (!payload.name) {
-    return payload.title;
-  }
-  if (payload.exitCode === 0) {
-    return `${payload.name} ok`;
-  }
-  if (payload.exitCode != null) {
-    return `${payload.name} (exit ${payload.exitCode})`;
-  }
-  return payload.name;
 }
 
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
@@ -1595,40 +1579,91 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ...options,
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
-            await pushPreviewToolProgress(toolName ? `tool: ${toolName}` : "tool running", {
-              toolName,
-            });
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "tool",
+                name: toolName,
+                phase: payload.phase,
+                args: payload.args,
+              }),
+              { toolName },
+            );
           },
           onItemEvent: async (payload) => {
             await pushPreviewToolProgress(
-              payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+              formatChannelProgressDraftLine({
+                event: "item",
+                itemKind: payload.kind,
+                title: payload.title,
+                name: payload.name,
+                phase: payload.phase,
+                status: payload.status,
+                summary: payload.summary,
+                progressText: payload.progressText,
+                meta: payload.meta,
+              }),
             );
           },
           onPlanUpdate: async (payload) => {
             if (payload.phase !== "update") {
               return;
             }
-            await pushPreviewToolProgress(payload.explanation ?? payload.steps?.[0] ?? "planning");
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "plan",
+                phase: payload.phase,
+                title: payload.title,
+                explanation: payload.explanation,
+                steps: payload.steps,
+              }),
+            );
           },
           onApprovalEvent: async (payload) => {
             if (payload.phase !== "requested") {
               return;
             }
             await pushPreviewToolProgress(
-              payload.command ? `approval: ${payload.command}` : "approval requested",
+              formatChannelProgressDraftLine({
+                event: "approval",
+                phase: payload.phase,
+                title: payload.title,
+                command: payload.command,
+                reason: payload.reason,
+                message: payload.message,
+              }),
             );
           },
           onCommandOutput: async (payload) => {
             if (payload.phase !== "end") {
               return;
             }
-            await pushPreviewToolProgress(formatMatrixCommandOutputToolProgress(payload));
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "command-output",
+                phase: payload.phase,
+                title: payload.title,
+                name: payload.name,
+                status: payload.status,
+                exitCode: payload.exitCode,
+              }),
+            );
           },
           onPatchSummary: async (payload) => {
             if (payload.phase !== "end") {
               return;
             }
-            await pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "patch",
+                phase: payload.phase,
+                title: payload.title,
+                name: payload.name,
+                added: payload.added,
+                modified: payload.modified,
+                deleted: payload.deleted,
+                summary: payload.summary,
+              }),
+            );
           },
         };
       };

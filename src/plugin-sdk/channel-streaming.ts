@@ -1,3 +1,5 @@
+import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -122,6 +124,176 @@ const NON_WORK_PROGRESS_TOOL_NAMES = new Set([
 export function isChannelProgressDraftWorkToolName(name: string | null | undefined): boolean {
   const normalized = normalizeOptionalLowercaseString(name);
   return Boolean(normalized && !NON_WORK_PROGRESS_TOOL_NAMES.has(normalized));
+}
+
+type ChannelProgressLineOptions = {
+  markdown?: boolean;
+};
+
+const EMOJI_PREFIX_RE = /^\p{Extended_Pictographic}/u;
+
+export type ChannelProgressDraftLineInput =
+  | {
+      event: "tool";
+      name?: string;
+      phase?: string;
+      args?: Record<string, unknown>;
+    }
+  | {
+      event: "item";
+      itemKind?: string;
+      title?: string;
+      name?: string;
+      phase?: string;
+      status?: string;
+      summary?: string;
+      progressText?: string;
+      meta?: string;
+    }
+  | {
+      event: "plan";
+      phase?: string;
+      title?: string;
+      explanation?: string;
+      steps?: string[];
+    }
+  | {
+      event: "approval";
+      phase?: string;
+      title?: string;
+      command?: string;
+      reason?: string;
+      message?: string;
+    }
+  | {
+      event: "command-output";
+      phase?: string;
+      title?: string;
+      name?: string;
+      status?: string;
+      exitCode?: number | null;
+    }
+  | {
+      event: "patch";
+      phase?: string;
+      title?: string;
+      name?: string;
+      added?: string[];
+      modified?: string[];
+      deleted?: string[];
+      summary?: string;
+    };
+
+function compactStrings(values: readonly (string | undefined | null)[]): string[] {
+  return values.map((value) => value?.replace(/\s+/g, " ").trim()).filter(Boolean) as string[];
+}
+
+function inferToolMeta(name: string | undefined, args: Record<string, unknown> | undefined) {
+  if (!name || !args) {
+    return undefined;
+  }
+  return formatToolDetail(resolveToolDisplay({ name, args }));
+}
+
+function formatNamedProgressLine(
+  name: string | undefined,
+  metas: readonly (string | undefined | null)[] | undefined,
+  options?: ChannelProgressLineOptions,
+): string | undefined {
+  const normalizedName = name?.trim() || "tool_call";
+  const compactMetas = compactStrings(metas ?? []);
+  return formatToolAggregate(normalizedName, compactMetas.length ? compactMetas : undefined, {
+    markdown: options?.markdown,
+  });
+}
+
+function itemKindToToolName(kind: string | undefined): string | undefined {
+  switch (normalizeOptionalLowercaseString(kind)) {
+    case "command":
+      return "exec";
+    case "patch":
+      return "apply_patch";
+    case "search":
+      return "web_search";
+    case "tool":
+      return "tool_call";
+    default:
+      return undefined;
+  }
+}
+
+function patchMetas(input: Extract<ChannelProgressDraftLineInput, { event: "patch" }>): string[] {
+  const fileMetas = [...(input.added ?? []), ...(input.modified ?? []), ...(input.deleted ?? [])];
+  return compactStrings([input.summary, ...fileMetas, input.title]);
+}
+
+function shouldPrefixProgressLine(line: string): boolean {
+  return !EMOJI_PREFIX_RE.test(line);
+}
+
+export function formatChannelProgressDraftLine(
+  input: ChannelProgressDraftLineInput,
+  options?: ChannelProgressLineOptions,
+): string | undefined {
+  switch (input.event) {
+    case "tool": {
+      return formatNamedProgressLine(
+        input.name,
+        [
+          inferToolMeta(input.name, input.args),
+          input.phase && !input.name ? input.phase : undefined,
+        ],
+        options,
+      );
+    }
+    case "item": {
+      const name = input.name ?? itemKindToToolName(input.itemKind);
+      const meta = input.meta ?? input.progressText ?? input.summary;
+      if (name) {
+        return formatNamedProgressLine(name, [meta], options);
+      }
+      return compactStrings([meta, input.title]).at(0);
+    }
+    case "plan": {
+      if (input.phase !== undefined && input.phase !== "update") {
+        return undefined;
+      }
+      return formatNamedProgressLine(
+        "update_plan",
+        [input.explanation, input.steps?.[0], input.title ?? "planning"],
+        options,
+      );
+    }
+    case "approval": {
+      if (input.phase !== undefined && input.phase !== "requested") {
+        return undefined;
+      }
+      return formatNamedProgressLine(
+        "approval",
+        [input.command, input.message, input.reason, input.title ?? "approval requested"],
+        options,
+      );
+    }
+    case "command-output": {
+      if (input.phase !== undefined && input.phase !== "end") {
+        return undefined;
+      }
+      const status =
+        input.exitCode === 0
+          ? "completed"
+          : input.exitCode != null
+            ? `exit ${input.exitCode}`
+            : input.status;
+      return formatNamedProgressLine(input.name ?? "exec", [status, input.title], options);
+    }
+    case "patch": {
+      if (input.phase !== undefined && input.phase !== "end") {
+        return undefined;
+      }
+      return formatNamedProgressLine(input.name ?? "apply_patch", patchMetas(input), options);
+    }
+  }
+  return undefined;
 }
 
 export function createChannelProgressDraftGate(params: {
@@ -377,6 +549,8 @@ export function formatChannelProgressDraftText(params: {
     .map((line) => line.replace(/\s+/g, " ").trim())
     .filter((line) => line.length > 0)
     .slice(-maxLines)
-    .map((line) => `${bullet} ${formatLine(line)}`);
+    .map((line) =>
+      shouldPrefixProgressLine(line) ? `${bullet} ${formatLine(line)}` : formatLine(line),
+    );
   return [label, ...lines].filter((line): line is string => Boolean(line)).join("\n");
 }
