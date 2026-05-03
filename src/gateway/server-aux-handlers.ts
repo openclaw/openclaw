@@ -10,12 +10,12 @@ import {
   activateSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
-  diffConfigPaths,
   type ChannelKind,
   type GatewayReloadPlan,
-} from "./config-reload.js";
+} from "./config-reload-plan.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";

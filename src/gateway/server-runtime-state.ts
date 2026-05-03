@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import { WebSocketServer } from "ws";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
-import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
+import type { CanvasHostHandler } from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -120,6 +120,7 @@ export async function createGatewayRuntimeState(params: {
     let canvasHost: CanvasHostHandler | null = null;
     if (params.canvasHostEnabled) {
       try {
+        const { createCanvasHostHandler } = await import("../canvas-host/server.js");
         const handler = await createCanvasHostHandler({
           runtime: params.canvasRuntime,
           rootDir: params.cfg.canvasHost?.root,
