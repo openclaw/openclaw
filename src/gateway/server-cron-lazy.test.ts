@@ -56,6 +56,35 @@ describe("createLazyGatewayCronState", () => {
     expect(cron.start).toHaveBeenCalledTimes(1);
   });
 
+  it("does not start cron after stop wins the lazy startup race", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    const startPromise = lazy.cron.start();
+
+    lazy.cron.stop();
+    await startPromise;
+
+    expect(cron.start).not.toHaveBeenCalled();
+    expect(cron.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a stopped loaded cron service to start again", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+
+    await lazy.cron.start();
+    lazy.cron.stop();
+    await lazy.cron.start();
+
+    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
+    expect(cron.stop).toHaveBeenCalledTimes(1);
+    expect(cron.start).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps synchronous wake non-blocking before the cron service is loaded", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
