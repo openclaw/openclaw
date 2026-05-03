@@ -9,6 +9,8 @@ const APNS_AUTHORITIES = new Set([
 
 type ApnsAuthority = "https://api.push.apple.com" | "https://api.sandbox.push.apple.com";
 
+export const APNS_HTTP2_CANCEL_CODE = http2.constants.NGHTTP2_CANCEL;
+
 export type ConnectApnsHttp2SessionParams = {
   authority: string;
   timeoutMs: number;

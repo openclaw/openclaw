@@ -18,8 +18,9 @@ const { connectSpy, tunnelSpy, fakeSession, fakeTlsSocket } = vi.hoisted(() => {
 });
 
 vi.mock("node:http2", () => ({
-  default: { connect: connectSpy },
+  default: { connect: connectSpy, constants: { NGHTTP2_CANCEL: 8 } },
   connect: connectSpy,
+  constants: { NGHTTP2_CANCEL: 8 },
 }));
 
 vi.mock("./net/http-connect-tunnel.js", () => ({
