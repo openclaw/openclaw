@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../infra/net/ssrf.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
   buildProviderRequestDispatcherPolicy,
@@ -267,6 +268,18 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
+  // Allowlist the configured provider hostname so fake-IP DNS proxy setups
+  // (sing-box / Clash / Surge) that resolve foreign provider hosts (e.g.
+  // `api.openai.com`, `generativelanguage.googleapis.com`, an internal
+  // LiteLLM proxy) into the 198.18.0.0/15 RFC 2544 benchmark range — or the
+  // fc00::/7 IPv6 ULA range — short-circuit the SSRF private-IP check.
+  // Matches the per-plugin pattern already used by ElevenLabs, OpenAI TTS,
+  // BlueBubbles, Feishu, Google-Meet and others. The provider hostname is
+  // operator-configured (via `models.providers.<id>.baseUrl` or the
+  // bundled-catalog default), so this is functionally equivalent to those
+  // plugins passing their own resolved base URL through
+  // `ssrfPolicyFromHttpBaseUrlAllowedHostname`.
+  const baseUrlPolicy = ssrfPolicyFromHttpBaseUrlAllowedHostname(model.baseUrl);
   return async (input, init) => {
     const request = input instanceof Request ? new Request(input, init) : undefined;
     const url =
@@ -303,7 +316,14 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
-      ...(requestConfig.allowPrivateNetwork ? { policy: { allowPrivateNetwork: true } } : {}),
+      ...(baseUrlPolicy || requestConfig.allowPrivateNetwork
+        ? {
+            policy: {
+              ...(baseUrlPolicy ?? {}),
+              ...(requestConfig.allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+            },
+          }
+        : {}),
     });
     let response = result.response;
     if (shouldBypassLongSdkRetry(response)) {
