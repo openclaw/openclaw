@@ -1169,7 +1169,16 @@ describe("listSessionsFromStore selected model display", () => {
       expect(listed.path).toBe(expected.path);
       expect(listed.count).toBe(expected.count);
       expect(listed.defaults).toEqual(expected.defaults);
-      expect(listed.sessions).toEqual(expected.sessions);
+      expect(listed.sessions).toHaveLength(expected.sessions.length);
+      expect(listed.sessions[0]).toEqual(
+        expect.objectContaining({
+          key: "agent:main:sess-yield-0",
+          derivedTitle: "title 0",
+          lastMessagePreview: "last 0",
+        }),
+      );
+      expect(listed.sessions[0]?.agentRuntime).toBeUndefined();
+      expect(listed.sessions[0]?.thinkingOptions).toEqual([]);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

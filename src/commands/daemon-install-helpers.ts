@@ -170,6 +170,61 @@ function collectConfigSecretRefServiceEnvVars(params: {
   return entries;
 }
 
+function collectExecSecretRefPassEnvServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  durableEnvironment: Record<string, string | undefined>;
+  warn?: DaemonInstallWarnFn;
+}): Record<string, string> {
+  if (!params.config) {
+    return {};
+  }
+  const entries: Record<string, string> = {};
+  for (const target of discoverConfigSecretTargets(params.config)) {
+    if (!target.entry.includeInPlan) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults: params.config.secrets?.defaults,
+    });
+    if (!ref || ref.source !== "exec") {
+      continue;
+    }
+    const provider = params.config.secrets?.providers?.[ref.provider];
+    if (!provider || provider.source !== "exec") {
+      continue;
+    }
+    for (const rawKey of provider.passEnv ?? []) {
+      const key = normalizeEnvVarKey(rawKey, { portable: true });
+      if (!key) {
+        params.warn?.(
+          `Exec SecretRef passEnv id "${rawKey}" is not portable and was not added to the service environment`,
+          "Config SecretRef",
+        );
+        continue;
+      }
+      if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+        params.warn?.(
+          `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
+          "Config SecretRef",
+        );
+        continue;
+      }
+      if (Object.hasOwn(params.durableEnvironment, key)) {
+        continue;
+      }
+      const value = params.env[key]?.trim();
+      if (!value) {
+        continue;
+      }
+      entries[key] = value;
+    }
+  }
+  return entries;
+}
+
 function mergeServicePath(
   nextPath: string | undefined,
   existingPath: string | undefined,
@@ -338,6 +393,12 @@ async function buildGatewayInstallEnvironment(params: {
     durableEnvironment,
     warn: params.warn,
   });
+  const execSecretRefPassEnvEnvironment = collectExecSecretRefPassEnvServiceEnvVars({
+    env: params.env,
+    config: params.config,
+    durableEnvironment,
+    warn: params.warn,
+  });
   const authProfileEnvironment = await collectAuthProfileServiceEnvVars({
     env: params.env,
     authStore: params.authStore,
@@ -350,6 +411,7 @@ async function buildGatewayInstallEnvironment(params: {
     ),
     ...durableEnvironment,
     ...configSecretRefEnvironment,
+    ...execSecretRefPassEnvEnvironment,
     ...authProfileEnvironment,
   };
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(durableEnvironment, {
