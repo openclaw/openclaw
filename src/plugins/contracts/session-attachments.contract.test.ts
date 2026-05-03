@@ -631,6 +631,37 @@ describe("plugin session attachments", () => {
     });
   });
 
+  it("returns structured errors when channel delivery lookup fails", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+      workflowMocks.getChannelPlugin.mockImplementation(() => {
+        throw new Error("channel registry unavailable");
+      });
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: filePath }],
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: "attachment delivery setup failed: channel registry unavailable",
+      });
+      expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
   it("wires sendSessionAttachment through the plugin API with stale-registry protection", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await updateSessionStore(storePath, (store) => {

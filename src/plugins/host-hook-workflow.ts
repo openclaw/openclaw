@@ -207,18 +207,25 @@ export async function sendPluginSessionAttachment(
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
   }
   const normalizedChannel = normalizeMessageChannel(deliveryContext.channel);
-  const deliveryPlugin =
-    normalizedChannel && isDeliverableMessageChannel(normalizedChannel)
-      ? ((await loadGetChannelPlugin())(normalizedChannel) as
-          | AttachmentDeliveryChannelPlugin
-          | undefined)
-      : undefined;
-  if (deliveryPlugin?.outbound?.deliveryMode === "gateway") {
+  try {
+    const deliveryPlugin =
+      normalizedChannel && isDeliverableMessageChannel(normalizedChannel)
+        ? ((await loadGetChannelPlugin())(normalizedChannel) as
+            | AttachmentDeliveryChannelPlugin
+            | undefined)
+        : undefined;
+    if (deliveryPlugin?.outbound?.deliveryMode === "gateway") {
+      return {
+        ok: false,
+        error:
+          `session attachments require direct outbound delivery for channel ` +
+          `${deliveryContext.channel}; channel uses gateway delivery`,
+      };
+    }
+  } catch (error) {
     return {
       ok: false,
-      error:
-        `session attachments require direct outbound delivery for channel ` +
-        `${deliveryContext.channel}; channel uses gateway delivery`,
+      error: `attachment delivery setup failed: ${formatErrorMessage(error)}`,
     };
   }
   const rawText = normalizeOptionalString(params.text) ?? "";
