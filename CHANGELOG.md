@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/models: forward model `maxTokens` as the default output-token limit for OpenAI-compatible Responses and Completions transports when no runtime override is provided, preventing provider defaults from silently truncating larger outputs. (#76645) Thanks @joeyfrasier.
 - Gateway/update: run `doctor --non-interactive --fix` after Control UI global package updates before reporting success, so legacy config is migrated before the gateway restart. Thanks @stevenchouai.
 - Gateway/cron: stop a lazy cron startup that loses a hot-reload race, preventing the old cron service from starting after reload has already replaced cron state.
 - CLI/plugins: warn when npm plugin installs remain shadowed by a failing config-selected source and surface the repair path in `plugins doctor`. Thanks @LindalyX-Lee.
@@ -45,6 +46,7 @@ Docs: https://docs.openclaw.ai
 - CLI/logs: auto-reconnect `openclaw logs --follow` on transient gateway disconnects (WebSocket close, timeout, connection drop) with bounded exponential backoff (up to 8 retries, capped at 30 s) and stderr retry warnings, while still exiting immediately on non-recoverable auth or configuration errors. Fixes #74782. (#75059) Thanks @shashank-poola.
 - CLI/logs: announce `--follow` recovery with a `[logs] gateway reconnected` notice once a poll succeeds after a transient outage, and emit JSON `notice` records in `--json` mode for both the retry warning and the reconnect transition, so live monitoring scripts can react to the recovery. Carries forward #75059. (#75372) Thanks @romneyda.
 - Plugins/onboarding: trust optional official plugin and web-search installs selected from the official catalog so npm security scanning treats them like other source-linked official install paths. Thanks @vincentkoc.
+- Agents/web_search: keep installed runtime provider discovery enabled when web-search metadata is missing, so externally installed official providers such as Brave remain visible to agent and cron turns instead of falling back to bundled-only lookup. Fixes #76626. Thanks @amknight.
 - Tests/plugins: expose the Discord npm onboarding Docker lane as a package script and assert planned Docker lanes point at real scripts, so external-channel onboarding coverage can actually run. Thanks @vincentkoc.
 - Plugins/ClawHub: explain unreleased ClawHub plugin artifacts as a rollout-state fallback to `npm:` installs instead of leaking raw archive metadata fields. Thanks @vincentkoc.
 - Tests/onboarding: assert packaged channel onboarding leaves `openclaw channels status --json` and plain `openclaw status` showing the configured channel, covering the empty Channels table regression path. Thanks @vincentkoc.
@@ -69,6 +71,7 @@ Docs: https://docs.openclaw.ai
 - Channels/secrets: resolve SecretRef-backed channel credentials through external plugin secret contracts after the plugin split, covering runtime startup, target discovery, webhook auth, disabled-account enumeration, and late-bound web_search config. Fixes #76371. (#76449) Thanks @joshavant and @neeravmakwana.
 - Docker/Gateway: pass Docker setup `.env` values into gateway and CLI containers and preserve exec SecretRef `passEnv` keys in managed service plans, so 1Password Connect-backed Discord tokens keep resolving after doctor or plugin repair. Thanks @vincentkoc.
 - Control UI/WebChat: explain compaction boundaries in chat history and link directly to session checkpoint controls so pre-compaction turns no longer look silently lost after refresh. Fixes #76415. Thanks @BunsDev.
+- Agents/compaction: add an optional bundled compaction notifier hook and retry once from the compacted transcript when automatic compaction leaves a turn without a final visible reply. (#76651) Thanks @simplyclever914.
 - Agents/incomplete-turn: detect and surface a warning when the agent's final text after a tool-call chain is silently dropped because the post-tool assistant response was never produced, instead of completing the turn with only the pre-tool analysis text. Fixes #76477. Thanks @amknight.
 - Channels/WhatsApp: attach native outbound mention metadata for group text and media captions by resolving `@+<digits>` and `@<digits>` tokens against WhatsApp participant data, including LID groups. Fixes #39879; carries forward #56863. Thanks @kengi1437, @joe2643, and @fridayck.
 - Channels/WhatsApp: require outbound mention tokens to end at a word boundary so phone-number prefixes inside longer strings no longer trigger hidden native mentions.
@@ -89,6 +92,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/models: keep read-only model-list responses on registry-compatible fallbacks and metadata defaults, so empty or minimal persisted model files do not hide built-ins or custom model capabilities. Thanks @Marvinthebored.
 - CLI/doctor: load the configured memory-slot plugin when resolving memory diagnostics so bundled `memory-core` no longer triggers a false “no active memory plugin” warning on standalone `doctor` / `status` runs. Fixes #76367. Thanks @neeravmakwana.
 - Gateway: preserve stack diagnostics when `chat.send` or agent attachment parsing/staging fails, improving image-send failure triage. Refs #63432. (#75135) Thanks @keen0206.
+- Agents/idle-timeout: add a cost-runaway breaker to the outer embedded-run retry loop that halts further attempts after 5 consecutive idle timeouts without completed model progress, so a wedged provider can no longer fan paid model calls out across the same run; completed text or tool-call progress resets the breaker, but partial tool-argument token dribbles do not. Fixes #76293. Thanks @ThePuma312.
 - Heartbeats/Codex: stop sending the legacy `HEARTBEAT_OK` prompt instruction when heartbeat turns have the structured `heartbeat_respond` tool, while keeping the text sentinel for legacy automatic heartbeat replies. Thanks @pashpashpash.
 - Agent runtimes: fail explicit plugin runtime selections honestly when the requested harness is unavailable instead of silently falling back to the embedded PI runtime. Thanks @pashpashpash.
 - Maintainer workflow: push prepared PR heads through GitHub's verified commit API by default and require an explicit override before git-protocol pushes can publish unsigned commits. Thanks @BunsDev.
@@ -120,6 +124,7 @@ Docs: https://docs.openclaw.ai
 - Active Memory: preserve the target agent context when building embedded recall plugin tools so `memory_search` and `memory_get` stay available for explicit recall sessions. Fixes #76343. Thanks @Countermarch.
 - Plugins/externalization: repair missing configured plugin installs from npm by default, reserve ClawHub downloads for explicit `clawhubSpec` metadata, and cover agent-runtime/env-selected plugin repair. Thanks @vincentkoc.
 - Plugins/install: allow official catalog-matched npm channel plugins such as Feishu to pass the trusted install scanner path while keeping spoofed package names blocked. Thanks @vincentkoc.
+- Tools/llm-task: keep JSON-only embedded model runs from tripping inherited tool allowlists when tools are intentionally disabled, while preserving runtime `toolsAllow` failures. Fixes #74019. Thanks @amknight.
 - Tools/profiles: make `tools.profile: "full"` grant all tools including optional plugin tools such as browser, so the full profile no longer silently drops plugin-provided tools that require an explicit allowlist entry. Fixes #76507. Thanks @amknight.
 - Feishu: keep timeout env parsing separate from the HTTP client wrapper so package security scans no longer report a false env-harvesting hit during install. Thanks @vincentkoc.
 - Upgrade/config: validate configured web-search providers and statically suppressed model/provider pairs against the active plugin set at config load, so stale plugin state fails loud before runtime fallback.
@@ -159,6 +164,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: remove the delete-confirm popover outside-click listener on every dismiss path, so Cancel, Delete, outside clicks, and same-button toggles no longer leave stale document listeners behind. Refs #75590 and #69982. Thanks @Ricardo-M-L.
 - Memory-core: treat exhausted file watcher limits as non-fatal for builtin memory auto-sync while preserving fatal handling for unrelated disk-full errors. (#73357) Thanks @solodmd.
 - Providers/Ollama: restore catalog context-window forwarding as `num_ctx` for native `/api/chat` requests; fixes tool selection and context truncation regressions on models with catalog entries (qwen3, llama3, gemma3, …) when no explicit `params.num_ctx` was configured. Fixes #76117. (#76181) Thanks @openperf.
+- Plugins/install: pin npm plugin installs to the verified resolved version and reject package-lock version or integrity drift, so mutable tags cannot race integrity checks into accepting a different artifact. Thanks @Lucenx9.
 
 - Plugins/providers: preserve scoped cold-load fallback for enabled external manifest-contract capability providers missing from the startup registry, so providers such as Fish Audio can resolve on request without requiring `activation.onStartup` for correctness. (#76536) Thanks @Conan-Scott.
 - Gateway/update: carry `continuationMessage` from `update.run` into successful restart sentinels so session-scoped self-updates can resume one follow-up turn after the Gateway restarts. Refs #71178. (#74362) Thanks @100menotu001, @HeilbronAILabs, and @artnking.

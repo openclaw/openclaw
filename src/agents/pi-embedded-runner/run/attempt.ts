@@ -58,7 +58,7 @@ import {
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
   buildBootstrapInjectionStats,
-  prependBootstrapPromptWarning,
+  appendBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
@@ -179,7 +179,7 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
-import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import {
@@ -697,7 +697,7 @@ function collectAttemptExplicitToolAllowlistSources(params: {
     { label: "group tools.allow", allow: groupPolicy?.allow },
     { label: "sandbox tools.allow", allow: params.sandboxToolPolicy?.allow },
     { label: "subagent tools.allow", allow: subagentPolicy?.allow },
-    { label: "runtime toolsAllow", allow: params.toolsAllow },
+    { label: "runtime toolsAllow", allow: params.toolsAllow, enforceWhenToolsDisabled: true },
   ]);
 }
 
@@ -2214,7 +2214,7 @@ export async function runEmbeddedAttempt(
           );
           const truncated = limitHistoryTurns(
             heartbeatFiltered,
-            getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
           );
           // Re-run tool_use/tool_result pairing repair after truncation, since
           // limitHistoryTurns can orphan tool_result blocks by removing the
@@ -2585,7 +2585,7 @@ export async function runEmbeddedAttempt(
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
-        let effectivePrompt = prependBootstrapPromptWarning(
+        let effectivePrompt = appendBootstrapPromptWarning(
           params.prompt,
           bootstrapPromptWarning.lines,
           {

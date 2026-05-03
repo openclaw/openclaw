@@ -328,7 +328,14 @@ describe("scripts/changed-lanes", () => {
       ".pre-commit-config.yaml",
       ".swiftformat",
       "Makefile",
+      "config/knip.config.ts",
+      "config/markdownlint-cli2.jsonc",
+      "config/shellcheckrc",
+      "deploy/fly.private.toml",
+      "docker-setup.sh",
       "openclaw.podman.env",
+      "setup-podman.sh",
+      "skills/pyproject.toml",
     ]);
     const plan = createChangedCheckPlan(result);
 
