@@ -59,6 +59,10 @@ export type GetReplyOptions = {
   suppressToolErrorWarnings?: boolean;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
+  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
+  enableHeartbeatTool?: boolean;
+  /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
+  forceHeartbeatTool?: boolean;
   /**
    * If true, dispatch skips default tool/progress text messages and expects the
    * channel to surface progress via its own streaming/edit UX.
