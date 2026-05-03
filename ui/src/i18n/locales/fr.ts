@@ -729,6 +729,16 @@ export const fr: TranslationMap = {
       dailyCsv: "CSV quotidien",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Le cache d’utilisation est en cours de reconstruction en arrière-plan. Les totaux affichés peuvent être obsolètes.",
+      title: "{status} : {pending} en attente, {stale} obsolètes, {cached} en cache",
+      status: {
+        refreshing: "actualisation",
+        stale: "obsolète",
+        partial: "partiel",
+      },
+    },
     empty: {
       title: "Commencez par une plage de dates",
       subtitle:

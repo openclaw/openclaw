@@ -1,3 +1,9 @@
+import {
+  createChannelProgressDraftGate,
+  formatChannelProgressDraftText,
+  isChannelProgressDraftWorkToolName,
+  resolveChannelProgressDraftMaxLines,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-gating";
 import {
   evaluateSupplementalContextVisibility,
@@ -13,6 +19,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CoreConfig,
+  MatrixConfig,
   MatrixRoomConfig,
   MatrixStreamingMode,
   ReplyToMode,
@@ -157,6 +164,7 @@ export type MatrixMonitorHandlerParams = {
   core: PluginRuntime;
   cfg: CoreConfig;
   accountId: string;
+  accountConfig?: MatrixConfig;
   runtime: RuntimeEnv;
   logger: RuntimeLogger;
   logVerboseMessage: (message: string) => void;
@@ -1449,7 +1457,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
       });
       const draftStreamingEnabled = streaming !== "off";
-      const quietDraftStreaming = streaming === "quiet";
+      const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
+      const progressDraftStreaming = streaming === "progress";
       const draftReplyToId = replyToMode !== "off" && !threadTarget ? _messageId : undefined;
       const draftStream: MatrixDraftStreamHandle | undefined = draftStreamingEnabled
         ? await loadMatrixDraftStream().then(({ createMatrixDraftStream }) =>
@@ -1468,6 +1477,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         : undefined;
       draftStreamRef = draftStream;
       const shouldStreamPreviewToolProgress = Boolean(draftStream) && previewToolProgressEnabled;
+      const shouldSuppressDefaultToolProgressMessages =
+        Boolean(draftStream) &&
+        (shouldStreamPreviewToolProgress || params.streaming === "progress");
       type PendingDraftBoundary = {
         messageGeneration: number;
         endOffset: number;
@@ -1483,30 +1495,75 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       let currentDraftReplyToId = draftReplyToId;
       let previewToolProgressSuppressed = false;
       let previewToolProgressLines: string[] = [];
+      const progressConfigEntry = params.accountConfig ?? cfg.channels?.matrix;
+      const progressSeed = `${_route.accountId}:${roomId}`;
       // Set after the first final payload consumes or discards the draft event
       // so subsequent finals go through normal delivery.
 
-      const pushPreviewToolProgress = (line?: string) => {
-        if (!draftStream || !shouldStreamPreviewToolProgress || previewToolProgressSuppressed) {
+      const renderProgressDraft = () => {
+        if (!draftStream || !progressDraftStreaming) {
+          return;
+        }
+        draftStream.update(
+          formatChannelProgressDraftText({
+            entry: progressConfigEntry,
+            lines: previewToolProgressLines,
+            seed: progressSeed,
+            formatLine: formatMatrixToolProgressMarkdownCode,
+            bullet: "-",
+          }),
+        );
+      };
+      const progressDraftGate = createChannelProgressDraftGate({
+        onStart: renderProgressDraft,
+      });
+
+      const pushPreviewToolProgress = async (line?: string, options?: { toolName?: string }) => {
+        if (!draftStream) {
+          return;
+        }
+        if (
+          options?.toolName !== undefined &&
+          !isChannelProgressDraftWorkToolName(options.toolName)
+        ) {
           return;
         }
         const normalized = line?.replace(/\s+/g, " ").trim();
-        if (!normalized) {
+        if (!progressDraftStreaming) {
+          if (!shouldStreamPreviewToolProgress || previewToolProgressSuppressed || !normalized) {
+            return;
+          }
+          const previous = previewToolProgressLines.at(-1);
+          if (previous === normalized) {
+            return;
+          }
+          previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+            -resolveChannelProgressDraftMaxLines(progressConfigEntry),
+          );
+          draftStream.update(
+            formatChannelProgressDraftText({
+              entry: progressConfigEntry,
+              lines: previewToolProgressLines,
+              seed: progressSeed,
+              formatLine: formatMatrixToolProgressMarkdownCode,
+              bullet: "-",
+            }),
+          );
           return;
         }
-        const previous = previewToolProgressLines.at(-1);
-        if (previous === normalized) {
-          return;
+        if (shouldStreamPreviewToolProgress && !previewToolProgressSuppressed && normalized) {
+          const previous = previewToolProgressLines.at(-1);
+          if (previous !== normalized) {
+            previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+              -resolveChannelProgressDraftMaxLines(progressConfigEntry),
+            );
+          }
         }
-        previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
-        draftStream.update(
-          [
-            "Working...",
-            ...previewToolProgressLines.map(
-              (entry) => `- ${formatMatrixToolProgressMarkdownCode(entry)}`,
-            ),
-          ].join("\n"),
-        );
+        const alreadyStarted = progressDraftGate.hasStarted;
+        await progressDraftGate.noteWork();
+        if (alreadyStarted && progressDraftGate.hasStarted) {
+          renderProgressDraft();
+        }
       };
 
       const suppressPreviewToolProgressForAnswerText = (text: string | undefined) => {
@@ -1523,17 +1580,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       };
 
       const buildPreviewToolProgressReplyOptions = (): Partial<GetReplyOptions> => {
-        if (!shouldStreamPreviewToolProgress) {
+        if (!shouldSuppressDefaultToolProgressMessages) {
           return {};
         }
-        return {
+        const options: Partial<GetReplyOptions> = {
           suppressDefaultToolProgressMessages: true,
+        };
+        if (!shouldStreamPreviewToolProgress) {
+          return options;
+        }
+        return {
+          ...options,
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
-            pushPreviewToolProgress(toolName ? `tool: ${toolName}` : "tool running");
+            await pushPreviewToolProgress(toolName ? `tool: ${toolName}` : "tool running", {
+              toolName,
+            });
           },
           onItemEvent: async (payload) => {
-            pushPreviewToolProgress(
+            await pushPreviewToolProgress(
               payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
             );
           },
@@ -1541,13 +1606,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             if (payload.phase !== "update") {
               return;
             }
-            pushPreviewToolProgress(payload.explanation ?? payload.steps?.[0] ?? "planning");
+            await pushPreviewToolProgress(payload.explanation ?? payload.steps?.[0] ?? "planning");
           },
           onApprovalEvent: async (payload) => {
             if (payload.phase !== "requested") {
               return;
             }
-            pushPreviewToolProgress(
+            await pushPreviewToolProgress(
               payload.command ? `approval: ${payload.command}` : "approval requested",
             );
           },
@@ -1555,13 +1620,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             if (payload.phase !== "end") {
               return;
             }
-            pushPreviewToolProgress(formatMatrixCommandOutputToolProgress(payload));
+            await pushPreviewToolProgress(formatMatrixCommandOutputToolProgress(payload));
           },
           onPatchSummary: async (payload) => {
             if (payload.phase !== "end") {
               return;
             }
-            pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
+            await pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
           },
         };
       };
@@ -1939,6 +2004,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                         disableBlockStreaming: !blockStreamingEnabled,
                         onPartialReply: draftStream
                           ? (payload) => {
+                              if (progressDraftStreaming) {
+                                return;
+                              }
                               latestDraftFullText = payload.text ?? "";
                               suppressPreviewToolProgressForAnswerText(latestDraftFullText);
                               updateDraftFromLatestFullText();
@@ -1966,6 +2034,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                       },
                     });
                   } finally {
+                    progressDraftGate.cancel();
                     markRunComplete();
                   }
                 },

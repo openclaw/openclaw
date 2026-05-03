@@ -220,6 +220,26 @@ describe("sessions view", () => {
     expect(keyCell?.getAttribute("title")).toBe("agent:unknown-agent:telegram:abc123");
   });
 
+  it("renders cron session kind distinctly", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:cron:daily-digest",
+            kind: "cron",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const badge = container.querySelector(".data-table-badge--cron");
+    expect(badge?.textContent?.trim()).toBe("cron");
+  });
+
   it("keeps raw keys for inherited identity object properties", async () => {
     const container = document.createElement("div");
     render(

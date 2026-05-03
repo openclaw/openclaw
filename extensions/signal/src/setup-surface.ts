@@ -8,8 +8,6 @@ import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
 import { installSignalCli } from "./install-signal-cli.js";
 import {
   createSignalCliPathTextInput,
-  normalizeSignalAccountInput,
-  parseSignalAllowFromEntries,
   signalCompletionNote,
   signalDmPolicy,
   signalNumberTextInput,
@@ -86,5 +84,3 @@ export const signalSetupWizard: ChannelSetupWizard = {
   dmPolicy: signalDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
-
-export { normalizeSignalAccountInput, parseSignalAllowFromEntries };

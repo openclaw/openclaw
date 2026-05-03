@@ -97,6 +97,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.list",
     "sessions.get",
     "sessions.preview",
+    "sessions.describe",
     "sessions.resolve",
     "sessions.compaction.list",
     "sessions.compaction.get",
@@ -169,6 +170,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   ],
   [ADMIN_SCOPE]: [
     "channels.start",
+    "channels.stop",
     "channels.logout",
     "agents.create",
     "agents.update",
@@ -183,6 +185,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "cron.run",
     "sessions.patch",
     "sessions.pluginPatch",
+    "sessions.cleanup",
     "sessions.reset",
     "sessions.delete",
     "sessions.compact",

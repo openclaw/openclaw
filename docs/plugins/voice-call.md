@@ -41,9 +41,8 @@ the Gateway, then restart the Gateway to load it.
       </Tab>
     </Tabs>
 
-    If npm reports the OpenClaw-owned package as deprecated, that package version
-    is from an older external package train; use a current packaged OpenClaw
-    build or the local folder path until a newer npm package is published.
+    Use the bare package to follow the current official release tag. Pin an
+    exact version only when you need a reproducible install.
 
     Restart the Gateway afterwards so the plugin loads.
 
@@ -109,6 +108,18 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           provider: "twilio", // or "telnyx" | "plivo" | "mock"
           fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER for Twilio
           toNumber: "+15550005678",
+          sessionScope: "per-phone", // per-phone | per-call
+          numbers: {
+            "+15550009999": {
+              inboundGreeting: "Silver Fox Cards, how can I help?",
+              responseSystemPrompt: "You are a concise baseball card specialist.",
+              tts: {
+                providers: {
+                  openai: { voice: "alloy" },
+                },
+              },
+            },
+          },
 
           twilio: {
             accountSid: "ACxxxxxxxx",
@@ -192,6 +203,14 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
   </Accordion>
 </AccordionGroup>
 
+## Session scope
+
+By default, Voice Call uses `sessionScope: "per-phone"` so repeat calls from
+the same caller keep conversation memory. Set `sessionScope: "per-call"` when
+each carrier call should start with fresh context, for example reception,
+booking, IVR, or Google Meet bridge flows where the same phone number may
+represent different meetings.
+
 ## Realtime voice conversations
 
 `realtime` selects a full-duplex realtime voice provider for live call
@@ -212,7 +231,7 @@ Current runtime behaviour:
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
-- Consult session keys reuse the existing voice session when available, then fall back to the caller/callee phone number so follow-up consult calls keep context during the call.
+- Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
 
 ### Tool policy
 
@@ -490,6 +509,57 @@ identity.
 
 Auto-responses use the agent system. Tune with `responseModel`,
 `responseSystemPrompt`, and `responseTimeoutMs`.
+
+### Per-number Routing
+
+Use `numbers` when one Voice Call plugin receives calls for multiple phone
+numbers and each number should behave like a different line. For example, one
+number can use a casual personal assistant while another uses a business
+persona, a different response agent, and a different TTS voice.
+
+Routes are selected from the provider-supplied dialed `To` number. Keys must be
+E.164 numbers. When a call arrives, Voice Call resolves the matching route once,
+stores the matched route on the call record, and reuses that effective config
+for the greeting, classic auto-response path, realtime consult path, and TTS
+playback. If no route matches, the global Voice Call config is used.
+Outbound calls do not use `numbers`; pass the outbound target, message, and
+session explicitly when initiating the call.
+
+Route overrides currently support:
+
+- `inboundGreeting`
+- `tts`
+- `agentId`
+- `responseModel`
+- `responseSystemPrompt`
+- `responseTimeoutMs`
+
+The `tts` route value deep-merges over the global Voice Call `tts` config, so
+you can usually override only the provider voice:
+
+```json5
+{
+  inboundGreeting: "Hello from the main line.",
+  responseSystemPrompt: "You are the default voice assistant.",
+  tts: {
+    provider: "openai",
+    providers: {
+      openai: { voice: "coral" },
+    },
+  },
+  numbers: {
+    "+15550001111": {
+      inboundGreeting: "Silver Fox Cards, how can I help?",
+      responseSystemPrompt: "You are a concise baseball card specialist.",
+      tts: {
+        providers: {
+          openai: { voice: "alloy" },
+        },
+      },
+    },
+  },
+}
+```
 
 ### Spoken output contract
 

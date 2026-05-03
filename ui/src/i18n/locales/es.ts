@@ -727,6 +727,16 @@ export const es: TranslationMap = {
       dailyCsv: "CSV diario",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "La caché de uso se está reconstruyendo en segundo plano. Los totales mostrados pueden estar desactualizados.",
+      title: "{status}: {pending} pendientes, {stale} desactualizados, {cached} en caché",
+      status: {
+        refreshing: "actualizando",
+        stale: "desactualizada",
+        partial: "parcial",
+      },
+    },
     empty: {
       title: "Comienza con un rango de fechas",
       subtitle:

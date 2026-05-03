@@ -727,6 +727,16 @@ export const nl: TranslationMap = {
       dailyCsv: "Dagelijkse CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Gebruikscache wordt op de achtergrond opnieuw opgebouwd. Weergegeven totalen kunnen verouderd zijn.",
+      title: "{status}: {pending} in behandeling, {stale} verouderd, {cached} gecachet",
+      status: {
+        refreshing: "verversen",
+        stale: "verouderd",
+        partial: "gedeeltelijk",
+      },
+    },
     empty: {
       title: "Begin met een datumbereik",
       subtitle:

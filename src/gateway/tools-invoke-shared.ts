@@ -30,13 +30,9 @@ export type ToolsInvokeInput = {
   dryRun?: unknown;
 };
 
-export type ToolsInvokeErrorType =
-  | "invalid_request"
-  | "not_found"
-  | "tool_call_blocked"
-  | "tool_error";
+type ToolsInvokeErrorType = "invalid_request" | "not_found" | "tool_call_blocked" | "tool_error";
 
-export type ToolsInvokeOutcome =
+type ToolsInvokeOutcome =
   | {
       ok: true;
       status: 200;
@@ -187,6 +183,9 @@ export async function invokeGatewayTool(params: {
     }
   }
 
+  const knownCoreTool = isKnownCoreToolId(toolName);
+  const gatewayRequestedTools = knownCoreTool ? [] : [toolName];
+
   const action = normalizeOptionalString(params.input.action);
   const argsRaw = params.input.args;
   const args =
@@ -207,9 +206,9 @@ export async function invokeGatewayTool(params: {
       surface: "http",
       disablePluginTools,
       senderIsOwner: params.senderIsOwner,
+      gatewayRequestedTools,
     });
 
-  const knownCoreTool = isKnownCoreToolId(toolName);
   let { agentId, tools } = resolveTools(knownCoreTool);
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
     ({ agentId, tools } = resolveTools(false));

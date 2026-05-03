@@ -2,10 +2,13 @@ import { posixAgentWorkspaceScript, windowsAgentWorkspaceScript } from "./agent-
 import { shellQuote } from "./host-command.ts";
 import {
   psSingleQuote,
-  windowsModelProviderTimeoutScript,
+  windowsAgentTurnConfigPatchScript,
   windowsOpenClawResolver,
 } from "./powershell.ts";
-import { modelProviderConfigBatchJson } from "./provider-auth.ts";
+import {
+  modelProviderConfigBatchJson,
+  resolveParallelsModelTimeoutSeconds,
+} from "./provider-auth.ts";
 import type { Platform, ProviderAuth } from "./types.ts";
 
 export interface NpmUpdateScriptInput {
@@ -13,6 +16,8 @@ export interface NpmUpdateScriptInput {
   expectedNeedle: string;
   updateTarget: string;
 }
+
+const windowsStalePostSwapImportRegex = String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.js`;
 
 function posixModelProviderConfigCommands(
   command: string,
@@ -177,7 +182,7 @@ $updateExit = $LASTEXITCODE
 $updateOutput
 if ($updateExit -ne 0) {
   $updateText = $updateOutput | Out-String
-  $stalePostSwapImport = $updateText -match 'ERR_MODULE_NOT_FOUND' -and $updateText -match 'node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\\.js'
+  $stalePostSwapImport = $updateText -match 'ERR_MODULE_NOT_FOUND' -and $updateText -match ${psSingleQuote(windowsStalePostSwapImportRegex)}
   if (-not $stalePostSwapImport) { throw "openclaw update failed with exit code $updateExit" }
   Write-Host "openclaw update returned a stale post-swap module import; continuing to post-update health checks"
 }
@@ -201,10 +206,7 @@ if ($LASTEXITCODE -ne 0) {
   "gateway restart exited with code $LASTEXITCODE; probing readiness before failing" | Out-Host
 }
 Wait-OpenClawGateway
-Invoke-OpenClaw models set ${psSingleQuote(input.auth.modelId)}
-${windowsModelProviderTimeoutScript(input.auth.modelId)}
-Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
-Invoke-OpenClaw config set tools.profile minimal
+${windowsAgentTurnConfigPatchScript(input.auth.modelId)}
 $sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-npm-update-windows.jsonl'
 Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
@@ -215,7 +217,7 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
   $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
   $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
   Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
-  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --message 'Reply with exact ASCII text OK only.' --thinking minimal --json 2>&1
+  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1
   if ($null -ne $output) { $output | ForEach-Object { $_ } }
   if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
   if (($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {

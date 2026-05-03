@@ -1,3 +1,7 @@
+import {
+  resolveChannelPreviewStreamMode,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createChannelReplyPipeline,
@@ -147,12 +151,16 @@ export function createMSTeamsReplyDispatcher(params: {
     context: params.context,
     feedbackLoopEnabled,
     log: params.log,
+    msteamsConfig: msteamsCfg,
+    progressSeed: `${params.accountId ?? "default"}:${params.conversationRef.conversation?.id ?? ""}`,
   });
   // Wire the forward-declared gate used by sendTypingIndicator.
   streamActiveRef.current = () => streamController.isStreamActive();
 
-  const blockStreamingEnabled =
-    typeof msteamsCfg?.blockStreaming === "boolean" ? msteamsCfg.blockStreaming : false;
+  const teamsStreamMode = resolveChannelPreviewStreamMode(msteamsCfg, "partial");
+  const resolvedBlockStreamingEnabled =
+    teamsStreamMode === "block" ? true : resolveChannelStreamingBlockEnabled(msteamsCfg);
+  const blockStreamingEnabled = resolvedBlockStreamingEnabled ?? false;
   const typingIndicatorEnabled =
     typeof msteamsCfg?.typingIndicator === "boolean" ? msteamsCfg.typingIndicator : true;
 
@@ -268,7 +276,7 @@ export function createMSTeamsReplyDispatcher(params: {
     },
     typingCallbacks,
     deliver: async (payload) => {
-      const preparedPayload = streamController.preparePayload(payload);
+      const preparedPayload = await streamController.preparePayload(payload);
       if (!preparedPayload) {
         return;
       }
@@ -335,10 +343,99 @@ export function createMSTeamsReplyDispatcher(params: {
         ? {
             onPartialReply: (payload: { text?: string }) =>
               streamController.onPartialReply(payload),
+            onToolStart: async (payload: { name?: string }) => {
+              await streamController.noteProgressWork({ toolName: payload.name });
+            },
+            onItemEvent: async () => {
+              await streamController.noteProgressWork();
+            },
+            onPlanUpdate: async (payload: { phase?: string }) => {
+              if (payload.phase === "update") {
+                await streamController.noteProgressWork();
+              }
+            },
+            onApprovalEvent: async (payload: { phase?: string }) => {
+              if (payload.phase === "requested") {
+                await streamController.noteProgressWork();
+              }
+            },
+            onCommandOutput: async (payload: { phase?: string }) => {
+              if (payload.phase === "end") {
+                await streamController.noteProgressWork();
+              }
+            },
+            onPatchSummary: async (payload: { phase?: string }) => {
+              if (payload.phase === "end") {
+                await streamController.noteProgressWork();
+              }
+            },
+          }
+        : {}),
+      ...(streamController.shouldSuppressDefaultToolProgressMessages()
+        ? { suppressDefaultToolProgressMessages: true }
+        : {}),
+      ...(streamController.shouldStreamPreviewToolProgress()
+        ? {
+            onToolStart: async (payload: { name?: string; phase?: string }) => {
+              await streamController.pushProgressLine(
+                payload.name ? `tool: ${payload.name}` : (payload.phase ?? "tool running"),
+                { toolName: payload.name },
+              );
+            },
+            onItemEvent: async (payload: {
+              progressText?: string;
+              summary?: string;
+              title?: string;
+              name?: string;
+            }) => {
+              await streamController.pushProgressLine(
+                payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+              );
+            },
+            onPlanUpdate: async (payload: {
+              phase?: string;
+              explanation?: string;
+              steps?: string[];
+            }) => {
+              if (payload.phase !== "update") {
+                return;
+              }
+              await streamController.pushProgressLine(
+                payload.explanation ?? payload.steps?.[0] ?? "planning",
+              );
+            },
+            onApprovalEvent: async (payload: { phase?: string; command?: string }) => {
+              if (payload.phase !== "requested") {
+                return;
+              }
+              await streamController.pushProgressLine(
+                payload.command ? `approval: ${payload.command}` : "approval requested",
+              );
+            },
+            onCommandOutput: async (payload: { phase?: string; summary?: string }) => {
+              if (payload.phase !== "end") {
+                return;
+              }
+              await streamController.pushProgressLine(payload.summary ?? "command output ready");
+            },
+            onPatchSummary: async (payload: {
+              phase?: string;
+              summary?: string;
+              title?: string;
+            }) => {
+              if (payload.phase !== "end") {
+                return;
+              }
+              await streamController.pushProgressLine(
+                payload.summary ?? payload.title ?? "patch applied",
+              );
+            },
           }
         : {}),
       disableBlockStreaming:
-        typeof msteamsCfg?.blockStreaming === "boolean" ? !msteamsCfg.blockStreaming : undefined,
+        typeof resolvedBlockStreamingEnabled === "boolean"
+          ? !resolvedBlockStreamingEnabled
+          : undefined,
       onModelSelected,
     },
     markDispatchIdle,

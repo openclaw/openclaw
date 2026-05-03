@@ -2554,6 +2554,111 @@ describe("matrix live qa scenarios", () => {
     });
   });
 
+  it("accepts non-read Matrix tool progress lines in quiet previews", async () => {
+    const previewEventId = "$tool-progress-generic-preview";
+    mockMatrixQaRoomClient({
+      driverEventId: "$tool-progress-generic-trigger",
+      events: [
+        {
+          event: matrixQaMessageEvent({
+            kind: "notice",
+            eventId: previewEventId,
+            body: "Working...",
+          }),
+          since: "driver-sync-preview",
+        },
+        {
+          event: matrixQaMessageEvent({
+            kind: "notice",
+            eventId: "$tool-progress-generic-update",
+            body: "Working...\n- `tool: exec_command`",
+            relatesTo: {
+              relType: "m.replace",
+              eventId: previewEventId,
+            },
+          }),
+          since: "driver-sync-progress",
+        },
+        {
+          event: ({ sendTextMessage }) =>
+            matrixQaMessageEvent({
+              kind: "notice",
+              eventId: "$tool-progress-generic-final",
+              body: readMatrixQaReplyDirective(
+                sendTextMessage.mock.calls[0]?.[0]?.body,
+                "MATRIX_QA_TOOL_PROGRESS_FIXED",
+              ),
+              relatesTo: {
+                relType: "m.replace",
+                eventId: previewEventId,
+              },
+            }),
+          since: "driver-sync-next",
+        },
+      ],
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-room-tool-progress-preview",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        driverEventId: "$tool-progress-generic-trigger",
+        previewBodyPreview: "Working...\n- `tool: exec_command`",
+        previewEventId: "$tool-progress-generic-preview",
+        reply: {
+          eventId: "$tool-progress-generic-final",
+        },
+      },
+    });
+  });
+
+  it("reports Matrix tool progress preview candidates when the progress wait times out", async () => {
+    const previewEvent = matrixQaMessageEvent({
+      kind: "notice",
+      eventId: "$tool-progress-timeout-preview",
+      body: "Working...",
+    });
+    const updateEvent = matrixQaMessageEvent({
+      kind: "notice",
+      eventId: "$tool-progress-timeout-update",
+      body: "Working...\nstill deciding",
+      relatesTo: {
+        relType: "m.replace",
+        eventId: previewEvent.eventId,
+      },
+    });
+    const context = matrixQaScenarioContext();
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$tool-progress-timeout-trigger");
+    const waitForRoomEvent = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        context.observedEvents.push(previewEvent);
+        return { event: previewEvent, since: "driver-sync-preview" };
+      })
+      .mockImplementationOnce(async () => {
+        context.observedEvents.push(updateEvent);
+        throw new Error("timed out after 8000ms waiting for Matrix room event");
+      });
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-room-tool-progress-preview",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, context)).rejects.toThrow(
+      /observed preview candidates:[\s\S]*\$tool-progress-timeout-update/,
+    );
+  });
+
   it("keeps Matrix tool progress opt-out from creating Working previews", async () => {
     const { waitForRoomEvent } = mockMatrixQaRoomClient({
       driverEventId: "$tool-progress-optout-trigger",

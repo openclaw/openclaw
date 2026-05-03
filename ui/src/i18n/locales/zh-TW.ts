@@ -714,6 +714,15 @@ export const zh_TW: TranslationMap = {
       dailyCsv: "每日 CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning: "用量快取正在背景重新建置。顯示的總計可能不是最新的。",
+      title: "{status}: {pending} 個待處理，{stale} 個過期，{cached} 個已快取",
+      status: {
+        refreshing: "重新整理中",
+        stale: "過期",
+        partial: "部分",
+      },
+    },
     empty: {
       title: "從日期範圍開始",
       subtitle: "載入使用資料以比較成本、檢視工作階段，並深入查看時間軸，無需離開儀表板。",

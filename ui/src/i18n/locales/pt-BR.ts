@@ -724,6 +724,16 @@ export const pt_BR: TranslationMap = {
       dailyCsv: "CSV diário",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "O cache de uso está sendo reconstruído em segundo plano. Os totais exibidos podem estar desatualizados.",
+      title: "{status}: {pending} pendentes, {stale} desatualizados, {cached} em cache",
+      status: {
+        refreshing: "atualizando",
+        stale: "desatualizado",
+        partial: "parcial",
+      },
+    },
     empty: {
       title: "Comece com um intervalo de datas",
       subtitle:

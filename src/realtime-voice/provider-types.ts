@@ -52,11 +52,18 @@ export type RealtimeVoiceToolResultOptions = {
   willContinue?: boolean;
 };
 
+export type RealtimeVoiceBridgeEvent = {
+  direction: "client" | "server";
+  type: string;
+  detail?: string;
+};
+
 export type RealtimeVoiceBridgeCallbacks = {
   onAudio: (audio: Buffer) => void;
   onClearAudio: () => void;
   onMark?: (markName: string) => void;
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
+  onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onToolCall?: (event: RealtimeVoiceToolCallEvent) => void;
   onReady?: () => void;
   onError?: (error: Error) => void;

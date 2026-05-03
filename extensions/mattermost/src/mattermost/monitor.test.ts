@@ -17,6 +17,7 @@ import {
   resolveMattermostThreadSessionContext,
   shouldFinalizeMattermostPreviewAfterDispatch,
   shouldClearMattermostDraftPreview,
+  shouldUpdateMattermostDraftToolProgress,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
 } from "./monitor.js";
@@ -263,6 +264,53 @@ describe("canFinalizeMattermostPreviewInPlace", () => {
         replyToId: "dm-post-123",
       }),
     ).toBe(true);
+  });
+});
+
+describe("shouldUpdateMattermostDraftToolProgress", () => {
+  type MattermostConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["mattermost"]>;
+
+  function resolveToolProgressEnabled(mattermostConfig: MattermostConfig) {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: mattermostConfig,
+        },
+      },
+      accountId: "default",
+      allowUnresolvedSecretRef: true,
+    });
+    return shouldUpdateMattermostDraftToolProgress(account);
+  }
+
+  it("shows tool status draft lines by default", () => {
+    expect(resolveToolProgressEnabled({ enabled: true })).toBe(true);
+  });
+
+  it("honors disabled progress-mode tool status lines", () => {
+    expect(
+      resolveToolProgressEnabled({
+        streaming: {
+          mode: "progress",
+          progress: {
+            toolProgress: false,
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps tool status draft lines disabled when draft streaming is off", () => {
+    expect(
+      resolveToolProgressEnabled({
+        streaming: {
+          mode: "off",
+          progress: {
+            toolProgress: true,
+          },
+        },
+      }),
+    ).toBe(false);
   });
 });
 
