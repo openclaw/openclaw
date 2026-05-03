@@ -544,8 +544,9 @@ export const usageHandlers: GatewayRequestHandlers = {
     // Sort by most recent first
     mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    // Apply limit
-    const limitedEntries = mergedEntries.slice(0, limit);
+    // Build a fast-lookup set of session keys for the page window so the aggregate
+    // loop can iterate all entries while only pushing per-session rows for the page.
+    const limitedKeys = new Set(mergedEntries.slice(0, limit).map((e) => e.key));
 
     // Load usage for each session
     const sessions: SessionUsageEntry[] = [];
@@ -629,7 +630,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       target.missingCostEntries += source.missingCostEntries;
     };
 
-    for (const merged of limitedEntries) {
+    for (const merged of mergedEntries) {
       const agentId = parseAgentSessionKey(merged.key)?.agentId;
       const usage = await loadSessionCostSummary({
         sessionId: merged.sessionId,
@@ -773,24 +774,26 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       }
 
-      sessions.push({
-        key: merged.key,
-        label: merged.label,
-        sessionId: merged.sessionId,
-        updatedAt: merged.updatedAt,
-        agentId,
-        channel,
-        chatType,
-        origin: merged.storeEntry?.origin,
-        modelOverride: merged.storeEntry?.modelOverride,
-        providerOverride: merged.storeEntry?.providerOverride,
-        modelProvider: merged.storeEntry?.modelProvider,
-        model: merged.storeEntry?.model,
-        usage,
-        contextWeight: includeContextWeight
-          ? (merged.storeEntry?.systemPromptReport ?? null)
-          : undefined,
-      });
+      if (limitedKeys.has(merged.key)) {
+        sessions.push({
+          key: merged.key,
+          label: merged.label,
+          sessionId: merged.sessionId,
+          updatedAt: merged.updatedAt,
+          agentId,
+          channel,
+          chatType,
+          origin: merged.storeEntry?.origin,
+          modelOverride: merged.storeEntry?.modelOverride,
+          providerOverride: merged.storeEntry?.providerOverride,
+          modelProvider: merged.storeEntry?.modelProvider,
+          model: merged.storeEntry?.model,
+          usage,
+          contextWeight: includeContextWeight
+            ? (merged.storeEntry?.systemPromptReport ?? null)
+            : undefined,
+        });
+      }
     }
 
     // Format dates back to YYYY-MM-DD strings

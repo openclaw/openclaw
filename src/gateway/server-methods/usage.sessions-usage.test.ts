@@ -292,4 +292,38 @@ describe("sessions.usage", () => {
       }),
     );
   });
+
+  it("aggregate totals include all sessions even when limit restricts the page (#76496)", async () => {
+    // Two sessions, each contributing cost. limit=1 means only one appears in `sessions`,
+    // but the aggregate totals must reflect both.
+    vi.mocked(loadSessionCostSummary).mockImplementation(async ({ sessionId }) => ({
+      input: 10,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 15,
+      totalCost: sessionId === "s-opus" ? 0.08 : 0.04,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+    }));
+
+    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, limit: 1 });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    const result = respond.mock.calls[0]?.[1] as {
+      sessions: unknown[];
+      totals: { totalCost: number; totalTokens: number };
+    };
+
+    // Only the most-recent session (opus, mtime=200) appears in the page.
+    expect(result.sessions).toHaveLength(1);
+
+    // But the aggregate totals must include both sessions (0.08 + 0.04 = 0.12).
+    expect(result.totals.totalCost).toBeCloseTo(0.12);
+    expect(result.totals.totalTokens).toBe(30);
+  });
 });
