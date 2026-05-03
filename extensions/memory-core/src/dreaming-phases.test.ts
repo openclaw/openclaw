@@ -1337,7 +1337,7 @@ describe("memory-core dreaming phases", () => {
             role: "user",
             timestamp: "2026-04-16T18:04:00.000Z",
             content:
-              "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+              "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply exactly NO_REPLY.",
           },
         }),
         JSON.stringify({

@@ -1030,6 +1030,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Visible answer");
   });
 
+  it("redacts silent control tokens from partial previews", async () => {
+    const answerDraftStream = createDraftStream(999);
+    createTelegramDraftStream.mockImplementationOnce(() => answerDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      for (const text of ["HE", "HEART", "HEARTBEAT_", "HEARTBEAT_OK", "NO", "NO_REPLY"]) {
+        await replyOptions?.onPartialReply?.({ text });
+      }
+      await replyOptions?.onPartialReply?.({ text: "HEARTBEAT_OK Visible answer" });
+      await replyOptions?.onPartialReply?.({ text: "No, that is valid" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(2);
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Visible answer");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "No, that is valid");
+  });
+
   it("does not overwrite finalized preview when additional final payloads are sent", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);

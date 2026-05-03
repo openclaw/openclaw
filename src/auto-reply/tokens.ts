@@ -177,3 +177,20 @@ export function isSilentReplyPrefixText(
   // because NO_REPLY streaming can transiently emit that fragment.
   return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
 }
+
+export function isControlTokenStreamPrefixText(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trimStart();
+  if (!trimmed || trimmed !== trimmed.toUpperCase()) {
+    return false;
+  }
+  const normalized = trimmed.toUpperCase();
+  if (normalized.length < 2 || /[^A-Z_]/.test(normalized)) {
+    return false;
+  }
+  return [SILENT_REPLY_TOKEN, HEARTBEAT_TOKEN].some((token) =>
+    token.toUpperCase().startsWith(normalized),
+  );
+}

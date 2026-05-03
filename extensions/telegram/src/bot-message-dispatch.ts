@@ -93,6 +93,7 @@ export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
+const CONTROL_REPLY_TOKENS = ["NO_REPLY", "HEARTBEAT_OK"] as const;
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -230,6 +231,36 @@ function formatProgressAsMarkdownCode(text: string): string {
   const clipped = clipProgressMarkdownText(text);
   const safe = clipped.replaceAll("`", "'");
   return `\`${safe}\``;
+}
+
+function sanitizeControlTokenPreviewText(text: string | undefined): string | undefined {
+  const trimmed = text?.trimStart();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed.toUpperCase();
+  if (
+    normalized === trimmed &&
+    normalized.length >= 2 &&
+    /^[A-Z_]+$/.test(normalized) &&
+    CONTROL_REPLY_TOKENS.some((token) => token.startsWith(normalized))
+  ) {
+    return undefined;
+  }
+  for (const token of CONTROL_REPLY_TOKENS) {
+    if (normalized === token) {
+      return undefined;
+    }
+    if (!normalized.startsWith(token)) {
+      continue;
+    }
+    const after = trimmed.slice(token.length);
+    if (!after || /^[\sA-Za-z0-9]/.test(after)) {
+      const stripped = after.trimStart();
+      return stripped || undefined;
+    }
+  }
+  return text;
 }
 
 export const dispatchTelegramMessage = async ({
@@ -578,7 +609,11 @@ export const dispatchTelegramMessage = async ({
     laneStream.update(text);
   };
   const ingestDraftLaneSegments = async (text: string | undefined) => {
-    const split = splitTextIntoLaneSegments(text);
+    const sanitizedText = sanitizeControlTokenPreviewText(text);
+    if (!sanitizedText) {
+      return;
+    }
+    const split = splitTextIntoLaneSegments(sanitizedText);
     const hasAnswerSegment = split.segments.some((segment) => segment.lane === "answer");
     if (hasAnswerSegment && activePreviewLifecycleByLane.answer !== "transient") {
       skipNextAnswerMessageStartRotation = await rotateAnswerLaneForNewAssistantMessage();

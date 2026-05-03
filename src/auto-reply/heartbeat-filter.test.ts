@@ -22,6 +22,14 @@ describe("isHeartbeatUserMessage", () => {
       isHeartbeatUserMessage({
         role: "user",
         content:
+          "Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply exactly NO_REPLY.",
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatUserMessage({
+        role: "user",
+        content:
           "Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply HEARTBEAT_OK.",
       }),
     ).toBe(true);
@@ -57,6 +65,13 @@ describe("isHeartbeatOkResponse", () => {
       isHeartbeatOkResponse({
         role: "assistant",
         content: "**HEARTBEAT_OK**",
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: "NO_REPLY",
       }),
     ).toBe(true);
 
@@ -103,7 +118,7 @@ describe("filterHeartbeatPairs", () => {
       { role: "user", content: "Hello" },
       { role: "assistant", content: "Hi there!" },
       { role: "user", content: HEARTBEAT_PROMPT },
-      { role: "assistant", content: "HEARTBEAT_OK" },
+      { role: "assistant", content: "NO_REPLY" },
       { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
       { role: "assistant", content: "HEARTBEAT_OK" },
       { role: "user", content: "What time is it?" },

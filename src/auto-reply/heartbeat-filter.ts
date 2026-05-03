@@ -1,9 +1,11 @@
 import { stripHeartbeatToken } from "./heartbeat.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "./heartbeat.js";
+import { isSilentReplyPayloadText } from "./tokens.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
-const HEARTBEAT_TASK_PROMPT_ACK = "After completing all due tasks, reply HEARTBEAT_OK.";
+const HEARTBEAT_TASK_PROMPT_ACK = "After completing all due tasks, reply exactly NO_REPLY.";
+const LEGACY_HEARTBEAT_TASK_PROMPT_ACK = "After completing all due tasks, reply HEARTBEAT_OK.";
 
 function resolveMessageText(content: unknown): { text: string; hasNonTextContent: boolean } {
   if (typeof content === "string") {
@@ -54,7 +56,9 @@ export function isHeartbeatUserMessage(
     return true;
   }
   return (
-    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) && trimmed.includes(HEARTBEAT_TASK_PROMPT_ACK)
+    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) &&
+    (trimmed.includes(HEARTBEAT_TASK_PROMPT_ACK) ||
+      trimmed.includes(LEGACY_HEARTBEAT_TASK_PROMPT_ACK))
   );
 }
 
@@ -68,6 +72,9 @@ export function isHeartbeatOkResponse(
   const { text, hasNonTextContent } = resolveMessageText(message.content);
   if (hasNonTextContent) {
     return false;
+  }
+  if (isSilentReplyPayloadText(text)) {
+    return true;
   }
   return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip;
 }

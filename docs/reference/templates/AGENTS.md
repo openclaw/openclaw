@@ -139,7 +139,7 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 
 ## 💓 Heartbeats - Be Proactive!
 
-When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!
+When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `NO_REPLY` every time. Use heartbeats productively!
 
 You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small to limit token burn.
 
@@ -188,12 +188,14 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 - Something interesting you found
 - It's been >8h since you said anything
 
-**When to stay quiet (HEARTBEAT_OK):**
+**When to stay quiet (`NO_REPLY`):**
 
 - Late night (23:00-08:00) unless urgent
 - Human is clearly busy
 - Nothing new since last check
 - You just checked &lt;30 minutes ago
+
+Use exactly `NO_REPLY` when a heartbeat needs no user-visible message.
 
 **Proactive work you can do without asking:**
 

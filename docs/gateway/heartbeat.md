@@ -62,7 +62,7 @@ Example config:
 ## Defaults
 
 - Interval: `30m` (or `1h` when Anthropic OAuth/token auth is the detected auth mode, including Claude CLI reuse). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
-- Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+- Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply exactly NO_REPLY.`
 - The heartbeat prompt is sent **verbatim** as the user message. The system prompt includes a "Heartbeat" section only when heartbeats are enabled for the default agent, and the run is flagged internally.
 - When heartbeats are disabled with `0m`, normal runs also omit `HEARTBEAT.md` from bootstrap context so the model does not see heartbeat-only instructions.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
@@ -81,13 +81,14 @@ If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub 
 
 ## Response contract
 
-- If nothing needs attention, reply with **`HEARTBEAT_OK`**.
+- If nothing needs attention, reply with exactly **`NO_REPLY`**.
 - Tool-capable heartbeat runs may instead call `heartbeat_respond` with `notify: false` for no visible update, or `notify: true` plus `notificationText` for an alert. When present, the structured tool response takes precedence over the text fallback.
-- During heartbeat runs, OpenClaw treats `HEARTBEAT_OK` as an ack when it appears at the **start or end** of the reply. The token is stripped and the reply is dropped if the remaining content is **≤ `ackMaxChars`** (default: 300).
-- If `HEARTBEAT_OK` appears in the **middle** of a reply, it is not treated specially.
-- For alerts, **do not** include `HEARTBEAT_OK`; return only the alert text.
+- During heartbeat runs, OpenClaw treats `NO_REPLY` as the current silent no-op contract and suppresses user-visible delivery.
+- Legacy `HEARTBEAT_OK` is still recognized as an internal heartbeat ack when it appears at the **start or end** of the reply. The token is stripped and the reply is dropped if the remaining content is **≤ `ackMaxChars`** (default: 300).
+- If legacy `HEARTBEAT_OK` appears in the **middle** of a reply, it is not treated specially.
+- For alerts, **do not** include `NO_REPLY` or `HEARTBEAT_OK`; return only the alert text.
 
-Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripped and logged; a message that is only `HEARTBEAT_OK` is dropped.
+Outside heartbeats, stray `NO_REPLY` or leading/trailing `HEARTBEAT_OK` is stripped before delivery; messages that are only a control token are dropped.
 
 ## Config
 
@@ -105,8 +106,8 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
         target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "bluebubbles")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
-        prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
-        ackMaxChars: 300, // max chars allowed after HEARTBEAT_OK
+        prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply exactly NO_REPLY.",
+        ackMaxChars: 300, // max chars allowed after legacy HEARTBEAT_OK
       },
     },
   },
@@ -145,7 +146,7 @@ Example: two agents, only the second agent runs heartbeats.
           target: "whatsapp",
           to: "+15551234567",
           timeoutSeconds: 45,
-          prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+          prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply exactly NO_REPLY.",
         },
       },
     ],
@@ -268,7 +269,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 
 </ParamField>
 <ParamField path="ackMaxChars" type="number" default="300">
-  Max chars allowed after `HEARTBEAT_OK` before delivery.
+  Max chars allowed after legacy `HEARTBEAT_OK` before delivery.
 
 </ParamField>
 <ParamField path="suppressToolErrorWarnings" type="boolean">
@@ -315,18 +316,18 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 
 ## Visibility controls
 
-By default, `HEARTBEAT_OK` acknowledgments are suppressed while alert content is delivered. You can adjust this per channel or per account:
+By default, silent heartbeat acknowledgments are suppressed while alert content is delivered. Legacy `HEARTBEAT_OK` acknowledgments are also suppressed. You can adjust legacy ack visibility per channel or per account:
 
 ```yaml
 channels:
   defaults:
     heartbeat:
-      showOk: false # Hide HEARTBEAT_OK (default)
+      showOk: false # Hide legacy HEARTBEAT_OK acknowledgments (default)
       showAlerts: true # Show alert messages (default)
       useIndicator: true # Emit indicator events (default)
   telegram:
     heartbeat:
-      showOk: true # Show OK acknowledgments on Telegram
+      showOk: true # Show legacy OK acknowledgments on Telegram
   whatsapp:
     accounts:
       work:
@@ -338,7 +339,7 @@ Precedence: per-account → per-channel → channel defaults → built-in defaul
 
 ### What each flag does
 
-- `showOk`: sends a `HEARTBEAT_OK` acknowledgment when the model returns an OK-only reply.
+- `showOk`: sends a legacy `HEARTBEAT_OK` acknowledgment when the model returns an OK-only reply.
 - `showAlerts`: sends the alert content when the model returns a non-OK reply.
 - `useIndicator`: emits indicator events for UI status surfaces.
 
@@ -413,7 +414,7 @@ tasks:
 # Additional instructions
 
 - Keep alerts short.
-- If nothing needs attention after all due tasks, reply HEARTBEAT_OK.
+- If nothing needs attention after all due tasks, reply exactly NO_REPLY.
 ```
 
 <AccordionGroup>

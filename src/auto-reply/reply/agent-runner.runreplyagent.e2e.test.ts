@@ -338,6 +338,18 @@ describe("runReplyAgent typing (heartbeat)", () => {
         expectedForwarded: ["The user is saying hello"],
         shouldType: true,
       },
+      {
+        partials: ["HE", "HEART", "HEARTBEAT_", "HEARTBEAT_OK"],
+        finalText: "HEARTBEAT_OK",
+        expectedForwarded: [] as string[],
+        shouldType: false,
+      },
+      {
+        partials: ["HEARTBEAT_OK hello"],
+        finalText: "HEARTBEAT_OK hello",
+        expectedForwarded: ["hello"],
+        shouldType: true,
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -374,6 +386,25 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
       expect(typing.startTypingLoop).not.toHaveBeenCalled();
     }
+  });
+
+  it("suppresses heartbeat ack partials during heartbeat runs", async () => {
+    const onPartialReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "HE" });
+      await params.onPartialReply?.({ text: "HEARTBEAT_OK all good" });
+      return { payloads: [{ text: "HEARTBEAT_OK all good" }], meta: {} };
+    });
+
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: true, onPartialReply },
+      typingMode: "message",
+    });
+    await run();
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
   it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {

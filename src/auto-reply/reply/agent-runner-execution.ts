@@ -63,7 +63,7 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import {
   HEARTBEAT_TOKEN,
-  isSilentReplyPrefixText,
+  isControlTokenStreamPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
   startsWithSilentToken,
@@ -1116,9 +1116,9 @@ export async function runAgentTurnWithFallback(params: {
         if (params.followupRun.run.silentExpected) {
           return { skip: true };
         }
-        if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+        if (text?.includes(HEARTBEAT_TOKEN)) {
           const stripped = stripHeartbeatToken(text, {
-            mode: "message",
+            mode: params.isHeartbeat ? "heartbeat" : "message",
           });
           if (stripped.didStrip && !didLogHeartbeatStrip) {
             didLogHeartbeatStrip = true;
@@ -1132,10 +1132,7 @@ export async function runAgentTurnWithFallback(params: {
         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           return { skip: true };
         }
-        if (
-          isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
-          isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
-        ) {
+        if (isControlTokenStreamPrefixText(text)) {
           return { skip: true };
         }
         if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
@@ -1157,7 +1154,7 @@ export async function runAgentTurnWithFallback(params: {
         return { text: sanitized, skip: false };
       };
       const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
-        if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
+        if (isControlTokenStreamPrefixText(payload.text)) {
           return undefined;
         }
         const { text, skip } = normalizeStreamingText(payload);

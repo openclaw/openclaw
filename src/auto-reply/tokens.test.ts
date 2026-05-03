@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  isControlTokenStreamPrefixText,
   isSilentReplyPrefixText,
   isSilentReplyText,
   startsWithSilentToken,
@@ -133,5 +134,23 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("NO_X")).toBe(false);
     expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
+  });
+});
+
+describe("isControlTokenStreamPrefixText", () => {
+  it("matches split control token snapshots", () => {
+    expect(isControlTokenStreamPrefixText("NO")).toBe(true);
+    expect(isControlTokenStreamPrefixText("NO_RE")).toBe(true);
+    expect(isControlTokenStreamPrefixText("HE")).toBe(true);
+    expect(isControlTokenStreamPrefixText("HEART")).toBe(true);
+    expect(isControlTokenStreamPrefixText("HEARTBEAT_")).toBe(true);
+    expect(isControlTokenStreamPrefixText("HEARTBEAT_OK")).toBe(true);
+  });
+
+  it("rejects natural language and diverged uppercase text", () => {
+    expect(isControlTokenStreamPrefixText("No")).toBe(false);
+    expect(isControlTokenStreamPrefixText("No, that is valid")).toBe(false);
+    expect(isControlTokenStreamPrefixText("HELLO")).toBe(false);
+    expect(isControlTokenStreamPrefixText("HEART rate")).toBe(false);
   });
 });

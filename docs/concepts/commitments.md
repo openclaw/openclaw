@@ -64,7 +64,7 @@ When it finds a high-confidence candidate, OpenClaw stores a commitment with:
 
 Delivery happens through heartbeat. When a commitment becomes due, heartbeat
 adds the commitment to the heartbeat turn for the same agent and channel scope.
-The model can send one natural check-in or reply `HEARTBEAT_OK` to dismiss it.
+The model can send one natural check-in or reply exactly `NO_REPLY` to dismiss it.
 If heartbeat is configured with `target: "none"`, due commitments remain
 internal and do not send external check-ins. Commitment delivery prompts do not
 replay the original conversation text, and due commitment heartbeat turns run

@@ -56,7 +56,7 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  "Default heartbeat prompt:\n`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
+  "Default heartbeat prompt:\n`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply exactly NO_REPLY.`";
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 
 type StablePromptPrefixCacheEntry = {
@@ -168,8 +168,8 @@ function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: s
   return [
     "## Heartbeats",
     "If the current user message is a heartbeat poll and nothing needs attention, reply exactly:",
-    "HEARTBEAT_OK",
-    'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
+    "NO_REPLY",
+    'If something needs attention, do NOT include "NO_REPLY"; reply with the alert text instead.',
     "",
   ];
 }
