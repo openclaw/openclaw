@@ -82,6 +82,7 @@ const emptyTotals = (): CostUsageTotals => ({
 
 const USAGE_COST_CACHE_VERSION = 2;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
+const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
@@ -131,6 +132,11 @@ type UsageCostCacheLock = {
   token?: string;
 };
 
+type UsageCostCacheLockReadResult =
+  | { state: "missing" }
+  | { state: "valid"; lock: UsageCostCacheLock }
+  | { state: "malformed"; mtimeMs: number };
+
 const cloneTotals = (totals: CostUsageTotals): CostUsageTotals => ({
   input: totals.input,
   output: totals.output,
@@ -171,26 +177,64 @@ function resolveUsageCostCacheLockPath(cachePath: string): string {
   return `${cachePath}.lock`;
 }
 
-async function readUsageCostCacheLock(lockPath: string): Promise<UsageCostCacheLock | null> {
-  try {
-    const parsed = JSON.parse(await fs.promises.readFile(lockPath, "utf-8")) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    const lock = parsed as Partial<UsageCostCacheLock>;
-    if (
-      typeof lock.pid !== "number" ||
-      !Number.isInteger(lock.pid) ||
-      lock.pid <= 0 ||
-      typeof lock.startedAt !== "number" ||
-      !Number.isFinite(lock.startedAt) ||
-      (lock.token !== undefined && typeof lock.token !== "string")
-    ) {
-      return null;
-    }
-    return { pid: lock.pid, startedAt: lock.startedAt, token: lock.token };
-  } catch {
+function parseUsageCostCacheLock(raw: string): UsageCostCacheLock | null {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== "object") {
     return null;
+  }
+  const lock = parsed as Partial<UsageCostCacheLock>;
+  if (
+    typeof lock.pid !== "number" ||
+    !Number.isInteger(lock.pid) ||
+    lock.pid <= 0 ||
+    typeof lock.startedAt !== "number" ||
+    !Number.isFinite(lock.startedAt) ||
+    (lock.token !== undefined && typeof lock.token !== "string")
+  ) {
+    return null;
+  }
+  return { pid: lock.pid, startedAt: lock.startedAt, token: lock.token };
+}
+
+async function readUsageCostCacheLockState(
+  lockPath: string,
+): Promise<UsageCostCacheLockReadResult> {
+  try {
+    const lock = parseUsageCostCacheLock(await fs.promises.readFile(lockPath, "utf-8"));
+    if (lock) {
+      return { state: "valid", lock };
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { state: "missing" };
+    }
+  }
+  const stats = await fs.promises.stat(lockPath).catch(() => null);
+  if (!stats) {
+    return { state: "missing" };
+  }
+  return { state: "malformed", mtimeMs: stats.mtimeMs };
+}
+
+async function readUsageCostCacheLock(lockPath: string): Promise<UsageCostCacheLock | null> {
+  const result = await readUsageCostCacheLockState(lockPath);
+  return result.state === "valid" ? result.lock : null;
+}
+
+function isMalformedUsageCostCacheLockRecent(mtimeMs: number): boolean {
+  return Date.now() - mtimeMs < USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
+}
+
+async function writeUsageCostCacheLockAtomically(
+  lockPath: string,
+  lock: UsageCostCacheLock,
+): Promise<void> {
+  const tempPath = `${lockPath}.${process.pid}.${process.hrtime.bigint()}.tmp`;
+  await fs.promises.writeFile(tempPath, `${JSON.stringify(lock)}\n`, { flag: "wx" });
+  try {
+    await fs.promises.link(tempPath, lockPath);
+  } finally {
+    await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
   }
 }
 
@@ -206,10 +250,18 @@ function isProcessRunning(pid: number): boolean {
 
 async function isUsageCostCacheRefreshRunning(cachePath: string): Promise<boolean> {
   const lockPath = resolveUsageCostCacheLockPath(cachePath);
-  const lock = await readUsageCostCacheLock(lockPath);
-  if (!lock) {
+  const result = await readUsageCostCacheLockState(lockPath);
+  if (result.state === "missing") {
     return false;
   }
+  if (result.state === "malformed") {
+    if (isMalformedUsageCostCacheLockRecent(result.mtimeMs)) {
+      return true;
+    }
+    await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
+    return false;
+  }
+  const lock = result.lock;
   if (isProcessRunning(lock.pid)) {
     return true;
   }
@@ -229,9 +281,7 @@ async function acquireUsageCostCacheRefreshLock(cachePath: string): Promise<{
     token: `${process.pid}:${Date.now()}:${process.hrtime.bigint()}`,
   };
   try {
-    const handle = await fs.promises.open(lockPath, "wx");
-    await handle.writeFile(`${JSON.stringify(lock)}\n`);
-    await handle.close();
+    await writeUsageCostCacheLockAtomically(lockPath, lock);
     return {
       acquired: true,
       release: async () => {

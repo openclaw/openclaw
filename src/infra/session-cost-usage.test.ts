@@ -751,6 +751,44 @@ describe("session cost usage", () => {
     });
   });
 
+  it("treats in-progress usage cache lock writes as busy", async () => {
+    const root = await makeSessionCostRoot("cost-cache-malformed-lock-recent");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-malformed-lock-recent.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 5,
+            output: 5,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const lockPath = `${cachePath}.lock`;
+      await fs.writeFile(lockPath, "", "utf-8");
+
+      try {
+        const result = await refreshCostUsageCache();
+        expect(result).toBe("busy");
+        expect(await fs.readFile(lockPath, "utf-8")).toBe("");
+      } finally {
+        await fs.rm(lockPath, { force: true });
+      }
+    });
+  });
+
   it("expires abandoned usage cache locks before refreshing", async () => {
     const root = await makeSessionCostRoot("cost-cache-abandoned-lock");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -788,6 +826,64 @@ describe("session cost usage", () => {
 
       const result = await refreshCostUsageCache();
       expect(result).toBe("refreshed");
+      await waitFor(async () => {
+        const warm = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+        return warm.cacheStatus?.status === "fresh";
+      });
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      expect(summary.totals.totalTokens).toBe(10);
+      expect(summary.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
+  it("reclaims old malformed usage cache locks before refreshing", async () => {
+    const root = await makeSessionCostRoot("cost-cache-malformed-lock-old");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-malformed-lock-old.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 5,
+            output: 5,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const lockPath = `${cachePath}.lock`;
+      await fs.writeFile(lockPath, "{", "utf-8");
+      const old = new Date(Date.now() - 60_000);
+      await fs.utimes(lockPath, old, old);
+
+      const result = await refreshCostUsageCache();
+      expect(result).toBe("refreshed");
+      await waitFor(async () => {
+        const warm = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+        return warm.cacheStatus?.status === "fresh";
+      });
       const summary = await loadCostUsageSummaryFromCache({
         startMs: Date.UTC(2026, 1, 5),
         endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
