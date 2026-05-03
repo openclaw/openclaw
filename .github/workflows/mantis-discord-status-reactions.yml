@@ -451,7 +451,6 @@ jobs:
           baseline_status="$(jq -r '.baseline.status' "$root/comparison.json")"
           candidate_status="$(jq -r '.candidate.status' "$root/comparison.json")"
           pass="$(jq -r '.pass' "$root/comparison.json")"
-          mantis_bot_login="$(gh api user --jq '.login')"
           comment_file="$(mktemp)"
           cat > "$comment_file" <<EOF
           <!-- mantis-discord-status-reactions -->
@@ -476,7 +475,7 @@ jobs:
 
           comment_id="$(
             gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TARGET_PR}/comments" \
-              --jq ".[] | select(.body | contains(\"<!-- mantis-discord-status-reactions -->\")) | select(.user.login == \"${mantis_bot_login}\") | .id" \
+              --jq '.[] | select(.body | contains("<!-- mantis-discord-status-reactions -->")) | .id' \
               | tail -n 1
           )"
 

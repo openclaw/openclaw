@@ -377,9 +377,9 @@ messages, and other bulky evidence stay in the Actions artifact.
 Production workflows should post those comments with the Mantis GitHub App, not
 with `github-actions[bot]`. Store the app id and private key as
 `MANTIS_GITHUB_APP_ID` and `MANTIS_GITHUB_APP_PRIVATE_KEY` GitHub Actions
-secrets. The workflow resolves the bot login from the GitHub App token, updates
-an existing Mantis-owned comment when one exists, and creates a new Mantis-owned
-comment instead of rewriting older `github-actions[bot]` comments.
+secrets. The workflow uses a hidden marker as the upsert key, updates that
+comment when the token can edit it, and creates a new Mantis-owned comment when
+an older bot-owned marker cannot be edited.
 
 The PR comment should be short and visual:
 
