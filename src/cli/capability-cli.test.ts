@@ -374,6 +374,60 @@ describe("capability cli", () => {
     expect(payload.some((entry) => entry.id === "image.describe")).toBe(true);
   });
 
+  it("loads the catalog metadata-only for infer model list", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "gpt-5.4", provider: "openai", name: "GPT-5.4" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "list", "--json"],
+    });
+
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readOnly: true,
+        skipProviderPluginAugmentation: true,
+      }),
+    );
+  });
+
+  it("loads the catalog metadata-only for infer model inspect", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "gpt-5.4", provider: "openai", name: "GPT-5.4" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "inspect", "--model", "openai/gpt-5.4", "--json"],
+    });
+
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readOnly: true,
+        skipProviderPluginAugmentation: true,
+      }),
+    );
+  });
+
+  it("loads the catalog metadata-only for infer model providers", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "gpt-5.4", provider: "openai", name: "GPT-5.4" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "providers", "--json"],
+    });
+
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readOnly: true,
+        skipProviderPluginAugmentation: true,
+      }),
+    );
+  });
+
   it("defaults model run to local transport", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,

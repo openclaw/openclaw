@@ -217,6 +217,174 @@ describe("loadModelCatalog", () => {
     expect(discoverAuthStorage).toHaveBeenCalledWith("/tmp/openclaw", { readOnly: true });
   });
 
+  it("skips provider plugin augmentation when skipProviderPluginAugmentation is true", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+    augmentCatalogMock.mockClear();
+    augmentCatalogMock.mockResolvedValueOnce([
+      { id: "ollama-live-only", name: "Ollama Live Only", provider: "ollama" },
+    ]);
+
+    const result = await loadModelCatalog({
+      config: {} as OpenClawConfig,
+      readOnly: true,
+      skipProviderPluginAugmentation: true,
+    });
+
+    // The pi SDK static row is included but the provider-plugin supplemental
+    // entry is NOT, because plugin runtime catalog hooks are bypassed.
+    expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+    expect(augmentCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses the read-only catalog cache for repeated loadModelCatalog({ readOnly: true }) calls", async () => {
+    let registryCalls = 0;
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              registryCalls += 1;
+              return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+    augmentCatalogMock.mockReset().mockResolvedValue([]);
+
+    const first = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+    const second = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(first).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+    expect(second).toBe(first);
+    expect(registryCalls).toBe(1);
+  });
+
+  it("does not cache read-only metadata-only loads so later non-skip callers stay correct", async () => {
+    let registryCalls = 0;
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              registryCalls += 1;
+              return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+    augmentCatalogMock
+      .mockReset()
+      .mockResolvedValue([
+        { id: "ollama-live-only", name: "Ollama Live Only", provider: "ollama" },
+      ]);
+
+    // Metadata-only call (skip=true): registry read once, no augmentation row.
+    const metadataOnly = await loadModelCatalog({
+      config: {} as OpenClawConfig,
+      readOnly: true,
+      skipProviderPluginAugmentation: true,
+    });
+    expect(metadataOnly).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+    expect(registryCalls).toBe(1);
+
+    // Subsequent non-skip readOnly call MUST rebuild (the metadata-only result
+    // is a strict subset and must not be served as the with-augmentation cache)
+    // and MUST include the augmented row.
+    const withAugmentation = await loadModelCatalog({
+      config: {} as OpenClawConfig,
+      readOnly: true,
+    });
+    expect(registryCalls).toBe(2);
+    expect(withAugmentation).toContainEqual(
+      expect.objectContaining({ id: "ollama-live-only", provider: "ollama" }),
+    );
+  });
+
+  it("invalidates the read-only catalog cache when useCache:false is passed", async () => {
+    let registryCalls = 0;
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              registryCalls += 1;
+              return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+    augmentCatalogMock.mockReset().mockResolvedValue([]);
+
+    // Prime the read-only cache slot.
+    await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+    expect(registryCalls).toBe(1);
+
+    // Repeat without invalidation — cache hit, registry not re-queried.
+    await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+    expect(registryCalls).toBe(1);
+
+    // useCache:false MUST invalidate the read-only slot and force a rebuild,
+    // even though readOnly is also true (freshness is symmetric).
+    await loadModelCatalog({
+      config: {} as OpenClawConfig,
+      readOnly: true,
+      useCache: false,
+    });
+    expect(registryCalls).toBe(2);
+  });
+
+  it("invalidates the read-only catalog cache when useCache:false is passed without readOnly", async () => {
+    let registryCalls = 0;
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              registryCalls += 1;
+              return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+    augmentCatalogMock.mockReset().mockResolvedValue([]);
+
+    // Prime the read-only cache slot.
+    await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+    expect(registryCalls).toBe(1);
+
+    // Write-path call with useCache:false and no readOnly mirrors the
+    // production caller in src/commands/auth-choice.model-check.ts. The
+    // freshness contract requires this to invalidate the read-only slot
+    // too, not just the read-write slot: otherwise a write-path refresh
+    // would leave a stale read-only cache visible to subsequent
+    // inspection callers.
+    await loadModelCatalog({ config: {} as OpenClawConfig, useCache: false });
+
+    // The next readOnly call MUST rebuild because the read-only slot was
+    // cleared by the cross-slot invalidation above.
+    await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+    expect(registryCalls).toBe(3);
+  });
+
   it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
     mockPiDiscoveryModels([
       {

@@ -50,6 +50,16 @@ type PiRegistryClassLike = {
 };
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
+// Separate slot for read-only catalog reads with full provider plugin
+// augmentation. Long-running hosts that invoke the read-only path repeatedly
+// should not rebuild from scratch each time. Skip-augmentation callers
+// deliberately stay uncached: their result is a strict subset of rows and must
+// not be served the with-augmentation cache, and the path is intended for
+// one-shot CLI inspection — a long-lived host that opts into skip-augmentation
+// would silently rebuild on every call (the rebuild still pays for pi-sdk
+// import, auth-storage discovery, registry instantiation, and configured-row
+// assembly; only the provider-runtime fan-out is bypassed).
+let readOnlyModelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
@@ -67,6 +77,7 @@ function loadModelSuppression() {
 
 export function resetModelCatalogCache() {
   modelCatalogPromise = null;
+  readOnlyModelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
 }
 
@@ -165,13 +176,28 @@ export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
   readOnly?: boolean;
+  // Skip the `augmentModelCatalogWithProviderPlugins` step, which is the last
+  // path inside `loadModelCatalog` that loads provider plugin runtime to invoke
+  // each provider's `augmentModelCatalog` hook. Read-only inspection callers
+  // (e.g. `infer model list`) opt in to keep the load fully metadata-only.
+  // Pi SDK static, manifest, and configured catalog rows are still returned —
+  // only live plugin-derived supplements are suppressed.
+  skipProviderPluginAugmentation?: boolean;
 }): Promise<ModelCatalogEntry[]> {
   const readOnly = params?.readOnly === true;
-  if (!readOnly && params?.useCache === false) {
+  const skipProviderPluginAugmentation = params?.skipProviderPluginAugmentation === true;
+  if (params?.useCache === false) {
+    // useCache:false invalidates both slots regardless of readOnly — the flag
+    // means "don't reuse any cached promise for this call", and freshness is
+    // symmetric across the read-write and read-only halves of the cache.
     modelCatalogPromise = null;
+    readOnlyModelCatalogPromise = null;
   }
   if (!readOnly && modelCatalogPromise) {
     return modelCatalogPromise;
+  }
+  if (readOnly && !skipProviderPluginAugmentation && readOnlyModelCatalogPromise) {
+    return readOnlyModelCatalogPromise;
   }
 
   const loadCatalog = async () => {
@@ -247,20 +273,24 @@ export async function loadModelCatalog(params?: {
         const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
         models.push({ id, name, provider, contextWindow, reasoning, input, compat });
       }
-      const supplemental = await augmentModelCatalogWithProviderPlugins({
-        config: cfg,
-        env: process.env,
-        context: {
+      if (!skipProviderPluginAugmentation) {
+        const supplemental = await augmentModelCatalogWithProviderPlugins({
           config: cfg,
-          agentDir,
           env: process.env,
-          entries: [...models],
-        },
-      });
-      if (supplemental.length > 0) {
-        appendCatalogEntriesIfAbsent(models, supplemental);
+          context: {
+            config: cfg,
+            agentDir,
+            env: process.env,
+            entries: [...models],
+          },
+        });
+        if (supplemental.length > 0) {
+          appendCatalogEntriesIfAbsent(models, supplemental);
+        }
+        logStage("plugin-models-merged", `entries=${models.length}`);
+      } else {
+        logStage("plugin-models-skipped", `entries=${models.length}`);
       }
-      logStage("plugin-models-merged", `entries=${models.length}`);
 
       const configuredModels = buildConfiguredModelCatalog({ cfg });
       if (configuredModels.length > 0) {
@@ -272,6 +302,8 @@ export async function loadModelCatalog(params?: {
         // If we found nothing, don't cache this result so we can try again.
         if (!readOnly) {
           modelCatalogPromise = null;
+        } else if (!skipProviderPluginAugmentation) {
+          readOnlyModelCatalogPromise = null;
         }
       }
 
@@ -286,6 +318,8 @@ export async function loadModelCatalog(params?: {
       // Don't poison the cache on transient dependency/filesystem issues.
       if (!readOnly) {
         modelCatalogPromise = null;
+      } else if (!skipProviderPluginAugmentation) {
+        readOnlyModelCatalogPromise = null;
       }
       if (models.length > 0) {
         return sortModels(models);
@@ -295,7 +329,11 @@ export async function loadModelCatalog(params?: {
   };
 
   if (readOnly) {
-    return loadCatalog();
+    if (skipProviderPluginAugmentation) {
+      return loadCatalog();
+    }
+    readOnlyModelCatalogPromise = loadCatalog();
+    return readOnlyModelCatalogPromise;
   }
 
   modelCatalogPromise = loadCatalog();
