@@ -320,6 +320,26 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
   });
 
+  it("routes legacy root sandbox Dockerfile moves to tooling instead of all lanes", () => {
+    const result = detectChangedLanes([
+      "Dockerfile.sandbox",
+      "Dockerfile.sandbox-browser",
+      "Dockerfile.sandbox-common",
+      "scripts/docker/sandbox/Dockerfile",
+      "scripts/docker/sandbox/Dockerfile.browser",
+      "scripts/docker/sandbox/Dockerfile.common",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
   it("routes live Docker ACP tooling changes through a focused gate", () => {
     const result = detectChangedLanes([
       "scripts/lib/live-docker-auth.sh",

@@ -14,7 +14,7 @@ coverage
 __openclaw_vitest__/
 __pycache__/
 *.pyc
-.tsbuildinfo
+*.tsbuildinfo
 .pnpm-store
 .worktrees/
 .DS_Store
@@ -93,7 +93,7 @@ docs/internal/
 tmp/
 IDENTITY.md
 USER.md
-.tgz
+*.tgz
 .idea
 
 # local tooling
@@ -187,6 +187,10 @@ changelog/fragments/
 .tmp/
 .vmux*
 .artifacts/
+.openclaw-config-doc-cache/
+openclaw-path-alias-*/
+/.pi/
+/C:\\openclaw/
 test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
