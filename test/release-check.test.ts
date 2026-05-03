@@ -307,7 +307,7 @@ describe("bundled plugin package dependency checks", () => {
     }
   });
 
-  it("still requires root deps for root-owned installed chunks", () => {
+  it("allows root-owned chunks to import externalized optional runtime deps", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-missing-"));
 
     try {
