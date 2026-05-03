@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearCurrentPluginMetadataSnapshot,
   resolvePluginMetadataControlPlaneFingerprint,
@@ -9,6 +9,7 @@ import {
 } from "./current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -242,5 +243,29 @@ describe("manifest model id normalization", () => {
 
     process.env.OPENCLAW_STATE_DIR = stateDirB;
     expect(normalizeDemoModel()).toBe("charlie/demo-model");
+  });
+
+  it("reuses manifest metadata while file fingerprints are unchanged", () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "normalizer");
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    writeInstallIndex({ stateDir, pluginDir });
+    writeNormalizerManifest({ pluginDir, prefix: "alpha" });
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_HOME = undefined;
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = undefined;
+
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+
+    expect(listOpenClawPluginManifestMetadata(process.env)).toHaveLength(1);
+    expect(listOpenClawPluginManifestMetadata(process.env)).toHaveLength(1);
+
+    const manifestReads = readFileSyncSpy.mock.calls.filter(
+      ([filePath]) => String(filePath) === manifestPath,
+    );
+    expect(manifestReads).toHaveLength(1);
+    readFileSyncSpy.mockRestore();
   });
 });
