@@ -171,6 +171,8 @@ const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
+const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
+  "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
 function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
@@ -769,6 +771,7 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
+      let compactionContinuationRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
       // on purpose so it survives across attempt boundaries and across
@@ -781,6 +784,7 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
+      let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
         provider,
@@ -996,6 +1000,7 @@ export async function runEmbeddedPiAgent(
             planningOnlyRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
+            compactionContinuationRetryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
           );
@@ -2347,6 +2352,29 @@ export async function runEmbeddedPiAgent(
                 timedOut,
                 attempt,
               });
+          if (
+            !emptyAssistantReplyIsSilent &&
+            attemptCompactionCount > 0 &&
+            payloadCount === 0 &&
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
+            !hasMessagingToolDeliveryEvidence(attempt) &&
+            compactionContinuationRetryAttempts < 1
+          ) {
+            compactionContinuationRetryAttempts += 1;
+            compactionContinuationRetryInstruction = COMPACTION_CONTINUATION_RETRY_INSTRUCTION;
+            log.warn(
+              `compaction interrupted visible final answer: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `compactions=${attemptCompactionCount} — retrying ${compactionContinuationRetryAttempts}/1 with compacted-transcript continuation`,
+            );
+            continue;
+          }
+          compactionContinuationRetryInstruction = null;
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
             log.warn(
               `reasoning-only retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
