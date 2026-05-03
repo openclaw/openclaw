@@ -25,6 +25,7 @@ const isWin = process.platform === "win32";
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
 const parseOpenClawChannelsLoginShellCommand = __testing.parseOpenClawChannelsLoginShellCommand;
+const parseOpenClawMessageDeliveryShellCommand = __testing.parseOpenClawMessageDeliveryShellCommand;
 const validateExecScriptPreflight = __testing.validateScriptFileForShellBleed;
 const createPreflightTool = () =>
   createExecTool({ host: "gateway", security: "full", ask: "on-miss" });
@@ -93,6 +94,650 @@ describe("exec interactive OpenClaw channel login guard", () => {
         command: "sudo -u openclaw bash -lc 'openclaw channels login --channel whatsapp'",
       }),
     ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+  });
+});
+
+describe("exec OpenClaw message delivery guard", () => {
+  it("recognizes real message delivery commands before execution", () => {
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm openclaw -- message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "corepack pnpm openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm exec openclaw message send --channel telegram --target 123 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw -- message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "./openclaw.mjs message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "node openclaw.mjs message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm exec node openclaw.mjs message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm exec node dist/entry.js message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm -c exec 'openclaw message send --channel whatsapp --target +1555 --message hi'",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm --shell-mode exec 'openclaw message send --channel whatsapp --target +1555 --message hi'",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm dlx openclaw@latest message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "/usr/bin/env openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "/usr/bin/env -S openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "/usr/bin/env -S'openclaw message send' --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "/usr/bin/env -iS'openclaw message send' --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "echo hi > /tmp/openclaw-message-send-preflight; openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "> /tmp/openclaw-message-send-preflight openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "2>/tmp/openclaw-message-send-preflight.err openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "echo ok > /tmp/openclaw-message-send-preflight; printf hi | openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        'echo "<<EOF"\nopenclaw message send --channel whatsapp --target +1555 --message hi',
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "echo $(openclaw message send --channel whatsapp --target +1555 --message hi)",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "cat <(openclaw message send --channel whatsapp --target +1555 --message hi)",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        'powershell -Command "openclaw message send --channel whatsapp --target +1555 --message hi"',
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "cmd /c openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "sh <<'EOF'\nopenclaw message send --channel whatsapp --target +1555 --message hi\nEOF",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "cat <<'EOF' | sh\nopenclaw message send --channel whatsapp --target +1555 --message hi\nEOF",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "cat <<'EOF' | sudo sh\nopenclaw message send --channel whatsapp --target +1555 --message hi\nEOF",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "bash <<< 'openclaw message send --channel whatsapp --target +1555 --message hi'",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "cat <<< 'openclaw message send --channel whatsapp --target +1555 --message hi' | sh",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "(openclaw message send --channel whatsapp --target +1555 --message hi)",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "( openclaw message send --channel whatsapp --target +1555 --message hi )",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "{ openclaw message send --channel whatsapp --target +1555 --message hi; }",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "if true; then openclaw message send --channel whatsapp --target +1555 --message hi; fi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "sleep 1 & openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "! openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message \\\nsend --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm openclaw message \\\nsend --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message s\\\nend --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm openclaw --profile work message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm -s --dir . openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm --loglevel silent openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm --reporter append-only openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpm exec -w openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm --prefix . run openclaw -- message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm --loglevel silent exec openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm exec openclaw -- message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm run-script openclaw -- message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm x openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm -w apps/cli run openclaw -- message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm --workspace apps/cli run openclaw -- message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "yarn workspace app openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "yarn openclaw -- message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "bun run openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm exec -c 'openclaw message send --channel whatsapp --target +1555 --message hi'",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm exec -c 'OPENCLAW_GATEWAY_TOKEN=secret openclaw message send --channel whatsapp --target +1555 --message hi'",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npm exec -c 'sudo -u openclaw openclaw message send --channel whatsapp --target +1555 --message hi'",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "sudo env -S 'openclaw message send --channel whatsapp --target +1555 --message hi'",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        'npm exec --call="openclaw message send --channel whatsapp --target +1555 --message hi"',
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "npx -c 'openclaw message send --channel whatsapp --target +1555 --message hi'",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "pnpx openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "eval 'openclaw message send --channel whatsapp --target +1555 --message hi'",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "eval openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message --profile work send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "sudo -Eu openclaw openclaw message send --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message send --channel whatsapp --target +1555 --message --help",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message send --channel whatsapp --target +1555 --message --dry-run",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message send --channel whatsapp --target +1555 --message=-h",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message broadcast --targets +1555 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message poll --channel telegram --target 123 --poll-question Snack --poll-option Pizza --poll-option Sushi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message thread reply --channel discord --target thread:123 --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message thread create --channel discord --target channel:123 --thread-name Updates --message hi",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message sticker send --channel discord --target channel:123 --sticker-id 456",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message broadcast --targets +1555 --message --help",
+      ),
+    ).toBe(true);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message poll --channel telegram --target 123 --poll-question Snack --poll-option --dry-run --poll-option Sushi",
+      ),
+    ).toBe(true);
+    expect(parseOpenClawMessageDeliveryShellCommand("openclaw message --help")).toBe(false);
+    expect(parseOpenClawMessageDeliveryShellCommand("openclaw message send --help")).toBe(false);
+    expect(parseOpenClawMessageDeliveryShellCommand("openclaw message broadcast --help")).toBe(
+      false,
+    );
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message send --dry-run --channel whatsapp --target +1555 --message hi",
+      ),
+    ).toBe(false);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "openclaw message poll --dry-run --channel telegram --target 123 --poll-question Snack --poll-option Pizza --poll-option Sushi",
+      ),
+    ).toBe(false);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "cat > send.sh <<'EOF'\nopenclaw message send --channel whatsapp --target +1555 --message hi\nEOF",
+      ),
+    ).toBe(false);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand(
+        "cat > send.sh <<'EOF'\necho $(openclaw message send --channel whatsapp --target +1555 --message hi)\nEOF",
+      ),
+    ).toBe(false);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand("openclaw message read --target channel:123"),
+    ).toBe(false);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand("openclaw message search --guild-id 1 --query hi"),
+    ).toBe(false);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand("openclaw message thread list --guild-id 1"),
+    ).toBe(false);
+    expect(
+      parseOpenClawMessageDeliveryShellCommand("openclaw --profile work message read --target 123"),
+    ).toBe(false);
+  });
+
+  it("blocks message delivery commands from exec", async () => {
+    const tool = createPreflightTool();
+
+    await expect(
+      tool.execute("call-openclaw-message-send", {
+        command:
+          'OPENCLAW_GATEWAY_TOKEN=secret pnpm openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-wrapped-openclaw-message-send", {
+        command:
+          "sudo -u openclaw bash -lc 'openclaw message send --channel whatsapp --target +1555 --message hello'",
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-broadcast", {
+        command: 'openclaw message broadcast --targets +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-poll", {
+        command:
+          'openclaw message poll --channel telegram --target 123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-thread-reply", {
+        command: 'openclaw message thread reply --target thread:123 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-thread-create", {
+        command:
+          'openclaw message thread create --target channel:123 --thread-name Updates --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-sticker-send", {
+        command: "openclaw message sticker send --target channel:123 --sticker-id 456",
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-npm-call", {
+        command:
+          'npm exec --call="openclaw message send --channel whatsapp --target +1555 --message hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-npm-call-env", {
+        command:
+          "npm exec -c 'OPENCLAW_GATEWAY_TOKEN=secret openclaw message send --channel whatsapp --target +1555 --message hello'",
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-pnpm-shell-mode", {
+        command:
+          "pnpm -c exec 'openclaw message send --channel whatsapp --target +1555 --message hello'",
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-pnpm-dlx-versioned", {
+        command:
+          'pnpm dlx openclaw@latest message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-sudo-env-split", {
+        command:
+          "sudo env -S 'openclaw message send --channel whatsapp --target +1555 --message hello'",
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-path-env", {
+        command:
+          '/usr/bin/env openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-after-redirect", {
+        command:
+          'echo hi > /tmp/openclaw-message-send-preflight; openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-command-substitution", {
+        command:
+          'echo $(openclaw message send --channel whatsapp --target +1555 --message "hello")',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-process-substitution", {
+        command: 'cat <(openclaw message send --channel whatsapp --target +1555 --message "hello")',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-powershell", {
+        command:
+          'powershell -Command "openclaw message send --channel whatsapp --target +1555 --message hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-cmd", {
+        command: 'cmd /c openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-shell-heredoc", {
+        command:
+          "sh <<'EOF'\nopenclaw message send --channel whatsapp --target +1555 --message \"hello\"\nEOF",
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-piped-shell-heredoc", {
+        command:
+          "cat <<'EOF' | sh\nopenclaw message send --channel whatsapp --target +1555 --message \"hello\"\nEOF",
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-shell-here-string", {
+        command:
+          "bash <<< 'openclaw message send --channel whatsapp --target +1555 --message \"hello\"'",
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-piped-shell-here-string", {
+        command:
+          "cat <<< 'openclaw message send --channel whatsapp --target +1555 --message \"hello\"' | sh",
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-grouped", {
+        command: '(openclaw message send --channel whatsapp --target +1555 --message "hello")',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-spaced-grouped", {
+        command: '( openclaw message send --channel whatsapp --target +1555 --message "hello" )',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-braced", {
+        command: '{ openclaw message send --channel whatsapp --target +1555 --message "hello"; }',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-if-then", {
+        command:
+          'if true; then openclaw message send --channel whatsapp --target +1555 --message "hello"; fi',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-after-background", {
+        command:
+          'sleep 1 & openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-negated", {
+        command: '! openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-line-continuation", {
+        command: 'openclaw message \\\nsend --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-root-terminator", {
+        command: 'openclaw -- message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-node-mjs", {
+        command:
+          'node openclaw.mjs message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-pnpm-node-mjs", {
+        command:
+          'pnpm exec node openclaw.mjs message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-leading-redirection", {
+        command:
+          '> /tmp/openclaw-message-send-preflight openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-bun-run", {
+        command:
+          'bun run openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-npm-run-script", {
+        command:
+          'npm run-script openclaw -- message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-eval", {
+        command:
+          "eval 'openclaw message send --channel whatsapp --target +1555 --message \"hello\"'",
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-pnpx", {
+        command: 'pnpx openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-corepack-pnpm", {
+        command:
+          'corepack pnpm openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    await expect(
+      tool.execute("call-openclaw-message-send-sudo-clustered-user", {
+        command:
+          'sudo -Eu openclaw openclaw message send --channel whatsapp --target +1555 --message "hello"',
+      }),
+    ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
   });
 });
 
@@ -385,6 +1030,88 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("blocks OpenClaw message delivery commands inside shell scripts before execution", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(
+        path.join(tmp, "send.sh"),
+        [
+          "#!/usr/bin/env bash",
+          'openclaw message send --channel whatsapp --target +1555 --message "hello"',
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const tool = createPreflightTool();
+      await expect(
+        tool.execute("call-shell-script-send", {
+          command: "bash send.sh",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+      await expect(
+        tool.execute("call-sh-script-send", {
+          command: "sh ./send.sh",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+      await expect(
+        tool.execute("call-chained-shell-script-send", {
+          command: "true && sh send.sh",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+      await expect(
+        tool.execute("call-shell-payload-script-send", {
+          command: "bash -c './send.sh'",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+      await expect(
+        tool.execute("call-direct-shell-script-send", {
+          command: "./send.sh",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+      await expect(
+        tool.execute("call-source-shell-script-send", {
+          command: "source ./send.sh",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+      await expect(
+        tool.execute("call-dot-source-shell-script-send", {
+          command: ". ./send.sh",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+
+      await fs.writeFile(path.join(tmp, "ok.js"), "console.log('ok')", "utf-8");
+      await expect(
+        tool.execute("call-mixed-node-and-shell-script-send", {
+          command: "node ok.js && sh send.sh",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    });
+  });
+
+  it("validates shell script targets reached through env split-string", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(
+        path.join(tmp, "send.sh"),
+        'openclaw message send --channel whatsapp --target +1555 --message "hello"',
+        "utf-8",
+      );
+
+      await expect(
+        validateExecScriptPreflight({
+          command: 'env -S "bash send.sh"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+    });
+  });
+
   it("skips script-file preflight in yolo host mode", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const jsPath = path.join(tmp, "bad.js");
@@ -406,6 +1133,18 @@ describeNonWin("exec script preflight", () => {
       expect(result.details).toMatchObject({
         status: expect.stringMatching(/completed|failed/),
       });
+
+      await fs.writeFile(
+        path.join(tmp, "send.sh"),
+        'openclaw message send --channel whatsapp --target +1555 --message "hello"',
+        "utf-8",
+      );
+      await expect(
+        tool.execute("call-yolo-shell-message-send", {
+          command: "sh send.sh",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
     });
   });
 
@@ -435,6 +1174,33 @@ describeNonWin("exec script preflight", () => {
       await expect(
         validateExecScriptPreflight({
           command: "node ../outside.js",
+          workdir,
+        }),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  it("validates readable shell script paths outside the workdir", async () => {
+    await withTempDir("openclaw-exec-preflight-parent-", async (parent) => {
+      const workdir = path.join(parent, "workdir");
+      await fs.mkdir(workdir, { recursive: true });
+      await fs.writeFile(
+        path.join(parent, "send.sh"),
+        'openclaw message send --channel whatsapp --target +1555 --message "hello"',
+        "utf-8",
+      );
+
+      await expect(
+        validateExecScriptPreflight({
+          command: "bash ../send.sh",
+          workdir,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+
+      await fs.writeFile(path.join(parent, "safe.sh"), "echo ok", "utf-8");
+      await expect(
+        validateExecScriptPreflight({
+          command: "bash ../safe.sh",
           workdir,
         }),
       ).resolves.toBeUndefined();
