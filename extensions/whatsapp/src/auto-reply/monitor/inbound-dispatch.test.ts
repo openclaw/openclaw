@@ -824,7 +824,7 @@ describe("whatsapp inbound dispatch", () => {
       cfg: {} as never,
       ctx: { Body: "hello" },
       dmRouteTarget: "+3000",
-      pinnedMainDmRecipient: null,
+      pinnedMainDmRecipient: "+1000", // owner different from dmRouteTarget
       route: makeRoute({
         sessionKey: "agent:main:whatsapp:direct:+3000",
         mainSessionKey: "agent:main:main",

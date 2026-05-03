@@ -256,12 +256,10 @@ export function updateWhatsAppMainLastRoute(params: {
     return;
   }
 
-  // Record last-route for per-contact session when using scoped dmScope
-  if (
-    params.dmRouteTarget &&
-    params.route.sessionKey !== params.route.mainSessionKey &&
-    shouldUpdateMainLastRoute
-  ) {
+  // Record last-route for per-contact session when using scoped dmScope.
+  // Always record per-contact sessions regardless of pinnedMainDmRecipient,
+  // since the pin guard only applies to main session updates.
+  if (params.dmRouteTarget && params.route.sessionKey !== params.route.mainSessionKey) {
     params.updateLastRoute({
       cfg: params.cfg,
       backgroundTasks: params.backgroundTasks,
