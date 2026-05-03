@@ -153,8 +153,8 @@ function listFiles(rootDir, prefix = "") {
   return files;
 }
 
-async function readPackedPackage(tarballPath, extractDir) {
-  await tar.x({ file: tarballPath, cwd: extractDir });
+function readPackedPackage(tarballPath, extractDir) {
+  tar.x({ file: tarballPath, cwd: extractDir, sync: true });
   const packageDir = path.join(extractDir, "package");
   const packageJson = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8"));
   return {
@@ -169,7 +169,7 @@ export async function verifyPublishedPluginRuntime(spec) {
     const tarballPath = await packPublishedPackage(spec, workingDir);
     const extractDir = path.join(workingDir, "extract");
     fs.mkdirSync(extractDir, { recursive: true });
-    const packedPackage = await readPackedPackage(tarballPath, extractDir);
+    const packedPackage = readPackedPackage(tarballPath, extractDir);
     const errors = collectPluginNpmPublishedRuntimeErrors({
       ...packedPackage,
       spec,
