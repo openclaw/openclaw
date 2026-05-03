@@ -339,8 +339,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     for (const svc of extraServices) {
       defaultRuntime.error(`- ${errorText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
-    for (const hint of renderGatewayServiceCleanupHints()) {
-      defaultRuntime.error(`${errorText("Cleanup hint:")} ${hint}`);
+    const cleanupHints = renderGatewayServiceCleanupHints();
+    if (cleanupHints.length > 0) {
+      defaultRuntime.error(
+        errorText(
+          "Note: the commands below are optional cleanup steps and can disable/remove this OpenClaw gateway service. Run them only if you intentionally want to remove this service.",
+        ),
+      );
+      for (const hint of cleanupHints) {
+        defaultRuntime.error(`${errorText("Optional cleanup:")} ${hint}`);
+      }
     }
     spacer();
   }

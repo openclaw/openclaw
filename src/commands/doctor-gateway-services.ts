@@ -665,7 +665,10 @@ export async function maybeScanExtraGatewayServices(
 
   const cleanupHints = renderGatewayServiceCleanupHints();
   if (cleanupHints.length > 0) {
-    note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
+    note(
+      cleanupHints.map((hint) => `- ${hint}`).join("\n"),
+      "Optional cleanup commands (only if intentionally removing this gateway service)",
+    );
   }
 
   note(
