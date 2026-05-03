@@ -580,6 +580,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
+    - `ignoreOtherMentions` (channel-only; default `false`): when `true`, drop inbound messages whose only `<@...>` mention is for another user, even inside bot-participated threads. The bot still replies when explicitly mentioned (`<@botId>`), in DMs, or in messages with no `<@...>` tokens. Mirrors the existing Discord per-channel option. Skipped when the bot identity is unresolved (Slack `auth.test` failure) so legitimate pings are not dropped.
     - `users` (allowlist)
     - `allowBots`
     - `skills`
