@@ -5,6 +5,11 @@ on:
     - cron: "11 5 * * *"
   workflow_dispatch:
     inputs:
+      target_ref:
+        description: OpenClaw ref to benchmark; defaults to the workflow ref
+        required: false
+        default: ""
+        type: string
       profile:
         description: Kova profile to run
         required: false
@@ -92,6 +97,7 @@ jobs:
       SUMMARY_DIR: ${{ github.workspace }}/.artifacts/kova/summaries
       SOURCE_PERF_DIR: ${{ github.workspace }}/.artifacts/openclaw-performance/source/${{ matrix.lane }}
       LANE_ID: ${{ matrix.lane }}
+      TARGET_REF: ${{ inputs.target_ref || github.ref_name }}
       PROFILE: ${{ inputs.profile || 'diagnostic' }}
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
       FAIL_ON_REGRESSION: ${{ inputs.fail_on_regression || 'false' }}
@@ -139,8 +145,24 @@ jobs:
         if: steps.lane.outputs.run == 'true'
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.ref }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Record tested revision
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          echo "TESTED_REF=${TARGET_REF}" >> "$GITHUB_ENV"
+          echo "TESTED_SHA=${tested_sha}" >> "$GITHUB_ENV"
+          {
+            echo "Tested ref: ${TARGET_REF}"
+            echo "Tested SHA: ${tested_sha}"
+            echo "Workflow ref: ${GITHUB_REF_NAME}"
+            echo "Workflow SHA: ${GITHUB_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Node environment
         if: steps.lane.outputs.run == 'true'
@@ -281,7 +303,7 @@ jobs:
 
           kova report bundle "$report_json" --output-dir "$BUNDLE_DIR" --json | tee "$BUNDLE_DIR/bundle.json"
 
-          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+          ref_slug="$(printf '%s' "${TESTED_REF}" | tr -c 'A-Za-z0-9._-' '-')"
           run_slug="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           report_url=""
           if [[ "${CLAWGRIT_REPORTS_TOKEN_PRESENT:-false}" == "true" ]]; then
@@ -293,6 +315,23 @@ jobs:
             summary_args+=(--report-url "$report_url")
           fi
           "${summary_args[@]}"
+          cat >> "$summary_path" <<EOF
+
+          ## Test scope
+
+          - Repository: ${GITHUB_REPOSITORY}
+          - Tested ref: ${TESTED_REF}
+          - Tested SHA: ${TESTED_SHA}
+          - Workflow ref: ${GITHUB_REF_NAME}
+          - Workflow SHA: ${GITHUB_SHA}
+          - Kova repository: ${KOVA_REPOSITORY}
+          - Kova ref: ${KOVA_REF}
+          - Kova profile: ${PROFILE}
+          - Lane auth: ${AUTH_MODE}
+          - Lane model: ${PERFORMANCE_MODEL_ID}
+          - Lane repeat: ${repeat}
+          - Include filters: ${INCLUDE_FILTERS}
+          EOF
           cat "$summary_path" >> "$GITHUB_STEP_SUMMARY"
 
           if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
@@ -438,7 +477,7 @@ jobs:
         run: |
           set -euo pipefail
           reports_root=".artifacts/clawgrit-reports"
-          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+          ref_slug="$(printf '%s' "${TESTED_REF}" | tr -c 'A-Za-z0-9._-' '-')"
           run_slug="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           dest="${reports_root}/openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
           mkdir -p "$dest"
@@ -466,8 +505,12 @@ jobs:
           cat > "${reports_root}/openclaw-performance/${ref_slug}/latest-${LANE_ID}.json" <<EOF
           {
             "repository": "${GITHUB_REPOSITORY}",
-            "ref": "${GITHUB_REF_NAME}",
-            "sha": "${GITHUB_SHA}",
+            "ref": "${TESTED_REF}",
+            "sha": "${TESTED_SHA}",
+            "tested_ref": "${TESTED_REF}",
+            "tested_sha": "${TESTED_SHA}",
+            "workflow_ref": "${GITHUB_REF_NAME}",
+            "workflow_sha": "${GITHUB_SHA}",
             "workflow": "${GITHUB_WORKFLOW}",
             "run_id": "${GITHUB_RUN_ID}",
             "run_attempt": "${GITHUB_RUN_ATTEMPT}",
@@ -483,5 +526,5 @@ jobs:
             echo "No clawgrit report changes to publish."
             exit 0
           fi
-          git -C "$reports_root" commit -m "perf: add OpenClaw ${LANE_ID} report ${GITHUB_SHA::12}"
+          git -C "$reports_root" commit -m "perf: add OpenClaw ${LANE_ID} report ${TESTED_SHA::12}"
           git -C "$reports_root" push origin HEAD:main
