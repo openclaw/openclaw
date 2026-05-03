@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/WebChat: collapse duplicate in-flight internal text sends onto the active Gateway run so rapid repeat submits do not start fresh `agent:main:main` dispatches. Fixes #75737. Thanks @dsdsddd1 and @BunsDev.
 - Mattermost: accept the documented `channels.mattermost.streaming` config and honor `streaming: "off"` by disabling draft preview posts. Thanks @vincentkoc.
 - Discord: keep progress draft boundary callbacks bound during streaming replies, so extension lint stays green while progress previews transition between assistant and reasoning blocks. Thanks @vincentkoc.
+- Discord: resolve SecretRef-backed bot tokens from the active runtime snapshot for named accounts and keep unresolved configured tokens from crashing status or health checks. (#76987) Thanks @joshavant.
 - Channels/streaming: expose `streaming.progress.label`, `labels`, `maxLines`, and `toolProgress` in bundled channel config metadata so progress draft settings appear in config, docs, and control surfaces. Thanks @vincentkoc.
 - Channels/streaming: normalize whitespace and case for `streaming.progress.label: "auto"` so progress draft labels keep using the built-in label pool instead of rendering a literal `auto` title. Thanks @vincentkoc.
 - Gateway/install: prefer supported system Node over nvm/fnm/volta/asdf/mise when regenerating managed gateway services, so `gateway install --force` no longer recreates service definitions that doctor immediately flags as version-manager-backed. Fixes #76339. Thanks @brokemac79.
