@@ -8,6 +8,8 @@ import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type {
+  ChannelLocationContext,
+  ChannelLocationResult,
   ChannelOutboundTargetMode,
   ChannelPollContext,
   ChannelPollResult,
@@ -172,4 +174,5 @@ export type ChannelOutboundAdapter = {
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
+  sendLocation?: (ctx: ChannelLocationContext) => Promise<ChannelLocationResult>;
 };

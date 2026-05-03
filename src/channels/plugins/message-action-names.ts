@@ -56,6 +56,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "set-profile",
   "download-file",
   "upload-file",
+  "location",
 ] as const;
 
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];
