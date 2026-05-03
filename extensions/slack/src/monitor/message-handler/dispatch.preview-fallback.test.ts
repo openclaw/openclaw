@@ -31,7 +31,16 @@ class TestSlackStreamNotDeliveredError extends Error {
 }
 let mockedNativeStreaming = false;
 let mockedBlockStreamingEnabled: boolean | undefined = false;
-let capturedReplyOptions: { disableBlockStreaming?: boolean } | undefined;
+let mockedSlackStreamingMode: "off" | "partial" | "block" | "progress" = "partial";
+let mockedSlackDraftMode: "replace" | "status_final" | "append" = "append";
+let capturedReplyOptions:
+  | {
+      disableBlockStreaming?: boolean;
+      suppressDefaultToolProgressMessages?: boolean;
+      onItemEvent?: (payload: { progressText: string }) => Promise<void> | void;
+      onPartialReply?: (payload: { text: string }) => Promise<void> | void;
+    }
+  | undefined;
 let capturedStatusReactionOptions: { enabled?: boolean; initialEmoji?: string } | undefined;
 const statusReactionControllerMock = {
   setQueued: vi.fn(async () => {}),
@@ -63,6 +72,9 @@ let mockedDispatchSequence: Array<{
   };
 }> = [];
 let mockedProgressEvents: string[] = [];
+let mockedReplyOptionEvents: Array<
+  { kind: "item"; progressText: string } | { kind: "partial"; text: string }
+> = [];
 
 const noop = () => {};
 const noopAsync = async () => {};
@@ -83,6 +95,7 @@ function createDraftStreamStub() {
 
 function createPreparedSlackMessage(params?: {
   cfg?: Record<string, unknown>;
+  accountConfig?: Record<string, unknown>;
   ctxPayload?: Record<string, unknown>;
   message?: Partial<{
     channel: string;
@@ -117,7 +130,7 @@ function createPreparedSlackMessage(params?: {
     },
     account: {
       accountId: "default",
-      config: {},
+      config: params?.accountConfig ?? {},
     },
     message: {
       channel: "C123",
@@ -218,9 +231,44 @@ vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
+  formatChannelProgressDraftText: (params: {
+    entry?: { streaming?: { progress?: { label?: string; maxLines?: number } } };
+    lines: string[];
+  }) =>
+    [
+      params.entry?.streaming?.progress?.label ?? "Thinking",
+      ...params.lines.map((line) => `• ${line}`),
+    ].join("\n"),
+  resolveChannelProgressDraftMaxLines: (entry?: {
+    streaming?: { progress?: { maxLines?: number } };
+  }) => entry?.streaming?.progress?.maxLines ?? 8,
   resolveChannelStreamingBlockEnabled: () => mockedBlockStreamingEnabled,
   resolveChannelStreamingNativeTransport: () => mockedNativeStreaming,
-  resolveChannelStreamingPreviewToolProgress: () => true,
+  resolveChannelStreamingPreviewToolProgress: (entry?: {
+    streaming?: { progress?: { toolProgress?: boolean }; preview?: { toolProgress?: boolean } };
+  }) => entry?.streaming?.progress?.toolProgress ?? entry?.streaming?.preview?.toolProgress ?? true,
+  resolveChannelStreamingSuppressDefaultToolProgressMessages: (
+    entry?: {
+      streaming?: {
+        mode?: string;
+        progress?: { toolProgress?: boolean };
+        preview?: { toolProgress?: boolean };
+      };
+    },
+    options?: {
+      draftStreamActive?: boolean;
+      previewStreamingEnabled?: boolean;
+      previewToolProgressEnabled?: boolean;
+    },
+  ) => {
+    if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
+      return false;
+    }
+    if (entry?.streaming?.mode === "progress") {
+      return true;
+    }
+    return options?.previewToolProgressEnabled ?? true;
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/outbound-runtime", () => ({
@@ -292,9 +340,9 @@ vi.mock("../../stream-mode.js", () => ({
   }),
   buildStatusFinalPreviewText: () => "status",
   resolveSlackStreamingConfig: () => ({
-    mode: "partial",
+    mode: mockedSlackStreamingMode,
     nativeStreaming: mockedNativeStreaming,
-    draftMode: "append",
+    draftMode: mockedSlackDraftMode,
   }),
 }));
 
@@ -364,7 +412,9 @@ vi.mock("../reply.runtime.js", () => ({
   dispatchInboundMessage: async (params: {
     replyOptions?: {
       disableBlockStreaming?: boolean;
+      suppressDefaultToolProgressMessages?: boolean;
       onItemEvent?: (payload: { progressText: string }) => Promise<void> | void;
+      onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     };
     dispatcher: {
       deliver: (
@@ -380,8 +430,18 @@ vi.mock("../reply.runtime.js", () => ({
     };
   }) => {
     capturedReplyOptions = params.replyOptions;
-    for (const progressText of mockedProgressEvents) {
-      await params.replyOptions?.onItemEvent?.({ progressText });
+    if (mockedReplyOptionEvents.length > 0) {
+      for (const entry of mockedReplyOptionEvents) {
+        if (entry.kind === "item") {
+          await params.replyOptions?.onItemEvent?.({ progressText: entry.progressText });
+        } else {
+          await params.replyOptions?.onPartialReply?.({ text: entry.text });
+        }
+      }
+    } else {
+      for (const progressText of mockedProgressEvents) {
+        await params.replyOptions?.onItemEvent?.({ progressText });
+      }
     }
     for (const entry of mockedDispatchSequence) {
       await params.dispatcher.deliver(entry.payload, { kind: entry.kind });
@@ -421,6 +481,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     }
     mockedNativeStreaming = false;
     mockedBlockStreamingEnabled = false;
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "append";
     capturedReplyOptions = undefined;
     capturedStatusReactionOptions = undefined;
     capturedTyping = undefined;
@@ -428,6 +490,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedReplyThreadTsSequence = undefined;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedProgressEvents = [];
+    mockedReplyOptionEvents = [];
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
     finalizeSlackPreviewEditMock.mockRejectedValue(new Error("socket closed"));
@@ -564,11 +627,97 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedDispatchSequence = [];
     mockedProgressEvents = ["ran <!here> <@U123> *bold* `code` & done"];
 
-    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Working…\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
+      "Shelling\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
     );
+  });
+
+  it("honors Slack progress maxLines above the legacy eight-line cap", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedProgressEvents = Array.from({ length: 10 }, (_value, index) => `step ${index + 1}`);
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling", maxLines: 10 } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      [
+        "Shelling",
+        "• step 1",
+        "• step 2",
+        "• step 3",
+        "• step 4",
+        "• step 5",
+        "• step 6",
+        "• step 7",
+        "• step 8",
+        "• step 9",
+        "• step 10",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves Slack progress lines across status-final answer partials", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "item", progressText: "tool one" },
+      { kind: "partial", text: "partial answer" },
+      { kind: "item", progressText: "tool two" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• tool one", "• tool two"].join("\n"),
+    );
+  });
+
+  it("suppresses standalone Slack tool progress when progress lines are disabled", async () => {
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "progress", progress: { toolProgress: false } } },
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    expect(capturedReplyOptions?.onItemEvent).toBeDefined();
+  });
+
+  it("keeps standalone Slack tool progress when partial preview lines are disabled", async () => {
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedDispatchSequence = [];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "partial", preview: { toolProgress: false } } },
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
+    expect(capturedReplyOptions?.onItemEvent).toBeDefined();
   });
 
   it("starts native streams in the first-reply thread for top-level channel messages", async () => {

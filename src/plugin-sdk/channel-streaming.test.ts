@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_PROGRESS_DRAFT_LABELS,
+  formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
+  resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftLabel,
+  resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
   resolveChannelStreamingNativeTransport,
   resolveChannelStreamingPreviewChunk,
+  resolveChannelStreamingSuppressDefaultToolProgressMessages,
   resolveChannelStreamingPreviewToolProgress,
 } from "./channel-streaming.js";
 
@@ -72,5 +78,91 @@ describe("channel-streaming", () => {
       breakPreference: "newline",
     });
     expect(resolveChannelStreamingPreviewToolProgress(entry)).toBe(true);
+  });
+
+  it("preserves progress as a first-class preview mode", () => {
+    expect(resolveChannelPreviewStreamMode({ streaming: "progress" }, "off")).toBe("progress");
+    expect(resolveChannelPreviewStreamMode({ streaming: { mode: "progress" } }, "off")).toBe(
+      "progress",
+    );
+  });
+
+  it("keeps block preview mode separate from block delivery", () => {
+    expect(resolveChannelStreamingBlockEnabled({ streaming: "block" })).toBeUndefined();
+    expect(resolveChannelStreamingBlockEnabled({ streaming: { mode: "block" } })).toBeUndefined();
+    expect(
+      resolveChannelStreamingBlockEnabled({
+        streaming: { mode: "block", block: { enabled: true } },
+      }),
+    ).toBe(true);
+    expect(resolveChannelStreamingBlockEnabled({ streaming: "block", blockStreaming: false })).toBe(
+      false,
+    );
+  });
+
+  it("suppresses standalone tool progress for active preview drafts", () => {
+    expect(
+      resolveChannelStreamingSuppressDefaultToolProgressMessages({
+        streaming: { mode: "progress", progress: { toolProgress: false } },
+      }),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingSuppressDefaultToolProgressMessages(
+        { streaming: { mode: "partial", preview: { toolProgress: false } } },
+        { draftStreamActive: true },
+      ),
+    ).toBe(false);
+    expect(
+      resolveChannelStreamingSuppressDefaultToolProgressMessages(
+        { streaming: { mode: "partial", preview: { toolProgress: false } } },
+        { draftStreamActive: true, previewToolProgressEnabled: true },
+      ),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingSuppressDefaultToolProgressMessages(
+        { streaming: { mode: "progress" } },
+        { draftStreamActive: false },
+      ),
+    ).toBe(false);
+  });
+
+  it("uses auto progress labels when no explicit label is configured", () => {
+    expect(resolveChannelProgressDraftLabel({ random: () => 0 })).toBe(
+      DEFAULT_PROGRESS_DRAFT_LABELS[0],
+    );
+    expect(resolveChannelProgressDraftLabel({ random: () => 0.99 })).toBe(
+      DEFAULT_PROGRESS_DRAFT_LABELS.at(-1),
+    );
+  });
+
+  it("supports explicit progress labels and custom label sets", () => {
+    expect(
+      resolveChannelProgressDraftLabel({
+        entry: { streaming: { progress: { label: "Crunching" } } },
+      }),
+    ).toBe("Crunching");
+    expect(
+      resolveChannelProgressDraftLabel({
+        entry: { streaming: { progress: { labels: ["Pearling"] } } },
+        random: () => 0.5,
+      }),
+    ).toBe("Pearling");
+    expect(
+      resolveChannelProgressDraftLabel({
+        entry: { streaming: { progress: { label: false } } },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("formats bounded progress draft text", () => {
+    const entry = { streaming: { progress: { label: "Shelling", maxLines: 2 } } };
+    expect(resolveChannelProgressDraftMaxLines(entry)).toBe(2);
+    expect(
+      formatChannelProgressDraftText({
+        entry,
+        lines: [" tool: read ", "patch applied", "tests done"],
+        formatLine: (line) => `\`${line}\``,
+      }),
+    ).toBe("Shelling\n• `patch applied`\n• `tests done`");
   });
 });

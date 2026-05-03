@@ -1,7 +1,10 @@
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  formatChannelProgressDraftText,
+  resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-streaming";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
@@ -50,7 +53,7 @@ export function createDiscordDraftPreviewController(params: {
         channelId: params.deliverChannelId,
         maxChars: draftMaxChars,
         replyToMessageId: () => params.replyReference.peek(),
-        minInitialChars: 30,
+        minInitialChars: discordStreamMode === "progress" ? 0 : 30,
         throttleMs: 1200,
         log: params.log,
         warn: params.log,
@@ -69,8 +72,15 @@ export function createDiscordDraftPreviewController(params: {
   let finalDeliveryHandled = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
+  const suppressDefaultToolProgressMessages =
+    Boolean(draftStream) &&
+    resolveChannelStreamingSuppressDefaultToolProgressMessages(params.discordConfig, {
+      draftStreamActive: true,
+      previewToolProgressEnabled,
+    });
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: string[] = [];
+  const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
 
   const resetProgressState = () => {
     lastPartialText = "";
@@ -91,6 +101,7 @@ export function createDiscordDraftPreviewController(params: {
   return {
     draftStream,
     previewToolProgressEnabled,
+    suppressDefaultToolProgressMessages,
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },
@@ -101,6 +112,25 @@ export function createDiscordDraftPreviewController(params: {
       finalizedViaPreviewMessage = true;
     },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
+    async startProgressDraft() {
+      if (!draftStream || discordStreamMode !== "progress") {
+        return;
+      }
+      const previewText = formatChannelProgressDraftText({
+        entry: params.discordConfig,
+        lines: [],
+        seed: progressSeed,
+      });
+      if (!previewText || previewText === lastPartialText) {
+        return;
+      }
+      lastPartialText = previewText;
+      draftText = previewText;
+      hasStreamedMessage = true;
+      draftChunker?.reset();
+      draftStream.update(previewText);
+      await draftStream.flush();
+    },
     pushToolProgress(line?: string) {
       if (!draftStream || !previewToolProgressEnabled || previewToolProgressSuppressed) {
         return;
@@ -113,11 +143,14 @@ export function createDiscordDraftPreviewController(params: {
       if (previous === normalized) {
         return;
       }
-      previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
-      const previewText = [
-        "Working…",
-        ...previewToolProgressLines.map((entry) => `• ${entry}`),
-      ].join("\n");
+      previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+        -resolveChannelProgressDraftMaxLines(params.discordConfig),
+      );
+      const previewText = formatChannelProgressDraftText({
+        entry: params.discordConfig,
+        lines: previewToolProgressLines,
+        seed: progressSeed,
+      });
       lastPartialText = previewText;
       draftText = previewText;
       hasStreamedMessage = true;
@@ -168,6 +201,9 @@ export function createDiscordDraftPreviewController(params: {
         return;
       }
       if (cleaned === lastPartialText) {
+        return;
+      }
+      if (discordStreamMode === "progress") {
         return;
       }
       previewToolProgressSuppressed = true;

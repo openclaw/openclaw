@@ -7,6 +7,8 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
+  formatChannelProgressDraftText,
+  resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
@@ -414,7 +416,8 @@ export const dispatchTelegramMessage = async ({
     replyToMode !== "off" && typeof msg.message_id === "number"
       ? (replyQuoteMessageId ?? msg.message_id)
       : undefined;
-  const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
+  const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
+  const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
@@ -485,12 +488,17 @@ export const dispatchTelegramMessage = async ({
     if (previous === normalized) {
       return;
     }
-    previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
-    const previewText = [
-      "Working…",
-      ...previewToolProgressLines.map((entry) => `• ${formatProgressAsMarkdownCode(entry)}`),
-    ].join("\n");
+    previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+      -resolveChannelProgressDraftMaxLines(telegramCfg),
+    );
+    const previewText = formatChannelProgressDraftText({
+      entry: telegramCfg,
+      lines: previewToolProgressLines,
+      seed: progressSeed,
+      formatLine: formatProgressAsMarkdownCode,
+    });
     answerLane.lastPartialText = previewText;
+    answerLane.hasStreamedMessage = true;
     answerLane.stream.update(previewText);
   };
   let splitReasoningOnNextStream = false;
@@ -570,6 +578,9 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     if (lane === answerLane) {
+      if (streamMode === "progress") {
+        return;
+      }
       previewToolProgressSuppressed = true;
       previewToolProgressLines = [];
     }
@@ -1056,6 +1067,25 @@ export const dispatchTelegramMessage = async ({
                 replyOptions: {
                   skillFilter,
                   disableBlockStreaming,
+                  onReplyStart:
+                    answerLane.stream && streamMode === "progress"
+                      ? () =>
+                          enqueueDraftLaneEvent(async () => {
+                            const previewText = formatChannelProgressDraftText({
+                              entry: telegramCfg,
+                              lines: [],
+                              seed: progressSeed,
+                              formatLine: formatProgressAsMarkdownCode,
+                            });
+                            if (!previewText || previewText === answerLane.lastPartialText) {
+                              return;
+                            }
+                            answerLane.lastPartialText = previewText;
+                            answerLane.hasStreamedMessage = true;
+                            answerLane.stream?.update(previewText);
+                            await answerLane.stream?.flush();
+                          })
+                      : undefined,
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream
                       ? (payload) =>
@@ -1082,6 +1112,11 @@ export const dispatchTelegramMessage = async ({
                           previewToolProgressLines = [];
                           if (skipNextAnswerMessageStartRotation) {
                             skipNextAnswerMessageStartRotation = false;
+                            activePreviewLifecycleByLane.answer = "transient";
+                            retainPreviewOnCleanupByLane.answer = false;
+                            return;
+                          }
+                          if (streamMode === "progress") {
                             activePreviewLifecycleByLane.answer = "transient";
                             retainPreviewOnCleanupByLane.answer = false;
                             return;

@@ -565,6 +565,7 @@ export async function processDiscordMessage(
         }
         await replyPipeline.typingCallbacks?.onReplyStart();
         await statusReactions.setThinking();
+        await draftPreview.startProgressDraft();
       },
     });
 
@@ -643,9 +644,8 @@ export async function processDiscordMessage(
                   ? draftPreview.handleAssistantMessageBoundary
                   : undefined,
                 onModelSelected,
-                suppressDefaultToolProgressMessages: draftPreview.previewToolProgressEnabled
-                  ? true
-                  : undefined,
+                suppressDefaultToolProgressMessages:
+                  draftPreview.suppressDefaultToolProgressMessages ? true : undefined,
                 onReasoningStream: async () => {
                   await statusReactions.setThinking();
                 },
