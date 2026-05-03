@@ -258,10 +258,43 @@ const McpServerSchema = z
   })
   .catchall(z.unknown());
 
+const McpToolAnnotationSchema = z
+  .object({
+    costWeight: z.number().finite().positive().optional(),
+    irreversible: z.boolean().optional(),
+  })
+  .strict();
+
+const McpRuntimeGuardrailsSchema = z
+  .object({
+    circuitBreaker: z
+      .object({
+        enabled: z.boolean().optional(),
+        failureThreshold: z.number().int().positive().optional(),
+        recoveryTimeoutMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+    budget: z
+      .object({
+        enabled: z.boolean().optional(),
+        warnAfterCallsPerSession: z.number().int().positive().optional(),
+        warnAfterWeightedCostPerSession: z.number().finite().positive().optional(),
+        warnAfterIrreversibleCallsPerSession: z.number().int().positive().optional(),
+        burstWindowMs: z.number().int().positive().optional(),
+        warnAfterCallsPerBurstWindow: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+    tools: z.record(z.string(), McpToolAnnotationSchema).optional(),
+  })
+  .strict();
+
 const McpConfigSchema = z
   .object({
     servers: z.record(z.string(), McpServerSchema).optional(),
     sessionIdleTtlMs: z.number().finite().min(0).optional(),
+    runtimeGuardrails: McpRuntimeGuardrailsSchema.optional(),
   })
   .strict()
   .optional();
