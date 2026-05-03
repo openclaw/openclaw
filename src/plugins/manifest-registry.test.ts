@@ -1133,6 +1133,48 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(false);
   });
 
+  it("fills missing official external catalog descriptors for partial npm channel configs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "wecom-openclaw-plugin",
+      channels: ["wecom"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        wecom: {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              corpId: { type: "string" },
+            },
+          },
+        },
+      },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "wecom-openclaw-plugin",
+        rootDir: dir,
+        origin: "global",
+        packageName: "@wecom/wecom-openclaw-plugin",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.channelConfigs?.wecom).toEqual(
+      expect.objectContaining({
+        label: "WeCom",
+        description: "Enterprise WeChat conversation channel.",
+        schema: expect.objectContaining({
+          additionalProperties: false,
+          properties: {
+            corpId: { type: "string" },
+          },
+        }),
+      }),
+    );
+  });
+
   it("drops prototype-polluting channel config keys from plugin manifests", () => {
     const dir = makeTempDir();
     writeTextFile(

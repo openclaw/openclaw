@@ -322,7 +322,37 @@ function mergeCatalogChannelConfigs(params: {
   }
   for (const [key, value] of Object.entries(params.manifestChannelConfigs ?? {})) {
     if (!isBlockedObjectKey(key)) {
-      merged[key] = value;
+      const catalogValue = merged[key];
+      merged[key] = catalogValue
+        ? {
+            ...catalogValue,
+            ...value,
+            schema: value.schema ?? catalogValue.schema,
+            ...(catalogValue.uiHints || value.uiHints
+              ? {
+                  uiHints: {
+                    ...catalogValue.uiHints,
+                    ...value.uiHints,
+                  },
+                }
+              : {}),
+            ...((value.runtime ?? catalogValue.runtime)
+              ? { runtime: value.runtime ?? catalogValue.runtime }
+              : {}),
+            ...((value.label ?? catalogValue.label)
+              ? { label: value.label ?? catalogValue.label }
+              : {}),
+            ...((value.description ?? catalogValue.description)
+              ? { description: value.description ?? catalogValue.description }
+              : {}),
+            ...((value.preferOver ?? catalogValue.preferOver)
+              ? { preferOver: value.preferOver ?? catalogValue.preferOver }
+              : {}),
+            ...((value.commands ?? catalogValue.commands)
+              ? { commands: value.commands ?? catalogValue.commands }
+              : {}),
+          }
+        : value;
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;

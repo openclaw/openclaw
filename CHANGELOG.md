@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/catalog: merge official external catalog descriptors into partial package channel config metadata, so lagging WeCom/Yuanbao manifests keep their own schema while still exposing host-supplied labels and setup text. Thanks @vincentkoc.
 - Plugins/catalog: supplement lagging official external WeCom and Yuanbao npm manifests with channel config descriptors and declared tool contracts from the OpenClaw catalog, so trusted package sweeps no longer fail because external package metadata trails the host contract. Thanks @vincentkoc.
 - Plugins/install: let trusted official `@openclaw/*` catalog installs recover when npm `latest` points at a prerelease by falling back to the newest stable version, or by allowing prerelease-only launch packages with a warning instead of making beta/development plugin sweeps fail at install time. Thanks @vincentkoc.
 - Google Meet: grant Chrome media permissions against the actual Meet tab, start the local realtime audio bridge only after Meet joins, expose realtime transcripts in status/logs, and force explicit audio responses with current OpenAI realtime output-audio events so BlackHole capture does not keep the OpenClaw participant muted or silent.
