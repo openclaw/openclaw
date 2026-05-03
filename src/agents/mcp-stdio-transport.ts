@@ -123,7 +123,7 @@ export class OpenClawStdioClientTransport implements Transport {
       }
       await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
       if (processToClose.exitCode === null && processToClose.pid) {
-        killProcessTree(processToClose.pid);
+        killProcessTree(processToClose.pid, { detached: process.platform !== "win32" });
         await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
       }
     }

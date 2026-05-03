@@ -32,7 +32,7 @@ export function killProcessTree(
     return;
   }
 
-  killProcessTreeUnix(pid, graceMs, opts?.detached !== false);
+  killProcessTreeUnix(pid, graceMs, opts?.detached === true);
 }
 
 function normalizeGraceMs(value?: number): number {
