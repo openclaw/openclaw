@@ -209,11 +209,11 @@ function isTrustedOfficialNpmPluginInstall(params: {
   if (!requested) {
     return false;
   }
-  // Match the policy enforced for trusted catalog installs in
-  // src/plugins/provider-install-catalog.ts (require exact-version pin and
-  // a non-empty expectedIntegrity hash). Without these, a name-only spec
-  // would resolve to npm's "latest" tag and bypass the security scan if the
-  // upstream package is ever compromised.
+  // Trusting a name-only or dist-tag spec means npm resolves it to "latest"
+  // at install time, and the scan bypass would also cover a future malicious
+  // release if the upstream @openclaw scope is ever compromised. Require the
+  // caller to have committed to a specific resolved version + integrity hash
+  // before granting the trusted-source scan bypass.
   if (requested.selectorKind !== "exact-version") {
     return false;
   }

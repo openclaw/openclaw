@@ -344,33 +344,34 @@ describe("installPluginFromNpmSpec", () => {
 
   it.each([
     {
-      spec: "@openclaw/acpx",
+      packageName: "@openclaw/acpx",
       pluginId: "acpx",
       indexJs: `import { spawn } from "node:child_process";\nspawn("codex-acp", []);`,
     },
     {
-      spec: "@openclaw/codex",
+      packageName: "@openclaw/codex",
       pluginId: "codex",
       indexJs: `import { spawn } from "node:child_process";\nspawn("codex", ["app-server"]);`,
     },
     {
-      spec: "@openclaw/google-meet",
+      packageName: "@openclaw/google-meet",
       pluginId: "google-meet",
       indexJs: `import { spawnSync } from "node:child_process";\nspawnSync("node", ["bridge.js"]);`,
     },
     {
-      spec: "@openclaw/voice-call",
+      packageName: "@openclaw/voice-call",
       pluginId: "voice-call",
       indexJs: `import { spawn } from "node:child_process";\nspawn("ngrok", ["http", "3000"]);`,
     },
   ])(
-    "allows official npm plugin $spec with reviewed launch code",
-    async ({ spec, pluginId, indexJs }) => {
+    "allows pinned official npm plugin $packageName with reviewed launch code when integrity is provided",
+    async ({ packageName, pluginId, indexJs }) => {
       const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
       const warnings: string[] = [];
+      const spec = `${packageName}@2026.5.2`;
       mockNpmViewAndInstall({
         spec,
-        packageName: spec,
+        packageName,
         version: "2026.5.2",
         pluginId,
         npmRoot,
@@ -380,6 +381,7 @@ describe("installPluginFromNpmSpec", () => {
       const result = await installPluginFromNpmSpec({
         spec,
         npmDir: npmRoot,
+        expectedIntegrity: "sha512-plugin-test",
         logger: {
           info: () => {},
           warn: (msg: string) => warnings.push(msg),
@@ -401,6 +403,49 @@ describe("installPluginFromNpmSpec", () => {
         npmRoot,
         spec,
       });
+    },
+  );
+
+  it.each([
+    {
+      label: "bare spec (no version selector)",
+      spec: "@openclaw/codex",
+      expectedIntegrity: "sha512-plugin-test" as string | undefined,
+    },
+    {
+      label: "dist-tag spec resolves to latest",
+      spec: "@openclaw/codex@latest",
+      expectedIntegrity: "sha512-plugin-test" as string | undefined,
+    },
+    {
+      label: "exact version without expectedIntegrity",
+      spec: "@openclaw/codex@2026.5.2",
+      expectedIntegrity: undefined,
+    },
+  ])(
+    "blocks official npm plugin install with reviewed launch code when trust prerequisites are missing: $label",
+    async ({ spec, expectedIntegrity }) => {
+      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+      mockNpmViewAndInstall({
+        spec,
+        packageName: "@openclaw/codex",
+        version: "2026.5.2",
+        pluginId: "codex",
+        npmRoot,
+        indexJs: `import { spawn } from "node:child_process";\nspawn("codex", ["app-server"]);`,
+      });
+
+      const result = await installPluginFromNpmSpec({
+        spec,
+        npmDir: npmRoot,
+        ...(expectedIntegrity ? { expectedIntegrity } : {}),
+        logger: { info: () => {}, warn: () => {} },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      }
     },
   );
 
