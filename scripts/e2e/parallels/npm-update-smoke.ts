@@ -24,9 +24,9 @@ import {
   type Provider,
   type ProviderAuth,
 } from "./common.ts";
+import { runWindowsBackgroundPowerShell } from "./guest-transports.ts";
 import { linuxUpdateScript, macosUpdateScript, windowsUpdateScript } from "./npm-update-scripts.ts";
 import { ensureVmRunning, resolveUbuntuVmName } from "./parallels-vm.ts";
-import { encodePowerShell } from "./powershell.ts";
 
 interface NpmUpdateOptions {
   packageSpec: string;
@@ -40,9 +40,11 @@ interface NpmUpdateOptions {
 
 interface Job {
   done: boolean;
+  durationMs: number;
   label: string;
   logPath: string;
   promise: Promise<number>;
+  startedAt: number;
 }
 
 interface UpdateJobContext {
@@ -60,6 +62,13 @@ interface NpmUpdateSummary {
   runDir: string;
   fresh: Record<Platform, string>;
   update: Record<Platform, { status: string; version: string }>;
+  timings: Array<{
+    durationMs: number;
+    label: string;
+    logPath: string;
+    phase: "fresh" | "update";
+    status: string;
+  }>;
 }
 
 const macosVm = "macOS Tahoe";
@@ -163,6 +172,7 @@ class NpmUpdateSmoke {
   private freshStatus = platformRecord("skip");
   private updateStatus = platformRecord("skip");
   private updateVersion = platformRecord("skip");
+  private timings: NpmUpdateSummary["timings"] = [];
 
   constructor(private options: NpmUpdateOptions) {
     this.auth = resolveProviderAuth({
@@ -236,6 +246,7 @@ class NpmUpdateSmoke {
       const status = (await job.promise) === 0 ? "pass" : "fail";
       const platform = this.platformFromLabel(job.label);
       this.freshStatus[platform] = status;
+      this.recordTiming("fresh", job, status);
       if (status !== "pass") {
         this.dumpLogTail(job.logPath);
         die(`${job.label} fresh baseline failed`);
@@ -270,11 +281,14 @@ class NpmUpdateSmoke {
     ];
     const job: Job = {
       done: false,
+      durationMs: 0,
       label,
       logPath,
       promise: Promise.resolve(1),
+      startedAt: Date.now(),
     };
     job.promise = this.spawnLogged("pnpm", args, logPath, env).finally(() => {
+      job.durationMs = Date.now() - job.startedAt;
       job.done = true;
     });
     return job;
@@ -323,6 +337,7 @@ class NpmUpdateSmoke {
       const status = (await job.promise) === 0 ? "pass" : "fail";
       this.updateStatus[platform] = status;
       this.updateVersion[platform] = await this.extractLastVersion(job.logPath);
+      this.recordTiming("update", job, status);
       if (status !== "pass") {
         this.dumpLogTail(job.logPath);
         die(`${job.label} update failed`);
@@ -338,9 +353,11 @@ class NpmUpdateSmoke {
     const logPath = path.join(this.runDir, `${platform}-update.log`);
     const job: Job = {
       done: false,
+      durationMs: 0,
       label,
       logPath,
       promise: Promise.resolve(1),
+      startedAt: Date.now(),
     };
     job.promise = (async () => {
       let log = "";
@@ -364,6 +381,7 @@ class NpmUpdateSmoke {
         clearTimeout(timeout);
       }
     })().finally(() => {
+      job.durationMs = Date.now() - job.startedAt;
       job.done = true;
     });
     return job;
@@ -572,145 +590,13 @@ class NpmUpdateSmoke {
     timeoutMs: number,
     ctx: UpdateJobContext,
   ): Promise<void> {
-    const fileBase = `openclaw-parallels-npm-update-windows-${process.pid}-${Date.now()}`;
-    const pathsScript = `$base = Join-Path $env:TEMP '${fileBase}'
-$scriptPath = "$base.ps1"
-$logPath = "$base.log"
-$donePath = "$base.done"
-$exitPath = "$base.exit"`;
-    const payload = `$ErrorActionPreference = 'Stop'
-$PSNativeCommandUseErrorActionPreference = $false
-${pathsScript}
-try {
-  & {
-${script}
-  } *>&1 | ForEach-Object { $_ | Out-String | Add-Content -Path $logPath -Encoding UTF8 }
-  Set-Content -Path $exitPath -Value '0' -Encoding UTF8
-} catch {
-  $_ | Out-String | Add-Content -Path $logPath -Encoding UTF8
-  Set-Content -Path $exitPath -Value '1' -Encoding UTF8
-} finally {
-  Set-Content -Path $donePath -Value 'done' -Encoding UTF8
-}`;
-    const writeScript = run(
-      "prlctl",
-      [
-        "exec",
-        windowsVm,
-        "--current-user",
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodePowerShell(`${pathsScript}
-Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue
-[System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))
-if (!(Test-Path $scriptPath)) { throw "background update script was not written" }`),
-      ],
-      { check: false, input: payload, timeoutMs: Math.min(timeoutMs, 120_000) },
-    );
-    if (writeScript.stdout) {
-      ctx.append(writeScript.stdout);
-    }
-    if (writeScript.stderr) {
-      ctx.append(writeScript.stderr);
-    }
-    if (writeScript.status !== 0) {
-      throw new Error(
-        `Windows update background script write failed with exit code ${writeScript.status}`,
-      );
-    }
-
-    const launchStatus = await this.runStreamingToJobLog(
-      "prlctl",
-      [
-        "exec",
-        windowsVm,
-        "--current-user",
-        "cmd.exe",
-        "/d",
-        "/s",
-        "/c",
-        `start "" /min powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%TEMP%\\${fileBase}.ps1"`,
-      ],
-      20_000,
-      ctx,
-    );
-    if (launchStatus !== 0 && launchStatus !== 124) {
-      throw new Error(`Windows update background launch failed with exit code ${launchStatus}`);
-    }
-
-    const deadline = Date.now() + timeoutMs;
-    let lastLogOffset = 0;
-    while (Date.now() < deadline) {
-      const poll = run(
-        "prlctl",
-        [
-          "exec",
-          windowsVm,
-          "--current-user",
-          "powershell.exe",
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-EncodedCommand",
-          encodePowerShell(`${pathsScript}
-$offset = ${lastLogOffset}
-if (Test-Path $logPath) {
-  $bytes = [System.IO.File]::ReadAllBytes($logPath)
-  if ($bytes.Length -gt $offset) {
-    "__OPENCLAW_LOG_OFFSET__:$($bytes.Length)"
-    [System.Text.Encoding]::UTF8.GetString($bytes, $offset, $bytes.Length - $offset)
-  }
-}
-if (Test-Path $donePath) {
-  $backgroundExit = if (Test-Path $exitPath) { (Get-Content -Path $exitPath -Raw).Trim() } else { '0' }
-  "__OPENCLAW_BACKGROUND_EXIT__:$backgroundExit"
-  '__OPENCLAW_BACKGROUND_DONE__'
-  if ($backgroundExit -ne '0') { exit 23 }
-  exit 0
-}`),
-        ],
-        { check: false, timeoutMs: Math.min(30_000, Math.max(1_000, deadline - Date.now())) },
-      );
-      if (poll.stdout) {
-        ctx.append(poll.stdout);
-      }
-      if (poll.stderr) {
-        ctx.append(poll.stderr);
-      }
-      const offsetMatch = poll.stdout.match(/__OPENCLAW_LOG_OFFSET__:(\d+)/);
-      if (offsetMatch) {
-        lastLogOffset = Number(offsetMatch[1]);
-      }
-      if (poll.stdout.includes("__OPENCLAW_BACKGROUND_DONE__")) {
-        const exitMatch = poll.stdout.match(/__OPENCLAW_BACKGROUND_EXIT__:(\S+)/);
-        const backgroundExit = exitMatch?.[1] ?? "0";
-        if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
-          throw new Error("Windows update failed");
-        }
-        run(
-          "prlctl",
-          [
-            "exec",
-            windowsVm,
-            "--current-user",
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-EncodedCommand",
-            encodePowerShell(`${pathsScript}
-Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue`),
-          ],
-          { check: false, timeoutMs: 30_000 },
-        );
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
-    }
-    throw new Error(`Windows update timed out after ${updateTimeoutSeconds}s`);
+    await runWindowsBackgroundPowerShell({
+      append: (chunk) => ctx.append(chunk),
+      label: "Windows update",
+      script,
+      timeoutMs,
+      vmName: windowsVm,
+    });
   }
 
   private async guestLinux(
@@ -866,6 +752,16 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
     }
   }
 
+  private recordTiming(phase: "fresh" | "update", job: Job, status: string): void {
+    this.timings.push({
+      durationMs: job.durationMs || Date.now() - job.startedAt,
+      label: job.label,
+      logPath: job.logPath,
+      phase,
+      status,
+    });
+  }
+
   private async writeSummary(): Promise<string> {
     const summary: NpmUpdateSummary = {
       currentHead: this.currentHeadShort,
@@ -879,6 +775,7 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
         macos: { status: this.updateStatus.macos, version: this.updateVersion.macos },
         windows: { status: this.updateStatus.windows, version: this.updateVersion.windows },
       },
+      timings: this.timings,
       updateExpected: this.updateExpectedNeedle,
       updateTarget: this.updateTargetEffective,
     };
