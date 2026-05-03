@@ -256,6 +256,197 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Alpha");
   });
 
+  // The gateway broadcasts chat deltas as monotonic full-snapshot text. When
+  // the agent emits text, then a tool, then more text within the same run, the
+  // tool-stream handler commits the pre-tool slice into chatStreamSegments and
+  // bumps chatStreamCommittedLen. The next chat delta still arrives as the
+  // full pre-tool + post-tool snapshot, so handleChatEvent must slice off the
+  // committed prefix before assigning to chatStream — otherwise the pre-tool
+  // text would render twice (once in the segment above the tool card, once in
+  // the active stream below it). See PR #54374 review history for context.
+  it("slices off committed prefix from delta after a tool boundary", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamCommittedLen: "Before tool".length,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Before toolAfter tool" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("After tool");
+  });
+
+  it("slices subsequent deltas relative to the committed prefix", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "After tool",
+      chatStreamCommittedLen: "Before tool".length,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Before toolAfter tool more" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("After tool more");
+  });
+
+  // Regression for clawsweeper review on PR #74498:
+  // The gateway's throttled emitChatDelta can re-broadcast an unchanged
+  // full-snapshot after a tool boundary (e.g. when the throttle window
+  // elapses but no new assistant text has been produced yet). With a `>`
+  // guard, an exact-length match would replay the full pre-tool prefix
+  // back into chatStream and recreate the duplicate render below the tool
+  // card. Treat next.length === committedLen as an empty post-tool slice.
+  it("collapses exact committed-prefix re-broadcasts to an empty post-tool slice", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamCommittedLen: "Before tool".length,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Before tool" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("");
+  });
+
+  it("falls back to full delta text when next is shorter than committed length", () => {
+    // Defensive fallback: if a stale or out-of-order delta arrives whose full
+    // text is shorter than chatStreamCommittedLen (e.g. after an aborted run
+    // mid-cleanup), keep the raw text rather than producing an empty/sliced
+    // stream that would silently drop content.
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamCommittedLen: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "short" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("short");
+  });
+
+  it("does not slice when no committed prefix exists", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "hello world" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("hello world");
+    expect(state.chatStreamCommittedLen ?? 0).toBe(0);
+  });
+
+  it.each(["final", "aborted", "error"] as const)(
+    "resets chatStreamCommittedLen on owned %s",
+    (terminalState) => {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "After tool",
+        chatStreamStartedAt: 100,
+        chatStreamCommittedLen: 11,
+      });
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: "main",
+        state: terminalState,
+      };
+      handleChatEvent(state, payload);
+      expect(state.chatStreamCommittedLen).toBe(0);
+    },
+  );
+
+  // Regression: when a final/aborted payload carries no message and has to
+  // fall back to the streamed text, chatStream only holds the post-tool slice
+  // after a tool boundary. Without rejoining the committed pre-tool segments,
+  // the persisted assistant message would silently drop pre-tool text that
+  // the user already saw rendered above the tool card.
+  it.each(["final", "aborted"] as const)(
+    "rejoins committed segments into the persisted assistant message on owned %s without payload message",
+    (terminalState) => {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "After tool",
+        chatStreamStartedAt: 100,
+        chatStreamCommittedLen: "Before tool".length,
+        chatStreamSegments: [{ text: "Before tool", ts: 90 }],
+      });
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: "main",
+        state: terminalState,
+      };
+      handleChatEvent(state, payload);
+      expect(state.chatMessages).toHaveLength(1);
+      expect(state.chatMessages[0]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "Before toolAfter tool" }],
+      });
+    },
+  );
+
+  it("persists only chatStream when there are no committed segments on owned final without message", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Plain reply",
+      chatStreamStartedAt: 100,
+      chatStreamCommittedLen: 0,
+      chatStreamSegments: [],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+    handleChatEvent(state, payload);
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Plain reply" }],
+    });
+  });
+
   it("returns final for another run when payload has no message", () => {
     const state = createActiveStreamingState();
     const payload: ChatEventPayload = {

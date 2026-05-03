@@ -32,6 +32,19 @@ type ToolStreamHost = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatStreamSegments: Array<{ text: string; ts: number }>;
+  /**
+   * Cumulative length of post-tool stream chunks already committed to
+   * `chatStreamSegments` for the current run. The gateway broadcasts chat
+   * deltas as full-snapshot text (a monotonically growing buffer including
+   * pre-tool content), so when a new delta arrives after a tool boundary,
+   * `handleChatEvent` slices off this many leading characters before
+   * assigning to `chatStream`. This avoids double-rendering text that is
+   * already shown in the committed segment above the tool card.
+   *
+   * Reset to 0 by `resetToolStream` and on chat run termination
+   * (`final` / `aborted` / `error`) in `handleChatEvent`.
+   */
+  chatStreamCommittedLen: number;
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
@@ -246,6 +259,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  host.chatStreamCommittedLen = 0;
 }
 
 export type CompactionStatus = {
@@ -507,6 +521,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       host.chatStream &&
       host.chatStream.trim().length > 0
     ) {
+      // Bump the committed prefix length BEFORE clearing the stream so the
+      // next chat-delta full-snapshot can be sliced into a post-tool segment
+      // (see `handleChatEvent`). `host.chatStream` already contains only the
+      // post-tool slice from the previous tool boundary (or the full text if
+      // this is the first tool), so we add its length to the running total.
+      host.chatStreamCommittedLen = (host.chatStreamCommittedLen ?? 0) + host.chatStream.length;
       host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
       host.chatStream = null;
       host.chatStreamStartedAt = null;

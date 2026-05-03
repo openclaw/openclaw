@@ -18,6 +18,7 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     chatStream: null,
     chatStreamStartedAt: null,
     chatStreamSegments: [],
+    chatStreamCommittedLen: 0,
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [],
     chatToolMessages: [],
@@ -274,5 +275,119 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionClearTimer).toBeNull();
 
     vi.useRealTimers();
+  });
+});
+
+// Verifies the gateway-broadcast contract bridge: gateway sends chat deltas as
+// monotonic full snapshots (pre-tool + post-tool concatenated). When a tool
+// starts mid-run, handleAgentEvent must commit the active stream into
+// chatStreamSegments AND record the snapshot length so handleChatEvent can
+// slice the next delta into post-tool-only text. Without the length bump, the
+// pre-tool prefix renders twice (once committed above the tool card, once in
+// the active stream below it). See PR #54374 review history.
+describe("app-tool-stream tool boundary segment offset bookkeeping", () => {
+  it("bumps chatStreamCommittedLen when committing a stream segment on tool start", () => {
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream: "Before tool",
+      chatStreamStartedAt: 100,
+      chatStreamCommittedLen: 0,
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "read",
+        toolCallId: "tool-1",
+      }),
+    );
+
+    expect(host.chatStreamSegments).toHaveLength(1);
+    expect(host.chatStreamSegments[0]?.text).toBe("Before tool");
+    expect(host.chatStream).toBe(null);
+    expect(host.chatStreamStartedAt).toBe(null);
+    expect(host.chatStreamCommittedLen).toBe("Before tool".length);
+  });
+
+  it("accumulates committed length across multiple tool boundaries in one run", () => {
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream: "Before tool",
+      chatStreamStartedAt: 100,
+      chatStreamCommittedLen: 0,
+    });
+
+    // First tool boundary commits "Before tool" (length 11).
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "read",
+        toolCallId: "tool-1",
+      }),
+    );
+    expect(host.chatStreamCommittedLen).toBe(11);
+
+    // Simulate handleChatEvent placing the next post-tool slice into chatStream
+    // (the slice handleChatEvent computes from the gateway's full snapshot).
+    host.chatStream = "After first";
+    host.chatStreamStartedAt = 200;
+
+    // Second tool boundary commits another "After first" (length 11). Total
+    // committed prefix in upstream snapshot = 11 + 11 = 22 characters.
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "start",
+        name: "edit",
+        toolCallId: "tool-2",
+      }),
+    );
+
+    expect(host.chatStreamSegments).toHaveLength(2);
+    expect(host.chatStreamSegments[0]?.text).toBe("Before tool");
+    expect(host.chatStreamSegments[1]?.text).toBe("After first");
+    expect(host.chatStreamCommittedLen).toBe(22);
+  });
+
+  it("does not bump chatStreamCommittedLen when there is no active stream text to commit", () => {
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamCommittedLen: 0,
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "read",
+        toolCallId: "tool-1",
+      }),
+    );
+
+    expect(host.chatStreamSegments).toHaveLength(0);
+    expect(host.chatStreamCommittedLen).toBe(0);
+  });
+
+  it("does not commit or bump for whitespace-only stream text", () => {
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream: "   ",
+      chatStreamCommittedLen: 0,
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "read",
+        toolCallId: "tool-1",
+      }),
+    );
+
+    expect(host.chatStreamSegments).toHaveLength(0);
+    expect(host.chatStreamCommittedLen).toBe(0);
   });
 });
