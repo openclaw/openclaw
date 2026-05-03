@@ -85,6 +85,16 @@ describe("isCacheTtlEligibleProvider", () => {
       ),
     ).toBe(true);
   });
+
+  it("allows openai-completions providers", () => {
+    expect(isCacheTtlEligibleProvider("openai", "gpt-4o", "openai-completions")).toBe(true);
+    expect(
+      isCacheTtlEligibleProvider("astroncodingplan", "astron-code-latest", "openai-completions"),
+    ).toBe(true);
+    expect(isCacheTtlEligibleProvider("deepseek", "deepseek-r1", "openai-completions")).toBe(
+      true,
+    );
+  });
 });
 
 describe("readLastCacheTtlTimestamp", () => {
