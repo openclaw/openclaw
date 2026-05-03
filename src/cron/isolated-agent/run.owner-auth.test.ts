@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
+  isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
   resetRunCronIsolatedAgentTurnHarness,
+  resolveConfiguredModelRefMock,
   resolveDeliveryTargetMock,
+  runCliAgentMock,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -40,6 +43,31 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
         kind: "agentTurn",
         message: "check owner tools",
         toolsAllow,
+      },
+    } as never,
+  };
+}
+
+function makeCliRuntimeParams() {
+  const params = makeParams();
+  const job = params.job as Record<string, unknown>;
+  return {
+    ...params,
+    cfg: {
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: "anthropic/claude-opus-4-6",
+        },
+      },
+    },
+    job: {
+      ...job,
+      payload: {
+        kind: "agentTurn",
+        message: "check owner tools",
+        allowUnsafeExternalContent: true,
+        externalContentSource: "webhook",
       },
     } as never,
   };
@@ -82,6 +110,33 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const senderIsOwner = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.senderIsOwner;
       expect(senderIsOwner).toBe(false);
+    },
+  );
+
+  it(
+    "passes senderIsOwner=false to isolated cron CLI runs",
+    { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
+    async () => {
+      isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+      resolveConfiguredModelRefMock.mockReturnValue({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "done" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+      await runCronIsolatedAgentTurn(makeCliRuntimeParams());
+
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+      expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+        provider: "claude-cli",
+        model: "claude-opus-4-6",
+        trigger: "cron",
+        senderIsOwner: false,
+      });
     },
   );
 
