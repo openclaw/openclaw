@@ -46,18 +46,27 @@ const SUDO_OPTIONS_WITH_VALUE = new Set([
 ]);
 const SUDO_STANDALONE_OPTIONS = new Set([
   "-A",
+  "-B",
   "-b",
   "-E",
   "-H",
+  "-i",
+  "-N",
   "-n",
   "-P",
   "-S",
+  "-s",
   "--askpass",
   "--background",
+  "--bell",
   "--login",
+  "--no-update",
   "--non-interactive",
   "--preserve-env",
+  "--preserve-groups",
   "--reset-home",
+  "--set-home",
+  "--shell",
   "--stdin",
 ]);
 const SUDO_NON_EXEC_OPTIONS = new Set([
