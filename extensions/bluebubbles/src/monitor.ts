@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveBlueBubblesEffectiveAllowPrivateNetwork } from "./accounts.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import {
@@ -193,7 +194,7 @@ export async function handleBlueBubblesWebhookRequest(
         targets,
         res,
         isMatch: (target) => {
-          const token = target.account.config.password?.trim() ?? "";
+          const token = normalizeSecretInputString(target.account.config.password)?.trim() ?? "";
           return safeEqualAuthToken(guid, token);
         },
       });
