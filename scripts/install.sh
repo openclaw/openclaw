@@ -737,6 +737,7 @@ run_npm_global_install() {
         return $?
     fi
 
+    ui_info "Installing OpenClaw package"
     "${cmd[@]}" >"$log" 2>&1
 }
 
