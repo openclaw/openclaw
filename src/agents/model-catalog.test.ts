@@ -15,6 +15,7 @@ let augmentCatalogMock: ReturnType<typeof vi.fn>;
 let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
 let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn>;
 let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn>;
+let readFileMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
   shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
@@ -70,6 +71,11 @@ function mockSingleOpenAiCatalogModel() {
 
 describe("loadModelCatalog", () => {
   beforeAll(async () => {
+    readFileMock = vi.fn();
+    vi.doMock("node:fs/promises", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:fs/promises")>()),
+      readFile: readFileMock,
+    }));
     ensureOpenClawModelsJsonMock = vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false });
     vi.doMock("./models-config.js", () => ({
       ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
@@ -104,6 +110,10 @@ describe("loadModelCatalog", () => {
 
   beforeEach(() => {
     resetModelCatalogCacheForTest();
+    readFileMock.mockReset();
+    readFileMock.mockRejectedValue(
+      Object.assign(new Error("models.json missing"), { code: "ENOENT" }),
+    );
     ensureOpenClawModelsJsonMock.mockClear();
     augmentCatalogMock.mockClear();
     currentPluginMetadataSnapshotMock.mockReset();
@@ -117,6 +127,7 @@ describe("loadModelCatalog", () => {
   });
 
   afterAll(() => {
+    vi.doUnmock("node:fs/promises");
     vi.doUnmock("./models-config.js");
     vi.doUnmock("./agent-paths.js");
     vi.doUnmock("../plugins/provider-runtime.runtime.js");
@@ -215,6 +226,163 @@ describe("loadModelCatalog", () => {
     expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(discoverAuthStorage).toHaveBeenCalledWith("/tmp/openclaw", { readOnly: true });
+  });
+
+  it("filters suppressed built-ins from persisted read-only catalog rows", async () => {
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          "openai-codex": {
+            models: [
+              {
+                id: "gpt-5.3-codex-spark",
+                name: "GPT-5.3 Codex Spark",
+                reasoning: true,
+                contextWindow: 128000,
+                input: ["text"],
+              },
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                reasoning: true,
+                contextWindow: 272000,
+                input: ["text", "image"],
+              },
+            ],
+          },
+          openai: {
+            models: [
+              {
+                id: "gpt-5.3-codex-spark",
+                name: "GPT-5.3 Codex Spark",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(result).toEqual([
+      {
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        reasoning: true,
+        contextWindow: 272000,
+        input: ["text", "image"],
+        compat: undefined,
+      },
+    ]);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(augmentCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the registry when persisted read-only catalog has no model rows", async () => {
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          openai: {
+            modelOverrides: {
+              "gpt-4.1": {
+                contextWindow: 128000,
+              },
+            },
+          },
+        },
+      }),
+    );
+    const discoverAuthStorage = vi.fn(() => ({
+      getOAuthProviders: () => [],
+    }));
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage,
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(discoverAuthStorage).toHaveBeenCalledWith("/tmp/openclaw", { readOnly: true });
+  });
+
+  it("preserves registry defaults for minimal persisted read-only catalog rows", async () => {
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          custom: {
+            models: [{ id: "local-tiny" }],
+          },
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(result).toEqual([
+      {
+        provider: "custom",
+        id: "local-tiny",
+        name: "local-tiny",
+        reasoning: false,
+        contextWindow: 128000,
+        input: ["text"],
+        compat: undefined,
+      },
+    ]);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(augmentCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves provider context defaults for persisted read-only catalog rows", async () => {
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          custom: {
+            contextWindow: 262144,
+            models: [
+              { id: "inherits-provider-context" },
+              { id: "overrides-context", contextWindow: 65536 },
+            ],
+          },
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(result).toEqual([
+      {
+        provider: "custom",
+        id: "inherits-provider-context",
+        name: "inherits-provider-context",
+        reasoning: false,
+        contextWindow: 262144,
+        input: ["text"],
+        compat: undefined,
+      },
+      {
+        provider: "custom",
+        id: "overrides-context",
+        name: "overrides-context",
+        reasoning: false,
+        contextWindow: 65536,
+        input: ["text"],
+        compat: undefined,
+      },
+    ]);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
   it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
