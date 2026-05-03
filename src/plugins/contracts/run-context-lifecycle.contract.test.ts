@@ -118,6 +118,39 @@ describe("plugin run context lifecycle", () => {
     ).toEqual({ restored: true });
   });
 
+  it("allows run-context initialization during activating plugin registration", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const api = registry.createApi(
+      createPluginRecord({
+        id: "registration-run-context-plugin",
+        name: "Registration Run Context Plugin",
+      }),
+      { config },
+    );
+
+    expect(
+      api.setRunContext({
+        runId: "run-registration",
+        namespace: "state",
+        value: { initialized: true },
+      }),
+    ).toBe(true);
+    expect(
+      getPluginRunContext({
+        pluginId: "registration-run-context-plugin",
+        get: { runId: "run-registration", namespace: "state" },
+      }),
+    ).toEqual({ initialized: true });
+
+    api.clearRunContext({ runId: "run-registration", namespace: "state" });
+    expect(
+      getPluginRunContext({
+        pluginId: "registration-run-context-plugin",
+        get: { runId: "run-registration", namespace: "state" },
+      }),
+    ).toBeUndefined();
+  });
+
   it("keeps restored active registry state after stale async cleanup finishes", async () => {
     let releaseCleanup: (() => void) | undefined;
     let markCleanupStarted: (() => void) | undefined;

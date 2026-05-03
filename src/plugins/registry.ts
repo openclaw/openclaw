@@ -2194,10 +2194,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
     pluginRuntimeRecordById.set(record.id, record);
     const sideEffectGuard = createPluginSideEffectGuard(record.id);
+    const isLoadedRecordInRegistry = () =>
+      registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
+    const isActivatingLoadedRecord = () =>
+      registryParams.activateGlobalSideEffects !== false &&
+      record.enabled &&
+      record.status === "loaded" &&
+      !registry.plugins.some((plugin) => plugin.id === record.id);
     const shouldCommitWorkflowSideEffect = () =>
       sideEffectGuard.active &&
       !isPluginRegistryRetired(registry) &&
-      registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
+      (isLoadedRecordInRegistry() || isActivatingLoadedRecord());
     return buildPluginApi({
       id: record.id,
       name: record.name,
