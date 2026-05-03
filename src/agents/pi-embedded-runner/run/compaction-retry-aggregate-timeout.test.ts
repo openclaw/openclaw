@@ -69,10 +69,12 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
             }, 170_000);
           }),
       );
+      const onHeartbeat = vi.fn();
       const params = buildAggregateTimeoutParams({
         waitForCompactionRetry,
         isCompactionStillInFlight: () => compactionInFlight,
       });
+      params.onHeartbeat = onHeartbeat;
 
       const resultPromise = waitForCompactionRetryWithAggregateTimeout(params);
 
@@ -80,6 +82,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(false);
+      expect(onHeartbeat).toHaveBeenCalledTimes(2);
       expectClearedTimeoutState(params.onTimeout, false);
     });
   });
