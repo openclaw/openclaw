@@ -53,10 +53,5 @@ export const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
 export const SANDBOX_STATE_DIR = path.join(STATE_DIR, "sandbox");
 export const SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");
 export const SANDBOX_BROWSER_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "browsers.json");
-
-// Per-entry sharded directories — each container/browser gets its own JSON
-// file under these dirs, eliminating cross-session lock contention on the
-// monolithic registry files. The legacy *.json files above are migrated
-// into these dirs on first read and then removed.
 export const SANDBOX_CONTAINERS_DIR = path.join(SANDBOX_STATE_DIR, "containers");
 export const SANDBOX_BROWSERS_DIR = path.join(SANDBOX_STATE_DIR, "browsers");

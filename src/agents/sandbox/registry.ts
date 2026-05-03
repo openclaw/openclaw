@@ -3,12 +3,14 @@ import path from "node:path";
 import { z } from "zod";
 import { writeJsonAtomic } from "../../infra/json-files.js";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
+import { acquireSessionWriteLock } from "../session-write-lock.js";
 import {
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_BROWSERS_DIR,
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_REGISTRY_PATH,
 } from "./constants.js";
+import { hashTextSha256 } from "./hash.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
@@ -45,13 +47,12 @@ type RegistryEntry = {
   containerName: string;
 };
 
+type RegistryEntryPayload = RegistryEntry & Record<string, unknown>;
+
 type RegistryFile = {
-  entries: RegistryEntry[];
+  entries: RegistryEntryPayload[];
 };
 
-// Schemas are shared between the per-entry files (live writes) and the
-// legacy monolithic files (one-shot migration). Both shapes must validate
-// containerName; per-entry files are just the RegistryEntrySchema directly.
 const RegistryEntrySchema = z
   .object({
     containerName: z.string(),
@@ -71,25 +72,73 @@ function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegi
   };
 }
 
-// ── Per-entry file primitives ──────────────────────────────────────────
-//
-// Each container gets its own JSON file under the sharded directory.
-// Writes use writeJsonAtomic (tmp + rename) for crash-safety. No file
-// locks are needed — each concurrent writer only touches its own file,
-// so there is zero cross-session contention on the monolithic lock that
-// previously serialized every sandbox ensure/remove in the process tree.
-
-function entryFilePath(dir: string, containerName: string): string {
-  return path.join(dir, `${containerName}.json`);
+async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
+  const lock = await acquireSessionWriteLock({
+    sessionFile: registryPath,
+    allowReentrant: false,
+    timeoutMs: 60_000,
+  });
+  try {
+    return await fn();
+  } finally {
+    await lock.release();
+  }
 }
 
-async function readEntryFile<T extends RegistryEntry>(
+async function readLegacyRegistryFile(registryPath: string): Promise<RegistryFile | null> {
+  try {
+    const raw = await fs.readFile(registryPath, "utf-8");
+    const parsed = safeParseJsonWithSchema(RegistryFileSchema, raw) as RegistryFile | null;
+    return parsed;
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return { entries: [] };
+    }
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Failed to read sandbox registry file: ${registryPath}`, { cause: error });
+  }
+}
+
+export async function readRegistry(): Promise<SandboxRegistry> {
+  await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
+  const entries = await readShardedEntries<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR);
+  return {
+    entries: entries.map((entry) => normalizeSandboxRegistryEntry(entry)),
+  };
+}
+
+function shardedEntryFilePath(dir: string, containerName: string): string {
+  return path.join(dir, `${hashTextSha256(containerName)}.json`);
+}
+
+async function withEntryLock<T>(
+  dir: string,
+  containerName: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const entryPath = shardedEntryFilePath(dir, containerName);
+  const lock = await acquireSessionWriteLock({
+    sessionFile: entryPath,
+    allowReentrant: false,
+    timeoutMs: 60_000,
+  });
+  try {
+    return await fn();
+  } finally {
+    await lock.release();
+  }
+}
+
+async function readShardedEntry<T extends RegistryEntry>(
   dir: string,
   containerName: string,
 ): Promise<T | null> {
   let raw: string;
   try {
-    raw = await fs.readFile(entryFilePath(dir, containerName), "utf-8");
+    raw = await fs.readFile(shardedEntryFilePath(dir, containerName), "utf-8");
   } catch (error) {
     const code = (error as { code?: string } | null)?.code;
     if (code === "ENOENT") {
@@ -98,153 +147,155 @@ async function readEntryFile<T extends RegistryEntry>(
     throw error;
   }
   const parsed = safeParseJsonWithSchema(RegistryEntrySchema, raw) as T | null;
-  return parsed ?? null;
+  return parsed?.containerName === containerName ? parsed : null;
 }
 
-async function writeEntryFile(dir: string, entry: RegistryEntry): Promise<void> {
+async function writeShardedEntry(dir: string, entry: RegistryEntryPayload): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
-  await writeJsonAtomic(entryFilePath(dir, entry.containerName), entry, { trailingNewline: true });
+  await writeJsonAtomic(shardedEntryFilePath(dir, entry.containerName), entry, {
+    trailingNewline: true,
+  });
 }
 
-async function removeEntryFile(dir: string, containerName: string): Promise<void> {
-  try {
-    await fs.rm(entryFilePath(dir, containerName), { force: true });
-  } catch {
-    // A concurrent remove or a missing file is fine — force:true already
-    // swallows ENOENT; any other error (e.g. permission) is non-fatal here
-    // because the caller's intent was "make sure it's gone".
-  }
+async function removeShardedEntry(dir: string, containerName: string): Promise<void> {
+  await fs.rm(shardedEntryFilePath(dir, containerName), { force: true });
 }
 
-/** Scan every per-entry JSON file in a sharded directory. */
-async function readAllEntries<T extends RegistryEntry>(dir: string): Promise<T[]> {
+async function readShardedEntries<T extends RegistryEntry>(dir: string): Promise<T[]> {
   let files: string[];
   try {
     files = await fs.readdir(dir);
-  } catch {
-    return [];
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
   }
-  const entries: T[] = [];
-  await Promise.all(
+
+  const entries = await Promise.all(
     files
       .filter((name) => name.endsWith(".json"))
+      .toSorted()
       .map(async (name) => {
         try {
           const raw = await fs.readFile(path.join(dir, name), "utf-8");
-          const parsed = safeParseJsonWithSchema(RegistryEntrySchema, raw) as T | null;
-          if (parsed) {
-            entries.push(parsed);
-          }
-          // Corrupt / partially-written files are skipped rather than
-          // aborting the whole read: one bad entry should not hide every
-          // other container the operator has running.
+          return safeParseJsonWithSchema(RegistryEntrySchema, raw) as T | null;
         } catch {
-          // ignore unreadable files for the same reason
+          return null;
         }
       }),
   );
-  return entries;
-}
-
-// ── One-shot migration from monolithic file → per-entry files ──────────
-
-async function migrateMonolithicIfNeeded(oldPath: string, newDir: string): Promise<void> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(oldPath, "utf-8");
-  } catch {
-    // Old file does not exist (already migrated on a previous boot, or
-    // fresh install). Nothing to do.
-    return;
+  const validEntries: T[] = [];
+  for (const entry of entries) {
+    if (entry) {
+      validEntries.push(entry);
+    }
   }
-  const parsed = safeParseJsonWithSchema(RegistryFileSchema, raw) as RegistryFile | null;
-  if (!parsed || parsed.entries.length === 0) {
-    // Corrupt or empty — drop it (and its stale lock) so we don't re-attempt
-    // migration every read.
-    await fs.rm(oldPath, { force: true }).catch(() => {});
-    await fs.rm(`${oldPath}.lock`, { force: true }).catch(() => {});
-    return;
-  }
-  await fs.mkdir(newDir, { recursive: true });
-  await Promise.all(
-    parsed.entries.map((entry) =>
-      writeJsonAtomic(entryFilePath(newDir, entry.containerName), entry, {
-        trailingNewline: true,
-      }),
-    ),
+  return validEntries.toSorted((left, right) =>
+    left.containerName.localeCompare(right.containerName),
   );
-  // Migration succeeded: remove the monolithic file and any leftover lock
-  // file from the previous single-writer scheme.
-  await fs.rm(oldPath, { force: true }).catch(() => {});
-  await fs.rm(`${oldPath}.lock`, { force: true }).catch(() => {});
 }
 
-// ── Public API: Container Registry ─────────────────────────────────────
-
-export async function readRegistry(): Promise<SandboxRegistry> {
-  await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
-  const entries = await readAllEntries<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR);
-  return { entries: entries.map(normalizeSandboxRegistryEntry) };
+async function quarantineLegacyRegistry(registryPath: string): Promise<void> {
+  const quarantinePath = `${registryPath}.invalid-${Date.now()}`;
+  await fs.rename(registryPath, quarantinePath).catch(async (error) => {
+    const code = (error as { code?: string } | null)?.code;
+    if (code !== "ENOENT") {
+      await fs.rm(registryPath, { force: true });
+    }
+  });
 }
 
-/**
- * Read a single container entry by name.
- *
- * O(1) file read — avoids scanning the entire sharded directory just to
- * look up one container, which is the hot path for `ensureSandboxContainer`.
- */
+async function migrateMonolithicIfNeeded(registryPath: string, shardedDir: string): Promise<void> {
+  try {
+    await fs.access(registryPath);
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+
+  await withRegistryLock(registryPath, async () => {
+    const registry = await readLegacyRegistryFile(registryPath);
+    if (!registry) {
+      await quarantineLegacyRegistry(registryPath);
+      return;
+    }
+    if (registry.entries.length === 0) {
+      await fs.rm(registryPath, { force: true });
+      return;
+    }
+    await fs.mkdir(shardedDir, { recursive: true });
+    for (const entry of registry.entries) {
+      await withEntryLock(shardedDir, entry.containerName, async () => {
+        await writeShardedEntry(shardedDir, entry);
+      });
+    }
+    await fs.rm(registryPath, { force: true });
+  });
+}
+
 export async function readRegistryEntry(
   containerName: string,
 ): Promise<SandboxRegistryEntry | null> {
   await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
-  const entry = await readEntryFile<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR, containerName);
+  const entry = await readShardedEntry<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR, containerName);
   return entry ? normalizeSandboxRegistryEntry(entry) : null;
 }
 
-export async function updateRegistry(entry: SandboxRegistryEntry): Promise<void> {
+export async function updateRegistry(entry: SandboxRegistryEntry) {
   await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
-  const existing = await readEntryFile<SandboxRegistryEntry>(
-    SANDBOX_CONTAINERS_DIR,
-    entry.containerName,
-  );
-  const merged: SandboxRegistryEntry = {
-    ...entry,
-    backendId: entry.backendId ?? existing?.backendId,
-    runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
-    createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
-    image: existing?.image ?? entry.image,
-    configLabelKind: entry.configLabelKind ?? existing?.configLabelKind,
-    configHash: entry.configHash ?? existing?.configHash,
-  };
-  await writeEntryFile(SANDBOX_CONTAINERS_DIR, merged);
+  await withEntryLock(SANDBOX_CONTAINERS_DIR, entry.containerName, async () => {
+    const existing = await readShardedEntry<SandboxRegistryEntry>(
+      SANDBOX_CONTAINERS_DIR,
+      entry.containerName,
+    );
+    await writeShardedEntry(SANDBOX_CONTAINERS_DIR, {
+      ...entry,
+      backendId: entry.backendId ?? existing?.backendId,
+      runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
+      createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
+      image: existing?.image ?? entry.image,
+      configLabelKind: entry.configLabelKind ?? existing?.configLabelKind,
+      configHash: entry.configHash ?? existing?.configHash,
+    });
+  });
 }
 
-export async function removeRegistryEntry(containerName: string): Promise<void> {
-  await removeEntryFile(SANDBOX_CONTAINERS_DIR, containerName);
+export async function removeRegistryEntry(containerName: string) {
+  await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
+  await withEntryLock(SANDBOX_CONTAINERS_DIR, containerName, async () => {
+    await removeShardedEntry(SANDBOX_CONTAINERS_DIR, containerName);
+  });
 }
-
-// ── Public API: Browser Registry ───────────────────────────────────────
 
 export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
   await migrateMonolithicIfNeeded(SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_BROWSERS_DIR);
-  return { entries: await readAllEntries<SandboxBrowserRegistryEntry>(SANDBOX_BROWSERS_DIR) };
+  return { entries: await readShardedEntries<SandboxBrowserRegistryEntry>(SANDBOX_BROWSERS_DIR) };
 }
 
-export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry): Promise<void> {
+export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
   await migrateMonolithicIfNeeded(SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_BROWSERS_DIR);
-  const existing = await readEntryFile<SandboxBrowserRegistryEntry>(
-    SANDBOX_BROWSERS_DIR,
-    entry.containerName,
-  );
-  const merged: SandboxBrowserRegistryEntry = {
-    ...entry,
-    createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
-    image: existing?.image ?? entry.image,
-    configHash: entry.configHash ?? existing?.configHash,
-  };
-  await writeEntryFile(SANDBOX_BROWSERS_DIR, merged);
+  await withEntryLock(SANDBOX_BROWSERS_DIR, entry.containerName, async () => {
+    const existing = await readShardedEntry<SandboxBrowserRegistryEntry>(
+      SANDBOX_BROWSERS_DIR,
+      entry.containerName,
+    );
+    await writeShardedEntry(SANDBOX_BROWSERS_DIR, {
+      ...entry,
+      createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
+      image: existing?.image ?? entry.image,
+      configHash: entry.configHash ?? existing?.configHash,
+    });
+  });
 }
 
-export async function removeBrowserRegistryEntry(containerName: string): Promise<void> {
-  await removeEntryFile(SANDBOX_BROWSERS_DIR, containerName);
+export async function removeBrowserRegistryEntry(containerName: string) {
+  await migrateMonolithicIfNeeded(SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_BROWSERS_DIR);
+  await withEntryLock(SANDBOX_BROWSERS_DIR, containerName, async () => {
+    await removeShardedEntry(SANDBOX_BROWSERS_DIR, containerName);
+  });
 }
