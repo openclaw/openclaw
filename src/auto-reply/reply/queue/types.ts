@@ -79,6 +79,8 @@ export type FollowupRun = {
     modelOverrideSource?: "auto" | "user";
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
+    /** Legacy auto auth-profile marker used before authProfileIdSource existed. */
+    authProfileIdCompactionCount?: number;
     thinkLevel?: ThinkLevel;
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;

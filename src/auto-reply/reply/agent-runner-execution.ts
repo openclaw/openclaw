@@ -207,6 +207,7 @@ function buildFallbackSelectionState(params: {
   model: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  authProfileIdCompactionCount?: number;
 }): FallbackSelectionState {
   return {
     providerOverride: params.provider,
@@ -214,7 +215,9 @@ function buildFallbackSelectionState(params: {
     modelOverrideSource: "auto",
     authProfileOverride: params.authProfileId,
     authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
-    authProfileOverrideCompactionCount: undefined,
+    authProfileOverrideCompactionCount: params.authProfileId
+      ? params.authProfileIdCompactionCount
+      : undefined,
   };
 }
 
@@ -234,6 +237,7 @@ export function applyFallbackCandidateSelectionToEntry(params: {
     model: params.model,
     authProfileId: scopedAuthProfile.authProfileId,
     authProfileIdSource: scopedAuthProfile.authProfileIdSource,
+    authProfileIdCompactionCount: scopedAuthProfile.authProfileIdCompactionCount,
   });
   return {
     updated: applyFallbackSelectionState(params.entry, nextState, params.now),

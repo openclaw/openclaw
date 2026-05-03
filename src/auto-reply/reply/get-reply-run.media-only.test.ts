@@ -973,7 +973,7 @@ describe("runPreparedReply media-only handling", () => {
         sessionId: "session-auth-profile",
         sessionFile: "/tmp/session-auth-profile.jsonl",
         authProfileOverride: "profile-before-wait",
-        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 2,
         updatedAt: 1,
       },
     };
@@ -1001,7 +1001,7 @@ describe("runPreparedReply media-only handling", () => {
     sessionStore["session-key"] = {
       ...sessionStore["session-key"],
       authProfileOverride: "profile-after-wait",
-      authProfileOverrideSource: "auto",
+      authProfileOverrideCompactionCount: 3,
       updatedAt: 2,
     };
     previousRun.complete();
@@ -1009,6 +1009,8 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
+    expect(call?.followupRun.run.authProfileIdSource).toBeUndefined();
+    expect(call?.followupRun.run.authProfileIdCompactionCount).toBe(3);
     expect(vi.mocked(resolveSessionAuthProfileOverride)).toHaveBeenCalledTimes(1);
   });
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {

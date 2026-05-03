@@ -149,6 +149,7 @@ import {
   buildBeforeModelResolveAttachments,
   resolveEffectiveRuntimeModel,
   resolveHookModelSelection,
+  resolvePreferredRunAuthProfile,
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
@@ -534,7 +535,7 @@ export async function runEmbeddedPiAgent(
             allowKeychainPrompt: false,
           });
       const requestedProfileId = params.authProfileId?.trim();
-      const resolvePluginHarnessPreferredProfileId = (): string | undefined => {
+      const resolvePluginHarnessDefaultProfileId = (): string | undefined => {
         if (requestedProfileId) {
           return requestedProfileId;
         }
@@ -562,10 +563,6 @@ export async function runEmbeddedPiAgent(
           provider: harnessAuthProvider,
         })[0]?.trim();
       };
-      const preferredProfileId = pluginHarnessOwnsTransport
-        ? resolvePluginHarnessPreferredProfileId()
-        : requestedProfileId;
-      let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
       const canForwardPluginHarnessAuthProfile = (
         profileId: string | undefined,
       ): profileId is string => {
@@ -584,6 +581,19 @@ export async function runEmbeddedPiAgent(
         });
         return runtimeAuthPlan.forwardedAuthProfileId === profileId;
       };
+      const resolvedPreferredProfile = resolvePreferredRunAuthProfile({
+        requestedAuthProfileId: params.authProfileId,
+        requestedAuthProfileIdSource: params.authProfileIdSource,
+        requestedAuthProfileCompactionCount: params.authProfileIdCompactionCount,
+        hookAuthProfileOverride: hookSelection.authProfileOverride,
+      });
+      let preferredProfileId = resolvedPreferredProfile.preferredProfileId;
+      let preferredProfileIdSource = resolvedPreferredProfile.preferredProfileIdSource;
+      if (pluginHarnessOwnsTransport && !preferredProfileId) {
+        preferredProfileId = resolvePluginHarnessDefaultProfileId();
+        preferredProfileIdSource = preferredProfileId ? "auto" : undefined;
+      }
+      let lockedProfileId = preferredProfileIdSource === "user" ? preferredProfileId : undefined;
       if (lockedProfileId) {
         if (pluginHarnessOwnsTransport) {
           if (!canForwardPluginHarnessAuthProfile(lockedProfileId)) {
@@ -1327,7 +1337,7 @@ export async function runEmbeddedPiAgent(
             currentProvider: provider,
             currentModel: modelId,
             currentAuthProfileId: preferredProfileId,
-            currentAuthProfileIdSource: params.authProfileIdSource,
+            currentAuthProfileIdSource: preferredProfileIdSource,
           });
           if (requestedSelection && canRestartForLiveSwitch) {
             await clearLiveModelSwitchPending({

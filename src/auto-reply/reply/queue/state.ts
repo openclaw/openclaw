@@ -144,9 +144,11 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
         run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);
+        run.authProfileIdCompactionCount = undefined;
       }
       if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+        run.authProfileIdCompactionCount = undefined;
       }
     }
   };

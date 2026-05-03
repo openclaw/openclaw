@@ -218,7 +218,8 @@ not prompt content:
 Use the phase-specific hooks for new plugins:
 
 - `before_model_resolve`: receives only the current prompt and attachment
-  metadata. Return `providerOverride` or `modelOverride`.
+  metadata. Return `providerOverride`, `modelOverride`, or
+  `authProfileOverride`.
 - `agent_turn_prepare`: receives the current prompt, prepared session messages,
   and any exactly-once queued injections drained for this session. Return
   `prependContext` or `appendContext`.

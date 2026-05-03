@@ -9,18 +9,28 @@ export function resolveProviderScopedAuthProfile(params: {
   primaryProvider: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  authProfileIdCompactionCount?: number;
   config?: ProviderAuthAliasLookupParams["config"];
   workspaceDir?: ProviderAuthAliasLookupParams["workspaceDir"];
-}): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
+}): {
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  authProfileIdCompactionCount?: number;
+} {
   const aliasParams = { config: params.config, workspaceDir: params.workspaceDir };
   const authProfileId =
     resolveProviderIdForAuth(params.provider, aliasParams) ===
     resolveProviderIdForAuth(params.primaryProvider, aliasParams)
       ? params.authProfileId
       : undefined;
+  const authProfileIdSource = authProfileId
+    ? (params.authProfileIdSource ??
+      (typeof params.authProfileIdCompactionCount === "number" ? "auto" : undefined))
+    : undefined;
   return {
     authProfileId,
-    authProfileIdSource: authProfileId ? params.authProfileIdSource : undefined,
+    authProfileIdSource,
+    authProfileIdCompactionCount: authProfileId ? params.authProfileIdCompactionCount : undefined,
   };
 }
 
@@ -34,6 +44,7 @@ export function resolveRunAuthProfile(
     primaryProvider: run.provider,
     authProfileId: run.authProfileId,
     authProfileIdSource: run.authProfileIdSource,
+    authProfileIdCompactionCount: run.authProfileIdCompactionCount,
     config: params?.config ?? run.config,
     workspaceDir: run.workspaceDir,
   });
