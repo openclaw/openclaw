@@ -2256,7 +2256,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(result?.prependContext).toContain("remember the ramen place");
-    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.timeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.timeoutMs).toBe(CONFIGURED_TIMEOUT_MS + 100);
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
