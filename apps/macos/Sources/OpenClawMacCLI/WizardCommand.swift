@@ -443,8 +443,15 @@ private func promptAnswer(for step: WizardStep) throws -> Any {
         _ = try readLineWithPrompt("Run? (enter)")
         return true
     case "text":
-        let initial = anyCodableString(step.initialvalue)
         let prompt = step.placeholder ?? "Value"
+        if step.sensitive == true {
+            // Sensitive credential entry: read without echo and never render the
+            // existing value in the prompt. Callers that need "keep existing"
+            // behavior must do so via a separate confirm step before this point.
+            let value = try readPasswordWithPrompt(prompt)
+            return value.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let initial = anyCodableString(step.initialvalue)
         let value = try readLineWithPrompt("\(prompt)\(initial.isEmpty ? "" : " [\(initial)]")")
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? initial : trimmed
@@ -523,4 +530,16 @@ private func readLineWithPrompt(_ prompt: String) throws -> String {
         throw WizardCliError.cancelled
     }
     return line
+}
+
+private func readPasswordWithPrompt(_ prompt: String) throws -> String {
+    // getpass(3) writes the prompt to /dev/tty and reads input without echo,
+    // returning a pointer to a static buffer overwritten on the next call.
+    // We immediately copy into a Swift String so the buffer can be reused.
+    let promptText = "\(prompt): "
+    let result: UnsafeMutablePointer<CChar>? = promptText.withCString { getpass($0) }
+    guard let buf = result else {
+        throw WizardCliError.cancelled
+    }
+    return String(cString: buf)
 }
