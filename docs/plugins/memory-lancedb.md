@@ -239,6 +239,45 @@ Agents also get LanceDB memory tools from the active memory plugin:
 - `memory_recall` for LanceDB-backed recall
 - `memory_store` for saving important facts, preferences, decisions, and entities
 - `memory_forget` for removing matching memories
+- `memory_refresh` for previewing similar memories or atomically replacing one by id
+
+### `memory_refresh`
+
+`memory_refresh` updates an existing memory in two phases so that agents can
+revise facts without losing the prior entry on a partial failure.
+
+Search-only mode (omit `memoryId`):
+
+- Embeds the proposed new `text` and returns up to three nearest LanceDB
+  matches.
+- Each candidate carries `id`, `text`, `category`, `importance`, and a
+  `similarity` score using the same `1 / (1 + L2)` metric as `memory_recall`,
+  so scores are directly comparable across the two tools.
+- Nothing is written to the database.
+
+Replace mode (`memoryId` provided):
+
+- Takes a per-id mutex so concurrent `memory_refresh` and `memory_forget`
+  calls on the same id serialize instead of racing.
+- Re-checks that the entry still exists inside the lock, then deletes the old
+  row and inserts the new one. The new row gets a fresh id; the old id is
+  reported as `details.old_id` and the new id as `details.new_id`.
+- `category` and `importance` are inherited from the existing entry when the
+  caller omits them, so a text-only refresh never silently resets metadata to
+  defaults.
+- If the insert fails after the delete, the original entry is restored under
+  its original id on a best-effort basis. The response includes
+  `details.error: "insert_failed"` and `details.restored_id` (the original id
+  on success, `null` if the rollback also failed).
+- A non-existent `memoryId` returns `details.error: "not_found"` without
+  writing or deleting anything.
+
+Each successful replace appends one JSON line to
+`~/.openclaw/memory/refresh-audit.jsonl`. The audit record contains only
+metadata (`ts`, `operation`, `old_id`, `new_id`, and the L2-derived
+`similarity`); memory text is intentionally never written to the audit log.
+The audit directory is created with mode `0o700` and the file with mode
+`0o600` so the trail is not world-readable on shared hosts.
 
 ## Storage
 
