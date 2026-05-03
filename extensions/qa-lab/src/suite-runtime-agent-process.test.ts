@@ -315,6 +315,42 @@ describe("qa suite runtime agent process helpers", () => {
     ).rejects.toThrow("agent.wait returned error: boom");
   });
 
+  it("retries timeout waits and uses extended gateway timeout buffer", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run-2" })
+      .mockResolvedValueOnce({ status: "timeout" })
+      .mockResolvedValueOnce({ status: "ok" });
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery: vi.fn(() => ({
+          channel: "qa-channel",
+          replyChannel: "reply-channel",
+          replyTo: "reply-target",
+        })),
+      },
+    } as never;
+
+    await expect(
+      runAgentPrompt(env, {
+        sessionKey: "session-2",
+        message: "hello",
+        timeoutMs: 70_000,
+      }),
+    ).resolves.toEqual({
+      started: { runId: "run-2" },
+      waited: { status: "ok" },
+    });
+    expect(gatewayCall).toHaveBeenCalledTimes(3);
+    expect(gatewayCall).toHaveBeenNthCalledWith(
+      2,
+      "agent.wait",
+      { runId: "run-2", timeoutMs: 30_000 },
+      { timeoutMs: 60_000 },
+    );
+  });
+
   it("waits for a specific agent run id", async () => {
     const gatewayCall = vi.fn(async () => ({ status: "ok" }));
 
@@ -324,7 +360,7 @@ describe("qa suite runtime agent process helpers", () => {
     expect(gatewayCall).toHaveBeenCalledWith(
       "agent.wait",
       { runId: "run-3", timeoutMs: 30_000 },
-      { timeoutMs: 35_000 },
+      { timeoutMs: 60_000 },
     );
   });
 

@@ -15,11 +15,15 @@ import {
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import {
+  parseFrontmatter,
+  resolveOpenClawMetadata,
+  resolveSkillInvocationPolicy,
+} from "./frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
-import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { createSyntheticSourceInfo, formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
@@ -762,7 +766,7 @@ export function formatSkillsCompact(skills: Skill[]): string {
 // Budget reserved for the compact-mode warning line prepended by the caller.
 const COMPACT_WARNING_OVERHEAD = 150;
 
-function applySkillsPromptLimits(params: {
+export function applySkillsPromptLimits(params: {
   skills: Skill[];
   config?: OpenClawConfig;
   agentId?: string;
@@ -840,6 +844,117 @@ export function buildWorkspaceSkillsPrompt(
   return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
 }
 
+export type SkillsPromptBudgetPreview = {
+  withinLimits: boolean;
+  compact: boolean;
+  truncated: boolean;
+};
+
+/**
+ * Build a {@link SkillEntry} from proposed SKILL.md text for prompt-budget simulation.
+ * Used by extensions (Skill Workshop) via `openclaw/plugin-sdk/skills-runtime`.
+ */
+export function buildSyntheticWorkspaceSkillEntryForPreview(params: {
+  workspaceDir: string;
+  skillName: string;
+  markdownContent: string;
+}): SkillEntry {
+  const skillDir = path.resolve(params.workspaceDir, "skills", params.skillName);
+  const skillFilePath = path.join(skillDir, "SKILL.md");
+  const frontmatter = parseFrontmatter(params.markdownContent);
+  const name = frontmatter.name?.trim() || params.skillName;
+  const description = frontmatter.description?.trim();
+  if (!description) {
+    throw new Error("skill markdown must include a description for prompt budget preview");
+  }
+  const invocation = resolveSkillInvocationPolicy(frontmatter);
+  const filePath = path.resolve(skillFilePath);
+  const baseDir = path.resolve(skillDir);
+  const skill: Skill = {
+    name,
+    description,
+    filePath,
+    baseDir,
+    source: "openclaw-workspace",
+    sourceInfo: createSyntheticSourceInfo(filePath, {
+      source: "openclaw-workspace",
+      baseDir,
+      scope: "project",
+      origin: "top-level",
+    }),
+    disableModelInvocation: invocation.disableModelInvocation,
+  };
+  return {
+    skill,
+    frontmatter,
+    metadata: resolveOpenClawMetadata(frontmatter),
+    invocation,
+    exposure: {
+      includeInRuntimeRegistry: true,
+      includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
+      userInvocable: invocation.userInvocable !== false,
+    },
+  };
+}
+
+/** Match workspace skill load semantics: one entry per `skill.name` (last wins). */
+function mergeSkillEntryByNameForPreview(
+  entries: readonly SkillEntry[],
+  incoming: SkillEntry,
+): SkillEntry[] {
+  const byName = new Map<string, SkillEntry>();
+  for (const entry of entries) {
+    byName.set(entry.skill.name, entry);
+  }
+  byName.set(incoming.skill.name, incoming);
+  return Array.from(byName.values()).sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"));
+}
+
+/**
+ * Simulate adding or replacing one skill entry for prompt-budget preflight.
+ * `withinLimits` is false when prompt limits would drop an eligible skill from the catalog block.
+ */
+export function previewSkillsPromptImpact(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+  eligibility?: SkillEligibilityContext;
+  simulationMode: "propose" | "replace";
+  syntheticEntry: SkillEntry;
+}): SkillsPromptBudgetPreview {
+  const baseline = resolveWorkspaceSkillPromptState(params.workspaceDir, {
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: params.eligibility,
+  });
+  const baseEntries = loadWorkspaceSkillEntries(params.workspaceDir, {
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: params.eligibility,
+  });
+  const merged =
+    params.simulationMode === "propose"
+      ? mergeSkillEntryByNameForPreview(baseEntries, params.syntheticEntry)
+      : [
+          ...baseEntries.filter((e) => e.skill.name !== params.syntheticEntry.skill.name),
+          params.syntheticEntry,
+        ];
+  const projected = resolveWorkspaceSkillPromptState(params.workspaceDir, {
+    entries: merged,
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: params.eligibility,
+  });
+  const droppedBaseline = baseline.skillsEligibleForPromptCount - baseline.skillsInPromptCount;
+  const droppedProjected = projected.skillsEligibleForPromptCount - projected.skillsInPromptCount;
+  const withinLimits = droppedProjected <= droppedBaseline;
+  return {
+    withinLimits,
+    compact: projected.compact,
+    truncated: projected.truncated,
+  };
+}
+
 type WorkspaceSkillBuildOptions = {
   config?: OpenClawConfig;
   managedSkillsDir?: string;
@@ -870,6 +985,10 @@ function resolveWorkspaceSkillPromptState(
   eligible: SkillEntry[];
   prompt: string;
   resolvedSkills: Skill[];
+  truncated: boolean;
+  compact: boolean;
+  skillsInPromptCount: number;
+  skillsEligibleForPromptCount: number;
 } {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
@@ -906,7 +1025,15 @@ function resolveWorkspaceSkillPromptState(
   ]
     .filter(Boolean)
     .join("\n");
-  return { eligible, prompt, resolvedSkills };
+  return {
+    eligible,
+    prompt,
+    resolvedSkills,
+    truncated,
+    compact,
+    skillsInPromptCount: skillsForPrompt.length,
+    skillsEligibleForPromptCount: resolvedSkills.length,
+  };
 }
 
 export function resolveSkillsPromptForRun(params: {

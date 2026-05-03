@@ -44,7 +44,6 @@ describe("speech provider registry", () => {
       },
     });
   });
-
   it("lists providers from the speech capability runtime", () => {
     const cfg = {} as OpenClawConfig;
     providers = [createSpeechProvider("demo-speech")];

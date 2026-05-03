@@ -4,6 +4,7 @@ import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
 import {
   applyProposalToWorkspace,
+  enforceSkillsPromptBudgetIfConfigured,
   normalizeSkillName,
   prepareProposalWrite,
   writeSupportFile,
@@ -174,6 +175,7 @@ export function createSkillWorkshopTool(params: {
           const applied = await applyProposalToWorkspace({
             proposal,
             maxSkillBytes: params.config.maxSkillBytes,
+            openClawConfig: params.api.config,
           });
           const stored = await store.add(
             {
@@ -204,6 +206,12 @@ export function createSkillWorkshopTool(params: {
           );
           return jsonResult({ status: "quarantined", proposal: stored });
         }
+        enforceSkillsPromptBudgetIfConfigured({
+          proposal,
+          preparedMarkdown: prepared.content,
+          created: prepared.created,
+          openClawConfig: params.api.config,
+        });
         const stored = await store.add(
           { ...proposal, scanFindings: prepared.findings },
           params.config.maxPending,
@@ -224,6 +232,7 @@ export function createSkillWorkshopTool(params: {
         const applied = await applyProposalToWorkspace({
           proposal,
           maxSkillBytes: params.config.maxSkillBytes,
+          openClawConfig: params.api.config,
         });
         const updated = await store.updateStatus(raw.id, "applied");
         return jsonResult({ status: "applied", skillPath: applied.skillPath, proposal: updated });

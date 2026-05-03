@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  MAX_LIVE_CHAT_BUFFER_CHARS,
-  resolveMergedAssistantText,
-} from "./live-chat-projector.js";
+import { MAX_LIVE_CHAT_BUFFER_CHARS, resolveMergedAssistantText } from "./live-chat-projector.js";
 
 describe("server chat stream text merge", () => {
   it.each([

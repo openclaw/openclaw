@@ -77,6 +77,7 @@ export default definePluginEntry({
             store,
             config,
             workspaceDir,
+            openClawConfig: api.config,
           });
           if (result.status === "applied") {
             api.logger.info(`skill-workshop: applied ${heuristicProposal.skillName}`);
@@ -124,7 +125,13 @@ export default definePluginEntry({
           api.logger.debug?.("skill-workshop: reviewer found no update");
           return;
         }
-        const result = await applyOrStoreProposal({ proposal, store, config, workspaceDir });
+        const result = await applyOrStoreProposal({
+          proposal,
+          store,
+          config,
+          workspaceDir,
+          openClawConfig: api.config,
+        });
         if (result.status === "applied") {
           api.logger.info(`skill-workshop: applied ${proposal.skillName}`);
         } else if (result.status === "quarantined") {

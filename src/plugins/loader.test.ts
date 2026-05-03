@@ -171,6 +171,7 @@ function writeBundledPlugin(params: {
   });
   delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+  delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   return { bundledDir, plugin };
 }
 

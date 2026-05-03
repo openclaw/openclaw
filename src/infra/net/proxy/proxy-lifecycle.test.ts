@@ -21,6 +21,7 @@ import { logInfo, logWarn } from "../../../logger.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
   _resetGlobalAgentBootstrapForTests,
+  _setCachedGlobalAgentBootstrapForTests,
   dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane,
   startProxy,
   stopProxy,
@@ -345,6 +346,21 @@ describe("startProxy", () => {
         proxyUrl: "http://127.0.0.1:3128",
       }),
     ).rejects.toThrow("failed to activate external proxy routing");
+
+    expect(process.env["http_proxy"]).toBeUndefined();
+    expect(process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"]).toBeUndefined();
+  });
+
+  it("restores env and throws when global-agent package cannot be resolved", async () => {
+    _resetGlobalAgentBootstrapForTests();
+    _setCachedGlobalAgentBootstrapForTests(null);
+
+    await expect(
+      startProxy({
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      }),
+    ).rejects.toThrow("global-agent package is required");
 
     expect(process.env["http_proxy"]).toBeUndefined();
     expect(process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"]).toBeUndefined();

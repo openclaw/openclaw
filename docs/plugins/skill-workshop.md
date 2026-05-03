@@ -111,6 +111,22 @@ Use automatic writes only in trusted workspaces:
 `approvalPolicy: "auto"` still uses the same scanner and quarantine path. It
 does not apply proposals with critical findings.
 
+## Security model (defense in depth)
+
+Writes under `<workspace>/skills/<name>/` go through **prepare → content scan → apply** (the `auto` policy uses the same apply helper after a clean scan). Hardening aligns with core OpenClaw behavior:
+
+- **Path:** Resolved paths must stay under the workspace `skills/<skillName>/` tree. When those directories already exist on disk, containment is checked with **realpath-aware** primitives (re-exported for extensions via `openclaw/plugin-sdk/security-runtime`), not only string prefix checks.
+- **TOCTOU:** Right before `SKILL.md` is committed, the proposal is **prepared again** from the current filesystem state. If the tree changed (for example `oldText` disappeared, or a create raced with another writer), apply fails with a clear error instead of silently merging the wrong baseline.
+- **Prompt economics:** Before a proposal is **queued** or **applied**, its projected `SKILL.md` is checked against the **same workspace skills prompt budget** rules the gateway uses for the skills catalog (`previewSkillsPromptImpact` / `applySkillsPromptLimits` in core, surfaced to plugins through `openclaw/plugin-sdk/skills-runtime`). This blocks proposals that would force **more** catalog truncation than the pre-proposal baseline.
+- **Defaults:** **`approvalPolicy: "pending"`** (recommended) means no `SKILL.md` on disk until **`apply`** (or auto-apply when policy is `auto`). **`auto`** is for **trusted** personal or single-tenant workspaces; it still **quarantines** scanner-critical content and never applies quarantined rows.
+
+### Memory vs Skill Workshop
+
+- **Memory** plugins store **facts**, **preferences**, and **semantic recall** — not workspace `SKILL.md` as their primary durable procedure format.
+- **Skill Workshop** stores **repeatable procedures** under `skills/…` with the funnel above. Prefer extending Workshop (or memory, respectively) rather than introducing a second procedural writer to the same paths.
+
+**Maintenance grep (fleet / fork hygiene):** when you add hooks or tools that learn into disk, search for additional writers to workspace skills (`skills/`, `SKILL.md`, `atomicWrite` / `writeFile` on skill paths, new `agent_end` consumers) and reconcile with this single funnel.
+
 ## Configuration
 
 | Key                  | Default     | Range / values                              | Meaning                                                              |
@@ -501,6 +517,14 @@ For `replace`:
 All writes are atomic and refresh the in-memory skills snapshot immediately, so
 the new or updated skill can become visible without a Gateway restart.
 
+Path validation uses defense-in-depth:
+
+- lexical containment checks to reject obvious escapes early
+- realpath-aware containment checks against existing ancestors before first write
+- support-file and `SKILL.md` targets are both validated under the skill root
+
+This prevents symlink-based root escapes and missing-target first-write bypasses.
+
 ## Safety model
 
 Skill Workshop has a safety scanner on generated `SKILL.md` content and support
@@ -532,6 +556,10 @@ Quarantined proposals:
 
 To recover from a quarantined proposal, create a new safe proposal with the
 unsafe content removed. Do not edit the store JSON by hand.
+
+Apply-time writes also enforce stale-write protection: proposal content is
+revalidated immediately before disk commit, and the write is rejected if the
+workspace changed between prepare and apply.
 
 ## Prompt guidance
 
@@ -571,6 +599,11 @@ The reviewer:
 - writes nothing directly
 - can only emit a proposal that goes through the normal scanner and
   approval/quarantine path
+
+Prompt economics are also enforced before queue/apply when runtime config is
+available. This uses the same core skills prompt-limit semantics exposed through
+the plugin SDK seam, so saved workspace skills and runtime prompt visibility
+stay in parity.
 
 If the reviewer fails, times out, or returns invalid JSON, the plugin logs a
 warning/debug message and skips that review pass.

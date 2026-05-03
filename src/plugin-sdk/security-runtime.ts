@@ -16,6 +16,7 @@ export {
 } from "./access-groups.js";
 export * from "../security/external-content.js";
 export * from "../security/safe-regex.js";
+export { isPathInsideWithRealpath } from "../security/scan-paths.js";
 export {
   SafeOpenError,
   openFileWithinRoot,

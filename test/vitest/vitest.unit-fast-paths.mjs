@@ -220,13 +220,20 @@ const broadUnitFastCandidateSkipGlobs = [
   "src/plugins/install.npm-spec.test.ts",
   "src/plugins/contracts/**/*.test.ts",
   "src/plugin-sdk/browser-subpaths.test.ts",
+  // Keep one-level security tests out even if Node glob semantics differ on `**`.
+  "src/security/*.test.ts",
   "src/security/**/*.test.ts",
+  "src/secrets/*.test.ts",
   "src/secrets/**/*.test.ts",
   "test/helpers/stt-live-audio.test.ts",
   "test/vitest-extensions-config.test.ts",
   "test/vitest-unit-paths.test.ts",
   ...boundaryTestFiles,
 ];
+export const alwaysExcludedUnitFastTestFiles = [
+  // Reserved for hard-excluded tests when needed.
+];
+const alwaysExcludedUnitFastTestFileSet = new Set(alwaysExcludedUnitFastTestFiles);
 
 const disqualifyingPatterns = [
   {
@@ -336,9 +343,9 @@ export function collectUnitFastTestCandidates(cwd = process.cwd()) {
       matchesAnyGlob(file, unitFastCandidateGlobs) &&
       !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
   );
-  return [
-    ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
-  ].toSorted((a, b) => a.localeCompare(b));
+  return [...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles])]
+    .filter((file) => !alwaysExcludedUnitFastTestFileSet.has(file))
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 export function collectBroadUnitFastTestCandidates(cwd = process.cwd()) {
@@ -347,9 +354,9 @@ export function collectBroadUnitFastTestCandidates(cwd = process.cwd()) {
       matchesAnyGlob(file, broadUnitFastCandidateGlobs) &&
       !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
   );
-  return [
-    ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
-  ].toSorted((a, b) => a.localeCompare(b));
+  return [...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles])]
+    .filter((file) => !alwaysExcludedUnitFastTestFileSet.has(file))
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 const unitFastAnalysisByKey = new Map();
@@ -378,6 +385,14 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
     }
     const reasons = classifyUnitFastTestFileContent(source);
     const forced = forcedUnitFastTestFileSet.has(file);
+    if (alwaysExcludedUnitFastTestFileSet.has(file)) {
+      return {
+        file,
+        unitFast: false,
+        forced,
+        reasons: [...reasons, "always-excluded"],
+      };
+    }
     return {
       file,
       unitFast: forced || reasons.length === 0,

@@ -87,14 +87,15 @@ export async function handleQaInbound(params: {
     },
   });
   const isGroup = inbound.conversation.kind !== "direct";
+  const mentionRuntime = runtime.channel.mentions;
+  const mentionRegexes =
+    isGroup && mentionRuntime
+      ? mentionRuntime.buildMentionRegexes(params.config as OpenClawConfig, route.agentId)
+      : [];
   const wasMentioned = isGroup
-    ? runtime.channel.mentions.matchesMentionPatterns(
-        inbound.text,
-        runtime.channel.mentions.buildMentionRegexes(
-          params.config as OpenClawConfig,
-          route.agentId,
-        ),
-      )
+    ? mentionRegexes.length > 0
+      ? (mentionRuntime?.matchesMentionPatterns(inbound.text, mentionRegexes) ?? false)
+      : false
     : undefined;
   const storePath = runtime.channel.session.resolveStorePath(params.config.session?.store, {
     agentId: route.agentId,

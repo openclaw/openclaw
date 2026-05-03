@@ -24,6 +24,8 @@ const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g")
 const MANAGED_DREAMING_CRON_MARKER = "[managed-by=memory-core.short-term-promotion]";
 const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DREAMING_PROMPT = "__openclaw_memory_core_short_term_promotion_dream__";
+const RUN_AGENT_PROMPT_WAIT_SLICE_MS = 30_000;
+const AGENT_WAIT_GATEWAY_TIMEOUT_BUFFER_MS = 30_000;
 
 function stripAnsiCodes(text: string) {
   return text.replace(ANSI_ESCAPE_PATTERN, "");
@@ -176,7 +178,7 @@ async function waitForAgentRun(
       timeoutMs,
     },
     {
-      timeoutMs: timeoutMs + 5_000,
+      timeoutMs: timeoutMs + AGENT_WAIT_GATEWAY_TIMEOUT_BUFFER_MS,
     },
   )) as { status?: string; error?: string };
 }
@@ -289,7 +291,25 @@ async function runAgentPrompt(
   },
 ) {
   const started = await startAgentRun(env, params);
-  const waited = await waitForAgentRun(env, started.runId!, params.timeoutMs ?? 30_000);
+  const totalTimeoutMs = params.timeoutMs ?? 30_000;
+  const deadline = Date.now() + totalTimeoutMs;
+  let waited: { status?: string; error?: string } = {};
+  while (Date.now() < deadline) {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    waited = await waitForAgentRun(
+      env,
+      started.runId!,
+      Math.min(remainingMs, RUN_AGENT_PROMPT_WAIT_SLICE_MS),
+    );
+    if (waited.status === "ok") {
+      break;
+    }
+    if (waited.status !== "timeout") {
+      throw new Error(
+        `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,
+      );
+    }
+  }
   if (waited.status !== "ok") {
     throw new Error(
       `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,

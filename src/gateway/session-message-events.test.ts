@@ -68,6 +68,7 @@ async function withOperatorSessionSubscriber<T>(
 function waitForSessionMessageEvent(
   ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
   sessionKey: string,
+  timeoutMs = 2_000,
 ) {
   return onceMessage(
     ws,
@@ -75,12 +76,14 @@ function waitForSessionMessageEvent(
       message.type === "event" &&
       message.event === "session.message" &&
       (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+    timeoutMs,
   );
 }
 
 function waitForSessionsChangedMessagePhase(
   ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
   sessionKey: string,
+  timeoutMs = 2_000,
 ) {
   return onceMessage(
     ws,
@@ -90,6 +93,7 @@ function waitForSessionsChangedMessagePhase(
       (message.payload as { phase?: string; sessionKey?: string } | undefined)?.phase ===
         "message" &&
       (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+    timeoutMs,
   );
 }
 
@@ -164,6 +168,7 @@ describe("session.message websocket events", () => {
           message.event === "sessions.changed" &&
           (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
             "agent:main:child",
+        2_000,
       );
 
       emitSessionLifecycleEvent({
@@ -406,6 +411,7 @@ describe("session.message websocket events", () => {
           message.event === "session.message" &&
           (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
             "agent:main:child",
+        2_000,
       );
       const changedEventPromise = onceMessage(
         ws,
@@ -416,6 +422,7 @@ describe("session.message websocket events", () => {
             "message" &&
           (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
             "agent:main:child",
+        2_000,
       );
 
       emitSessionTranscriptUpdate({

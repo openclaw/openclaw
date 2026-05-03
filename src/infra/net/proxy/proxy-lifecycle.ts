@@ -9,8 +9,8 @@
 
 import http from "node:http";
 import https from "node:https";
+import { createRequire } from "node:module";
 import { isIP } from "node:net";
-import { bootstrap as bootstrapGlobalAgent } from "global-agent";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
 import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
@@ -80,7 +80,11 @@ type GlobalAgentHttpsAgent = {
   createConnection: GlobalAgentCreateConnection;
 };
 
+const nodeRequire = createRequire(import.meta.url);
+let cachedBootstrapGlobalAgent: (() => void) | null | undefined;
+
 let globalAgentBootstrapped = false;
+let globalAgentBootstrapUnavailable = false;
 let nodeHttpStackSnapshot: NodeHttpStackSnapshot | null = null;
 let activeProxyRegistrations: ActiveProxyRegistration[] = [];
 let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
@@ -88,10 +92,54 @@ let patchedGlobalAgentHttpsAgents = new WeakSet<object>();
 
 export function _resetGlobalAgentBootstrapForTests(): void {
   globalAgentBootstrapped = false;
+  globalAgentBootstrapUnavailable = false;
   nodeHttpStackSnapshot = null;
   activeProxyRegistrations = [];
   baseProxyEnvSnapshot = null;
+  cachedBootstrapGlobalAgent = undefined;
   patchedGlobalAgentHttpsAgents = new WeakSet<object>();
+}
+
+/** Test-only: force resolver to treat global-agent as absent (`null`) or let it resolve (`undefined`). */
+export function _setCachedGlobalAgentBootstrapForTests(
+  value: (() => void) | null | undefined,
+): void {
+  cachedBootstrapGlobalAgent = value;
+  globalAgentBootstrapped = false;
+  globalAgentBootstrapUnavailable = false;
+}
+
+function resolveGlobalAgentBootstrap(): (() => void) | null {
+  if (cachedBootstrapGlobalAgent !== undefined) {
+    return cachedBootstrapGlobalAgent;
+  }
+  try {
+    const loaded = nodeRequire("global-agent") as { bootstrap?: unknown };
+    if (typeof loaded.bootstrap === "function") {
+      cachedBootstrapGlobalAgent = loaded.bootstrap as () => void;
+      return cachedBootstrapGlobalAgent;
+    }
+  } catch {
+    // Optional dependency in some test/runtime setups.
+  }
+  cachedBootstrapGlobalAgent = null;
+  return null;
+}
+
+async function resolveGlobalAgentBootstrapAsync(): Promise<(() => void) | null> {
+  if (cachedBootstrapGlobalAgent !== undefined) {
+    return cachedBootstrapGlobalAgent;
+  }
+  try {
+    const loaded = (await import("global-agent")) as { bootstrap?: unknown };
+    if (typeof loaded.bootstrap === "function") {
+      cachedBootstrapGlobalAgent = loaded.bootstrap as () => void;
+      return cachedBootstrapGlobalAgent;
+    }
+  } catch {
+    // Fall through to CJS resolution for mixed module environments.
+  }
+  return resolveGlobalAgentBootstrap();
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -220,12 +268,23 @@ function restoreNodeHttpStack(): void {
   }
   nodeHttpStackSnapshot = null;
   globalAgentBootstrapped = false;
+  cachedBootstrapGlobalAgent = undefined;
+  globalAgentBootstrapUnavailable = false;
 }
 
 function bootstrapNodeHttpStack(proxyUrl: string): void {
   if (!globalAgentBootstrapped) {
+    if (globalAgentBootstrapUnavailable) {
+      return;
+    }
+    const bootstrapGlobalAgentFn = resolveGlobalAgentBootstrap();
+    if (!bootstrapGlobalAgentFn) {
+      globalAgentBootstrapUnavailable = true;
+      logWarn("proxy: global-agent package unavailable; skipping node HTTP proxy hooks");
+      return;
+    }
     nodeHttpStackSnapshot = captureNodeHttpStack();
-    bootstrapGlobalAgent();
+    bootstrapGlobalAgentFn();
     patchGlobalAgentHttpsConnectTlsTargetHost();
     globalAgentBootstrapped = true;
   }
@@ -433,7 +492,14 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   try {
     injectedEnvSnapshot = injectProxyEnv(proxyUrl);
     forceResetGlobalDispatcher();
+    const bootstrapFn = await resolveGlobalAgentBootstrapAsync();
     bootstrapNodeHttpStack(proxyUrl);
+    if (!bootstrapFn) {
+      throw new Error(
+        "proxy: the global-agent package is required when proxy.enabled is true but could not be loaded; " +
+          "install dependencies from the OpenClaw package root (for example `pnpm install`) or run `openclaw doctor --fix`.",
+      );
+    }
     registration = {
       proxyUrl,
       stopped: false,

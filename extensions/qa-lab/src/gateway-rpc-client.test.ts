@@ -48,6 +48,14 @@ describe("startQaGatewayRpcClient", () => {
         timeout: "45000",
         expectFinal: true,
         json: true,
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ],
       },
       { prompt: "hi" },
       {
@@ -125,6 +133,14 @@ describe("startQaGatewayRpcClient", () => {
         timeout: "20000",
         expectFinal: undefined,
         json: true,
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ],
       },
       {},
       {
