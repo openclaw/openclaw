@@ -79,11 +79,34 @@ function normalizeGoogleAuthPreparedRequestHeaders<T extends GoogleAuthRequestWi
   return config as T & { headers: Headers };
 }
 
+/**
+ * Ensure response headers support the `.get()` method expected by
+ * `google-auth-library` (e.g. `getFederatedSignonCertsAsync` reads
+ * `res?.headers.get('cache-control')`).
+ *
+ * When the bundled build's deep-clone utility (`extend`) from gaxios
+ * serialises a `GaxiosResponse`, the native `Headers` instance can be
+ * downgraded to a plain `Record<string, string>` whose `.get()` method is
+ * lost.  This helper converts such objects back to a proper `Headers`.
+ */
+function normalizeGoogleAuthResponseHeaders<
+  T extends { headers?: unknown; config?: unknown; data?: unknown },
+>(response: T): T {
+  const h = response.headers;
+  if (h && typeof h === "object" && !(h instanceof Headers) && typeof (h as Headers).get !== "function") {
+    (response as Record<string, unknown>).headers = new Headers(h as Record<string, string>);
+  }
+  return response;
+}
+
 function installGoogleAuthHeaderCompatibilityInterceptor(
   transport: GoogleAuthTransport,
 ): GoogleAuthTransport {
   transport.interceptors.request.add({
     resolved: async (config) => normalizeGoogleAuthPreparedRequestHeaders(config),
+  });
+  transport.interceptors.response.add({
+    resolved: async (response) => normalizeGoogleAuthResponseHeaders(response),
   });
   return transport;
 }
@@ -558,6 +581,7 @@ export const __testing = {
     googleAuthTransportPromise = null;
   },
   normalizeGoogleAuthPreparedRequestHeaders,
+  normalizeGoogleAuthResponseHeaders,
   resolveGoogleAuthEnvProxyUrl,
   validateGoogleChatServiceAccountCredentials,
 };
