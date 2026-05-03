@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 - Channels/onboarding: map third-party official WeCom and Yuanbao catalog entries to their published plugin ids so npm installs pass expected-plugin validation. Thanks @vincentkoc.
 - Plugin SDK: restore the Mattermost and Matrix compatibility subpaths used by the pinned Yuanbao channel package so external installs can module-load after npm install. Thanks @vincentkoc.
 - Plugins/install: keep managed npm-root security scans from treating earlier plugin `openclaw` peer links as failures, so one external plugin install cannot poison later official npm installs. Thanks @vincentkoc.
+- Memory LanceDB: allow installed-but-unconfigured plugin metadata to load so onboarding and setup flows can prompt for embedding config instead of failing the plugin registry first. Thanks @vincentkoc.
 - CLI/plugins: keep `plugins enable` and `plugins disable` from creating unconfigured channel config sections, so channel plugins with required setup fields no longer fail validation during lifecycle probes. Thanks @vincentkoc.
 - Agents/sessions: keep delayed `sessions_send` A2A replies alive after soft wait-window timeouts, while preserving terminal run timeouts and avoiding stale target replies in requester sessions. Fixes #76443. Thanks @ryswork1993 and @vincentkoc.
 - CLI/sessions: keep intentional empty agent replies silent after tool-delivered channel output, instead of surfacing a misleading "No reply from agent." fallback. Thanks @vincentkoc.
