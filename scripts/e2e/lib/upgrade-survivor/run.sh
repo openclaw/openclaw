@@ -252,7 +252,7 @@ legacy_runtime_deps_symlink_plugin() {
 
 legacy_runtime_deps_symlink_target() {
   local plugin="$1"
-  printf '%s/dist/extensions/%s/node_modules\n' "$(package_root)" "$plugin"
+  printf '%s/@openclaw-upgrade-survivor/%s-runtime-dep\n' "$(dirname "$(package_root)")" "$plugin"
 }
 
 legacy_runtime_deps_symlink_source() {
@@ -431,6 +431,7 @@ seed_legacy_runtime_deps_symlink() {
   source_dir="$(legacy_runtime_deps_symlink_source "$plugin")"
   target_dir="$(legacy_runtime_deps_symlink_target "$plugin")"
   mkdir -p "$source_dir"
+  mkdir -p "$(dirname "$target_dir")"
   printf '{"name":"openclaw-upgrade-survivor-legacy-runtime-deps","version":"0.0.0"}\n' \
     >"$source_dir/package.json"
   rm -rf "$target_dir"
