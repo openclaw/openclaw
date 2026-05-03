@@ -69,24 +69,6 @@ describe("formatInstallHint", () => {
     ).toBe("npm, with ClawHub fallback");
   });
 
-  it("keeps catalog diagnostics installs ClawHub first with npm fallback", () => {
-    const diagnostics = resolveOfficialPluginOnboardingInstallEntries({ config: {} }).filter(
-      (entry) => entry.pluginId.startsWith("diagnostics-"),
-    );
-
-    expect(diagnostics).toHaveLength(2);
-    for (const entry of diagnostics) {
-      expect(entry.install).toEqual(
-        expect.objectContaining({
-          clawhubSpec: expect.stringMatching(/^clawhub:@openclaw\/diagnostics-/u),
-          npmSpec: expect.stringMatching(/^@openclaw\/diagnostics-/u),
-          defaultChoice: "clawhub",
-        }),
-      );
-      expect(__testing.formatInstallHint(entry.install)).toBe("ClawHub, with npm fallback");
-    }
-  });
-
   it("keeps dual-source clawhub-default installs ClawHub first", () => {
     expect(
       __testing.formatInstallHint({
@@ -134,7 +116,7 @@ describe("setupOfficialPluginInstalls", () => {
           install: expect.objectContaining({
             clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
             npmSpec: "@openclaw/diagnostics-otel",
-            defaultChoice: "clawhub",
+            defaultChoice: "npm",
           }),
         }),
         promptInstall: false,

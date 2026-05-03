@@ -62,7 +62,7 @@
         "install": {
           "clawhubSpec": "clawhub:@openclaw/diagnostics-otel",
           "npmSpec": "@openclaw/diagnostics-otel",
-          "defaultChoice": "clawhub",
+          "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.25"
         }
       }
@@ -80,7 +80,7 @@
         "install": {
           "clawhubSpec": "clawhub:@openclaw/diagnostics-prometheus",
           "npmSpec": "@openclaw/diagnostics-prometheus",
-          "defaultChoice": "clawhub",
+          "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.25"
         }
       }
