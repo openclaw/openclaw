@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Channels/bluebubbles: add opt-in `channels.bluebubbles.textFormatting.enabled` (default `false`) that translates inline markdown (`**bold**`, `*italic*`, `~~strike~~`, plus the `__bold__` alias and nested `**_bold italic_**`) into BlueBubbles `textFormatting` ranges on outbound `/api/v1/message/text` payloads. Gated on Private API + a new `isMacOS15OrHigher` probe; block-level markdown bails to plain stripping to avoid index drift. Stock pre-PR-766 BB servers ignore the unknown payload field, so the flag is safe to flip on hosts that are not yet upgraded. Companion to [BlueBubblesApp/bluebubbles-server#766](https://github.com/BlueBubblesApp/bluebubbles-server/pull/766) and [BlueBubblesApp/bluebubbles-helper#50](https://github.com/BlueBubblesApp/bluebubbles-helper/pull/50). Thanks @omarshahine.
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
 - Agents/tools: skip optional media and PDF tool factories when the effective tool denylist already blocks them, avoiding unnecessary hot-path setup for tools that will be filtered out before model use. (#76773) Thanks @dorukardahan.
 - Discord/status: let explicit reaction tool calls opt into tracking subsequent tool progress on the reacted message with `trackToolCalls: true`, and use the shared tool display emoji table for status reactions.
