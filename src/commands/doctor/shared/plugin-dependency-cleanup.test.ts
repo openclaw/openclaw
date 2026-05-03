@@ -230,6 +230,74 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expect(fs.stat(runtimeRoot)).resolves.toBeTruthy();
   });
 
+  it("preserves current prerelease runtime deps while pruning stale prerelease siblings", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "package");
+    const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const currentAlphaRoot = path.join(runtimeRoot, "openclaw-2026.4.29-alpha.1-discord");
+    const currentNumericRoot = path.join(runtimeRoot, "openclaw-2026.4.29-1-telegram");
+    const staleAlphaRoot = path.join(runtimeRoot, "openclaw-2026.4.28-alpha.1-discord");
+    const staleNumericRoot = path.join(runtimeRoot, "openclaw-2026.4.28-1-telegram");
+
+    await fs.mkdir(path.join(currentAlphaRoot, "node_modules", "current-dep"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(currentNumericRoot, "node_modules", "current-dep"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(staleAlphaRoot, "node_modules", "stale-dep"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(staleNumericRoot, "node_modules", "stale-dep"), {
+      recursive: true,
+    });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "2026.4.29-alpha.1" }, null, 2)}\n`,
+    );
+
+    const alphaResult = await cleanupLegacyPluginDependencyState({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(alphaResult.warnings).toEqual([]);
+    expect(alphaResult.changes).not.toContain(
+      `Removed legacy plugin dependency state: ${currentAlphaRoot}`,
+    );
+    expect(alphaResult.changes).toEqual(
+      expect.arrayContaining([
+        `Removed legacy plugin dependency state: ${currentNumericRoot}`,
+        `Removed legacy plugin dependency state: ${staleAlphaRoot}`,
+        `Removed legacy plugin dependency state: ${staleNumericRoot}`,
+      ]),
+    );
+    await expect(fs.stat(currentAlphaRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(currentNumericRoot)).rejects.toThrow();
+    await expect(fs.stat(staleAlphaRoot)).rejects.toThrow();
+    await expect(fs.stat(staleNumericRoot)).rejects.toThrow();
+
+    await fs.mkdir(path.join(currentNumericRoot, "node_modules", "current-dep"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "2026.4.29-1" }, null, 2)}\n`,
+    );
+
+    const numericResult = await cleanupLegacyPluginDependencyState({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(numericResult.warnings).toEqual([]);
+    expect(numericResult.changes).not.toContain(
+      `Removed legacy plugin dependency state: ${currentNumericRoot}`,
+    );
+    await expect(fs.stat(currentNumericRoot)).resolves.toBeTruthy();
+  });
+
   it("prunes only stale versioned children when explicit stage dir is a runtime deps root", async () => {
     const packageRoot = path.join(tempDir, "package");
     const explicitStageRoot = path.join(tempDir, "plugin-runtime-deps");

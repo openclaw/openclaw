@@ -6,7 +6,7 @@ import { resolveConfigDir, resolveUserPath } from "../../../utils.js";
 
 const LEGACY_DIRECT_CHILD_NAMES = new Set(["plugin-runtime-deps", "bundled-plugin-runtime-deps"]);
 const VERSIONED_RUNTIME_DEPS_ROOT_RE =
-  /^openclaw-(?<version>\d{4}\.\d{1,2}\.\d{1,2}(?:-beta\.\d+)?)-[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+  /^openclaw-(?<version>\d{4}\.\d{1,2}\.\d{1,2}(?:-(?:alpha|beta|rc)\.\d+|-\d+)?)-[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
 function uniqueSorted(values: Iterable<string | null | undefined>): string[] {
   return [
