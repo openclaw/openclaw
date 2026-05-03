@@ -404,6 +404,19 @@ const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "300000";
+const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
+const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = [
+  "src/gateway/embeddings-http.test.ts",
+  "src/gateway/models-http.test.ts",
+  "src/gateway/openai-http.test.ts",
+  "src/gateway/openresponses-http.test.ts",
+  "src/gateway/probe.auth.integration.test.ts",
+];
+const GATEWAY_SERVER_EXCLUDED_TEST_TARGETS = new Set([
+  "src/gateway/gateway.test.ts",
+  "src/gateway/server.startup-matrix-migration.integration.test.ts",
+  "src/gateway/sessions-history-http.test.ts",
+]);
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
@@ -453,6 +466,62 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
 
 function normalizePathPattern(value) {
   return value.replaceAll("\\", "/");
+}
+
+function listRepoFilesRecursive(root, cwd) {
+  const entries = fs.readdirSync(root, { withFileTypes: true });
+  return entries.flatMap((entry) => {
+    const absolute = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      return listRepoFilesRecursive(absolute, cwd);
+    }
+    if (!entry.isFile()) {
+      return [];
+    }
+    return [normalizePathPattern(path.relative(cwd, absolute))];
+  });
+}
+
+function isGatewayServerFullSuiteTarget(relative) {
+  if (
+    GATEWAY_SERVER_EXCLUDED_TEST_TARGETS.has(relative) ||
+    relative.startsWith("src/gateway/server-methods/")
+  ) {
+    return false;
+  }
+  return (
+    GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS.includes(relative) ||
+    (relative.startsWith("src/gateway/") &&
+      path.posix.basename(relative).includes("server") &&
+      relative.endsWith(".test.ts"))
+  );
+}
+
+function resolveGatewayServerFullSuiteTargets(cwd) {
+  const gatewayDir = path.join(cwd, "src/gateway");
+  if (!fs.existsSync(gatewayDir)) {
+    return [];
+  }
+  return listRepoFilesRecursive(gatewayDir, cwd)
+    .filter(isGatewayServerFullSuiteTarget)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function splitTargetChunks(targets, chunkCount) {
+  if (targets.length === 0) {
+    return [];
+  }
+  const normalizedChunkCount = Math.min(chunkCount, targets.length);
+  const baseSize = Math.floor(targets.length / normalizedChunkCount);
+  const remainder = targets.length % normalizedChunkCount;
+  const chunks = [];
+  let offset = 0;
+  for (let index = 0; index < normalizedChunkCount; index += 1) {
+    const chunkSize = baseSize + (index < remainder ? 1 : 0);
+    chunks.push(targets.slice(offset, offset + chunkSize));
+    offset += chunkSize;
+  }
+  return chunks;
 }
 
 function isExistingPathTarget(arg, cwd) {
@@ -1299,7 +1368,7 @@ export function buildVitestRunPlans(
 }
 
 export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
-  const { forwardedArgs, watchMode } = parseTestProjectsArgs(args, cwd);
+  const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
   if (watchMode) {
     return [
       {
@@ -1324,12 +1393,30 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     }
     const expandShard = expandToProjectConfigs;
     const configs = expandShard ? shard.projects : [shard.config];
-    return configs.map((config) => ({
-      config,
-      forwardedArgs,
-      includePatterns: null,
-      watchMode: false,
-    }));
+    return configs.flatMap((config) => {
+      if (expandShard && targetArgs.length === 0 && config === GATEWAY_SERVER_VITEST_CONFIG) {
+        const chunks = splitTargetChunks(
+          resolveGatewayServerFullSuiteTargets(cwd),
+          GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
+        );
+        if (chunks.length > 0) {
+          return chunks.map((targets) => ({
+            config,
+            forwardedArgs: [...forwardedArgs, ...targets],
+            includePatterns: null,
+            watchMode: false,
+          }));
+        }
+      }
+      return [
+        {
+          config,
+          forwardedArgs,
+          includePatterns: null,
+          watchMode: false,
+        },
+      ];
+    });
   });
 }
 
