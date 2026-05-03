@@ -20,6 +20,24 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
  * (Ollama, LM Studio, llama.cpp) legitimately stay silent for many minutes
  * during prompt evaluation and thinking, so the network-silence-as-hang
  * heuristic that motivates the default idle watchdog does not apply.
+ *
+ * Coverage scope:
+ *  - IPv4 loopback (RFC 5735, full 127/8), RFC 1918 private, RFC 6598 shared
+ *    CGNAT (100.64/10 — Tailscale/Headscale IPv4 mesh), `0.0.0.0`, `localhost`,
+ *    and `*.local` mDNS (RFC 6762).
+ *  - IPv6 loopback `::1`, IPv6 unique local `fc00::/7` (RFC 4193 — Tailscale's
+ *    IPv6 mesh `fd7a:115c:a1e0::/48` falls in this range), and IPv6 link-local
+ *    `fe80::/10` (RFC 4291).
+ *  - IPv4-mapped IPv6 covers loopback only (`::ffff:127.0.0.1`,
+ *    `::ffff:7f00:1`); private IPv4 in mapped form is intentionally not
+ *    matched, mirroring the SSRF-policy helper in
+ *    `src/cron/isolated-agent/model-preflight.runtime.ts`.
+ *  - DNS-resolved local aliases (e.g. an `/etc/hosts` entry mapping a custom
+ *    hostname to a private IP) are not detected: classification keys on
+ *    `URL.hostname` so resolution would have to happen here, and adding
+ *    sync/async DNS to the watchdog hot path is disproportionate. Affected
+ *    users can use the IP directly or set
+ *    `models.providers.<id>.timeoutSeconds` explicitly.
  */
 function isLocalProviderBaseUrl(baseUrl: string): boolean {
   let host: string;
@@ -39,6 +57,15 @@ function isLocalProviderBaseUrl(baseUrl: string): boolean {
     host === "::ffff:127.0.0.1" ||
     host.endsWith(".local")
   ) {
+    return true;
+  }
+  // IPv6 unique local (RFC 4193, fc00::/7) and link-local (RFC 4291,
+  // fe80::/10). The full first hextet is required so an abbreviated `fc::1`
+  // (which expands to `00fc:0:0:...` and is therefore not in fc00::/7)
+  // correctly stays on the cloud path. The first regex requires four hex
+  // digits then a colon; a zone identifier such as `fe80::1%eth0` is fine
+  // because the prefix still matches at the start.
+  if (/^f[cd][0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host)) {
     return true;
   }
   // Require a strict IPv4 literal before parsing; `Number.parseInt` is

@@ -100,6 +100,17 @@ describe("resolveLlmIdleTimeoutMs", () => {
     "http://192.168.1.20:11434",
     "http://100.64.0.5:11434",
     "http://100.127.255.254:11434",
+    // RFC 4193 IPv6 unique local (Tailscale IPv6 mesh fd7a:115c:a1e0::/48
+    // falls inside fc00::/7).
+    "http://[fc00::1]:11434",
+    "http://[fd00::1]:11434",
+    "http://[fd7a:115c:a1e0::dead:beef]:11434",
+    "http://[fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:11434",
+    // RFC 4291 IPv6 link-local.
+    "http://[fe80::1]:11434",
+    "http://[fe9a::1]:11434",
+    "http://[feab:cd::1]:11434",
+    "http://[febf::1]:11434",
   ])("disables the default idle watchdog for local provider baseUrl %s", (baseUrl) => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
   });
@@ -110,6 +121,25 @@ describe("resolveLlmIdleTimeoutMs", () => {
     "http://100.63.255.254:11434",
     "http://100.128.0.1:11434",
   ])("keeps the default idle watchdog for non-private IPv4 baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it.each([
+    // Just outside fc00::/7 (fe.. and 00fc::/16 are not unique-local).
+    "http://[fec0::1]:11434",
+    "http://[fbff::1]:11434",
+    // Just outside fe80::/10 (fec0:: was deprecated site-local, fe7f:: not LL).
+    "http://[fe7f::1]:11434",
+    // Public IPv6.
+    "http://[2001:db8::1]:11434",
+    // Abbreviated `fc::1` expands to 00fc:0:0:...:1, first byte is 0x00, not
+    // 0xfc — outside fc00::/7. Strict first-hextet match keeps this remote.
+    "http://[fc::1]:11434",
+    // IPv4-mapped IPv6 outside loopback (private RFC 1918 in mapped form is
+    // intentionally not matched, mirroring the SSRF policy helper).
+    "http://[::ffff:10.0.0.5]:11434",
+    "http://[::ffff:192.168.1.20]:11434",
+  ])("keeps the default idle watchdog for non-private IPv6 baseUrl %s", (baseUrl) => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
