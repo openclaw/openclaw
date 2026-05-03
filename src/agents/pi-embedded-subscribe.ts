@@ -131,8 +131,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
-    includeReasoning: reasoningMode === "on" && canShowReasoning,
-    shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
+    includeReasoning:
+      (reasoningMode === "on" ||
+        (reasoningMode === "verbose" && typeof params.onReasoningStream !== "function")) &&
+      canShowReasoning,
+    shouldEmitPartialReplies: !(
+      (reasoningMode === "on" ||
+        (reasoningMode === "verbose" && typeof params.onReasoningStream !== "function")) &&
+      !params.onBlockReply
+    ),
     streamReasoning:
       (reasoningMode === "stream" || reasoningMode === "verbose") &&
       canShowReasoning &&
