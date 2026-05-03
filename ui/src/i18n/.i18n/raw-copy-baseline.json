@@ -88,9 +88,23 @@
     {
       "count": 1,
       "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/ui/chat/build-chat-items.ts",
+      "text": "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/build-chat-items.ts",
-      "text": "Compaction"
+      "text": "Compacted history"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/build-chat-items.ts",
+      "text": "Open checkpoints"
     },
     {
       "count": 1,

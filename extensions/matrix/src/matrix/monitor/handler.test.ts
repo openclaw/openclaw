@@ -190,6 +190,44 @@ describe("matrix monitor handler pairing account scope", () => {
     }
   });
 
+  it("pins direct-message main route updates to the configured owner", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      cfg: {
+        channels: {
+          matrix: {
+            dm: { allowFrom: ["@owner:example.org"] },
+          },
+        },
+      },
+      dmPolicy: "allowlist",
+      allowFrom: ["@owner:example.org"],
+      allowFromResolvedEntries: [{ input: "@owner:example.org", id: "@owner:example.org" }],
+      isDirectMessage: true,
+    });
+
+    await handler(
+      "!dm:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$owner-dm",
+        sender: "@owner:example.org",
+        body: "hello",
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        updateLastRoute: expect.objectContaining({
+          channel: "matrix",
+          to: "room:!dm:example.org",
+          mainDmOwnerPin: expect.objectContaining({
+            ownerRecipient: "@owner:example.org",
+            senderRecipient: "@owner:example.org",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("sends pairing reminders for pending requests with cooldown", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-01T10:00:00.000Z"));
@@ -2498,6 +2536,7 @@ describe("matrix monitor handler draft streaming", () => {
     info: { kind: string },
   ) => Promise<void>;
   type ReplyOpts = {
+    onReplyStart?: () => Promise<void> | void;
     onPartialReply?: (payload: { text: string }) => void;
     onBlockReplyQueued?: (
       payload: {
@@ -2538,8 +2577,9 @@ describe("matrix monitor handler draft streaming", () => {
   function createStreamingHarness(opts?: {
     replyToMode?: "off" | "first" | "all" | "batched";
     blockStreamingEnabled?: boolean;
-    streaming?: "partial" | "quiet";
+    streaming?: "partial" | "quiet" | "progress";
     previewToolProgressEnabled?: boolean;
+    accountConfig?: import("../../types.js").MatrixConfig;
   }) {
     let capturedDeliver: DeliverFn | undefined;
     let capturedReplyOpts: ReplyOpts | undefined;
@@ -2569,6 +2609,7 @@ describe("matrix monitor handler draft streaming", () => {
 
     const { handler } = createMatrixHandlerTestHarness({
       streaming: opts?.streaming ?? "quiet",
+      accountConfig: opts?.accountConfig,
       previewToolProgressEnabled: opts?.previewToolProgressEnabled ?? false,
       blockStreamingEnabled: opts?.blockStreamingEnabled ?? false,
       replyToMode: opts?.replyToMode ?? "off",
@@ -2664,9 +2705,7 @@ describe("matrix monitor handler draft streaming", () => {
     await vi.waitFor(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
-    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe(
-      "Working...\n- `tool: read_file`",
-    );
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toMatch(/\n- `tool: read_file`$/);
 
     await deliver({ text: "Done" }, { kind: "final" });
 
@@ -2680,6 +2719,40 @@ describe("matrix monitor handler draft streaming", () => {
     );
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("uses resolved Matrix account progress config for draft text", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      accountConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Pearling",
+            maxLines: 1,
+          },
+        },
+      } as never,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onReplyStart?.();
+    await opts.onItemEvent?.({ progressText: "first" });
+    await opts.onItemEvent?.({ progressText: "second" });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(editMessageMatrixMock).toHaveBeenCalledWith(
+        "!room:example.org",
+        "$draft1",
+        "Pearling\n- `second`",
+        expect.anything(),
+      );
+    });
     await finish();
   });
 
@@ -2697,8 +2770,8 @@ describe("matrix monitor handler draft streaming", () => {
     await vi.waitFor(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
-    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe(
-      "Working...\n- `@room ping @alice:example.org [label](https://example.org)`",
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toMatch(
+      /\n- `@room ping @alice:example\.org \[label\]\(https:\/\/example\.org\)`$/,
     );
     await finish();
   });
@@ -2710,6 +2783,19 @@ describe("matrix monitor handler draft streaming", () => {
     const { opts, finish } = await dispatch();
 
     expect(opts.suppressDefaultToolProgressMessages).toBeUndefined();
+    expect(opts.onToolStart).toBeUndefined();
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("suppresses standalone Matrix tool progress in progress mode when draft lines are disabled", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: false,
+    });
+    const { opts, finish } = await dispatch();
+
+    expect(opts.suppressDefaultToolProgressMessages).toBe(true);
     expect(opts.onToolStart).toBeUndefined();
     expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
     await finish();

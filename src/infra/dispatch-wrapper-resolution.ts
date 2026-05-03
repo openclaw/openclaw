@@ -82,16 +82,7 @@ function isKnownArchNameToken(token: string): boolean {
 
 type WrapperScanDirective = "continue" | "consume-next" | "stop" | "invalid";
 
-function withWindowsExeAliases(names: readonly string[]): string[] {
-  const expanded = new Set<string>();
-  for (const name of names) {
-    expanded.add(name);
-    expanded.add(`${name}.exe`);
-  }
-  return Array.from(expanded);
-}
-
-export function isEnvAssignment(token: string): boolean {
+function isEnvAssignment(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token);
 }
 
@@ -540,16 +531,12 @@ const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(
   DISPATCH_WRAPPER_SPECS.map((spec) => [spec.name, spec] as const),
 );
 
-export const DISPATCH_WRAPPER_EXECUTABLES = new Set(
-  withWindowsExeAliases(DISPATCH_WRAPPER_SPECS.map((spec) => spec.name)),
-);
-
-export type DispatchWrapperUnwrapResult =
+type DispatchWrapperUnwrapResult =
   | { kind: "not-wrapper" }
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
-export type DispatchWrapperTrustPlan = {
+type DispatchWrapperTrustPlan = {
   argv: string[];
   wrappers: string[];
   policyBlocked: boolean;

@@ -1,6 +1,11 @@
 import { vi } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
-import type { MatrixRoomConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
+import type {
+  MatrixConfig,
+  MatrixRoomConfig,
+  MatrixStreamingMode,
+  ReplyToMode,
+} from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
@@ -16,6 +21,7 @@ const DEFAULT_ROUTE = {
 
 type MatrixHandlerTestHarnessOptions = {
   accountId?: string;
+  accountConfig?: MatrixConfig;
   cfg?: unknown;
   client?: Partial<MatrixClient>;
   runtime?: RuntimeEnv;
@@ -142,6 +148,28 @@ export function createMatrixHandlerTestHarness(
       };
     },
   );
+  const run = vi.fn(
+    async (params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["turn"]["run"]>[0]) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflightResult = await params.adapter.preflight?.(input, eventClass);
+      const preflight =
+        preflightResult && "kind" in preflightResult
+          ? { admission: preflightResult }
+          : (preflightResult ?? {});
+      const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
+      if ("runDispatch" in turn) {
+        return await runPrepared(turn);
+      }
+      throw new Error("matrix test helper only supports prepared turn dispatch");
+    },
+  );
   const dmPolicy = options.dmPolicy ?? "open";
   const allowFrom = options.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
   const cfgForHandler =
@@ -229,6 +257,7 @@ export function createMatrixHandlerTestHarness(
             }),
         },
         turn: {
+          run,
           runPrepared,
         },
         reactions: {
@@ -241,6 +270,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     cfg: cfgForHandler as never,
     accountId: options.accountId ?? "ops",
+    accountConfig: options.accountConfig,
     runtime:
       options.runtime ??
       ({

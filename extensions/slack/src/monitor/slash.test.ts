@@ -8,6 +8,8 @@ vi.mock("./slash-commands.runtime.js", () => {
   const reportExternalCommand = { key: "reportexternal", nativeName: "reportexternal" };
   const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
   const reportLongButtonCommand = { key: "reportlongbutton", nativeName: "reportlongbutton" };
+  const reportHugeButtonCommand = { key: "reporthugebutton", nativeName: "reporthugebutton" };
+  const reportHugeValueCommand = { key: "reporthugevalue", nativeName: "reporthugevalue" };
   const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
   const longConfirmCommand = { key: "longconfirm", nativeName: "longconfirm" };
   const statusAliasCommand = { key: "status", nativeName: "status" };
@@ -76,6 +78,12 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (normalized === "reportlongbutton") {
         return reportLongButtonCommand;
       }
+      if (normalized === "reporthugebutton") {
+        return reportHugeButtonCommand;
+      }
+      if (normalized === "reporthugevalue") {
+        return reportHugeValueCommand;
+      }
       if (normalized === "unsafeconfirm") {
         return unsafeConfirmCommand;
       }
@@ -125,6 +133,18 @@ vi.mock("./slash-commands.runtime.js", () => {
         args: [],
       },
       {
+        name: "reporthugebutton",
+        description: "ReportHugeButton",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "reporthugevalue",
+        description: "ReportHugeValue",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
         name: "unsafeconfirm",
         description: "UnsafeConfirm",
         acceptsArgs: true,
@@ -157,7 +177,7 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (params.command?.key === "reportlong") {
         return resolvePeriodMenu(params, [
           ...fullReportPeriodChoices,
-          { value: "x".repeat(45), label: "long" },
+          { value: "x".repeat(100), label: "long" },
         ]);
       }
       if (params.command?.key === "reportlongbutton") {
@@ -166,6 +186,21 @@ vi.mock("./slash-commands.runtime.js", () => {
             value: "x".repeat(170),
             label: "Long button label ".repeat(8),
           },
+        ]);
+      }
+      if (params.command?.key === "reporthugebutton") {
+        return resolvePeriodMenu(
+          params,
+          Array.from({ length: 250 }, (_v, i) => ({
+            value: `${String(i + 1)}-${"x".repeat(170)}`,
+            label: `Long button label ${i + 1}`,
+          })),
+        );
+      }
+      if (params.command?.key === "reporthugevalue") {
+        return resolvePeriodMenu(params, [
+          { value: "valid", label: "Valid" },
+          { value: "x".repeat(2500), label: "Overlong" },
         ]);
       }
       if (params.command?.key === "reportcompact") {
@@ -446,6 +481,8 @@ describe("Slack native command argument menus", () => {
   let reportExternalHandler: (args: unknown) => Promise<void>;
   let reportLongHandler: (args: unknown) => Promise<void>;
   let reportLongButtonHandler: (args: unknown) => Promise<void>;
+  let reportHugeButtonHandler: (args: unknown) => Promise<void>;
+  let reportHugeValueHandler: (args: unknown) => Promise<void>;
   let unsafeConfirmHandler: (args: unknown) => Promise<void>;
   let longConfirmHandler: (args: unknown) => Promise<void>;
   let agentStatusHandler: (args: unknown) => Promise<void>;
@@ -464,6 +501,16 @@ describe("Slack native command argument menus", () => {
       harness.commands,
       "/reportlongbutton",
       "/reportlongbutton",
+    );
+    reportHugeButtonHandler = requireHandler(
+      harness.commands,
+      "/reporthugebutton",
+      "/reporthugebutton",
+    );
+    reportHugeValueHandler = requireHandler(
+      harness.commands,
+      "/reporthugevalue",
+      "/reporthugevalue",
     );
     unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
     longConfirmHandler = requireHandler(harness.commands, "/longconfirm", "/longconfirm");
@@ -585,8 +632,17 @@ describe("Slack native command argument menus", () => {
   });
 
   it("uses static_select when encoded values fit Slack option limits", async () => {
-    const firstElement = await getFirstActionElementFromCommand(reportLongHandler);
+    const firstElement = (await getFirstActionElementFromCommand(reportLongHandler)) as
+      | {
+          type?: string;
+          options?: Array<{ value?: string }>;
+          confirm?: unknown;
+        }
+      | undefined;
     expect(firstElement?.type).toBe("static_select");
+    const longOption = firstElement?.options?.find((option) => option.value?.includes("xxx"));
+    expect(longOption?.value?.length).toBeGreaterThan(75);
+    expect(longOption?.value?.length).toBeLessThanOrEqual(150);
     expect(firstElement?.confirm).toBeTruthy();
   });
 
@@ -599,6 +655,36 @@ describe("Slack native command argument menus", () => {
     expect(firstElement?.text?.text?.endsWith("…")).toBe(true);
     expect(firstElement?.value?.length).toBeGreaterThan(75);
     expect(firstElement?.confirm).toBeTruthy();
+  });
+
+  it("caps large button fallback menus to Slack's block limit", async () => {
+    const { respond } = await runCommandHandler(reportHugeButtonHandler);
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type: string; elements?: unknown[] }>;
+    };
+    const actionBlocks = (payload.blocks ?? []).filter((block) => block.type === "actions");
+    expect(payload.blocks).toHaveLength(50);
+    expect(actionBlocks).toHaveLength(47);
+    expect(actionBlocks.at(-1)?.elements).toHaveLength(5);
+  });
+
+  it("drops fallback buttons whose encoded values exceed Slack's button value limit", async () => {
+    const { respond } = await runCommandHandler(reportHugeValueHandler);
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{
+        type: string;
+        elements?: Array<{ text?: { text?: string }; value?: string }>;
+      }>;
+    };
+    const actionBlocks = (payload.blocks ?? []).filter((block) => block.type === "actions");
+    expect(actionBlocks).toHaveLength(1);
+    expect(actionBlocks[0]?.elements).toHaveLength(1);
+    expect(actionBlocks[0]?.elements?.[0]).toMatchObject({
+      text: { text: "Valid" },
+    });
+    expect(actionBlocks[0]?.elements?.[0]?.value?.length).toBeLessThanOrEqual(2000);
   });
 
   it("shows an overflow menu when choices fit compact range", async () => {

@@ -48,6 +48,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED"],
     tests: [
       "src/plugins/contracts/plugin-sdk-index.test.ts",
+      "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
       "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
     ],
   },
@@ -275,21 +276,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["activation.onAgentHarnesses", "activation planner"],
     diagnostics: ["activation plan compat reason"],
     tests: ["src/plugins/activation-planner.test.ts"],
-  },
-  {
-    code: "legacy-implicit-startup-sidecar",
-    status: "deprecated",
-    owner: "plugin-execution",
-    introduced: "2026-04-28",
-    deprecated: "2026-04-28",
-    warningStarts: "2026-04-28",
-    removeAfter: "2026-07-28",
-    replacement:
-      "`activation.onStartup: true` for startup work or `activation.onStartup: false` for inert plugins",
-    docsPath: "/plugins/manifest",
-    surfaces: ["Gateway startup plugin planning", "openclaw.plugin.json activation"],
-    diagnostics: ["plugin compatibility notice"],
-    tests: ["src/plugins/channel-plugin-ids.test.ts", "src/plugins/installed-plugin-index.test.ts"],
   },
   {
     code: "activation-provider-hint",

@@ -149,6 +149,9 @@ const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
+const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
+  /qa group message unavailable fallback check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -1325,6 +1328,21 @@ async function buildResponsesPayload(
       },
     ]);
   }
+  if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
+    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: marker,
+      });
+    }
+    return buildAssistantEvents("");
+  }
+  if (QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE.test(allInputText)) {
+    return buildAssistantEvents(
+      exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-FALLBACK-OK",
+    );
+  }
   if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return buildAssistantEvents(exactReplyDirective);
   }
@@ -1447,6 +1465,12 @@ async function buildResponsesPayload(
     /silent snack recall check/i.test(allInputText)
   ) {
     if (!toolOutput) {
+      if (!hasDeclaredTool(body, "memory_recall")) {
+        return buildToolCallEventsWithArgs("memory_search", {
+          query: "QA movie night snack lemon pepper wings blue cheese",
+          maxResults: 3,
+        });
+      }
       return buildToolCallEventsWithArgs("memory_recall", {
         query: "QA movie night snack lemon pepper wings blue cheese",
         limit: 3,
@@ -1471,6 +1495,23 @@ async function buildResponsesPayload(
         return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
       }
       return buildAssistantEvents("NONE");
+    }
+    const results = Array.isArray(toolJson?.results)
+      ? (toolJson.results as Array<Record<string, unknown>>)
+      : [];
+    const first = results[0];
+    if (typeof first?.path === "string") {
+      const from =
+        typeof first.startLine === "number"
+          ? Math.max(1, first.startLine)
+          : typeof first.endLine === "number"
+            ? Math.max(1, first.endLine)
+            : 1;
+      return buildToolCallEventsWithArgs("memory_get", {
+        path: first.path,
+        from,
+        lines: 4,
+      });
     }
     const memorySnippet = Array.isArray(toolJson?.results)
       ? JSON.stringify(toolJson.results)

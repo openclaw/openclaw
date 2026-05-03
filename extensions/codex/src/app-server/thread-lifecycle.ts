@@ -2,9 +2,12 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
+import {
+  CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
+  renderCodexPromptOverlay,
+} from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
-import type { CodexAppServerClient } from "./client.js";
+import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
   assertCodexThreadResumeResponse,
@@ -86,6 +89,9 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
         };
       } catch (error) {
+        if (isCodexAppServerConnectionClosedError(error)) {
+          throw error;
+        }
         embeddedAgentLog.warn("codex app-server thread resume failed; starting a new thread", {
           error,
         });
@@ -94,25 +100,19 @@ export async function startOrResumeThread(params: {
     }
   }
 
-  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
   const response = assertCodexThreadStartResponse(
-    await params.client.request("thread/start", {
-      model: params.params.modelId,
-      ...(modelProvider ? { modelProvider } : {}),
-      cwd: params.cwd,
-      approvalPolicy: params.appServer.approvalPolicy,
-      approvalsReviewer: params.appServer.approvalsReviewer,
-      sandbox: params.appServer.sandbox,
-      ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-      serviceName: "OpenClaw",
-      ...(params.config ? { config: params.config } : {}),
-      developerInstructions:
-        params.developerInstructions ?? buildDeveloperInstructions(params.params),
-      dynamicTools: params.dynamicTools,
-      experimentalRawEvents: true,
-      persistExtendedHistory: true,
-    } satisfies CodexThreadStartParams),
+    await params.client.request(
+      "thread/start",
+      buildThreadStartParams(params.params, {
+        cwd: params.cwd,
+        dynamicTools: params.dynamicTools,
+        appServer: params.appServer,
+        developerInstructions: params.developerInstructions,
+        config: params.config,
+      }),
+    ),
   );
+  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
   const createdAt = new Date().toISOString();
   await writeCodexAppServerBinding(params.params.sessionFile, {
     threadId: response.thread.id,
@@ -134,6 +134,34 @@ export async function startOrResumeThread(params: {
     dynamicToolsFingerprint,
     createdAt,
     updatedAt: createdAt,
+  };
+}
+
+export function buildThreadStartParams(
+  params: EmbeddedRunAttemptParams,
+  options: {
+    cwd: string;
+    dynamicTools: CodexDynamicToolSpec[];
+    appServer: CodexAppServerRuntimeOptions;
+    developerInstructions?: string;
+    config?: JsonObject;
+  },
+): CodexThreadStartParams {
+  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
+  return {
+    model: params.modelId,
+    ...(modelProvider ? { modelProvider } : {}),
+    cwd: options.cwd,
+    approvalPolicy: options.appServer.approvalPolicy,
+    approvalsReviewer: options.appServer.approvalsReviewer,
+    sandbox: options.appServer.sandbox,
+    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    serviceName: "OpenClaw",
+    ...(options.config ? { config: options.config } : {}),
+    developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
+    dynamicTools: options.dynamicTools,
+    experimentalRawEvents: true,
+    persistExtendedHistory: true,
   };
 }
 
@@ -180,7 +208,31 @@ export function buildTurnStartParams(
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+    collaborationMode: buildTurnCollaborationMode(params),
   };
+}
+
+type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;
+
+export function buildTurnCollaborationMode(
+  params: EmbeddedRunAttemptParams,
+): CodexTurnCollaborationMode {
+  return {
+    mode: "default",
+    settings: {
+      model: params.modelId,
+      reasoning_effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+      developer_instructions:
+        params.trigger === "heartbeat" ? buildHeartbeatCollaborationInstructions() : null,
+    },
+  };
+}
+
+function buildHeartbeatCollaborationInstructions(): string {
+  return [
+    "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.",
+    CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
+  ].join("\n\n");
 }
 
 function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
@@ -222,7 +274,7 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
   const promptOverlay = renderCodexRuntimePromptOverlay(params);
   const sections = [
-    "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
+    "You are running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-specific integrations such as messaging, cron, sessions, media, gateway, and nodes when available.",
     "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
     promptOverlay,
     params.extraSystemPrompt,

@@ -32,6 +32,12 @@ describe("createDiscordPluginBase", () => {
     expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
   });
 
+  it("hydrates announce delivery targets from stored session routing", () => {
+    const plugin = createDiscordPluginBase({ setup: {} as never });
+
+    expect(plugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+
   it("reports duplicate-token accounts as disabled to gateway startup", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
     const plugin = createDiscordPluginBase({ setup: {} as never });
@@ -127,5 +133,33 @@ describe("discordConfigAdapter", () => {
     expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
       "123456789",
     ]);
+  });
+
+  it("keeps read-only accessors from resolving token SecretRefs", () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          discord_token: {
+            source: "file",
+            path: "/tmp/openclaw-missing-discord-token",
+            mode: "singleValue",
+          },
+        },
+      },
+      channels: {
+        discord: {
+          token: { source: "file", provider: "discord_token", id: "value" },
+          allowFrom: ["1128540374256849009"],
+          defaultTo: "1498959610751750304",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "1128540374256849009",
+    ]);
+    expect(discordConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+      "1498959610751750304",
+    );
   });
 });

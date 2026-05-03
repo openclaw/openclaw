@@ -15,19 +15,20 @@ import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   hasFinalInboundReplyDispatch,
-  runPreparedInboundReplyTurn,
+  runInboundReplyTurn,
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
+import { resolveDiscordTargetChannelId } from "../send.shared.js";
+import { resolveDiscordChannelId } from "../targets.js";
 import {
   createDiscordAckReactionAdapter,
   createDiscordAckReactionContext,
@@ -82,6 +83,21 @@ type DiscordMessageProcessObserver = {
   onFinalReplyDelivered?: () => void;
   onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
 };
+
+type ToolStartPayload = {
+  name?: string;
+  phase?: string;
+  args?: Record<string, unknown>;
+};
+
+function readToolStringArg(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readToolBooleanArg(args: Record<string, unknown>, key: string): boolean {
+  return args[key] === true;
+}
 
 export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
@@ -177,9 +193,12 @@ export async function processDiscordMessage(
         shouldBypassMention,
       }),
     );
-  const shouldSendAckReaction = !sourceRepliesAreToolOnly && shouldAckReaction();
+  const shouldSendAckReaction = shouldAckReaction();
+  const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
   const statusReactionsEnabled =
-    shouldSendAckReaction && cfg.messages?.statusReactions?.enabled !== false;
+    shouldSendAckReaction &&
+    cfg.messages?.statusReactions?.enabled !== false &&
+    (!sourceRepliesAreToolOnly || statusReactionsExplicitlyEnabled);
   const feedbackRest = createDiscordRestClient({
     cfg,
     token,
@@ -201,7 +220,9 @@ export async function processDiscordMessage(
     messageId: message.id,
     reactionContext: ackReactionContext,
   });
-  const statusReactions = createStatusReactionController({
+  let statusReactionTarget = `${messageChannelId}/${message.id}`;
+  let statusReactionsActive = statusReactionsEnabled;
+  let statusReactions = createStatusReactionController({
     enabled: statusReactionsEnabled,
     adapter: discordAdapter,
     initialEmoji: ackReaction,
@@ -211,11 +232,99 @@ export async function processDiscordMessage(
       logAckFailure({
         log: logVerbose,
         channel: "discord",
-        target: `${messageChannelId}/${message.id}`,
+        target: statusReactionTarget,
         error: err,
       });
     },
   });
+  const resolveTrackedReactionChannelId = async (
+    args: Record<string, unknown>,
+  ): Promise<string> => {
+    const target =
+      readToolStringArg(args, "channelId") ??
+      readToolStringArg(args, "channel_id") ??
+      readToolStringArg(args, "to");
+    if (!target) {
+      return messageChannelId;
+    }
+    try {
+      return resolveDiscordChannelId(target);
+    } catch {
+      return (
+        await resolveDiscordTargetChannelId(target, {
+          cfg,
+          token,
+          accountId,
+        })
+      ).channelId;
+    }
+  };
+  const maybeBindStatusReactionsToToolReaction = async (payload: ToolStartPayload) => {
+    if (
+      sourceRepliesAreToolOnly ||
+      cfg.messages?.statusReactions?.enabled === false ||
+      payload.phase !== "start" ||
+      payload.name !== "message" ||
+      !payload.args
+    ) {
+      return;
+    }
+    const args = payload.args;
+    const action = readToolStringArg(args, "action")?.toLowerCase();
+    if (action !== "react") {
+      return;
+    }
+    const shouldTrack =
+      readToolBooleanArg(args, "trackToolCalls") || readToolBooleanArg(args, "track_tool_calls");
+    if (!shouldTrack) {
+      return;
+    }
+    const emoji = readToolStringArg(args, "emoji");
+    const remove = readToolBooleanArg(args, "remove");
+    if (!emoji || remove) {
+      return;
+    }
+    const trackedMessageId =
+      readToolStringArg(args, "messageId") ?? readToolStringArg(args, "message_id") ?? message.id;
+    let trackedChannelId: string;
+    try {
+      trackedChannelId = await resolveTrackedReactionChannelId(args);
+    } catch (err) {
+      logAckFailure({
+        log: logVerbose,
+        channel: "discord",
+        target: `${readToolStringArg(args, "to") ?? readToolStringArg(args, "channelId") ?? messageChannelId}/${trackedMessageId}`,
+        error: err,
+      });
+      return;
+    }
+    statusReactionTarget = `${trackedChannelId}/${trackedMessageId}`;
+    if (statusReactionsActive) {
+      void statusReactions.clear();
+    }
+    const trackedAdapter = createDiscordAckReactionAdapter({
+      channelId: trackedChannelId,
+      messageId: trackedMessageId,
+      reactionContext: ackReactionContext,
+    });
+    statusReactions = createStatusReactionController({
+      enabled: true,
+      adapter: trackedAdapter,
+      initialEmoji: emoji,
+      emojis: cfg.messages?.statusReactions?.emojis,
+      timing: cfg.messages?.statusReactions?.timing,
+      onError: (err) => {
+        logAckFailure({
+          log: logVerbose,
+          channel: "discord",
+          target: statusReactionTarget,
+          error: err,
+        });
+      },
+    });
+    statusReactionsActive = true;
+    void statusReactions.setQueued();
+  };
   queueInitialDiscordAckReaction({
     enabled: statusReactionsEnabled,
     shouldSendAckReaction,
@@ -456,6 +565,7 @@ export async function processDiscordMessage(
         }
         await replyPipeline.typingCallbacks?.onReplyStart();
         await statusReactions.setThinking();
+        await draftPreview.startProgressDraft();
       },
     });
 
@@ -480,109 +590,137 @@ export async function processDiscordMessage(
       await settleDispatchBeforeStart();
       return;
     }
-    const preparedResult = await runPreparedInboundReplyTurn({
+    const preparedResult = await runInboundReplyTurn({
       channel: "discord",
       accountId: route.accountId,
-      routeSessionKey: persistedSessionKey,
-      storePath: turn.storePath,
-      ctxPayload,
-      recordInboundSession,
-      record: turn.record,
-      onPreDispatchFailure: settleDispatchBeforeStart,
-      runDispatch: () =>
-        dispatchInboundMessage({
-          ctx: ctxPayload,
-          cfg,
-          dispatcher,
-          replyOptions: {
-            ...replyOptions,
-            abortSignal,
-            skillFilter: channelConfig?.skills,
-            sourceReplyDeliveryMode,
-            disableBlockStreaming: sourceRepliesAreToolOnly
-              ? true
-              : (draftPreview.disableBlockStreamingForDraft ??
-                (typeof resolvedBlockStreamingEnabled === "boolean"
-                  ? !resolvedBlockStreamingEnabled
-                  : undefined)),
-            onPartialReply: draftPreview.draftStream
-              ? (payload) => draftPreview.updateFromPartial(payload.text)
-              : undefined,
-            onAssistantMessageStart: draftPreview.draftStream
-              ? draftPreview.handleAssistantMessageBoundary
-              : undefined,
-            onReasoningEnd: draftPreview.draftStream
-              ? draftPreview.handleAssistantMessageBoundary
-              : undefined,
-            onModelSelected,
-            suppressDefaultToolProgressMessages: draftPreview.previewToolProgressEnabled
-              ? true
-              : undefined,
-            onReasoningStream: async () => {
-              await statusReactions.setThinking();
-            },
-            onToolStart: async (payload) => {
-              if (isProcessAborted(abortSignal)) {
-                return;
-              }
-              await statusReactions.setTool(payload.name);
-              draftPreview.pushToolProgress(
-                payload.name ? `tool: ${payload.name}` : "tool running",
-              );
-            },
-            onItemEvent: async (payload) => {
-              draftPreview.pushToolProgress(
-                payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
-              );
-            },
-            onPlanUpdate: async (payload) => {
-              if (payload.phase !== "update") {
-                return;
-              }
-              draftPreview.pushToolProgress(
-                payload.explanation ?? payload.steps?.[0] ?? "planning",
-              );
-            },
-            onApprovalEvent: async (payload) => {
-              if (payload.phase !== "requested") {
-                return;
-              }
-              draftPreview.pushToolProgress(
-                payload.command ? `approval: ${payload.command}` : "approval requested",
-              );
-            },
-            onCommandOutput: async (payload) => {
-              if (payload.phase !== "end") {
-                return;
-              }
-              draftPreview.pushToolProgress(
-                payload.name
-                  ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
-                  : payload.title,
-              );
-            },
-            onPatchSummary: async (payload) => {
-              if (payload.phase !== "end") {
-                return;
-              }
-              draftPreview.pushToolProgress(payload.summary ?? payload.title ?? "patch applied");
-            },
-            onCompactionStart: async () => {
-              if (isProcessAborted(abortSignal)) {
-                return;
-              }
-              await statusReactions.setCompacting();
-            },
-            onCompactionEnd: async () => {
-              if (isProcessAborted(abortSignal)) {
-                return;
-              }
-              statusReactions.cancelPending();
-              await statusReactions.setThinking();
-            },
+      raw: ctx,
+      adapter: {
+        ingest: () => ({
+          id: message.id,
+          timestamp: message.timestamp ? Date.parse(message.timestamp) : undefined,
+          rawText: text,
+          textForAgent: ctxPayload.BodyForAgent,
+          textForCommands: ctxPayload.CommandBody,
+          raw: message,
+        }),
+        resolveTurn: () => ({
+          channel: "discord",
+          accountId: route.accountId,
+          routeSessionKey: persistedSessionKey,
+          storePath: turn.storePath,
+          ctxPayload,
+          recordInboundSession,
+          record: turn.record,
+          history: {
+            isGroup: isGuildMessage,
+            historyKey: messageChannelId,
+            historyMap: guildHistories,
+            limit: historyLimit,
+          },
+          onPreDispatchFailure: settleDispatchBeforeStart,
+          runDispatch: async () => {
+            await draftPreview.startProgressDraft();
+            return await dispatchInboundMessage({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher,
+              replyOptions: {
+                ...replyOptions,
+                abortSignal,
+                skillFilter: channelConfig?.skills,
+                sourceReplyDeliveryMode,
+                disableBlockStreaming: sourceRepliesAreToolOnly
+                  ? true
+                  : (draftPreview.disableBlockStreamingForDraft ??
+                    (typeof resolvedBlockStreamingEnabled === "boolean"
+                      ? !resolvedBlockStreamingEnabled
+                      : undefined)),
+                onPartialReply: draftPreview.draftStream
+                  ? (payload) => draftPreview.updateFromPartial(payload.text)
+                  : undefined,
+                onAssistantMessageStart: draftPreview.draftStream
+                  ? draftPreview.handleAssistantMessageBoundary
+                  : undefined,
+                onReasoningEnd: draftPreview.draftStream
+                  ? draftPreview.handleAssistantMessageBoundary
+                  : undefined,
+                onModelSelected,
+                suppressDefaultToolProgressMessages:
+                  draftPreview.suppressDefaultToolProgressMessages ? true : undefined,
+                onReasoningStream: async () => {
+                  await statusReactions.setThinking();
+                },
+                onToolStart: async (payload) => {
+                  if (isProcessAborted(abortSignal)) {
+                    return;
+                  }
+                  await maybeBindStatusReactionsToToolReaction(payload);
+                  await statusReactions.setTool(payload.name);
+                  draftPreview.pushToolProgress(
+                    payload.name ? `tool: ${payload.name}` : "tool running",
+                  );
+                },
+                onItemEvent: async (payload) => {
+                  draftPreview.pushToolProgress(
+                    payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+                  );
+                },
+                onPlanUpdate: async (payload) => {
+                  if (payload.phase !== "update") {
+                    return;
+                  }
+                  draftPreview.pushToolProgress(
+                    payload.explanation ?? payload.steps?.[0] ?? "planning",
+                  );
+                },
+                onApprovalEvent: async (payload) => {
+                  if (payload.phase !== "requested") {
+                    return;
+                  }
+                  draftPreview.pushToolProgress(
+                    payload.command ? `approval: ${payload.command}` : "approval requested",
+                  );
+                },
+                onCommandOutput: async (payload) => {
+                  if (payload.phase !== "end") {
+                    return;
+                  }
+                  draftPreview.pushToolProgress(
+                    payload.name
+                      ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
+                      : payload.title,
+                  );
+                },
+                onPatchSummary: async (payload) => {
+                  if (payload.phase !== "end") {
+                    return;
+                  }
+                  draftPreview.pushToolProgress(
+                    payload.summary ?? payload.title ?? "patch applied",
+                  );
+                },
+                onCompactionStart: async () => {
+                  if (isProcessAborted(abortSignal)) {
+                    return;
+                  }
+                  await statusReactions.setCompacting();
+                },
+                onCompactionEnd: async () => {
+                  if (isProcessAborted(abortSignal)) {
+                    return;
+                  }
+                  statusReactions.cancelPending();
+                  await statusReactions.setThinking();
+                },
+              },
+            });
           },
         }),
+      },
     });
+    if (!preparedResult.dispatched) {
+      return;
+    }
     dispatchResult = preparedResult.dispatchResult;
     if (isProcessAborted(abortSignal)) {
       dispatchAborted = true;
@@ -604,7 +742,7 @@ export async function processDiscordMessage(
         markDispatchIdle();
       }
     }
-    if (statusReactionsEnabled) {
+    if (statusReactionsActive) {
       if (dispatchAborted) {
         if (removeAckAfterReply) {
           void statusReactions.clear();
@@ -646,27 +784,14 @@ export async function processDiscordMessage(
     return;
   }
 
-  if (!hasFinalInboundReplyDispatch(dispatchResult)) {
-    if (isGuildMessage) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: guildHistories,
-        historyKey: messageChannelId,
-        limit: historyLimit,
-      });
-    }
+  const finalDispatchResult = dispatchResult;
+  if (!finalDispatchResult || !hasFinalInboundReplyDispatch(finalDispatchResult)) {
     return;
   }
   if (shouldLogVerbose()) {
-    const finalCount = dispatchResult.counts.final;
+    const finalCount = finalDispatchResult.counts.final;
     logVerbose(
       `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
     );
-  }
-  if (isGuildMessage) {
-    clearHistoryEntriesIfEnabled({
-      historyMap: guildHistories,
-      historyKey: messageChannelId,
-      limit: historyLimit,
-    });
   }
 }

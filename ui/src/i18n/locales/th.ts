@@ -713,6 +713,15 @@ export const th: TranslationMap = {
       dailyCsv: "CSV รายวัน",
       json: "JSON",
     },
+    cacheStatus: {
+      warning: "แคชการใช้งานกำลังสร้างใหม่ในเบื้องหลัง ยอดรวมที่แสดงอาจไม่เป็นปัจจุบัน",
+      title: "{status}: ค้างอยู่ {pending}, ล้าสมัย {stale}, แคชแล้ว {cached}",
+      status: {
+        refreshing: "กำลังรีเฟรช",
+        stale: "ล้าสมัย",
+        partial: "บางส่วน",
+      },
+    },
     empty: {
       title: "เริ่มต้นด้วยช่วงวันที่",
       subtitle:
