@@ -92,10 +92,29 @@ const NARRATIVE_SYSTEM_PROMPT = [
 // many minutes after the reports have already been written. The previous 15 s
 // limit was empirically too tight for warm-gateway runs across light, REM, and
 // deep phases — even unblocked LLM calls hit it on the first sweep after a
-// restart. 60 s gives realistic latency headroom while still capping the
-// worst case at one minute, well below the multi-minute stall the original
-// comment warned against.
-const NARRATIVE_TIMEOUT_MS = 60_000;
+// restart.
+//
+// Default raised to 240 s (4 min) after field reports of reliable timeouts on
+// hosts with 15+ workspaces where embedded-agent prep alone consumes 13-22 s
+// before any token can be streamed (see github.com/openclaw/openclaw#76333).
+// The cap can be overridden per-host via the `OPENCLAW_DREAMING_NARRATIVE_TIMEOUT_MS`
+// environment variable for operators who need a tighter or looser budget
+// without rebuilding.
+const DEFAULT_NARRATIVE_TIMEOUT_MS = 240_000;
+
+function resolveNarrativeTimeoutMs(): number {
+  const raw = process.env.OPENCLAW_DREAMING_NARRATIVE_TIMEOUT_MS;
+  if (raw === undefined || raw === "") {
+    return DEFAULT_NARRATIVE_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_NARRATIVE_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
+const NARRATIVE_TIMEOUT_MS = resolveNarrativeTimeoutMs();
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;

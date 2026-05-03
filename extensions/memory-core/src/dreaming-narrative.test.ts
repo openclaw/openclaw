@@ -783,7 +783,7 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
-    expect(subagent.waitForRun.mock.calls[0][0]).toMatchObject({ timeoutMs: 60_000 });
+    expect(subagent.waitForRun.mock.calls[0][0]).toMatchObject({ timeoutMs: 240_000 });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("narrative session cleanup failed for rem phase"),
     );
