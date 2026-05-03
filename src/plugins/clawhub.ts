@@ -268,10 +268,6 @@ function normalizeArtifactResolverFiles(
 function resolveTopLevelNpmPackArtifact(
   artifact: ClawHubResolvedArtifact | null | undefined,
 ): ClawHubPackageArtifactSummary | null {
-  // The live ClawHub artifact resolver currently emits `kind`/`sha256` on the
-  // top-level artifact, while the typed contract uses `artifactKind`/
-  // `artifactSha256`. Accept either spelling so installs unblock before the
-  // server catches up.
   const raw = artifact as
     | {
         artifactKind?: string | null;
