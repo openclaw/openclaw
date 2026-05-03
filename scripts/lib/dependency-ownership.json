@@ -61,6 +61,12 @@
       "class": "core-runtime",
       "risk": ["schema-validation"]
     },
+    "bottleneck": {
+      "owner": "plugin:telegram",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.telegram.enabled"],
+      "risk": ["transitive-runtime"]
+    },
     "chalk": {
       "owner": "core:cli",
       "class": "core-runtime",

@@ -112,6 +112,9 @@ importers:
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
+      bottleneck:
+        specifier: ^2.19.5
+        version: 2.19.5
       chalk:
         specifier: ^5.6.2
         version: 5.6.2
@@ -217,10 +220,6 @@ importers:
       zod:
         specifier: ^4.4.1
         version: 4.4.1
-    optionalDependencies:
-      sqlite-vec:
-        specifier: 0.1.9
-        version: 0.1.9
     devDependencies:
       '@copilotkit/aimock':
         specifier: 1.16.4
@@ -288,6 +287,10 @@ importers:
       vitest:
         specifier: ^4.1.5
         version: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@25.6.0)(@vitest/browser-playwright@4.1.5)(@vitest/coverage-v8@4.1.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.10(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
+    optionalDependencies:
+      sqlite-vec:
+        specifier: 0.1.9
+        version: 0.1.9
 
   extensions/acpx:
     dependencies:
@@ -1357,6 +1360,9 @@ importers:
       '@grammyjs/transformer-throttler':
         specifier: ^1.2.1
         version: 1.2.1(grammy@1.42.0)
+      bottleneck:
+        specifier: ^2.19.5
+        version: 2.19.5
       grammy:
         specifier: ^1.42.0
         version: 1.42.0
@@ -6386,10 +6392,6 @@ packages:
     resolution: {integrity: sha512-9MdFxmkKaOYVTV+XVRG8ArDwwQ77XIgIPyKASB1k3JPq3M8fGQQQE3YpMOrKm6g//Ktx8ivZr8xo1Qmtqub+GA==}
     engines: {node: ^18 || ^20 || >= 21}
 
-  node-gyp-build@4.8.4:
-    resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
-    hasBin: true
-
   node-downloader-helper@2.1.11:
     resolution: {integrity: sha512-882fH2C9AWdiPCwz/2beq5t8FGMZK9Dx8TJUOIxzMCbvG7XUKM5BuJwN5f0NKo4SCQK6jR4p2TPm54mYGdGchQ==}
     engines: {node: '>=14.18'}
@@ -6411,6 +6413,10 @@ packages:
   node-fetch@3.3.2:
     resolution: {integrity: sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
+  node-gyp-build@4.8.4:
+    resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
+    hasBin: true
 
   node-sarif-builder@3.4.0:
     resolution: {integrity: sha512-tGnJW6OKRii9u/b2WiUViTJS+h7Apxx17qsMUjsUeNDiMMX5ZFf8F8Fcz7PAQ6omvOxHZtvDTmOYKJQwmfpjeg==}
@@ -13579,8 +13585,6 @@ snapshots:
 
   node-addon-api@8.7.0: {}
 
-  node-gyp-build@4.8.4: {}
-
   node-downloader-helper@2.1.11: {}
 
   node-edge-tts@1.2.10:
@@ -13602,6 +13606,8 @@ snapshots:
       data-uri-to-buffer: 4.0.1
       fetch-blob: 3.2.0
       formdata-polyfill: 4.0.10
+
+  node-gyp-build@4.8.4: {}
 
   node-sarif-builder@3.4.0:
     dependencies:
@@ -14597,6 +14603,7 @@ snapshots:
       sqlite-vec-linux-arm64: 0.1.9
       sqlite-vec-linux-x64: 0.1.9
       sqlite-vec-windows-x64: 0.1.9
+    optional: true
 
   stackback@0.0.2: {}
 
