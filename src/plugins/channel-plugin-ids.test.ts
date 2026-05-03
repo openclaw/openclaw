@@ -618,10 +618,33 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "microsoft", "memory-core"],
     ],
     [
+      "includes active persona speech providers at startup",
+      {
+        channels: {},
+        messages: {
+          tts: {
+            persona: "narrator",
+            personas: {
+              narrator: {
+                label: "Narrator",
+                provider: "microsoft",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
       "honors disabled speech provider config blocks at startup",
       {
         channels: {},
-        messages: { tts: { providers: { microsoft: { enabled: false } } } },
+        messages: {
+          tts: {
+            provider: "microsoft",
+            providers: { microsoft: { enabled: false } },
+          },
+        },
       } as OpenClawConfig,
       ["browser", "memory-core"],
     ],

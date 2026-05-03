@@ -14,6 +14,10 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
+import {
+  collectConfiguredSpeechProviderIds,
+  normalizeConfiguredSpeechProviderIdForStartup,
+} from "./gateway-startup-speech-providers.js";
 import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
@@ -159,117 +163,6 @@ function hasConfiguredActivationPath(params: {
       pathPattern,
     }).some((match) => isConfigActivationValueEnabled(match.value)),
   );
-}
-
-const TTS_PROVIDER_CONFIG_RESERVED_KEYS = new Set([
-  "auto",
-  "enabled",
-  "maxTextLength",
-  "mode",
-  "modelOverrides",
-  "persona",
-  "personas",
-  "prefsPath",
-  "provider",
-  "providers",
-  "summaryModel",
-  "timeoutMs",
-]);
-
-function normalizeConfiguredSpeechProviderIdForStartup(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized === "edge" ? "microsoft" : normalized;
-}
-
-function addConfiguredTtsProviderIds(target: Set<string>, value: unknown): void {
-  if (!isRecord(value)) {
-    return;
-  }
-  const directProvider = normalizeConfiguredSpeechProviderIdForStartup(value.provider);
-  if (directProvider) {
-    target.add(directProvider);
-  }
-  if (isRecord(value.providers)) {
-    for (const [providerId, providerConfig] of Object.entries(value.providers)) {
-      if (!isConfigActivationValueEnabled(providerConfig)) {
-        continue;
-      }
-      const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
-      if (normalized) {
-        target.add(normalized);
-      }
-    }
-  }
-  for (const [key, providerConfig] of Object.entries(value)) {
-    if (TTS_PROVIDER_CONFIG_RESERVED_KEYS.has(key) || !isRecord(providerConfig)) {
-      continue;
-    }
-    if (!isConfigActivationValueEnabled(providerConfig)) {
-      continue;
-    }
-    const normalized = normalizeConfiguredSpeechProviderIdForStartup(key);
-    if (normalized) {
-      target.add(normalized);
-    }
-  }
-}
-
-function collectConfiguredSpeechProviderIds(config: OpenClawConfig): ReadonlySet<string> {
-  const configured = new Set<string>();
-  addConfiguredTtsProviderIds(configured, config.messages?.tts);
-
-  const agents = config.agents;
-  if (isRecord(agents)) {
-    if (Array.isArray(agents.list)) {
-      for (const agent of agents.list) {
-        if (isRecord(agent)) {
-          addConfiguredTtsProviderIds(configured, agent.tts);
-        }
-      }
-    }
-  }
-
-  const channels = config.channels;
-  if (isRecord(channels)) {
-    for (const channelConfig of Object.values(channels)) {
-      if (!isRecord(channelConfig)) {
-        continue;
-      }
-      addConfiguredTtsProviderIds(configured, channelConfig.tts);
-      if (isRecord(channelConfig.voice)) {
-        addConfiguredTtsProviderIds(configured, channelConfig.voice.tts);
-      }
-      if (isRecord(channelConfig.accounts)) {
-        for (const accountConfig of Object.values(channelConfig.accounts)) {
-          if (!isRecord(accountConfig)) {
-            continue;
-          }
-          addConfiguredTtsProviderIds(configured, accountConfig.tts);
-          if (isRecord(accountConfig.voice)) {
-            addConfiguredTtsProviderIds(configured, accountConfig.voice.tts);
-          }
-        }
-      }
-    }
-  }
-
-  const pluginEntries = config.plugins?.entries;
-  if (isRecord(pluginEntries)) {
-    for (const entry of Object.values(pluginEntries)) {
-      if (!isRecord(entry) || !isRecord(entry.config)) {
-        continue;
-      }
-      addConfiguredTtsProviderIds(configured, entry.config.tts);
-    }
-  }
-
-  return configured;
 }
 
 function manifestOwnsConfiguredSpeechProvider(params: {
