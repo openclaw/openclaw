@@ -271,6 +271,46 @@ describe("configured plugin install release step", () => {
     expect(result.completed).toBe(true);
   });
 
+  it("does not stamp config during update-time deferred install repair", async () => {
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: [
+        'Deferred missing configured plugin "codex" install repair until post-update doctor.',
+      ],
+      warnings: [],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      currentVersion: "2026.5.2-beta.1",
+      touchedVersion: "2026.5.1",
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+    });
+
+    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["codex"],
+        env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      }),
+    );
+    expect(result).toEqual({
+      changes: [
+        'Deferred missing configured plugin "codex" install repair until post-update doctor.',
+      ],
+      warnings: [],
+      completed: false,
+      touchedConfig: false,
+    });
+  });
+
   it("does not touch config when install repair warns", async () => {
     mocks.detectPluginAutoEnableCandidates.mockReturnValue([
       { pluginId: "matrix", kind: "channel-configured", channelId: "matrix" },

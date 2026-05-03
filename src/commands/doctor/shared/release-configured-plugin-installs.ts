@@ -5,6 +5,7 @@ import { isChannelConfigured } from "../../../config/channel-configured.js";
 import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../../../config/version.js";
+import { isTruthyEnvValue } from "../../../infra/env.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
@@ -12,6 +13,7 @@ import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-i
 import { asObjectRecord } from "./object.js";
 
 export const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
+const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
 
 const AGENT_HARNESS_RUNTIME_PLUGIN_IDS: Readonly<Record<string, string>> = {
   // Codex can be selected as a harness for OpenAI models without a plugin entry.
@@ -343,9 +345,10 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     return { changes: [], warnings: [], completed: false, touchedConfig: false };
   }
   const env = params.env ?? process.env;
+  const updateInProgress = isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]);
   const configured = collectReleaseConfiguredPluginIds({ cfg: params.cfg, env });
   if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
-    return { changes: [], warnings: [], completed: true, touchedConfig: true };
+    return { changes: [], warnings: [], completed: true, touchedConfig: !updateInProgress };
   }
   const repaired = await repairMissingPluginInstallsForIds({
     cfg: params.cfg,
@@ -354,7 +357,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
     env,
   });
-  const completed = repaired.warnings.length === 0;
+  const completed = repaired.warnings.length === 0 && !updateInProgress;
   return {
     changes: repaired.changes,
     warnings: repaired.warnings,
