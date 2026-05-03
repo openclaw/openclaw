@@ -109,7 +109,13 @@ const UNICODE_TO_SLACK: Record<string, string> = {
 };
 
 function toSlackEmojiName(emoji: string): string {
-  const trimmed = emoji.trim().replace(/^:+|:+$/g, "");
+  let trimmed = emoji.trim();
+  while (trimmed.startsWith(":")) {
+    trimmed = trimmed.slice(1);
+  }
+  while (trimmed.endsWith(":")) {
+    trimmed = trimmed.slice(0, -1);
+  }
   return UNICODE_TO_SLACK[trimmed] ?? trimmed;
 }
 
