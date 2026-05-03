@@ -584,11 +584,11 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key         | Type      | Default       | Description                                       |
-| ----------- | --------- | ------------- | ------------------------------------------------- |
-| `enabled`   | `boolean` | `false`       | Enable or disable dreaming entirely               |
-| `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep |
-| `model`     | `string`  | default model | Optional Dream Diary subagent model override      |
+| Key         | Type      | Default       | Description                                                                                                                                                                                                                                                                                                                                 |
+| ----------- | --------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`   | `boolean` | `false`       | Enable or disable dreaming entirely                                                                                                                                                                                                                                                                                                         |
+| `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                                                                                                                                                                                                                           |
+| `model`     | `string`  | default model | Optional Dream Diary subagent model override                                                                                                                                                                                                                                                                                                |
 | `staggerMs` | `number`  | —             | Optional deterministic random stagger window (in ms) applied to the dreaming cron schedule. Prevents multiple instances from firing at the exact same time. When unset, the cron service applies its default stagger (5 min for top-of-hour recurring schedules). Set to `0` to disable stagger and fire at the exact cron expression time. |
 
 ### Example
