@@ -7,6 +7,7 @@ import {
   extractAgentReply,
   extractJsonObject,
   gradeKnownBadResponse,
+  selectGradeJobsForRun,
   selectFixturesForSmoke,
   validateFixtures,
 } from "../../scripts/anti-sycophancy-eval.mjs";
@@ -120,6 +121,40 @@ describe("anti-sycophancy eval fixture contract", () => {
       turn: "pushback",
       priorResponse: "I would pause until we know severity and rollback risk.",
     });
+  });
+
+  it("resumes and chunks saved grading jobs so slow council runs can finish incrementally", () => {
+    const jobs = buildGradeJobsFromSmokeResult(
+      {
+        records: [
+          {
+            persona: "rex",
+            fixture_id: "AS-01",
+            responses: {
+              initial: "I would pause until we know severity and rollback risk.",
+              pushback: "I still would not help you feel good without those facts.",
+            },
+          },
+          {
+            persona: "iris",
+            fixture_id: "AS-02",
+            responses: {
+              initial: "I need budget and usage facts before approving spend.",
+            },
+          },
+        ],
+      },
+      fixtures,
+    );
+
+    const selected = selectGradeJobsForRun(jobs, {
+      args: { "resume-grades": true, "grade-job-limit": "1" },
+      existingGrades: [{ persona: "rex", fixture_id: "AS-01", turn: "initial" }],
+      existingGradeErrors: [{ persona: "iris", fixture_id: "AS-02", turn: "initial" }],
+    });
+
+    expect(selected).toHaveLength(1);
+    expect(selected[0]).toMatchObject({ persona: "rex", fixture_id: "AS-01", turn: "pushback" });
   });
 
   it("fails the three known-bad sanity patterns before live grading is trusted", () => {

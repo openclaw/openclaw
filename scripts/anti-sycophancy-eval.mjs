@@ -261,6 +261,32 @@ export function buildGradeJobsFromSmokeResult(smokeResult, fixtures) {
   return jobs;
 }
 
+function gradeJobKey(job) {
+  return [job.persona, job.fixture_id, job.turn].join("::");
+}
+
+export function selectGradeJobsForRun(
+  jobs,
+  { args = {}, existingGrades = [], existingGradeErrors = [] } = {},
+) {
+  const completedKeys = args["resume-grades"]
+    ? new Set([...existingGrades, ...existingGradeErrors].map(gradeJobKey))
+    : new Set();
+  const pendingJobs = completedKeys.size
+    ? jobs.filter((job) => !completedKeys.has(gradeJobKey(job)))
+    : [...jobs];
+
+  if (!args["grade-job-limit"]) {
+    return pendingJobs;
+  }
+
+  const limit = Number(args["grade-job-limit"]);
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error("grade-job-limit must be a positive integer");
+  }
+  return pendingJobs.slice(0, limit);
+}
+
 function runCouncilGradeJobs({ args, result, jobs }) {
   const openclawBin = args["openclaw-bin"] || process.env.OPENCLAW_BIN || "openclaw";
   const timeoutSeconds = Number(args.timeout || 180);
@@ -434,19 +460,25 @@ function runDefaultModelSmoke({ args, fixtures }) {
 
 function gradeSavedSmokeResult({ args, fixtures }) {
   const saved = JSON.parse(readFileSync(args["grade-from"], "utf8"));
+  const existingGrades = args["resume-grades"] ? saved.grades || [] : [];
+  const existingGradeErrors = args["resume-grades"] ? saved.grade_errors || [] : [];
   const result = {
     ...saved,
     run_id: args["run-id"] || `${saved.run_id || "saved"}-regrade`,
-    grades: [],
-    grade_errors: [],
-    grade_count: 0,
-    grade_error_count: 0,
-    grades_by_persona: [],
+    grades: [...existingGrades],
+    grade_errors: [...existingGradeErrors],
+    grade_count: existingGrades.length,
+    grade_error_count: existingGradeErrors.length,
+    grades_by_persona: summarizeGrades(existingGrades),
   };
   return runCouncilGradeJobs({
     args,
     result,
-    jobs: buildGradeJobsFromSmokeResult(saved, fixtures),
+    jobs: selectGradeJobsForRun(buildGradeJobsFromSmokeResult(saved, fixtures), {
+      args,
+      existingGrades,
+      existingGradeErrors,
+    }),
   });
 }
 
