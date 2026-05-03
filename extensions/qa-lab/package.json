@@ -14,6 +14,7 @@
   "devDependencies": {
     "@openclaw/discord": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
+    "@openclaw/slack": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

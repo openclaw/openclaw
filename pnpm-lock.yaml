@@ -1195,6 +1195,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@openclaw/slack':
+        specifier: workspace:*
+        version: link:../slack
       openclaw:
         specifier: workspace:*
         version: link:../..
