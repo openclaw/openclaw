@@ -177,6 +177,12 @@ describe("config schema", () => {
     expect(channelProps?.accessToken).toBeTruthy();
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
+    expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
+      "Matrix Progress Label",
+    );
+    expect(res.uiHints["channels.discord.streaming.progress.toolProgress"]?.label).toBe(
+      "Discord Progress Tool Lines",
+    );
   });
 
   it("omits a single oversized plugin schema from the full schema response", () => {

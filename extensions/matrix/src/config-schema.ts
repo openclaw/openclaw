@@ -1,3 +1,4 @@
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 import {
   AllowFromListSchema,
   buildNestedDmConfigSchema,
@@ -8,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "openclaw/plugin-sdk/zod";
+import { matrixChannelConfigUiHints } from "./config-ui-hints.js";
 
 const matrixActionSchema = z
   .object({
@@ -136,4 +138,8 @@ export const MatrixConfigSchema = z.object({
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,
+});
+
+export const MatrixChannelConfigSchema = buildChannelConfigSchema(MatrixConfigSchema, {
+  uiHints: matrixChannelConfigUiHints,
 });

@@ -117,6 +117,22 @@ export const slackChannelConfigUiHints = {
     label: "Slack Draft Tool Progress",
     help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
   },
+  "streaming.progress.label": {
+    label: "Slack Progress Label",
+    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
+  },
+  "streaming.progress.labels": {
+    label: "Slack Progress Label Pool",
+    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
+  },
+  "streaming.progress.maxLines": {
+    label: "Slack Progress Max Lines",
+    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+  },
+  "streaming.progress.toolProgress": {
+    label: "Slack Progress Tool Lines",
+    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+  },
   "thread.historyScope": {
     label: "Slack Thread History Scope",
     help: 'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
