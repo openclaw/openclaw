@@ -918,7 +918,12 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
     }
     warnedFutureTouchedVersions.add(touched);
     logger.warn(
-      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
+      [
+        `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
+        "Some config keys or value formats may be incompatible with this version.",
+        'Run "openclaw doctor --fix" to strip unrecognized keys automatically.',
+        "Keys whose value format changed between versions (e.g. channels.*.streaming) may require manual correction after stripping.",
+      ].join(" "),
     );
   }
 }
