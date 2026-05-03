@@ -1,0 +1,70 @@
+{
+  "id": "slack-addressee-guard",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Slack Addressee Guard",
+  "description": "Pre-send guard that rewrites an agent reply leading with an accidental Slack @-mention when a different human spoke last in the thread.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "mode": { "type": "string", "enum": ["rewrite", "cancel"] },
+      "targetUserId": { "type": "string" },
+      "botUserId": { "type": "string" },
+      "humanNames": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      },
+      "logPath": { "type": "string" },
+      "cacheTtlMs": { "type": "integer", "minimum": 0, "maximum": 600000 },
+      "allowlistPatterns": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "askedForTargetPhrases": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enable Slack Addressee Guard",
+      "help": "When enabled, agent replies leading with the target user's @-mention are rewritten to address the last human in the thread if they were different."
+    },
+    "mode": {
+      "label": "Mode",
+      "help": "rewrite (default) repairs the leading address. cancel drops the reply entirely when a mismatch is detected."
+    },
+    "targetUserId": {
+      "label": "Target Slack User ID",
+      "help": "The Slack user id the agent too often addresses by default (e.g. the operator). Replies leading with this id are inspected."
+    },
+    "botUserId": {
+      "label": "Bot Slack User ID",
+      "help": "The Slack user id of the bot itself. Used to skip bot messages when walking thread history to find the last human."
+    },
+    "humanNames": {
+      "label": "Human Name Map",
+      "help": "Optional map of Slack user ids to display names for log records."
+    },
+    "logPath": {
+      "label": "Log Path",
+      "help": "Optional JSONL path for decisions. Defaults to no file logging when omitted."
+    },
+    "cacheTtlMs": {
+      "label": "Thread Cache TTL (ms)",
+      "help": "How long a resolved last-human-in-thread lookup is cached. Defaults to 8s."
+    },
+    "allowlistPatterns": {
+      "label": "Allowlist Regex Patterns",
+      "help": "Optional additional regex patterns (JS flavor) that mark a reply as a cron/PM/nudge header that must stay intact."
+    },
+    "askedForTargetPhrases": {
+      "label": "Asked-For-Target Phrases",
+      "help": "Optional additional phrases that mean the last human explicitly requested the target user be addressed."
+    }
+  }
+}
