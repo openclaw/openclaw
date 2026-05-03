@@ -18,6 +18,19 @@ const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 
+const CHAT_SEND_INTERVAL_MS = 3_000;
+const _perChatSendGate = ((globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.perChatSendGate")
+] ??= new Map<string | number, number>()) as Map<string | number, number>;
+
+function acquireChatSendGate(chatId: string | number): Promise<void> | null {
+  const lastSent = _perChatSendGate.get(chatId) ?? 0;
+  const elapsed = Date.now() - lastSent;
+  const waitMs = elapsed < CHAT_SEND_INTERVAL_MS ? CHAT_SEND_INTERVAL_MS - elapsed : 0;
+  _perChatSendGate.set(chatId, Date.now() + waitMs);
+  return waitMs > 0 ? new Promise((r) => setTimeout(r, waitMs)) : null;
+}
+
 type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
 
 function hasNumericMessageThreadId(
@@ -254,6 +267,11 @@ export function createTelegramDraftStream(params: {
         textBaseOffset = 0;
         resetStreamToNewMessage();
       }
+    }
+    const gateWait = acquireChatSendGate(chatId);
+    if (gateWait) {
+      await gateWait;
+      if (streamState.stopped && !streamState.final) return false;
     }
     const trimmed = text.trimEnd();
     if (!trimmed) {
