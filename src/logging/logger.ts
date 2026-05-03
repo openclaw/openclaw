@@ -56,6 +56,7 @@ export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legac
 
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
+const LOG_DATE_PLACEHOLDER = "YYYY-MM-DD";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const MAX_ROTATED_LOG_FILES = 5;
@@ -477,7 +478,7 @@ function resolveSettings(): ResolvedSettings {
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const level = envLevel ?? fromConfig;
-  const file = cfg?.file ?? defaultRollingPathForToday();
+  const file = resolveConfiguredLogFile(cfg?.file ?? defaultRollingPathForToday(), new Date());
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   return { level, file, maxFileBytes };
 }
@@ -517,7 +518,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   }
 
   const rollingFile = isRollingPath(settings.file);
-  let activeFile = resolveActiveLogFile(settings.file);
+  let activeFile = resolveConfiguredLogFile(settings.file, new Date());
   fs.mkdirSync(path.dirname(activeFile), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
   if (rollingFile) {
@@ -528,7 +529,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const nextActiveFile = resolveActiveLogFile(settings.file);
+      const nextActiveFile = resolveConfiguredLogFile(settings.file, new Date());
       if (nextActiveFile !== activeFile) {
         activeFile = nextActiveFile;
         fs.mkdirSync(path.dirname(activeFile), { recursive: true });
@@ -686,25 +687,24 @@ function defaultRollingPathForToday(): string {
   return rollingPathForDate(DEFAULT_LOG_DIR, new Date());
 }
 
+function resolveConfiguredLogFile(file: string, date: Date): string {
+  const withPlaceholder = file.includes(LOG_DATE_PLACEHOLDER)
+    ? file.replaceAll(LOG_DATE_PLACEHOLDER, formatLocalDate(date))
+    : file;
+  if (!isRollingPath(withPlaceholder)) {
+    return withPlaceholder;
+  }
+  return rollingPathForDate(path.dirname(withPlaceholder), date);
+}
+
 function rollingPathForDate(dir: string, date: Date): string {
   const today = formatLocalDate(date);
   return path.join(dir, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
 }
 
-function resolveActiveLogFile(file: string): string {
-  if (!isRollingPath(file)) {
-    return file;
-  }
-  return rollingPathForDate(path.dirname(file), new Date());
-}
-
 function isRollingPath(file: string): boolean {
   const base = path.basename(file);
-  return (
-    base.startsWith(`${LOG_PREFIX}-`) &&
-    base.endsWith(LOG_SUFFIX) &&
-    base.length === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}`.length
-  );
+  return /^openclaw-(?:\d{4}-\d{2}-\d{2}|YYYY-MM-DD)\.log$/u.test(base);
 }
 
 function pruneOldRollingLogs(dir: string): void {

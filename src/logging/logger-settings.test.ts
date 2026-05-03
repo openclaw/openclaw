@@ -48,15 +48,32 @@ afterEach(() => {
 });
 
 describe("getResolvedLoggerSettings", () => {
+  it("substitutes YYYY-MM-DD placeholder in configured file path with actual date", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-09T08:30:00.000Z"));
+      process.env.OPENCLAW_TEST_FILE_LOG = "1";
+      const customDir = "/tmp/custom-logs";
+      logging.setLoggerOverride({
+        level: "info",
+        file: `${customDir}/openclaw-YYYY-MM-DD.log`,
+      });
+      const expected = `${customDir}/openclaw-2026-03-09.log`;
+      expect(logging.getResolvedLoggerSettings().file).toBe(expected);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses a silent fast path in default Vitest mode without config reads", () => {
     const settings = logging.getResolvedLoggerSettings();
     expect(settings.level).toBe("silent");
     expect(readLoggingConfigMock).not.toHaveBeenCalled();
   });
 
-  it("reads logging config when test file logging is explicitly enabled", () => {
+  it("uses override logging settings when test file logging is explicitly enabled", () => {
     process.env.OPENCLAW_TEST_FILE_LOG = "1";
-    readLoggingConfigMock.mockReturnValue({
+    logging.setLoggerOverride({
       level: "debug",
       file: "/tmp/openclaw-configured.log",
       maxFileBytes: 2048,

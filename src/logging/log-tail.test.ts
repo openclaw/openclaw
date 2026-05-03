@@ -53,4 +53,24 @@ describe("readConfiguredLogTail", () => {
 
     await fs.rm(tempDir, { recursive: true, force: true });
   });
+
+  it("resolves YYYY-MM-DD placeholder in configured file path", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-27T02:03:04.000Z"));
+      const { readConfiguredLogTail } = await import("./log-tail.js");
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-log-tail-"));
+      const resolvedFile = path.join(tempDir, "openclaw-2026-04-27.log");
+      await fs.writeFile(resolvedFile, "line one\nline two\n");
+
+      setLoggerOverride({ file: path.join(tempDir, "openclaw-YYYY-MM-DD.log") });
+      const result = await readConfiguredLogTail();
+
+      expect(result.file).toBe(resolvedFile);
+      expect(result.lines).toEqual(["line one", "line two"]);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
