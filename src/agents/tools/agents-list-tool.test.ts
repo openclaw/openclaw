@@ -83,7 +83,7 @@ describe("agents_list tool", () => {
     });
   });
 
-  it("marks OPENCLAW_AGENT_RUNTIME and fallback env overrides as effective", async () => {
+  it("ignores fallback overrides for explicit plugin runtime selections", async () => {
     vi.stubEnv("OPENCLAW_AGENT_RUNTIME", "codex");
     vi.stubEnv("OPENCLAW_AGENT_HARNESS_FALLBACK", "pi");
     loadConfigMock.mockReturnValue({
@@ -106,7 +106,7 @@ describe("agents_list tool", () => {
       agents: [
         {
           id: "main",
-          agentRuntime: { id: "codex", fallback: "pi", source: "env" },
+          agentRuntime: { id: "codex", fallback: "none", source: "env" },
         },
       ],
     });

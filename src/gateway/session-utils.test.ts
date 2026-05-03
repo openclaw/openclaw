@@ -908,7 +908,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("listAgentsForGateway reports effective env runtime fallback override", () => {
+  test("listAgentsForGateway ignores fallback env overrides for explicit plugin runtimes", () => {
     const previousFallback = process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
     process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "pi";
     try {
@@ -927,8 +927,8 @@ describe("gateway session utils", () => {
         id: "main",
         agentRuntime: {
           id: "codex",
-          fallback: "pi",
-          source: "env",
+          fallback: "none",
+          source: "defaults",
         },
       });
     } finally {

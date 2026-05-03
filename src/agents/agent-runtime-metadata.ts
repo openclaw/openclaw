@@ -43,12 +43,12 @@ function resolveEffectiveFallback(params: {
   agentPolicy?: AgentRuntimePolicyConfig;
   defaultsPolicy?: AgentRuntimePolicyConfig;
 }): EmbeddedAgentHarnessFallback | undefined {
-  if (params.envFallback) {
-    return params.envFallback;
+  if (isPluginAgentRuntime(params.runtime)) {
+    return "none";
   }
 
-  if (params.envRuntime && isPluginAgentRuntime(params.runtime)) {
-    return normalizeAgentHarnessFallback(undefined, params.runtime);
+  if (params.envFallback) {
+    return params.envFallback;
   }
 
   if (params.agentPolicy?.id) {
@@ -108,7 +108,7 @@ export function resolveAgentRuntimeMetadata(
         agentPolicy,
         defaultsPolicy,
       }),
-      source: envFallback ? "env" : "agent",
+      source: envFallback && !isPluginAgentRuntime(agentRuntime) ? "env" : "agent",
     };
   }
 
@@ -122,7 +122,12 @@ export function resolveAgentRuntimeMetadata(
         agentPolicy,
         defaultsPolicy,
       }),
-      source: envFallback ? "env" : agentPolicy?.fallback ? "agent" : "defaults",
+      source:
+        envFallback && !isPluginAgentRuntime(defaultsRuntime)
+          ? "env"
+          : agentPolicy?.fallback
+            ? "agent"
+            : "defaults",
     };
   }
 

@@ -48,7 +48,6 @@ type AgentHarnessSelectionDecision = {
     | "pinned"
     | "forced_pi"
     | "forced_plugin"
-    | "forced_plugin_fallback_to_pi"
     // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
     // Auto mode found no supporting plugin harness, so PI handled the run.
@@ -115,20 +114,7 @@ function selectAgentHarnessDecision(params: {
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
-    if (policy.fallback === "none") {
-      throw new Error(
-        `Requested agent harness "${runtime}" is not registered and PI fallback is disabled.`,
-      );
-    }
-    log.warn("requested agent harness is not registered; falling back to embedded PI backend", {
-      requestedRuntime: runtime,
-    });
-    return buildSelectionDecision({
-      harness: piHarness,
-      policy,
-      selectedReason: "forced_plugin_fallback_to_pi",
-      candidates: listHarnessCandidates(pluginHarnesses),
-    });
+    throw new Error(`Requested agent harness "${runtime}" is not registered.`);
   }
 
   const candidates = pluginHarnesses.map((harness) => ({
@@ -343,14 +329,13 @@ function resolveAgentHarnessFallbackPolicy(params: {
   agentPolicy?: AgentRuntimePolicyConfig;
   defaultsPolicy?: AgentRuntimePolicyConfig;
 }): EmbeddedAgentHarnessFallback {
+  if (isPluginAgentRuntime(params.runtime)) {
+    return "none";
+  }
+
   const envFallback = resolveEmbeddedAgentHarnessFallback(params.env);
   if (envFallback) {
     return envFallback;
-  }
-
-  const envRuntime = params.env.OPENCLAW_AGENT_RUNTIME?.trim();
-  if (envRuntime && isPluginAgentRuntime(params.runtime)) {
-    return normalizeAgentHarnessFallback(undefined, params.runtime);
   }
 
   if (params.agentPolicy?.id) {
