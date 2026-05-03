@@ -141,6 +141,47 @@ describe("createTypingCallbacks", () => {
     });
   });
 
+  it("resets a tripped typing guard on repeated reply starts without restarting an active interval", async () => {
+    await withFakeTimers(async () => {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+      try {
+        const { start, onStartError, callbacks } = createTypingHarness({
+          start: vi
+            .fn()
+            .mockRejectedValueOnce(new Error("accepted typing failed"))
+            .mockResolvedValue(undefined),
+          maxConsecutiveFailures: 1,
+        });
+
+        await callbacks.onReplyStart();
+        await flushMicrotasks();
+        expect(start).toHaveBeenCalledTimes(1);
+        expect(onStartError).toHaveBeenCalledTimes(1);
+        expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+        expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+
+        await callbacks.onReplyStart();
+        await flushMicrotasks();
+
+        expect(start).toHaveBeenCalledTimes(2);
+        expect(onStartError).toHaveBeenCalledTimes(1);
+        expect(setIntervalSpy).toHaveBeenCalledTimes(2);
+
+        await callbacks.onReplyStart();
+        await flushMicrotasks();
+
+        expect(start).toHaveBeenCalledTimes(3);
+        expect(setIntervalSpy).toHaveBeenCalledTimes(2);
+
+        callbacks.onCleanup?.();
+      } finally {
+        setIntervalSpy.mockRestore();
+        clearIntervalSpy.mockRestore();
+      }
+    });
+  });
+
   it("stops keepalive after consecutive start failures", async () => {
     await withFakeTimers(async () => {
       const { start, onStartError, callbacks } = createTypingHarness({

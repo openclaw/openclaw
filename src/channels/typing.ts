@@ -74,12 +74,12 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       return;
     }
     stopSent = false;
+    startGuard.reset();
     if (!started) {
       started = true;
-      startGuard.reset();
       clearTtlTimer();
-      keepaliveLoop.start();
     }
+    keepaliveLoop.start();
     startTtlTimer();
     void keepaliveLoop.tick();
     await Promise.resolve();
