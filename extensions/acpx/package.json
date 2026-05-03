@@ -20,7 +20,7 @@
       "./index.ts"
     ],
     "install": {
-      "npmSpec": "@openclaw/acpx",
+      "npmSpec": "@openclaw/acpx@beta",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.25"
     },

@@ -70,7 +70,7 @@
       ]
     },
     "install": {
-      "npmSpec": "@openclaw/googlechat",
+      "npmSpec": "@openclaw/googlechat@beta",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10"
     },

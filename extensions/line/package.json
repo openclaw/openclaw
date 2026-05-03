@@ -40,7 +40,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/line",
+      "npmSpec": "@openclaw/line@beta",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10"
     },

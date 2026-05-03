@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   getOfficialExternalPluginCatalogEntry,
@@ -45,5 +47,42 @@ describe("official external plugin catalog", () => {
 
     expect(ids.has("matrix")).toBe(false);
     expect(ids.has("mattermost")).toBe(false);
+  });
+
+  it("keeps local package install metadata aligned with external catalog specs", () => {
+    const mismatches: string[] = [];
+
+    for (const entry of listOfficialExternalPluginCatalogEntries()) {
+      const pluginId = resolveOfficialExternalPluginId(entry);
+      const catalogInstall = resolveOfficialExternalPluginInstall(entry);
+      if (!pluginId || !catalogInstall) {
+        continue;
+      }
+      const packagePath = path.join("extensions", pluginId, "package.json");
+      if (!fs.existsSync(packagePath)) {
+        continue;
+      }
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8")) as {
+        openclaw?: {
+          install?: {
+            clawhubSpec?: string;
+            npmSpec?: string;
+          };
+        };
+      };
+      const packageInstall = packageJson.openclaw?.install ?? {};
+      if (packageInstall.npmSpec && packageInstall.npmSpec !== catalogInstall.npmSpec) {
+        mismatches.push(
+          `${pluginId} npmSpec catalog=${catalogInstall.npmSpec ?? "<none>"} package=${packageInstall.npmSpec}`,
+        );
+      }
+      if (packageInstall.clawhubSpec && packageInstall.clawhubSpec !== catalogInstall.clawhubSpec) {
+        mismatches.push(
+          `${pluginId} clawhubSpec catalog=${catalogInstall.clawhubSpec ?? "<none>"} package=${packageInstall.clawhubSpec}`,
+        );
+      }
+    }
+
+    expect(mismatches).toEqual([]);
   });
 });
