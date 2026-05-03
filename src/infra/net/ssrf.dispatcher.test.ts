@@ -62,7 +62,7 @@ function createDispatcherWithPinnedOverride(lookup: PinnedHostname["lookup"]) {
 }
 
 describe("createPinnedDispatcher", () => {
-  it("uses pinned lookup without overriding global family policy", () => {
+  it("uses pinned lookup and inherits system autoSelectFamily", () => {
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
     const pinned: PinnedHostname = {
       hostname: "api.telegram.org",
@@ -73,16 +73,13 @@ describe("createPinnedDispatcher", () => {
     const dispatcher = createPinnedDispatcher(pinned);
 
     expect(dispatcher).toBeDefined();
-    expect(agentCtor).toHaveBeenCalledWith({
-      connect: {
-        lookup,
-      },
-      allowH2: false,
-    });
     const firstCallArg = agentCtor.mock.calls[0]?.[0] as
       | { connect?: Record<string, unknown> }
       | undefined;
-    expect(firstCallArg?.connect?.autoSelectFamily).toBeUndefined();
+    expect(firstCallArg?.connect?.lookup).toBe(lookup);
+    // Per-request dispatchers now inherit the system autoSelectFamily setting
+    // (Happy Eyeballs) so IPv4-only hosts can fall back when DNS returns AAAA.
+    expect(firstCallArg?.connect?.autoSelectFamily).toBeDefined();
   });
 
   it("preserves caller transport hints while overriding lookup", () => {
