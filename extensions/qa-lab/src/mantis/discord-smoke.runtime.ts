@@ -277,7 +277,7 @@ function addSensitiveValue(values: Set<string>, value: string | undefined) {
 
 function redactMantisDiscordMetadata(text: string, sensitiveValues: ReadonlySet<string>) {
   let redacted = text;
-  const sortedValues = [...sensitiveValues].sort((a, b) => b.length - a.length);
+  const sortedValues = [...sensitiveValues].toSorted((a, b) => b.length - a.length);
   for (const value of sortedValues) {
     redacted = redacted.replaceAll(value, "<redacted>");
   }
