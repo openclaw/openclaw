@@ -77,7 +77,7 @@ function expectGatewayTermination(pid: number) {
     expect(killProcessTree).not.toHaveBeenCalled();
     return;
   }
-  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
+  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300, detached: false });
 }
 
 async function withPreparedGatewayTask(
@@ -139,8 +139,11 @@ describe("Scheduled Task stop/restart cleanup", () => {
       await stopScheduledTask({ env, stdout });
 
       if (process.platform !== "win32") {
-        expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
-        expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
+        expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300, detached: false });
+        expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), {
+          graceMs: 300,
+          detached: false,
+        });
       } else {
         expect(killProcessTree).not.toHaveBeenCalled();
       }
