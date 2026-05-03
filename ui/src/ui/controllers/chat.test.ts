@@ -171,7 +171,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Hello");
   });
 
-  it("ignores NO_REPLY delta updates", () => {
+  it.each(["NO_REPLY", "HEARTBEAT_OK"])("ignores %s delta updates", (text) => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -181,7 +181,7 @@ describe("handleChatEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "delta",
-      message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+      message: { role: "assistant", content: [{ type: "text", text }] },
     };
 
     expect(handleChatEvent(state, payload)).toBe("delta");
@@ -212,16 +212,19 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages[0]).toEqual(payload.message);
   });
 
-  it("drops NO_REPLY final payload from another run without clearing active stream", () => {
-    const state = createActiveStreamingState();
-    const payload = createOtherRunNoReplyFinalPayload();
+  it.each(["NO_REPLY", "HEARTBEAT_OK"])(
+    "drops %s final payload from another run without clearing active stream",
+    (text) => {
+      const state = createActiveStreamingState();
+      const payload = createOtherRunSilentFinalPayload(text);
 
-    expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatRunId).toBe("run-user");
-    expect(state.chatStream).toBe("Working...");
-    expect(state.chatStreamStartedAt).toBe(123);
-    expect(state.chatMessages).toEqual([]);
-  });
+      expect(handleChatEvent(state, payload)).toBe("final");
+      expect(state.chatRunId).toBe("run-user");
+      expect(state.chatStream).toBe("Working...");
+      expect(state.chatStreamStartedAt).toBe(123);
+      expect(state.chatMessages).toEqual([]);
+    },
+  );
 
   it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "keeps plain-text %s final payload from another run without clearing active stream",
@@ -559,11 +562,11 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Working...");
   });
 
-  it("drops NO_REPLY final payload from own run", () => {
+  it.each(["NO_REPLY", "HEARTBEAT_OK"])("drops %s final payload from own run", (text) => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
-      chatStream: "NO_REPLY",
+      chatStream: text,
       chatStreamStartedAt: 100,
     });
     const payload: ChatEventPayload = {
@@ -572,7 +575,7 @@ describe("handleChatEvent", () => {
       state: "final",
       message: {
         role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
+        content: [{ type: "text", text }],
       },
     };
 
@@ -608,22 +611,25 @@ describe("handleChatEvent", () => {
     },
   );
 
-  it("does not persist NO_REPLY stream text on final without message", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "NO_REPLY",
-      chatStreamStartedAt: 100,
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-    };
+  it.each(["NO_REPLY", "HEARTBEAT_OK"])(
+    "does not persist %s stream text on final without message",
+    (text) => {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: text,
+        chatStreamStartedAt: 100,
+      });
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+      };
 
-    expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([]);
-  });
+      expect(handleChatEvent(state, payload)).toBe("final");
+      expect(state.chatMessages).toEqual([]);
+    },
+  );
 
   it("does not persist NO_REPLY stream text on abort", () => {
     const state = createState({
@@ -1062,10 +1068,28 @@ describe("loadChatHistory", () => {
     expect(state.lastError).toBeNull();
   });
 
-  it("filters heartbeat acknowledgements and internal-only user messages", async () => {
+  it("filters heartbeat acknowledgements, heartbeat prompts, and internal-only user messages", async () => {
     const request = vi.fn().mockResolvedValue({
       messages: [
         { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK.",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "An async command completion event was triggered, but user delivery is disabled for this run. Handle the result internally and reply HEARTBEAT_OK only.",
+            },
+          ],
+        },
         {
           role: "user",
           content: [

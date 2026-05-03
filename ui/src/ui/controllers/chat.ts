@@ -16,6 +16,12 @@ import {
 
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const HEARTBEAT_USER_PROMPT_PREFIXES = [
+  "Read HEARTBEAT.md if it exists (workspace context).",
+  "Run the following periodic tasks (only those due based on their intervals):",
+  "An async command completion event was triggered, but user delivery is disabled for this run.",
+  "[OpenClaw heartbeat poll]",
+] as const;
 const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
@@ -45,6 +51,10 @@ function shouldApplyChatHistoryResult(
 
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
+}
+
+function isSuppressedAssistantDisplayText(text: string): boolean {
+  return isSilentReplyStream(text) || stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
 
 function escapeRegExp(value: string): string {
@@ -195,7 +205,7 @@ function isTextOnlyContent(content: unknown): boolean {
   return sawText;
 }
 
-function isEmptyUserTextOnlyMessage(message: unknown): boolean {
+function isUserTextOnlyMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -203,10 +213,25 @@ function isEmptyUserTextOnlyMessage(message: unknown): boolean {
   if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
     return false;
   }
-  if (!isTextOnlyContent(entry.content ?? entry.text)) {
+  return isTextOnlyContent(entry.content ?? entry.text);
+}
+
+function isEmptyUserTextOnlyMessage(message: unknown): boolean {
+  if (!isUserTextOnlyMessage(message)) {
     return false;
   }
   return (extractText(message)?.trim() ?? "") === "";
+}
+
+function isHeartbeatUserPromptMessage(message: unknown): boolean {
+  if (!isUserTextOnlyMessage(message)) {
+    return false;
+  }
+  const text = extractText(message)?.trim() ?? "";
+  if (!text) {
+    return false;
+  }
+  return HEARTBEAT_USER_PROMPT_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
 function isAssistantHeartbeatAck(message: unknown): boolean {
@@ -226,6 +251,7 @@ function shouldHideHistoryMessage(message: unknown): boolean {
   return (
     isAssistantSilentReply(message) ||
     isAssistantHeartbeatAck(message) ||
+    isHeartbeatUserPromptMessage(message) ||
     isSyntheticTranscriptRepairToolResult(message) ||
     isEmptyUserTextOnlyMessage(message)
   );
@@ -738,7 +764,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
-      if (finalMessage && !isAssistantSilentReply(finalMessage)) {
+      if (finalMessage && !shouldHideHistoryMessage(finalMessage)) {
         state.chatMessages = [...state.chatMessages, finalMessage];
         return null;
       }
@@ -749,14 +775,14 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 
   if (payload.state === "delta") {
     const next = extractText(payload.message);
-    if (typeof next === "string" && !isSilentReplyStream(next)) {
+    if (typeof next === "string" && !isSuppressedAssistantDisplayText(next)) {
       state.chatStream = next;
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (finalMessage && !isAssistantSilentReply(finalMessage)) {
+    if (finalMessage && !shouldHideHistoryMessage(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
+    } else if (state.chatStream?.trim() && !isSuppressedAssistantDisplayText(state.chatStream)) {
       state.chatMessages = [
         ...state.chatMessages,
         {
@@ -771,11 +797,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
+    if (normalizedMessage && !shouldHideHistoryMessage(normalizedMessage)) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
       const streamedText = state.chatStream ?? "";
-      if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
+      if (streamedText.trim() && !isSuppressedAssistantDisplayText(streamedText)) {
         state.chatMessages = [
           ...state.chatMessages,
           {
