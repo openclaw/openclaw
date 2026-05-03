@@ -471,6 +471,37 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("reads Codex CLI credentials through the prompt-capable provider-auth path", async () => {
+    cliCredentialMocks.readCodexCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "codex-cli-access",
+      refresh: "codex-cli-refresh",
+      expires: createUsableOAuthExpiry(),
+    });
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-codex-cli-",
+        agentEnv: "main",
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({ provider: "openai-codex" });
+        expect(resolved).toMatchObject({
+          apiKey: "codex-cli-access",
+          profileId: "openai-codex:default",
+          source: "profile:openai-codex:default",
+          mode: "oauth",
+        });
+      },
+    );
+
+    expect(cliCredentialMocks.readCodexCliCredentialsCached).toHaveBeenCalledWith(
+      expect.objectContaining({ allowKeychainPrompt: true }),
+    );
+  });
+
   it("throws when ZAI API key is missing", async () => {
     await withEnvAsync(
       {

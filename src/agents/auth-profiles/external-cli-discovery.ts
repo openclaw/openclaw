@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeProviderId } from "../provider-id.js";
 import {
   resolveExternalCliAuthScopeFromConfig,
   type ExternalCliAuthScope,
@@ -48,6 +49,12 @@ function normalizeStringList(values: Iterable<string | undefined>): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
+function resolveDefaultProviderAuthKeychainPrompt(provider: string): boolean {
+  // Codex OAuth may live only in the macOS keychain, so runtime provider-auth
+  // resolution must be allowed to consult the prompt-capable path by default.
+  return normalizeProviderId(provider) === "openai-codex";
+}
+
 export function externalCliDiscoveryNone(params?: {
   config?: OpenClawConfig;
 }): ExternalCliAuthDiscovery {
@@ -94,7 +101,8 @@ export function externalCliDiscoveryForProviderAuth(
   const profileIds = normalizeStringList([params.profileId, params.preferredProfile]);
   return externalCliDiscoveryScoped({
     config: params.cfg,
-    allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+    allowKeychainPrompt:
+      params.allowKeychainPrompt ?? resolveDefaultProviderAuthKeychainPrompt(params.provider),
     providerIds: [params.provider],
     ...(profileIds.length > 0 ? { profileIds } : {}),
   });
