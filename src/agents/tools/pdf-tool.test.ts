@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
 import * as modelDiscovery from "../pi-model-discovery.js";
@@ -24,13 +25,11 @@ vi.mock("@mariozechner/pi-ai", async () => {
 
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
-let clearPdfToolModelConfigCache: PdfToolModule["clearPdfToolModelConfigCache"];
 let PdfToolSchema: PdfToolModule["PdfToolSchema"];
 
 async function loadCreatePdfTool() {
   if (!createPdfTool || !PdfToolSchema) {
-    ({ clearPdfToolModelConfigCache, createPdfTool, PdfToolSchema } =
-      await import("./pdf-tool.js"));
+    ({ createPdfTool, PdfToolSchema } = await import("./pdf-tool.js"));
   }
   return createPdfTool;
 }
@@ -145,7 +144,6 @@ describe("createPdfTool", () => {
   });
 
   afterEach(() => {
-    clearPdfToolModelConfigCache?.();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     global.fetch = priorFetch;
@@ -169,57 +167,74 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("caches model config resolution across repeated createPdfTool calls with matching dependencies (#76644)", async () => {
+  it("defers automatic model config resolution during registration (#76644)", async () => {
     const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
-    const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
-    const authProfileStore = { version: 1, profiles: {} };
+    const cfg = withDefaultModel("openai/gpt-5.4");
+    const authProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "test-key",
+        },
+      },
+    } satisfies AuthProfileStore;
     const createTool = await loadCreatePdfTool();
     await withTempPdfAgentDir(async (agentDir) => {
-      createTool({ config: cfg, agentDir, authProfileStore });
-      createTool({ config: cfg, agentDir, authProfileStore });
-      createTool({ config: cfg, agentDir, authProfileStore });
+      expect(
+        createTool({
+          config: cfg,
+          agentDir,
+          authProfileStore,
+          deferAutoModelResolution: true,
+        })?.name,
+      ).toBe("pdf");
+      expect(resolveSpy).not.toHaveBeenCalled();
+    });
+    resolveSpy.mockRestore();
+  });
+
+  it("keeps explicit model config resolution eager even when automatic resolution is deferred", async () => {
+    const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
+    const createTool = await loadCreatePdfTool();
+    await withTempPdfAgentDir(async (agentDir) => {
+      expect(
+        createTool({
+          config: withPdfModel(ANTHROPIC_PDF_MODEL),
+          agentDir,
+          deferAutoModelResolution: true,
+        })?.name,
+      ).toBe("pdf");
       expect(resolveSpy).toHaveBeenCalledTimes(1);
     });
     resolveSpy.mockRestore();
   });
 
-  it("does not reuse cached PDF model config after config changes for the same agentDir", async () => {
-    const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
-    const createTool = await loadCreatePdfTool();
-    const authProfileStore = { version: 1, profiles: {} };
-    await withTempPdfAgentDir(async (agentDir) => {
-      expect(
-        createTool({ config: withPdfModel(ANTHROPIC_PDF_MODEL), agentDir, authProfileStore })?.name,
-      ).toBe("pdf");
-      expect(
-        createTool({ config: withPdfModel(OPENAI_PDF_MODEL), agentDir, authProfileStore })?.name,
-      ).toBe("pdf");
-      expect(resolveSpy).toHaveBeenCalledTimes(2);
-    });
-    resolveSpy.mockRestore();
-  });
-
-  it("does not cache an unavailable PDF tool after auth profiles become available", async () => {
+  it("resolves deferred model config on execution before loading PDFs", async () => {
     const resolveSpy = vi
       .spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool")
-      .mockReturnValueOnce(null)
-      .mockReturnValueOnce({ primary: ANTHROPIC_PDF_MODEL });
+      .mockReturnValue(null);
+    const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw");
     const createTool = await loadCreatePdfTool();
     const cfg = withDefaultModel("openai/gpt-5.4");
-    const authProfileStore = { version: 1, profiles: {} } as {
-      version: 1;
-      profiles: Record<string, { type: "api_key"; provider: string; key: string }>;
-    };
     await withTempPdfAgentDir(async (agentDir) => {
-      expect(createTool({ config: cfg, agentDir, authProfileStore })).toBeNull();
-      authProfileStore.profiles.anthropic = {
-        type: "api_key",
-        provider: "anthropic",
-        key: "test-key",
-      };
-      expect(createTool({ config: cfg, agentDir, authProfileStore })?.name).toBe("pdf");
+      const tool = requirePdfTool(
+        createTool({
+          config: cfg,
+          agentDir,
+          deferAutoModelResolution: true,
+        }),
+      );
+      await expect(
+        tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+        }),
+      ).rejects.toThrow("No PDF model configured.");
     });
-    expect(resolveSpy).toHaveBeenCalledTimes(2);
+    expect(resolveSpy).toHaveBeenCalledTimes(1);
+    expect(loadSpy).not.toHaveBeenCalled();
     resolveSpy.mockRestore();
   });
 

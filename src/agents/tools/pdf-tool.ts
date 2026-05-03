@@ -1,6 +1,5 @@
 import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
-import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   classifyMediaReferenceSource,
@@ -14,9 +13,8 @@ import {
 } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { listKnownProviderEnvApiKeyNames } from "../model-auth-env-vars.js";
-import { stableStringify } from "../stable-stringify.js";
-import { type ImageModelConfig } from "./image-tool.helpers.js";
+import { ToolInputError } from "./common.js";
+import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
@@ -26,6 +24,7 @@ import {
   resolvePromptAndModelOverride,
   resolveRemoteMediaSsrfPolicy,
 } from "./media-tool-shared.js";
+import { hasToolModelConfig } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
@@ -80,69 +79,11 @@ export const PdfToolSchema = Type.Object({
 
 export { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
-const knownProviderEnvAuthKeys = listKnownProviderEnvApiKeyNames();
-const pdfModelConfigCache = new Map<string, ImageModelConfig | null>();
-
-/** @internal — exposed for test teardown only */
-export function clearPdfToolModelConfigCache(): void {
-  pdfModelConfigCache.clear();
-}
-
-function resolveAuthProfileAvailabilityCacheKey(authStore: AuthProfileStore): string {
-  const profiles = Object.entries(authStore.profiles)
-    .map(([id, credential]) => ({
-      id,
-      provider: credential.provider,
-      type: credential.type,
-    }))
-    .toSorted((left, right) => left.id.localeCompare(right.id));
-  return stableStringify({ profiles });
-}
-
-function resolveEnvAuthPresenceCacheKey(): string {
-  return stableStringify(
-    knownProviderEnvAuthKeys.map((key) => [key, Boolean(process.env[key]?.trim())]),
+function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
+  return (
+    hasToolModelConfig(coercePdfModelConfig(config)) ||
+    hasToolModelConfig(coerceImageModelConfig(config))
   );
-}
-
-function resolvePdfModelConfigCacheKey(params: {
-  agentDir: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  authStore: AuthProfileStore;
-}): string {
-  return stableStringify({
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir ?? "",
-    config: params.config ? resolveRuntimeConfigCacheKey(params.config) : "none",
-    authStore: resolveAuthProfileAvailabilityCacheKey(params.authStore),
-    envAuth: resolveEnvAuthPresenceCacheKey(),
-  });
-}
-
-function resolveCachedPdfModelConfig(params: {
-  cfg?: OpenClawConfig;
-  agentDir: string;
-  workspaceDir?: string;
-  authStore?: AuthProfileStore;
-}): ImageModelConfig | null {
-  const authStore = params.authStore;
-  if (!authStore) {
-    return resolvePdfModelConfigForTool(params);
-  }
-  const cacheKey = resolvePdfModelConfigCacheKey({
-    agentDir: params.agentDir,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    authStore,
-  });
-  const cached = pdfModelConfigCache.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const resolved = resolvePdfModelConfigForTool(params);
-  pdfModelConfigCache.set(cacheKey, resolved);
-  return resolved;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,23 +258,32 @@ export function createPdfTool(options?: {
   workspaceDir?: string;
   sandbox?: PdfSandboxConfig;
   fsPolicy?: ToolFsPolicy;
+  /**
+   * Avoid resolving auto PDF-provider/model candidates while registering the
+   * tool. The concrete PDF model is still resolved before execution.
+   */
+  deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
+  const hasExplicitModelConfig = hasExplicitPdfToolModelConfig(options?.config);
   if (!agentDir) {
-    const explicit = coercePdfModelConfig(options?.config);
-    if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
+    if (hasExplicitModelConfig) {
       throw new Error("createPdfTool requires agentDir when enabled");
     }
     return null;
   }
 
-  const pdfModelConfig = resolveCachedPdfModelConfig({
-    cfg: options?.config,
-    agentDir,
-    workspaceDir: options?.workspaceDir,
-    authStore: options?.authProfileStore,
-  });
-  if (!pdfModelConfig) {
+  const shouldDeferAutoModelResolution =
+    options?.deferAutoModelResolution === true && !hasExplicitModelConfig;
+  const registrationPdfModelConfig = shouldDeferAutoModelResolution
+    ? null
+    : resolvePdfModelConfigForTool({
+        cfg: options?.config,
+        agentDir,
+        workspaceDir: options?.workspaceDir,
+        authStore: options?.authProfileStore,
+      });
+  if (!registrationPdfModelConfig && !shouldDeferAutoModelResolution) {
     return null;
   }
 
@@ -392,6 +342,18 @@ export function createPdfTool(options?: {
 
       // Parse page range
       const pagesRaw = normalizeOptionalString(record.pages);
+
+      const pdfModelConfig =
+        registrationPdfModelConfig ??
+        resolvePdfModelConfigForTool({
+          cfg: options?.config,
+          agentDir,
+          workspaceDir: options?.workspaceDir,
+          authStore: options?.authProfileStore,
+        });
+      if (!pdfModelConfig) {
+        throw new ToolInputError("No PDF model configured.");
+      }
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options.sandbox.root.trim()

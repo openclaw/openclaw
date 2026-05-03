@@ -414,6 +414,7 @@ export function createOpenClawTools(
           workspaceDir,
           sandbox,
           fsPolicy: options?.fsPolicy,
+          deferAutoModelResolution: true,
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
