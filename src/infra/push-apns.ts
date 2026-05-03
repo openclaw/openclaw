@@ -10,6 +10,7 @@ import {
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import { connectApnsHttp2Session } from "./push-apns-http2.js";
 import {
   type ApnsRelayConfig,
   type ApnsRelayPushResponse,
@@ -658,8 +659,12 @@ async function sendApnsRequest(params: {
   const body = JSON.stringify(params.payload);
   const requestPath = `/3/device/${params.token}`;
 
+  const client = await connectApnsHttp2Session({
+    authority,
+    timeoutMs: params.timeoutMs,
+  });
+
   return await new Promise((resolve, reject) => {
-    const client = http2.connect(authority);
     let settled = false;
     const fail = (err: unknown) => {
       if (settled) {
