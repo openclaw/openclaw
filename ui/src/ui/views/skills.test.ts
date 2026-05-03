@@ -100,6 +100,8 @@ describe("renderSkills", () => {
 
   it("opens detail dialogs and routes ClawHub actions", async () => {
     const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
     const onDetailClose = vi.fn();
     const showModal = vi.fn(function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
