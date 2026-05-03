@@ -855,7 +855,8 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
     - `getMe returned 401` is a Telegram authentication failure for the configured bot token.
     - Re-copy or regenerate the bot token in BotFather, then update `channels.telegram.botToken`, `channels.telegram.tokenFile`, `channels.telegram.accounts.<id>.botToken`, or `TELEGRAM_BOT_TOKEN` for the default account.
     - `deleteWebhook 401 Unauthorized` during startup is also an auth failure; treating it as "no webhook exists" would only defer the same bad-token failure to later API calls.
-    - If `deleteWebhook` fails with a transient network error during polling startup, OpenClaw checks `getWebhookInfo`; when Telegram reports an empty webhook URL, polling continues because cleanup is already satisfied.
+    - If `deleteWebhook` fails with a transient network error during polling startup, OpenClaw continues into long polling instead of making another pre-poll control-plane call. A still-active webhook surfaces as a `getUpdates` conflict; OpenClaw then rebuilds the Telegram transport and retries webhook cleanup.
+    - After a successful startup `getMe` probe, OpenClaw reuses that bot identity for grammY polling startup so the runner does not need a second `getMe` before the first `getUpdates`.
 
   </Accordion>
 
