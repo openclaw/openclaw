@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set identity)"
+summary: "CLI reference for `openclaw agents` (list/add/delete/import/bindings/bind/unbind/set identity)"
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
 title: "Agents"
@@ -28,6 +28,8 @@ openclaw agents unbind --agent work --bind telegram:ops
 openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity
 openclaw agents set-identity --agent main --avatar avatars/openclaw.png
 openclaw agents delete work
+openclaw agents import /path/to/agent-export.tar.gz
+openclaw agents import /path/to/agent-export.tar.gz --force
 ```
 
 ## Routing bindings
@@ -156,6 +158,27 @@ Notes:
 - If another agent's workspace is the same path, inside this workspace, or contains this workspace,
   the workspace is retained and `--json` reports `workspaceRetained`,
   `workspaceRetainedReason`, and `workspaceSharedWith`.
+
+### `agents import <file>`
+
+Import an agent from a `.tar.gz` archive (or `.tgz`, `.tar`, `.zip`).
+
+The archive should contain:
+
+- `agent.json` (required): agent configuration with `id` field
+- `workspace/` (optional): workspace files to extract
+
+Options:
+
+- `--force`: overwrite existing agent without prompting
+- `--non-interactive`: disable prompts; requires `--force`
+- `--json`: output JSON summary
+
+Notes:
+
+- `main` is reserved and cannot be overwritten.
+- If the archive contains a `workspace/` directory, its contents are copied to the agent's workspace directory.
+- Without `--force`, interactive confirmation is required if the agent already exists.
 
 ## Identity files
 
