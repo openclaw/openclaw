@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/sessions: fix `sessions.usage` aggregate totals (totalCost, totalTokens, etc.) being silently capped when a `limit` parameter is passed; the aggregation loop now covers all sessions while only the paginated slice appears in the `sessions` array. Fixes #76496.
 - Plugins/onboarding: trust optional official plugin and web-search installs selected from the official catalog so npm security scanning treats them like other source-linked official install paths. Thanks @vincentkoc.
 - CLI/plugins: keep `plugins enable` and `plugins disable` from creating unconfigured channel config sections, so channel plugins with required setup fields no longer fail validation during lifecycle probes. Thanks @vincentkoc.
 - Agents/sessions: keep delayed `sessions_send` A2A replies alive after soft wait-window timeouts, while preserving terminal run timeouts and avoiding stale target replies in requester sessions. Fixes #76443. Thanks @ryswork1993 and @vincentkoc.
