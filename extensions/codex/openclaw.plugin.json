@@ -27,6 +27,11 @@
       "name": "codex",
       "kind": "runtime-slash",
       "cliCommand": "plugins"
+    },
+    {
+      "name": "goal",
+      "kind": "runtime-slash",
+      "cliCommand": "plugins"
     }
   ],
   "configSchema": {
