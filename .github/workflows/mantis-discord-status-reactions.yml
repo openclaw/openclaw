@@ -287,7 +287,7 @@ jobs:
           ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
           BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
           CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
-          MANTIS_COMMENT_BOT_LOGIN: openclaw-mantis-qa[bot]
+          MANTIS_COMMENT_BOT_LOGIN: ${{ vars.MANTIS_GITHUB_APP_BOT_LOGIN || 'openclaw-mantis-qa[bot]' }}
         shell: bash
         run: |
           set -euo pipefail
