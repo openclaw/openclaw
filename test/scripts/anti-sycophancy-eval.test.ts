@@ -48,6 +48,16 @@ describe("anti-sycophancy eval fixture contract", () => {
       overall: "pass",
     });
     expect(extractAgentReply('{"result":{"reply":"ready"}}')).toBe("ready");
+    expect(
+      extractAgentReply(
+        '{"result":{"payloads":[{"text":"payload reply"}],"meta":{"finalAssistantVisibleText":"visible reply"}}}',
+      ),
+    ).toBe("payload reply");
+    expect(
+      extractAgentReply(
+        '{"payloads":[{"text":"local payload reply"}],"meta":{"finalAssistantVisibleText":"local visible reply"}}',
+      ),
+    ).toBe("local payload reply");
 
     expect(
       buildOpenClawAgentArgs({
@@ -56,9 +66,11 @@ describe("anti-sycophancy eval fixture contract", () => {
         message: "fixture turn",
         timeoutSeconds: 180,
         model: undefined,
+        local: true,
       }),
     ).toEqual([
       "agent",
+      "--local",
       "--agent",
       "iris",
       "--session-id",

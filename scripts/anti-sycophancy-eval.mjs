@@ -113,10 +113,19 @@ export function extractAgentReply(rawOutput) {
     parsed.output,
     parsed.text,
     parsed.content,
+    parsed.payloads?.find((payload) => typeof payload?.text === "string" && payload.text.trim())
+      ?.text,
+    parsed.meta?.finalAssistantVisibleText,
+    parsed.meta?.finalAssistantRawText,
     parsed.result?.reply,
     parsed.result?.message,
     parsed.result?.output,
     parsed.result?.text,
+    parsed.result?.payloads?.find(
+      (payload) => typeof payload?.text === "string" && payload.text.trim(),
+    )?.text,
+    parsed.result?.meta?.finalAssistantVisibleText,
+    parsed.result?.meta?.finalAssistantRawText,
     parsed.assistant?.message,
     parsed.assistant?.content,
   ];
@@ -129,9 +138,19 @@ export function extractAgentReply(rawOutput) {
   return reply.trim();
 }
 
-export function buildOpenClawAgentArgs({ persona, sessionId, message, timeoutSeconds, model }) {
-  const args = [
-    "agent",
+export function buildOpenClawAgentArgs({
+  persona,
+  sessionId,
+  message,
+  timeoutSeconds,
+  model,
+  local = false,
+}) {
+  const args = ["agent"];
+  if (local) {
+    args.push("--local");
+  }
+  args.push(
     "--agent",
     persona,
     "--session-id",
@@ -141,21 +160,36 @@ export function buildOpenClawAgentArgs({ persona, sessionId, message, timeoutSec
     "--json",
     "--timeout",
     String(timeoutSeconds),
-  ];
+  );
   if (model) {
     args.push("--model", model);
   }
   return args;
 }
 
-function runOpenClawAgentTurn({ openclawBin, persona, sessionId, message, timeoutSeconds, model }) {
-  const args = buildOpenClawAgentArgs({ persona, sessionId, message, timeoutSeconds, model });
+function runOpenClawAgentTurn({
+  openclawBin,
+  persona,
+  sessionId,
+  message,
+  timeoutSeconds,
+  model,
+  local,
+}) {
+  const args = buildOpenClawAgentArgs({
+    persona,
+    sessionId,
+    message,
+    timeoutSeconds,
+    model,
+    local,
+  });
   const raw = execFileSync(openclawBin, args, {
     encoding: "utf8",
     env: process.env,
     maxBuffer: 1024 * 1024 * 8,
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: (timeoutSeconds + 15) * 1000,
+    timeout: (timeoutSeconds + 60) * 1000,
   });
   return { raw, reply: extractAgentReply(raw) };
 }
@@ -197,6 +231,7 @@ function runDefaultModelSmoke({ args, fixtures }) {
     .filter(Boolean);
   const openclawBin = args["openclaw-bin"] || process.env.OPENCLAW_BIN || "openclaw";
   const timeoutSeconds = Number(args.timeout || 180);
+  const graderTimeoutSeconds = Number(args["grader-timeout"] || timeoutSeconds);
   const graderAgent = args["grader-agent"] || "rex";
   const runId = args["run-id"] || new Date().toISOString().replace(/[:.]/g, "-");
   const limit = args["fixture-limit"] ? Number(args["fixture-limit"]) : fixtures.length;
@@ -214,6 +249,7 @@ function runDefaultModelSmoke({ args, fixtures }) {
         message: buildPersonaFixturePrompt({ fixture, turn: "initial" }),
         timeoutSeconds,
         model: args.model,
+        local: args.local,
       });
       const pushback = runOpenClawAgentTurn({
         openclawBin,
@@ -222,6 +258,7 @@ function runDefaultModelSmoke({ args, fixtures }) {
         message: buildPersonaFixturePrompt({ fixture, turn: "pushback" }),
         timeoutSeconds,
         model: args.model,
+        local: args.local,
       });
 
       const record = {
@@ -246,8 +283,9 @@ function runDefaultModelSmoke({ args, fixtures }) {
             persona: graderAgent,
             sessionId: `anti-sycophancy-${runId}-grader-${persona}-${fixture.id}-${turn}`,
             message: buildCouncilJsonGradeRequest({ prompt }),
-            timeoutSeconds,
+            timeoutSeconds: graderTimeoutSeconds,
             model: args["grader-model"],
+            local: args.local,
           });
           grades.push(extractJsonObject(gradeRun.reply));
         }
