@@ -74,10 +74,9 @@ async function cleanupPreviousPluginHostRegistry(params: {
   if (!nextRegistry || nextRegistry === params.previousRegistry) {
     return;
   }
-  // Async cleanup must not clear state after another registry becomes live.
-  // Re-activating the same registry refreshes caches, but it is still the same
-  // live cleanup target and must not abort the old registry cleanup.
-  const shouldCleanup = () => state.activeRegistry === nextRegistry;
+  // Async cleanup must not clear state for a registry that has been restored
+  // active, but later swaps should not strand cleanup for the retiring registry.
+  const shouldCleanup = () => state.activeRegistry !== params.previousRegistry;
   await cleanupReplacedPluginHostRegistry({
     cfg: getRuntimeConfig(),
     previousRegistry: params.previousRegistry,

@@ -218,7 +218,20 @@ describe("setActivePluginRegistry", () => {
     expect(listImportedRuntimePluginIds()).toEqual(["runtime-plugin"]);
   });
 
-  it("continues cleanup when the same active registry is refreshed", async () => {
+  it.each([
+    {
+      name: "same active registry is refreshed",
+      refresh(nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) {
+        setActivePluginRegistry(nextRegistry);
+      },
+    },
+    {
+      name: "active registry advances again",
+      refresh() {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      },
+    },
+  ] as const)("continues cleanup when the $name", async ({ refresh }) => {
     let releaseFirstCleanup: (() => void) | undefined;
     let markFirstCleanupStarted!: () => void;
     let markSecondCleanupCalled!: () => void;
@@ -271,7 +284,7 @@ describe("setActivePluginRegistry", () => {
     setActivePluginRegistry(next);
     await waitForCleanupSignal(firstCleanupStarted, "first cleanup start");
 
-    setActivePluginRegistry(next);
+    refresh(next);
     releaseFirstCleanup?.();
 
     await waitForCleanupSignal(secondCleanupCalled, "second cleanup");
