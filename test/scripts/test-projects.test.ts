@@ -527,6 +527,50 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes unit ui test targets to the unit ui lane", () => {
+    expect(buildVitestRunPlans(["ui/src/ui/chat/grouped-render.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/views/chat.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/chat.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/views/dreaming.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/dreaming.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes changed unit ui tests to the unit ui lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/src/ui/chat/grouped-render.test.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes auto-reply route source files to route regression tests", () => {
     expect(
       resolveChangedTestTargetPlan([

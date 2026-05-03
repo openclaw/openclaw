@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 - Codex harness: forward OpenClaw workspace bootstrap files such as `SOUL.md` through native Codex config instructions while leaving `AGENTS.md` to Codex project-doc discovery. Fixes #76273. Thanks @zknicker.
 - Parallels/Windows update smoke: escape the stale post-swap import regex in the generated PowerShell script so expected `ERR_MODULE_NOT_FOUND` update handoffs continue to post-update health checks. (#75315)
 - Slack: allow draft preview streaming in top-level DMs when `replyToMode` is `off` while keeping Slack native streaming and assistant thread status gated on reply threads. Fixes #56480. (#56544) Thanks @HangGlidersRule.
+- Control UI/chat: remove the delete-confirm popover outside-click listener on every dismiss path, so Cancel, Delete, outside clicks, and same-button toggles no longer leave stale document listeners behind. Refs #75590 and #69982. Thanks @Ricardo-M-L.
 
 ## 2026.5.2
 
