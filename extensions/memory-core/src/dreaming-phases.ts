@@ -30,6 +30,7 @@ import {
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
   recordShortTermRecalls,
+  isContaminatedDreamingSnippet,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 
@@ -1387,6 +1388,25 @@ function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): Shor
   return deduped;
 }
 
+function shouldSuppressInlineDreamingBlockOnFallback(bodyLines: string[]): boolean {
+  const body = bodyLines.join("\n").trim();
+  if (!body) {
+    return false;
+  }
+  if (isContaminatedDreamingSnippet(body)) {
+    return true;
+  }
+  const hasReflectionMetadata =
+    /^### Reflections$/m.test(body) &&
+    /\bconfidence:\s*\d/i.test(body) &&
+    /\bevidence:\s*memory\//i.test(body);
+  const hasCandidateTruthMetadata =
+    /^### Possible Lasting Truths$/m.test(body) &&
+    /\bconfidence=\d/i.test(body) &&
+    /\bevidence=memory\//i.test(body);
+  return hasReflectionMetadata || hasCandidateTruthMetadata;
+}
+
 function buildLightDreamingBody(entries: ShortTermRecallEntry[]): string[] {
   if (entries.length === 0) {
     return ["- No notable updates."];
@@ -1589,6 +1609,7 @@ async function runLightDreaming(params: {
     workspaceDir: params.workspaceDir,
     phase: "light",
     bodyLines,
+    inlineBodyLines: bodyLines,
     nowMs,
     timezone: params.config.timezone,
     storage: params.config.storage,
@@ -1623,7 +1644,7 @@ async function runLightDreaming(params: {
         logger: params.logger,
       });
     } else {
-      await generateAndAppendDreamNarrative({
+      const narrativeResult = await generateAndAppendDreamNarrative({
         subagent: params.subagent,
         workspaceDir: params.workspaceDir,
         data,
@@ -1632,6 +1653,17 @@ async function runLightDreaming(params: {
         model: params.config.execution?.model,
         logger: params.logger,
       });
+      if (narrativeResult.fallbackUsed && shouldSuppressInlineDreamingBlockOnFallback(bodyLines)) {
+        await writeDailyDreamingPhaseBlock({
+          workspaceDir: params.workspaceDir,
+          phase: "light",
+          bodyLines,
+          inlineBodyLines: [],
+          nowMs,
+          timezone: params.config.timezone,
+          storage: params.config.storage,
+        });
+      }
     }
   }
 }
@@ -1679,6 +1711,7 @@ async function runRemDreaming(params: {
     workspaceDir: params.workspaceDir,
     phase: "rem",
     bodyLines: preview.bodyLines,
+    inlineBodyLines: preview.bodyLines,
     nowMs,
     timezone: params.config.timezone,
     storage: params.config.storage,
@@ -1722,7 +1755,7 @@ async function runRemDreaming(params: {
         logger: params.logger,
       });
     } else {
-      await generateAndAppendDreamNarrative({
+      const narrativeResult = await generateAndAppendDreamNarrative({
         subagent: params.subagent,
         workspaceDir: params.workspaceDir,
         data,
@@ -1731,6 +1764,20 @@ async function runRemDreaming(params: {
         model: params.config.execution?.model,
         logger: params.logger,
       });
+      if (
+        narrativeResult.fallbackUsed &&
+        shouldSuppressInlineDreamingBlockOnFallback(preview.bodyLines)
+      ) {
+        await writeDailyDreamingPhaseBlock({
+          workspaceDir: params.workspaceDir,
+          phase: "rem",
+          bodyLines: preview.bodyLines,
+          inlineBodyLines: [],
+          nowMs,
+          timezone: params.config.timezone,
+          storage: params.config.storage,
+        });
+      }
     }
   }
 }

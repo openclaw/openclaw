@@ -2467,6 +2467,45 @@ describe("memory-core dreaming phases", () => {
     );
   });
 
+  it("keeps raw light-sleep candidate dumps out of daily memory when narrative fallback is request-scoped", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const subagent = createMockNarrativeSubagent("");
+    let persistedBeforeNarrative = false;
+    subagent.run.mockImplementation(async () => {
+      const daily = await fs.readFile(
+        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+        "utf-8",
+      );
+      persistedBeforeNarrative = daily.includes("Candidate:");
+      throw new RequestScopedSubagentRuntimeError();
+    });
+    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir, subagent);
+
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Move backups to S3 Glacier.",
+        "- Keep retention at 365 days.",
+      ]);
+
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const daily = await fs.readFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+      "utf-8",
+    );
+    expect(persistedBeforeNarrative).toBe(true);
+    expect(daily).toContain("- Move backups to S3 Glacier.");
+    expect(daily).not.toContain("## Light Sleep");
+    expect(daily).not.toContain("Candidate:");
+    expect(daily).not.toContain("confidence:");
+    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+      "Move backups to S3 Glacier.",
+    );
+  });
+
   it("passes rem-dreaming snippets into the narrative pipeline", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const subagent = createMockNarrativeSubagent("The traces braided themselves into a map.");
@@ -2527,6 +2566,66 @@ describe("memory-core dreaming phases", () => {
     expect(firstRun?.model).toBe("xai/grok-4.1-fast");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The traces braided themselves into a map.",
+    );
+  });
+
+  it("keeps raw rem reflections out of daily memory when narrative fallback is request-scoped", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const subagent = createMockNarrativeSubagent("");
+    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  storage: { mode: "inline", separateReports: false },
+                  phases: {
+                    rem: {
+                      enabled: true,
+                      limit: 10,
+                      lookbackDays: 7,
+                      minPatternStrength: 0,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+      subagent,
+    );
+
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Move backups to S3 Glacier.",
+        "- Keep retention at 365 days.",
+        "- Rotate access keys after the audit.",
+      ]);
+
+      setDreamingTestTime(5);
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_rem_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    });
+
+    const daily = await fs.readFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+      "utf-8",
+    );
+    expect(daily).toContain("- Move backups to S3 Glacier.");
+    expect(daily).not.toContain("## REM Sleep");
+    expect(daily).not.toContain("### Reflections");
+    expect(daily).not.toContain("### Possible Lasting Truths");
+    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+      "Move backups to S3 Glacier.",
     );
   });
 

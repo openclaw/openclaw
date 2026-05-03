@@ -55,16 +55,48 @@ function shouldWriteSeparate(storage: MemoryDreamingStorageConfig): boolean {
   return storage.mode === "separate" || storage.mode === "both" || storage.separateReports;
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function removeManagedMarkdownBlock(params: {
+  original: string;
+  startMarker: string;
+  endMarker: string;
+  heading?: string;
+}): string {
+  const existingPattern = new RegExp(
+    `${params.heading ? `${escapeRegex(params.heading)}\\n` : ""}${escapeRegex(params.startMarker)}[\\s\\S]*?${escapeRegex(params.endMarker)}(?:\\n)?`,
+    "m",
+  );
+  const match = existingPattern.exec(params.original);
+  if (!match || match.index === undefined) {
+    return params.original;
+  }
+  let before = params.original.slice(0, match.index);
+  let after = params.original.slice(match.index + match[0].length);
+
+  if (before.endsWith("\n\n") && after.startsWith("\n\n")) {
+    before = before.slice(0, -1);
+    after = after.slice(1);
+  }
+
+  return `${before}${after}`;
+}
+
 export async function writeDailyDreamingPhaseBlock(params: {
   workspaceDir: string;
   phase: Exclude<MemoryDreamingPhaseName, "deep">;
   bodyLines: string[];
+  inlineBodyLines?: string[];
   nowMs?: number;
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
 }): Promise<{ inlinePath?: string; reportPath?: string }> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No notable updates.";
+  const inlineLines = params.inlineBodyLines ?? params.bodyLines;
+  const inlineBody = inlineLines.length > 0 ? inlineLines.join("\n") : "";
   let inlinePath: string | undefined;
   let reportPath: string | undefined;
 
@@ -78,14 +110,25 @@ export async function writeDailyDreamingPhaseBlock(params: {
       throw err;
     });
     const markers = resolvePhaseMarkers(params.phase);
-    const updated = replaceManagedMarkdownBlock({
-      original,
-      heading: DAILY_PHASE_HEADINGS[params.phase],
-      startMarker: markers.start,
-      endMarker: markers.end,
-      body,
-    });
-    await fs.writeFile(inlinePath, withTrailingNewline(updated), "utf-8");
+    const updated =
+      inlineBody.length > 0
+        ? replaceManagedMarkdownBlock({
+            original,
+            heading: DAILY_PHASE_HEADINGS[params.phase],
+            startMarker: markers.start,
+            endMarker: markers.end,
+            body: inlineBody,
+          })
+        : removeManagedMarkdownBlock({
+            original,
+            heading: DAILY_PHASE_HEADINGS[params.phase],
+            startMarker: markers.start,
+            endMarker: markers.end,
+          });
+    const finalContent = inlineBody.length > 0 ? withTrailingNewline(updated) : updated;
+    if (finalContent !== original) {
+      await fs.writeFile(inlinePath, finalContent, "utf-8");
+    }
   }
 
   if (shouldWriteSeparate(params.storage)) {

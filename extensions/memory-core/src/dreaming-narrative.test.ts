@@ -839,6 +839,26 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
+  it("does not report fallback when the request-scoped fallback write fails", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    await fs.mkdir(path.join(workspaceDir, "DREAMS.md"), { recursive: true });
+    const subagent = createMockSubagent("");
+    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
+    const logger = createMockLogger();
+
+    const result = await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["API endpoints need authentication"] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    expect(result).toEqual({ fallbackUsed: false });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("narrative fallback failed"));
+  });
+
   it("falls back when the request-scoped runtime error is detected by stable code", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("");

@@ -29,6 +29,7 @@ describe("dreaming markdown storage", () => {
     const content = await fs.readFile(result.inlinePath!, "utf-8");
     expect(content).toContain("## Light Sleep");
     expect(content).toContain("- Candidate: remember the API key is fake");
+    expect(content.endsWith("\n")).toBe(true);
   });
 
   it("keeps multiple inline phases in the shared daily memory file", async () => {
@@ -109,5 +110,45 @@ describe("dreaming markdown storage", () => {
     expect(content).toContain("- Promoted: durable preference");
 
     await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();
+  });
+
+  it("preserves surrounding formatting when removing an inline dreaming block", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    await fs.writeFile(
+      inlinePath,
+      [
+        "# Notes",
+        "",
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Previous inline dreaming block",
+        "<!-- openclaw:dreaming:light:end -->",
+        "",
+        "",
+        "",
+        "Keep this spacing",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- archived elsewhere"],
+      inlineBodyLines: [],
+      nowMs,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+    });
+
+    const content = await fs.readFile(inlinePath, "utf-8");
+    expect(content).toBe("# Notes\n\n\n\nKeep this spacing\n");
   });
 });
