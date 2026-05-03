@@ -28,6 +28,10 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
   loadGatewaySessionRow: vi.fn(),
 }));
 
+vi.mock("./session-utils.js", () => ({
+  loadSessionEntry: vi.fn(() => ({ cfg: {}, entry: undefined })),
+}));
+
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
@@ -37,6 +41,7 @@ import {
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 describe("agent event handler", () => {
   beforeEach(() => {
@@ -46,6 +51,7 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
+    vi.mocked(loadSessionEntry).mockReset().mockReturnValue({ cfg: {}, entry: undefined });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     resetAgentRunContextForTest();
@@ -757,6 +763,71 @@ describe("agent event handler", () => {
     // But node/channel subscribers should NOT receive when verbose is off
     const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
     expect(nodeToolCalls).toHaveLength(0);
+    resetAgentRunContextForTest();
+  });
+
+  it("uses newer session verbose state for in-flight tool events", () => {
+    const { nodeSendToSession, handler } = createHarness({
+      now: 1_000,
+      resolveSessionKeyForRun: () => "session-1",
+    });
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      entry: { verboseLevel: "on", updatedAt: 1_500 },
+    });
+
+    registerAgentRunContext("run-tool-toggle", {
+      sessionKey: "session-1",
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-tool-toggle",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "read", toolCallId: "t-toggle" },
+    });
+
+    const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    expect(nodeToolCalls).toHaveLength(1);
+    expect(nodeToolCalls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "start",
+          name: "read",
+        }),
+      }),
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("keeps one-shot run verbose over older session state", () => {
+    const { nodeSendToSession, handler } = createHarness({
+      now: 2_000,
+      resolveSessionKeyForRun: () => "session-1",
+    });
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      entry: { verboseLevel: "off", updatedAt: 1_500 },
+    });
+
+    registerAgentRunContext("run-tool-inline", {
+      sessionKey: "session-1",
+      verboseLevel: "on",
+    });
+
+    handler({
+      runId: "run-tool-inline",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "read", toolCallId: "t-inline" },
+    });
+
+    const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    expect(nodeToolCalls).toHaveLength(1);
     resetAgentRunContextForTest();
   });
 
