@@ -4,12 +4,9 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
-### Changes
-
-- Cron: add a process-local slot-level delivery dedup guard so same-process restart catch-up replays of the same scheduled slot cannot double-deliver, complementing the executionId guard from #67896, and propagate `deliveryAttempted` from startup catch-up outcomes. (#66712) Thanks @jeffchen1981-fu.
-
 ### Fixes
 
+- Cron: prevent same-slot double-delivery on restart catch-up replays where `runStartedAt` differs but the planned scheduled slot is identical, by adding a process-local slot-level dedup guard that complements the executionId-keyed guard from #69000, and propagate `deliveryAttempted` from startup catch-up outcomes. (#66712) Thanks @jeffchen1981-fu.
 - Gateway/Bonjour: keep @homebridge/ciao cancellation handlers registered across advertiser restarts so late probing cancellations cannot crash Linux and other mDNS-churned gateways. Thanks @codex.
 - Plugins/startup: load the default `memory-core` slot during Gateway startup when permitted so active-memory recall can call `memory_search` and `memory_get` without requiring an explicit `plugins.slots.memory` entry, while preserving `plugins.slots.memory: "none"`. Thanks @codex.
 - Plugins/CLI: prefer native require for compiled bundled plugin JavaScript before jiti so read-only config, status, device, and node commands avoid unnecessary transform overhead on slow hosts. Fixes #62842. Thanks @Effet.
