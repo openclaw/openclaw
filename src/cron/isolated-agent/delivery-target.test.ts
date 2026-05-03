@@ -394,6 +394,32 @@ describe("resolveDeliveryTarget", () => {
       expect.objectContaining({
         channel: "forum",
         input: "123456789",
+        preferredKind: "group",
+      }),
+    );
+  });
+
+  it("preserves explicit DM intent during id-like target normalization", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(maybeResolveIdLikeTarget).mockClear();
+    vi.mocked(maybeResolveIdLikeTarget).mockResolvedValueOnce({
+      to: "dm:123456789",
+      kind: "user",
+      source: "normalized",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "forum",
+      to: "dm:123456789",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("dm:123456789");
+    expect(maybeResolveIdLikeTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "forum",
+        input: "dm:123456789",
+        preferredKind: "user",
       }),
     );
   });

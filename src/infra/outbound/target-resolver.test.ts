@@ -153,6 +153,37 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
 
+  it("passes inferred DM kind into id-like plugin resolution", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        inferTargetChatType: () => "direct",
+        targetResolver: {
+          looksLikeId: () => true,
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.resolveTarget.mockResolvedValue({
+      to: "user:123",
+      kind: "user",
+      source: "normalized",
+    });
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "workspace",
+      input: "user:123",
+    });
+
+    expect(result.target.to).toBe("user:123");
+    expect(mocks.resolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: "user:123",
+        preferredKind: "user",
+      }),
+    );
+  });
+
   it("uses plugin chat-type inference for directory lookups and plugin fallback on miss", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       directory: {
