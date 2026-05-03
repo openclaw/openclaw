@@ -54,4 +54,41 @@ describe("Slack live QA runtime helpers", () => {
       "slack-canary",
     ]);
   });
+
+  it("fails mention-gating when the SUT replies without the marker", async () => {
+    const observedMessages: Array<unknown> = [];
+    await expect(
+      __testing.waitForSlackNoReply({
+        channelId: "C123456789",
+        client: {
+          conversations: {
+            history: async () => ({
+              messages: [
+                {
+                  text: "I should not have replied",
+                  ts: "2.000000",
+                  user: "U999999999",
+                },
+              ],
+            }),
+          },
+        } as never,
+        matchText: "SLACK_QA_NOMENTION_MARKER",
+        observedMessages: observedMessages as never,
+        observationScenarioId: "slack-mention-gating",
+        observationScenarioTitle: "Slack unmentioned bot message does not trigger",
+        sentTs: "1.000000",
+        sutIdentity: { userId: "U999999999" },
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("unexpected Slack SUT reply observed");
+    expect(observedMessages).toMatchObject([
+      {
+        matchedScenario: false,
+        text: "I should not have replied",
+        ts: "2.000000",
+        userId: "U999999999",
+      },
+    ]);
+  });
 });

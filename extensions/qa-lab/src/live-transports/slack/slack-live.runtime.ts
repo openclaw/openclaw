@@ -428,16 +428,38 @@ async function waitForSlackNoReply(params: {
   sutIdentity: SlackAuthIdentity;
   timeoutMs: number;
 }) {
-  try {
-    await waitForSlackScenarioReply(params);
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    if (message === `timed out after ${params.timeoutMs}ms waiting for Slack message`) {
-      return;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < params.timeoutMs) {
+    const messages = await listSlackMessages({
+      channelId: params.channelId,
+      client: params.client,
+      oldestTs: params.sentTs,
+    });
+    for (const message of messages) {
+      const text = message.text ?? "";
+      if (
+        !message.ts ||
+        message.ts === params.sentTs ||
+        !isSutSlackMessage(message, params.sutIdentity)
+      ) {
+        continue;
+      }
+      const matchedScenario = text.includes(params.matchText);
+      params.observedMessages.push({
+        botId: message.bot_id,
+        channelId: params.channelId,
+        matchedScenario,
+        scenarioId: params.observationScenarioId,
+        scenarioTitle: params.observationScenarioTitle,
+        text,
+        threadTs: message.thread_ts,
+        ts: message.ts,
+        userId: message.user,
+      });
+      throw new Error("unexpected Slack SUT reply observed");
     }
-    throw error;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  throw new Error("unexpected Slack SUT reply observed");
 }
 
 async function waitForSlackChannelRunning(
@@ -816,4 +838,5 @@ export const __testing = {
   parseSlackQaCredentialPayload,
   resolveSlackQaRuntimeEnv,
   SLACK_QA_STANDARD_SCENARIO_IDS,
+  waitForSlackNoReply,
 };
