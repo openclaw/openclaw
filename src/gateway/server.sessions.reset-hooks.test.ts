@@ -296,3 +296,93 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
     sessionId: "sess-new",
   });
 });
+
+test("sessions.create with parentSessionKey emits command:new internal hook (#76957)", async () => {
+  await createSessionStoreDir();
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{ key?: string; sessionId?: string }>("sessions.create", {
+    parentSessionKey: "main",
+  });
+  expect(created.ok).toBe(true);
+
+  const commandHookEvents = (
+    sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+  )
+    .map((call) => call[0])
+    .filter(
+      (event): event is { type: string; action: string; sessionKey: string } =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        (event as { type?: unknown }).type === "command" &&
+        (event as { action?: unknown }).action === "new",
+    );
+  expect(commandHookEvents).toHaveLength(1);
+  expect(commandHookEvents[0]).toMatchObject({
+    type: "command",
+    action: "new",
+    sessionKey: "agent:main:main",
+    context: expect.objectContaining({ commandSource: "webchat" }),
+  });
+});
+
+test("sessions.create with parentSessionKey emits before_reset plugin hook (#76957)", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-parent", "hello");
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent"),
+    },
+  });
+
+  beforeResetHookState.hasBeforeResetHook = true;
+  await directSessionReq<{ key?: string }>("sessions.create", { parentSessionKey: "main" });
+
+  expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+  const [payload, context] = beforeResetHookMocks.runBeforeReset.mock.calls[0] as [
+    { reason?: string },
+    { sessionKey?: string; sessionId?: string },
+  ];
+  expect(payload.reason).toBe("new");
+  expect(context.sessionKey).toBe("agent:main:main");
+  expect(context.sessionId).toBe("sess-parent");
+});
+
+test("sessions.create with parentSessionKey emits session_end and session_start lifecycle hooks (#76957)", async () => {
+  await createSessionStoreDir();
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{ sessionId?: string }>("sessions.create", {
+    parentSessionKey: "main",
+  });
+  expect(created.ok).toBe(true);
+  const newSessionId = created.payload?.sessionId;
+
+  expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+  const [endEvent, endContext] = sessionLifecycleHookMocks.runSessionEnd.mock.calls[0] as [
+    { nextSessionId?: string },
+    { sessionId?: string; sessionKey?: string },
+  ];
+  expect(endEvent.nextSessionId).toBe(newSessionId);
+  expect(endContext.sessionId).toBe("sess-parent");
+  expect(endContext.sessionKey).toBe("agent:main:main");
+
+  expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+  const [startEvent] = sessionLifecycleHookMocks.runSessionStart.mock.calls[0] as [
+    { sessionId?: string; resumedFrom?: string },
+    unknown,
+  ];
+  expect(startEvent.sessionId).toBe(newSessionId);
+  expect(startEvent.resumedFrom).toBe("sess-parent");
+});

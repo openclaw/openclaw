@@ -24,6 +24,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  createInternalHookEvent,
   hasInternalHookListeners,
   triggerInternalHook,
   type SessionPatchHookContext,
@@ -999,6 +1000,49 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       canonicalParentSessionKey = parent.canonicalKey;
     }
+    // When creating a new session from a parent (Control UI /new flow), fire the full
+    // command:new + before_reset + session_end/session_start hook contract against the parent
+    // session so bundled hooks like session-memory can capture the outgoing session before the
+    // switch. Without this, commit 37aebf612b's change from sendChatMessageNow("/new") to
+    // sessions.create silently breaks hook delivery (#76957).
+    let parentEntryForHooks: SessionEntry | undefined;
+    let parentStorePath: string | undefined;
+    let parentTargetForHooks: ReturnType<typeof resolveGatewaySessionStoreTarget> | undefined;
+    if (canonicalParentSessionKey) {
+      const { entry: parentEntry } = loadSessionEntry(canonicalParentSessionKey);
+      const parentAgentId = normalizeAgentId(
+        resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? resolveDefaultAgentId(cfg),
+      );
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, parentAgentId);
+      if (hasInternalHookListeners("command", "new")) {
+        const hookEvent = createInternalHookEvent("command", "new", canonicalParentSessionKey, {
+          sessionEntry: parentEntry,
+          previousSessionEntry: parentEntry,
+          commandSource: "webchat",
+          cfg,
+          workspaceDir,
+        });
+        await triggerInternalHook(hookEvent);
+      }
+      parentEntryForHooks = parentEntry;
+      parentStorePath = resolveGatewaySessionStoreTarget({
+        cfg,
+        key: canonicalParentSessionKey,
+      }).storePath;
+      parentTargetForHooks = resolveGatewaySessionStoreTarget({
+        cfg,
+        key: canonicalParentSessionKey,
+      });
+      const { emitGatewayBeforeResetPluginHook } = await loadSessionsRuntimeModule();
+      await emitGatewayBeforeResetPluginHook({
+        cfg,
+        key: canonicalParentSessionKey,
+        target: parentTargetForHooks,
+        storePath: parentStorePath,
+        entry: parentEntryForHooks,
+        reason: "new",
+      });
+    }
     const loweredRequestedKey = normalizeOptionalLowercaseString(requestedKey);
     const key = requestedKey
       ? loweredRequestedKey === "global" || loweredRequestedKey === "unknown"
@@ -1140,6 +1184,27 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       emitSessionsChanged(context, {
         sessionKey: target.canonicalKey,
         reason: "send",
+      });
+    }
+    if (canonicalParentSessionKey && parentEntryForHooks && parentStorePath) {
+      const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
+        await loadSessionsRuntimeModule();
+      emitGatewaySessionEndPluginHook({
+        cfg,
+        sessionKey: canonicalParentSessionKey,
+        sessionId: parentEntryForHooks.sessionId,
+        storePath: parentStorePath,
+        sessionFile: parentEntryForHooks.sessionFile,
+        agentId: resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? undefined,
+        reason: "new",
+        nextSessionId: createdEntry.sessionId,
+        nextSessionKey: target.canonicalKey,
+      });
+      emitGatewaySessionStartPluginHook({
+        cfg,
+        sessionKey: target.canonicalKey,
+        sessionId: createdEntry.sessionId,
+        resumedFrom: parentEntryForHooks.sessionId,
       });
     }
   },

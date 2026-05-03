@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/cron: make the New Job sidebar collapsible so the jobs list can reclaim space while keeping the form one click away. Thanks @BunsDev.
 - Gateway/startup: keep model-catalog test helpers, run-session lookup code, QR pairing helpers, and TypeBox memory-tool schema construction out of hot startup import paths, reducing default gateway benchmark plugin-load and memory pressure.
 - Control UI/performance: record browser long animation frame or long task entries in the debug event log when supported, making slow dashboard renders easier to attribute from the UI.
+- Gateway/sessions: fire the `command:new` internal hook against the parent session when `sessions.create` is called with a `parentSessionKey` (Control UI `/new` flow), restoring `session-memory` and custom `command:new` hook delivery after commit 37aebf612b rerouted the typed-`/new` path away from `sendChatMessageNow`. Fixes #76957. Thanks @hclsys.
 - Channels/streaming: add unified `streaming.mode: "progress"` drafts with auto single-word status labels and shared progress configuration across Discord, Telegram, Matrix, Slack, and Microsoft Teams.
 - Slack/streaming: add `streaming.progress.render: "rich"` for Block Kit progress drafts backed by structured progress line data.
 - Slack/streaming: keep the newest rich progress lines when Block Kit limits trim long progress drafts. Thanks @vincentkoc.
