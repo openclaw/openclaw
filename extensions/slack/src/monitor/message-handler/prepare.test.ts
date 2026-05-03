@@ -2003,6 +2003,73 @@ describe("prepareSlackMessage sender prefix", () => {
     ]);
   });
 
+  describe("ignoreOtherMentions", () => {
+    function createIgnoreOtherMentionsCtx(): SlackMonitorContext {
+      return {
+        ...createSenderPrefixCtx({
+          channels: {},
+          slashCommand: { command: "/openclaw", enabled: false },
+        }),
+        defaultRequireMention: false,
+        channelsConfig: { "*": { ignoreOtherMentions: true } },
+        channelsConfigKeys: ["*"],
+      } as unknown as SlackMonitorContext;
+    }
+
+    async function prepareIgnoreMsg(
+      ctx: SlackMonitorContext,
+      text: string,
+      channelType = "channel",
+    ) {
+      return prepareSlackMessage({
+        ctx,
+        account: { accountId: "default", config: {}, replyToMode: "off" } as never,
+        message: {
+          type: "message",
+          channel: channelType === "im" ? "D123" : "C123",
+          channel_type: channelType,
+          text,
+          user: "U1",
+          ts: "1.000",
+          event_ts: "1.000",
+        } as never,
+        opts: { source: "message" },
+      });
+    }
+
+    it("drops channel message mentioning another user when ignoreOtherMentions=true", async () => {
+      const result = await prepareIgnoreMsg(createIgnoreOtherMentionsCtx(), "<@U456> hey");
+      expect(result).toBeNull();
+    });
+
+    it("does not drop when bot is explicitly mentioned alongside another user", async () => {
+      const result = await prepareIgnoreMsg(createIgnoreOtherMentionsCtx(), "<@BOT> <@U456> hey");
+      expect(result).not.toBeNull();
+    });
+
+    it("does not drop DM messages mentioning another user", async () => {
+      const result = await prepareIgnoreMsg(createIgnoreOtherMentionsCtx(), "<@U456> hey", "im");
+      expect(result).not.toBeNull();
+    });
+
+    it("does not drop channel message with no user mentions", async () => {
+      const result = await prepareIgnoreMsg(createIgnoreOtherMentionsCtx(), "hello");
+      expect(result).not.toBeNull();
+    });
+
+    it("does not drop messages when botUserId is unknown even if mention regexes exist", async () => {
+      // When auth.test fails, botUserId is empty. Mention regexes may still be non-empty
+      // (auto-derived from agent identity). Without botUserId, we cannot distinguish a bot
+      // mention from a coworker mention — the gate must not activate.
+      const ctx = {
+        ...createIgnoreOtherMentionsCtx(),
+        botUserId: "",
+      } as unknown as SlackMonitorContext;
+      const result = await prepareIgnoreMsg(ctx, "<@U456> help");
+      expect(result).not.toBeNull();
+    });
+  });
+
   it("detects /new as control command when prefixed with Slack mention", async () => {
     const ctx = createSenderPrefixCtx({
       channels: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },

@@ -486,6 +486,50 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
+  // Drop messages that mention another user but not the bot.
+  // Unlike Discord, Slack implicit mentions (thread participation) are very broad — they fire
+  // for every message in a bot-participated thread. We intentionally ignore implicitMention here
+  // so that tagging a coworker in a bot thread does not trigger a reply.
+  // Guard on canDetectMention: require an explicit bot user ID before activating the gate.
+  // hasAnyMention matches any <@...> token, so without botUserId we cannot distinguish
+  // "bot was mentioned" from "someone else was mentioned". When botUserId is unknown (e.g.
+  // auth.test failed), skip the gate entirely to avoid dropping legitimate bot pings.
+  // Mention regexes alone are insufficient — they are derived from agent identity (name-based
+  // patterns) and do not match Slack <@USER_ID> tokens, so canDetectMention must not rely
+  // on mentionRegexes.length > 0 as a fallback.
+  // Note: when inbound debouncing merges multiple messages, hasAnyMention and wasMentioned
+  // reflect the combined batch. This is intentional — debounced messages are a single logical
+  // unit, and a batch where someone tagged a coworker (but not the bot) is correctly dropped.
+  const canDetectMentionForIgnoreOtherMentions = Boolean(ctx.botUserId);
+  const ignoreOtherMentions = channelConfig?.ignoreOtherMentions ?? false;
+  if (
+    isRoom &&
+    ignoreOtherMentions &&
+    canDetectMentionForIgnoreOtherMentions &&
+    hasAnyMention &&
+    !wasMentioned
+  ) {
+    logInboundDrop({
+      log: logVerbose,
+      channel: "slack",
+      reason: "other-mention",
+      target: senderId,
+    });
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: ctx.channelHistories,
+      historyKey,
+      limit: ctx.historyLimit,
+      entry: (message.text ?? "").trim()
+        ? {
+            sender: await resolveSenderName(),
+            body: (message.text ?? "").trim(),
+            timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+          }
+        : null,
+    });
+    return null;
+  }
+
   const shouldRequireMention = isRoom
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;

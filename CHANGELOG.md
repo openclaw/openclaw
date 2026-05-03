@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Discord/status: add degraded Discord transport and gateway event-loop starvation signals to `openclaw channels status`, `openclaw status --deep`, and fetch-timeout logs so intermittent socket resets do not look like a healthy running channel. (#76327) Thanks @joshavant.
 - Plugins/update: on the beta OpenClaw update channel, default-line npm and ClawHub plugin updates try `@beta` first and fall back to default/latest when no plugin beta release exists.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
+- Channels/Slack: add per-channel `ignoreOtherMentions` option that drops inbound `<@user>` messages whose explicit mention is for someone other than the bot, even inside bot-participated threads, so Slack mirrors the existing Discord control without making the bot respond when teammates tag each other. Thanks @hanamizuki.
 
 ### Fixes
 
