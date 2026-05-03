@@ -60,28 +60,15 @@ import {
   listChannelPluginConfigTargetIds,
   pluginConfigTargetsChanged,
 } from "./plugin-channel-reload-targets.js";
-import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
-import { createChannelManager } from "./server-channels.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
-import { loadGatewayModelCatalog } from "./server-model-catalog.js";
-import { bootstrapGatewayNetworkRuntime } from "./server-network-runtime.js";
-import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
-import { createGatewayRequestContext } from "./server-request-context.js";
-import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
-import {
-  activateGatewayScheduledServices,
-  startGatewayCronWithLogging,
-  startGatewayRuntimeServices,
-} from "./server-runtime-services.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
-import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
@@ -104,7 +91,6 @@ import {
   startGatewayPostAttachRuntime,
 } from "./server-startup.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
-import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
   getHealthCache,
@@ -171,6 +157,17 @@ function loadGatewayCloseModule(): Promise<typeof import("./server-close.js")> {
   gatewayCloseModulePromise ??= import("./server-close.js");
   return gatewayCloseModulePromise;
 }
+
+type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
+
+let gatewayModelCatalogModulePromise: Promise<typeof import("./server-model-catalog.js")> | null =
+  null;
+
+const loadGatewayModelCatalog: LoadGatewayModelCatalog = async (...args) => {
+  gatewayModelCatalogModulePromise ??= import("./server-model-catalog.js");
+  const mod = await gatewayModelCatalogModulePromise;
+  return mod.loadGatewayModelCatalog(...args);
+};
 
 const logHealth = log.child("health");
 const logCron = log.child("cron");
@@ -490,6 +487,7 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
   const minimalTestGateway =
@@ -660,8 +658,9 @@ export async function startGatewayServer(
         ...listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []),
       ]),
     );
-  const runtimeConfig = await startupTrace.measure("runtime.config", () =>
-    resolveGatewayRuntimeConfig({
+  const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
+    const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
+    return resolveGatewayRuntimeConfig({
       cfg: cfgAtStart,
       port,
       bind: opts.bind,
@@ -671,8 +670,8 @@ export async function startGatewayServer(
       openResponsesEnabled: opts.openResponsesEnabled,
       auth: opts.auth,
       tailscale: opts.tailscale,
-    }),
-  );
+    });
+  });
   const {
     bindHost,
     controlUiEnabled,
@@ -755,6 +754,7 @@ export async function startGatewayServer(
   const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
   let startupSidecarsReady = minimalTestGateway;
   let startupPendingReason = "startup-sidecars";
+  const { createChannelManager } = await import("./server-channels.js");
   const channelManager = createChannelManager({
     getRuntimeConfig: () =>
       applyPluginAutoEnable({
@@ -832,6 +832,7 @@ export async function startGatewayServer(
       getReadiness,
     }),
   );
+  const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
     nodeRegistry,
     nodePresenceTimers,
@@ -980,6 +981,10 @@ export async function startGatewayServer(
     getActiveTaskCount = earlyRuntime.getActiveTaskCount;
     runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
 
+    const [{ startGatewayEventSubscriptions }, gatewayRuntimeServices] = await Promise.all([
+      import("./server-runtime-subscriptions.js"),
+      import("./server-runtime-services.js"),
+    ]);
     Object.assign(
       runtimeState,
       startGatewayEventSubscriptions({
@@ -999,7 +1004,7 @@ export async function startGatewayServer(
 
     Object.assign(
       runtimeState,
-      startGatewayRuntimeServices({
+      gatewayRuntimeServices.startGatewayRuntimeServices({
         minimalTestGateway,
         cfgAtStart,
         channelManager,
@@ -1007,6 +1012,7 @@ export async function startGatewayServer(
       }),
     );
 
+    const { createGatewayAuxHandlers } = await import("./server-aux-handlers.js");
     const { execApprovalManager, pluginApprovalManager, extraHandlers } = createGatewayAuxHandlers({
       log,
       activateRuntimeSecrets,
@@ -1179,6 +1185,7 @@ export async function startGatewayServer(
     const unavailableGatewayMethods = new Set<string>(
       minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
     );
+    const { createGatewayRequestContext } = await import("./server-request-context.js");
     const gatewayRequestContext = createGatewayRequestContext({
       deps,
       runtimeState,
@@ -1272,6 +1279,7 @@ export async function startGatewayServer(
       }
     }
 
+    const { attachGatewayWsHandlers } = await import("./server-ws-runtime.js");
     attachGatewayWsHandlers({
       wss,
       clients,
@@ -1311,7 +1319,7 @@ export async function startGatewayServer(
       ) {
         return;
       }
-      const activated = activateGatewayScheduledServices({
+      const activated = gatewayRuntimeServices.activateGatewayScheduledServices({
         minimalTestGateway,
         cfgAtStart,
         deps,
@@ -1445,7 +1453,7 @@ export async function startGatewayServer(
         runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
         runtimeState.mediaCleanup = maintenance.mediaCleanup;
       }
-      startGatewayCronWithLogging({
+      gatewayRuntimeServices.startGatewayCronWithLogging({
         cron: runtimeState.cronState.cron,
         logCron,
       });
