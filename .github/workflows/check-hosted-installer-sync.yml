@@ -1,0 +1,72 @@
+name: Check Hosted Installer Sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/install.sh'
+      - '.github/workflows/check-hosted-installer-sync.yml'
+  pull_request:
+    paths:
+      - 'scripts/install.sh'
+      - '.github/workflows/check-hosted-installer-sync.yml'
+  schedule:
+    # Check daily at 06:17 UTC (outside peak hours)
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  check-hosted-installer-sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch hosted installer
+        run: |
+          curl -fsSL --proto '=https' --tlsv1.2 \
+            "https://openclaw.ai/install.sh" \
+            -o /tmp/hosted_install.sh
+          echo "Hosted installer downloaded successfully"
+
+      - name: Compare checksums
+        run: |
+          SOURCE_SHA256="$(sha256sum scripts/install.sh | cut -d' ' -f1)"
+          HOSTED_SHA256="$(sha256sum /tmp/hosted_install.sh | cut -d' ' -f1)"
+
+          echo "Source scripts/install.sh:     ${SOURCE_SHA256}"
+          echo "Hosted openclaw.ai/install.sh: ${HOSTED_SHA256}"
+
+          if [ "$SOURCE_SHA256" != "$HOSTED_SHA256" ]; then
+            echo ""
+            echo "::error::Hosted installer is OUT OF SYNC with scripts/install.sh"
+            echo ""
+            echo "The hosted installer at https://openclaw.ai/install.sh"
+            echo "does not match the source in the repository."
+            echo ""
+            echo "Line counts:"
+            echo "  Source:  $(wc -l < scripts/install.sh) lines"
+            echo "  Hosted:  $(wc -l < /tmp/hosted_install.sh) lines"
+            echo ""
+            echo "Size difference:"
+            du -h scripts/install.sh /tmp/hosted_install.sh
+            echo ""
+            echo "To fix: ensure the deployment pipeline syncs scripts/install.sh to the CDN"
+            exit 1
+          fi
+
+          echo ""
+          echo "✓ Hosted installer is in sync with scripts/install.sh"
