@@ -240,6 +240,11 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         'await import("@lancedb/lancedb");\n',
         "utf8",
       );
+      writeFileSync(
+        join(packageRoot, "dist", "discord-voice-runtime.js"),
+        'const OpusScript = require("opusscript");\nexport { OpusScript };\n',
+        "utf8",
+      );
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {

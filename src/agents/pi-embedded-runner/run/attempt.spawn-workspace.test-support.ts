@@ -77,6 +77,7 @@ type AttemptSpawnWorkspaceHoisted = {
   getGlobalHookRunnerMock: Mock<() => unknown>;
   initializeGlobalHookRunnerMock: UnknownMock;
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
+  detectAndLoadPromptImagesMock: AsyncUnknownMock;
   getHistoryLimitFromSessionKeyMock: Mock<
     (sessionKey: string | undefined, config: unknown) => number | undefined
   >;
@@ -148,6 +149,12 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
   const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
+  const detectAndLoadPromptImagesMock = vi.fn(async () => ({
+    images: [],
+    detectedRefs: [],
+    loadedCount: 0,
+    skippedCount: 0,
+  }));
   const getHistoryLimitFromSessionKeyMock = vi.fn<
     (sessionKey: string | undefined, config: unknown) => number | undefined
   >(() => undefined);
@@ -187,6 +194,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     getGlobalHookRunnerMock,
     initializeGlobalHookRunnerMock,
     runContextEngineMaintenanceMock,
+    detectAndLoadPromptImagesMock,
     getHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
     preemptiveCompactionCalls,
@@ -386,7 +394,8 @@ vi.mock("../runs.js", () => ({
 }));
 
 vi.mock("./images.js", () => ({
-  detectAndLoadPromptImages: async () => ({ images: [] }),
+  detectAndLoadPromptImages: (...args: unknown[]) =>
+    (hoisted.detectAndLoadPromptImagesMock as (...args: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../../system-prompt-params.js", () => ({

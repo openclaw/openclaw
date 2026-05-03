@@ -21,6 +21,8 @@ Current pieces:
   drive a real channel inside a child QA gateway.
 - `qa/`: repo-backed seed assets for the kickoff task and baseline QA
   scenarios.
+- [Mantis](/concepts/mantis): before and after live verification for bugs that
+  need real transports, browser screenshots, VM state, and PR evidence.
 
 ## Command surface
 
@@ -45,6 +47,7 @@ script aliases; both forms are supported.
 | `qa matrix`                                         | Live transport lane against a disposable Tuwunel homeserver. See [Matrix QA](/concepts/qa-matrix).                                                                     |
 | `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                             |
 | `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                      |
+| `qa mantis`                                         | Planned before and after verification runner for live transport bugs. See [Mantis](/concepts/mantis).                                                                  |
 
 ## Operator flow
 

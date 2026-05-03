@@ -37,6 +37,8 @@ export type GatewayStartupPluginPlan = {
   pluginIds: readonly string[];
 };
 
+type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegistry>;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -282,6 +284,76 @@ function canStartConfiguredRootPlugin(params: {
   return true;
 }
 
+function hasExplicitHookPolicyConfig(
+  entry: NormalizedPluginsConfig["entries"][string] | undefined,
+): boolean {
+  return (
+    entry?.hooks?.allowConversationAccess === true || entry?.hooks?.allowPromptInjection === true
+  );
+}
+
+function hasHookRuntimeStartupIntent(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  activationSourcePlugins: NormalizedPluginsConfig;
+}): boolean {
+  if (params.manifest?.activation?.onCapabilities?.includes("hook")) {
+    return true;
+  }
+  return hasExplicitHookPolicyConfig(
+    params.activationSourcePlugins.entries[params.plugin.pluginId],
+  );
+}
+
+function canStartExplicitHookPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSource: {
+    plugins: NormalizedPluginsConfig;
+    rootConfig?: OpenClawConfig;
+  };
+  activationSourcePlugins: NormalizedPluginsConfig;
+}): boolean {
+  const hasHookPolicyIntent = hasExplicitHookPolicyConfig(
+    params.activationSourcePlugins.entries[params.plugin.pluginId],
+  );
+  if (
+    !hasHookRuntimeStartupIntent({
+      plugin: params.plugin,
+      manifest: params.manifest,
+      activationSourcePlugins: params.activationSourcePlugins,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSourcePlugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSourcePlugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: params.plugin.enabledByDefault,
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled && (activationState.explicitlyEnabled || hasHookPolicyIntent);
+}
+
 function canStartConfiguredChannelPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   config: OpenClawConfig;
@@ -495,6 +567,18 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           pluginsConfig,
           activationSource,
           configuredSpeechProviderIds,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartExplicitHookPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          activationSourcePlugins,
         })
       ) {
         return true;

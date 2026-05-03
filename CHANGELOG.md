@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Gateway/performance: lazy-load early runtime discovery and shutdown-hook helpers, defer maintenance timers until after readiness, and trim duplicate plugin auto-enable work during Gateway startup.
+- QA/Mantis: add a `pnpm openclaw qa mantis discord-smoke` runner and manual GitHub workflow that verify the Mantis Discord bot can see the configured guild/channel, post a smoke message, add a reaction, and upload artifacts.
 - Gateway/performance: lazy-load the heavy cron runtime after the rest of Gateway startup, defer restart-sentinel refresh after readiness, and let the Gateway startup benchmark write per-run V8 CPU profiles with `--cpu-prof-dir`.
 - Gateway/performance: keep raw channel-config schema parsing from discovering bundled plugin runtime metadata, and add `pnpm gateway:watch --benchmark-no-force` for profiling startup without the default port cleanup.
 - Plugins/onboarding: let Manual setup install optional official plugins, including ClawHub-backed diagnostics with npm fallback, and expose the external Codex plugin as a selectable provider setup choice. Thanks @vincentkoc.
@@ -24,18 +25,21 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Media/understanding: replace `import("sharp")` with `createRequire("sharp")` so the bundled image-ops plugin loads correctly on Node 24+, where sharp's CJS-only module is unreachable via ESM `import()`. Fixes #76713. Thanks @BrutusDeRobot.
-
-### Fixes
+- Discord/status: honor explicit `messages.statusReactions.enabled: true` in tool-only guild channels so queued ack reactions can progress through thinking/done lifecycle reactions instead of stopping at the initial emoji. Thanks @Marvinthebored.
 - Agents/models: forward model `maxTokens` as the default output-token limit for OpenAI-compatible Responses and Completions transports when no runtime override is provided, preventing provider defaults from silently truncating larger outputs. (#76645) Thanks @joeyfrasier.
+- Control UI/Skills: fix skill detail modal silently failing to open in all browsers by deferring `showModal()` until the dialog element is connected to the DOM; the Lit `ref` callback fired before connection causing a `DOMException: HTMLDialogElement.showModal: Dialog element is not connected` on every skill click. Thanks @nickmopen.
 - Gateway/update: run `doctor --non-interactive --fix` after Control UI global package updates before reporting success, so legacy config is migrated before the gateway restart. Thanks @stevenchouai.
 - Gateway/cron: stop a lazy cron startup that loses a hot-reload race, preventing the old cron service from starting after reload has already replaced cron state.
 - CLI/plugins: warn when npm plugin installs remain shadowed by a failing config-selected source and surface the repair path in `plugins doctor`. Thanks @LindalyX-Lee.
+- Agents/Telegram: preserve explicit reply and quote context in embedded model prompts without letting quoted text drive prompt-local image loading. Fixes #76419. (#76659) Thanks @cheechnd.
 - Active Memory: apply `setupGraceTimeoutMs` to the embedded recall runner as well as the outer prompt-build watchdog, so very-cold first recalls keep the configured setup grace end-to-end. (#74480) Thanks @volcano303.
+- Channels/Feishu: cap how long the per-chat sequential queue blocks subsequent same-key tasks behind a single in-flight task (5 min default), so a single hung dispatch no longer leaves later same-chat messages in `queued` state until gateway restart; the stuck task continues running but is evicted from the blocking chain and a warning is logged. Fixes #70133. (#76687) Thanks @martingarramon and @bek91.
 - CLI/config: keep JSON dry-run patches validating touched channel configuration against bundled channel schemas even when the patch only contains SecretRef objects.
 - Plugins/tools: keep disabled bundled tool plugins out of explicit runtime allowlist ownership and fall back from loaded-but-empty channel registries to tool-bearing plugin registries, so Active Memory can use bundled `memory-core` search/get tools even when `memory-lancedb` is disabled. Fixes #76603. Thanks @jwong-art.
 - Plugins/install: run `npm install` from the managed npm-root manifest so installing one `@openclaw/*` plugin preserves already installed sibling plugins instead of pruning them. Fixes #76571. (#76602) Thanks @byungskers and @crpol.
 - Plugins/context-engine: include the selected `plugins.slots.contextEngine` plugin in the gateway startup load plan so external context-engine plugins without `activation.onStartup` in their manifest are loaded before any agent turn resolves the active engine; prevents the "Context engine X is not registered; falling back to default engine legacy" warning after gateway startup. Fixes #76576. Thanks @hclsys.
 - Plugins/tools: restore on-demand registry load for path-based plugins (origin "config") so tool factories registered via `plugins.load.paths` are resolved at agent request time when no pre-warmed channel registry is present; prevents "unknown method" errors after gateway startup. Fixes #76598. Thanks @hclsys.
+- Plugins/hooks: include explicitly enabled hook-capable plugins in the Gateway startup runtime scope so embedded PI runs can see their `before_prompt_build` and `agent_end` hooks. Fixes #76649. Thanks @wwf3045 and @MkDev11.
 - Channels/QQ Bot: resolve structured `clientSecret` SecretRefs before QQ token exchange, expose the QQ Bot secret contract to secrets tooling, and reject legacy `secretref:/...` marker strings. (#74772) Thanks @xialonglee.
 - Agents: keep active streamed provider replies alive by refreshing guarded fetch timeouts on raw body chunks and surface true prompt stream timeouts as explicit errors instead of partial assistant fragments. Fixes #76307. (#76633) Thanks @MkDev11.
 - Plugins/externalization: keep official ACPX, Google Chat, and LINE install specs on production package names, leaving beta-tag probing to the explicit OpenClaw beta update channel. Thanks @vincentkoc.
@@ -45,9 +49,12 @@ Docs: https://docs.openclaw.ai
 - Plugins/catalog: pin bare npm specs from prerelease external channel catalog entries to the catalog entry version, so beta catalogs do not silently install the latest stable package.
 - Plugins/update: treat catalog-matched official npm updates and OpenClaw-authored externalized-bundled npm bridges as trusted official installs so launch-code plugins can update or migrate out of the bundled tree without scanner false positives. Thanks @vincentkoc.
 - Plugins/onboarding: fall back from ClawHub to npm only for missing package/version errors, keeping integrity and verification failures fail-closed during storepack rollout. Thanks @vincentkoc.
+- CLI/onboarding: mask credential inputs (model-auth provider API keys, gateway tokens and passwords, web-search provider keys, and skill env-var values) in the interactive `openclaw onboard` wizard so pasted secrets no longer echo into terminal scrollback, `Start-Transcript` logs, or screenshots; existing tokens/passwords are preserved through a masked-preview confirm step before the sensitive prompt. Thanks @anurag-bg-neu.
 - Control UI/Talk: fix Talk (OpenAI Realtime WebRTC) CORS failure by stripping server-side-only attribution headers (`originator`, `version`, `User-Agent`) from browser offer headers; `api.openai.com/v1/realtime/calls` only allows `authorization` and `content-type` in its CORS preflight, so forwarding these headers caused the browser SDP exchange to fail. Fixes #76435. Thanks @hclsys.
+- Chat delivery: make `/verbose on|full|off` changes affect subsequent tool-use chat bubbles again, including channels with draft preview tool progress enabled, while preserving one-shot verbose directives.
 - CLI/logs: auto-reconnect `openclaw logs --follow` on transient gateway disconnects (WebSocket close, timeout, connection drop) with bounded exponential backoff (up to 8 retries, capped at 30 s) and stderr retry warnings, while still exiting immediately on non-recoverable auth or configuration errors. Fixes #74782. (#75059) Thanks @shashank-poola.
 - CLI/logs: announce `--follow` recovery with a `[logs] gateway reconnected` notice once a poll succeeds after a transient outage, and emit JSON `notice` records in `--json` mode for both the retry warning and the reconnect transition, so live monitoring scripts can react to the recovery. Carries forward #75059. (#75372) Thanks @romneyda.
+- Codex/WhatsApp: keep the `message` dynamic tool available when Codex source replies are configured for message-tool delivery, so coding-profile chat agents do not complete turns privately without a visible channel reply. Fixes #76660. (#76663) Thanks @VishalJ99.
 - Plugins/onboarding: trust optional official plugin and web-search installs selected from the official catalog so npm security scanning treats them like other source-linked official install paths. Thanks @vincentkoc.
 - Agents/web_search: keep installed runtime provider discovery enabled when web-search metadata is missing, so externally installed official providers such as Brave remain visible to agent and cron turns instead of falling back to bundled-only lookup. Fixes #76626. Thanks @amknight.
 - Tests/plugins: expose the Discord npm onboarding Docker lane as a package script and assert planned Docker lanes point at real scripts, so external-channel onboarding coverage can actually run. Thanks @vincentkoc.
@@ -74,6 +81,7 @@ Docs: https://docs.openclaw.ai
 - Channels/secrets: resolve SecretRef-backed channel credentials through external plugin secret contracts after the plugin split, covering runtime startup, target discovery, webhook auth, disabled-account enumeration, and late-bound web_search config. Fixes #76371. (#76449) Thanks @joshavant and @neeravmakwana.
 - Docker/Gateway: pass Docker setup `.env` values into gateway and CLI containers and preserve exec SecretRef `passEnv` keys in managed service plans, so 1Password Connect-backed Discord tokens keep resolving after doctor or plugin repair. Thanks @vincentkoc.
 - Control UI/WebChat: explain compaction boundaries in chat history and link directly to session checkpoint controls so pre-compaction turns no longer look silently lost after refresh. Fixes #76415. Thanks @BunsDev.
+- Agents/compaction: add an optional bundled compaction notifier hook and retry once from the compacted transcript when automatic compaction leaves a turn without a final visible reply. (#76651) Thanks @simplyclever914.
 - Agents/incomplete-turn: detect and surface a warning when the agent's final text after a tool-call chain is silently dropped because the post-tool assistant response was never produced, instead of completing the turn with only the pre-tool analysis text. Fixes #76477. Thanks @amknight.
 - Channels/WhatsApp: attach native outbound mention metadata for group text and media captions by resolving `@+<digits>` and `@<digits>` tokens against WhatsApp participant data, including LID groups. Fixes #39879; carries forward #56863. Thanks @kengi1437, @joe2643, and @fridayck.
 - Channels/WhatsApp: require outbound mention tokens to end at a word boundary so phone-number prefixes inside longer strings no longer trigger hidden native mentions.
@@ -95,6 +103,7 @@ Docs: https://docs.openclaw.ai
 - Gateway: preserve stack diagnostics when `chat.send` or agent attachment parsing/staging fails, improving image-send failure triage. Refs #63432. (#75135) Thanks @keen0206.
 - Agents/idle-timeout: add a cost-runaway breaker to the outer embedded-run retry loop that halts further attempts after 5 consecutive idle timeouts without completed model progress, so a wedged provider can no longer fan paid model calls out across the same run; completed text or tool-call progress resets the breaker, but partial tool-argument token dribbles do not. Fixes #76293. Thanks @ThePuma312.
 - Heartbeats/Codex: stop sending the legacy `HEARTBEAT_OK` prompt instruction when heartbeat turns have the structured `heartbeat_respond` tool, while keeping the text sentinel for legacy automatic heartbeat replies. Thanks @pashpashpash.
+- Heartbeats/Codex: keep structured heartbeat prompts aligned with actual `heartbeat_respond` tool availability and keep tool-disabled commitment check-ins on the legacy ack path. Thanks @pashpashpash and @vincentkoc.
 - Agent runtimes: fail explicit plugin runtime selections honestly when the requested harness is unavailable instead of silently falling back to the embedded PI runtime. Thanks @pashpashpash.
 - Maintainer workflow: push prepared PR heads through GitHub's verified commit API by default and require an explicit override before git-protocol pushes can publish unsigned commits. Thanks @BunsDev.
 - Feishu: resolve setup/status probes through the selected/default account so multi-account configs with account-scoped app credentials show as configured and probeable. Fixes #72930. Thanks @brokemac79.
@@ -169,6 +178,7 @@ Docs: https://docs.openclaw.ai
 
 - Plugins/providers: preserve scoped cold-load fallback for enabled external manifest-contract capability providers missing from the startup registry, so providers such as Fish Audio can resolve on request without requiring `activation.onStartup` for correctness. (#76536) Thanks @Conan-Scott.
 - Gateway/update: carry `continuationMessage` from `update.run` into successful restart sentinels so session-scoped self-updates can resume one follow-up turn after the Gateway restarts. Refs #71178. (#74362) Thanks @100menotu001, @HeilbronAILabs, and @artnking.
+- Agents/fallback: suppress duplicate current-turn user-message transcript writes after embedded fallback retries while still sending the retry prompt to the model. (#63696) Thanks @dashhuang.
 
 ## 2026.5.2
 
