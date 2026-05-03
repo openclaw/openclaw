@@ -287,3 +287,39 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     );
   });
 });
+
+describe("channelsStatusCommand option validation", () => {
+  beforeEach(() => {
+    mocks.callGateway.mockReset();
+    mocks.resolveCommandConfigWithSecrets.mockReset();
+    mocks.requireValidConfigSnapshot.mockReset();
+    mocks.withProgress.mockClear();
+  });
+
+  it("preserves the longer default timeout for probe mode", async () => {
+    mocks.callGateway.mockResolvedValue({});
+    const { runtime } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ probe: true }, runtime as never);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ probe: true, timeoutMs: 30_000 }),
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
+  it("throws for invalid timeout values before probing the gateway", async () => {
+    const { runtime } = createCapturingTestRuntime();
+
+    await expect(
+      channelsStatusCommand({ probe: false, timeout: "not-a-number" }, runtime as never),
+    ).rejects.toThrow("invalid --timeout: not-a-number");
+
+    expect(mocks.withProgress).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.requireValidConfigSnapshot).not.toHaveBeenCalled();
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+  });
+});
