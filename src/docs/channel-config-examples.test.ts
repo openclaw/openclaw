@@ -22,10 +22,17 @@ describe("channel docs config examples", () => {
       for (const match of blocks) {
         const code = match[1] ?? "";
         const location = `${fileName}:${lineNumberAt(markdown, match.index ?? 0)}`;
+        const isStrictJson = match[0].startsWith("```json\n");
         try {
-          JSON5.parse(code);
+          if (isStrictJson) {
+            JSON.parse(code);
+          } else {
+            JSON5.parse(code);
+          }
         } catch (error) {
-          failures.push(`${location} JSON5 parse failed: ${String(error)}`);
+          failures.push(
+            `${location} ${isStrictJson ? "JSON" : "JSON5"} parse failed: ${String(error)}`,
+          );
         }
       }
     }

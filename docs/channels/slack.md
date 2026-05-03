@@ -251,7 +251,19 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
     "event_subscriptions": {
       "request_url": "https://gateway-host.example.com/slack/events",
       "bot_events": [
-        /* same as Socket Mode */
+        "app_home_opened",
+        "app_mention",
+        "channel_rename",
+        "member_joined_channel",
+        "member_left_channel",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "pin_added",
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
       ]
     },
     "interactivity": {
@@ -420,10 +432,11 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
       "description": "Show the short help summary",
       "url": "https://gateway-host.example.com/slack/events"
     }
-    // ...repeat for every command with the same `url` value
   ]
 }
 ```
+
+        Repeat that `url` value on every command in the list.
 
       </Tab>
     </Tabs>
