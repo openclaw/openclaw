@@ -675,6 +675,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         agentId,
         startMs,
         endMs,
+        refreshMode: "sync-when-empty",
       });
       cacheStatus = mergeUsageCacheStatus(cacheStatus, cachedUsage.cacheStatus);
       const usage = cachedUsage.summary;

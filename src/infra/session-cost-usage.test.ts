@@ -502,6 +502,90 @@ describe("session cost usage", () => {
     });
   });
 
+  it("rebuilds missing session summaries synchronously when requested", async () => {
+    const root = await makeSessionCostRoot("cost-cache-session-sync");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-session-sync.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 10,
+            output: 20,
+            totalTokens: 30,
+            cost: { total: 0.03 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      const summary = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-session-sync",
+        sessionFile,
+        refreshMode: "sync-when-empty",
+      });
+
+      expect(summary.summary?.totalTokens).toBe(30);
+      expect(summary.summary?.totalCost).toBeCloseTo(0.03, 5);
+      expect(summary.cacheStatus.status).toBe("fresh");
+    });
+  });
+
+  it("expires stale usage cache locks before refreshing", async () => {
+    const root = await makeSessionCostRoot("cost-cache-stale-lock");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-stale-lock.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 5,
+            output: 5,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const lockPath = `${cachePath}.lock`;
+      await fs.writeFile(
+        lockPath,
+        `${JSON.stringify({
+          pid: process.pid,
+          startedAt: Date.now() - 11 * 60 * 1000,
+        })}\n`,
+        "utf-8",
+      );
+
+      const result = await refreshCostUsageCache();
+      expect(result).toBe("refreshed");
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      expect(summary.totals.totalTokens).toBe(10);
+      expect(summary.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
   it("batches stale session summary refreshes for the same agent", async () => {
     const root = await makeSessionCostRoot("cost-cache-session-batch");
     const sessionsDir = path.join(root, "agents", "main", "sessions");

@@ -203,6 +203,11 @@ describe("sessions.usage", () => {
             .mocked(loadSessionCostSummaryFromCache)
             .mock.calls.some((call) => call[0]?.agentId === "opus"),
         ).toBe(true);
+        expect(
+          vi
+            .mocked(loadSessionCostSummaryFromCache)
+            .mock.calls.every((call) => call[0]?.refreshMode === "sync-when-empty"),
+        ).toBe(true);
       });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });

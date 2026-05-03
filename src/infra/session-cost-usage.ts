@@ -82,6 +82,7 @@ const emptyTotals = (): CostUsageTotals => ({
 
 const USAGE_COST_CACHE_VERSION = 2;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
+const USAGE_COST_CACHE_LOCK_STALE_MS = 10 * 60 * 1000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
@@ -206,6 +207,10 @@ async function isUsageCostCacheRefreshRunning(cachePath: string): Promise<boolea
   const lockPath = resolveUsageCostCacheLockPath(cachePath);
   const lock = await readUsageCostCacheLock(lockPath);
   if (!lock) {
+    return false;
+  }
+  if (Date.now() - lock.startedAt > USAGE_COST_CACHE_LOCK_STALE_MS) {
+    await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
     return false;
   }
   if (isProcessRunning(lock.pid)) {
@@ -1121,18 +1126,19 @@ export async function loadSessionCostSummaryFromCache(params: {
   startMs?: number;
   endMs?: number;
   requestRefresh?: boolean;
+  refreshMode?: "background" | "sync-when-empty";
 }): Promise<{ summary: SessionCostSummary | null; cacheStatus: UsageCacheStatus }> {
   const cachePath = resolveUsageCostCachePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
-  const [cache, stats] = await Promise.all([
+  let [cache, stats] = await Promise.all([
     readUsageCostCache(cachePath),
     fs.promises.stat(params.sessionFile).catch(() => null),
   ]);
-  const file = stats
+  let file = stats
     ? { filePath: params.sessionFile, size: stats.size, mtimeMs: stats.mtimeMs }
     : undefined;
-  const entry = cache.files[params.sessionFile];
-  const stale =
+  let entry = cache.files[params.sessionFile];
+  let stale =
     !file ||
     !isUsageCostCacheEntryFresh({
       entry,
@@ -1141,14 +1147,57 @@ export async function loadSessionCostSummaryFromCache(params: {
       requireSessionSummary: true,
     });
   if (params.requestRefresh !== false && stale) {
-    requestCostUsageCacheRefresh({
-      config: params.config,
-      agentId: params.agentId,
-      sessionFiles: [params.sessionFile],
-    });
+    if (params.refreshMode === "sync-when-empty") {
+      const result = await refreshCostUsageCache({
+        config: params.config,
+        agentId: params.agentId,
+        sessionFiles: [params.sessionFile],
+      });
+      if (result === "refreshed") {
+        [cache, stats] = await Promise.all([
+          readUsageCostCache(cachePath),
+          fs.promises.stat(params.sessionFile).catch(() => null),
+        ]);
+        file = stats
+          ? { filePath: params.sessionFile, size: stats.size, mtimeMs: stats.mtimeMs }
+          : undefined;
+        entry = cache.files[params.sessionFile];
+        stale =
+          !file ||
+          !isUsageCostCacheEntryFresh({
+            entry,
+            file,
+            pricingFingerprint,
+            requireSessionSummary: true,
+          });
+      } else {
+        requestCostUsageCacheRefresh({
+          config: params.config,
+          agentId: params.agentId,
+          sessionFiles: [params.sessionFile],
+        });
+      }
+    } else {
+      requestCostUsageCacheRefresh({
+        config: params.config,
+        agentId: params.agentId,
+        sessionFiles: [params.sessionFile],
+      });
+    }
   }
   const refreshRunning = await isUsageCostCacheRefreshRunning(cachePath);
   let summary = stale ? null : (entry?.sessionSummary ?? null);
+  if (!summary && params.refreshMode === "sync-when-empty") {
+    summary = await loadSessionCostSummary({
+      sessionId: params.sessionId,
+      sessionEntry: params.sessionEntry,
+      sessionFile: params.sessionFile,
+      config: params.config,
+      agentId: params.agentId,
+      startMs: params.startMs,
+      endMs: params.endMs,
+    });
+  }
   if (
     summary &&
     params.startMs !== undefined &&
