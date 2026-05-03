@@ -525,11 +525,12 @@ export function escapeMemoryForPrompt(text: string): string {
   // detectImageReferences() cannot re-parse them as live media references.
   const hadMedia = MEDIA_ATTACHED_PATTERN_TEST.test(text);
   let stripped = text.replace(MEDIA_ATTACHED_PATTERN, "");
-  // Collapse runs of whitespace only when media was actually stripped; otherwise
+  // Collapse runs of spaces/tabs only when media was actually stripped; otherwise
   // intentional multi-space formatting (tabular data, indented code references,
-  // etc.) is preserved.
+  // etc.) is preserved. Newlines are deliberately excluded from the collapse so
+  // multi-line memories keep their line structure after media removal.
   if (hadMedia) {
-    stripped = stripped.replace(/\s{2,}/g, " ").trim();
+    stripped = stripped.replace(/[ \t]{2,}/g, " ").trim();
   }
   return stripped.replace(/[&<>"']/g, (char) => PROMPT_ESCAPE_MAP[char] ?? char);
 }
@@ -539,9 +540,18 @@ export function escapeMemoryForPrompt(text: string): string {
 // ============================================================================
 
 /**
- * Sentinel strings that identify OpenClaw-injected inbound metadata blocks.
- * Canonical source: src/auto-reply/reply/strip-inbound-meta.ts
- * Duplicated here because extensions must not import core internals.
+ * Explicit sentinel strings used by `sanitizeForMemoryCapture` to locate and
+ * surgically strip individual blocks. Canonical source:
+ * src/auto-reply/reply/strip-inbound-meta.ts. Duplicated here because
+ * extensions must not import core internals.
+ *
+ * NOTE: `looksLikeEnvelopeSludge` deliberately uses the broader
+ * `INBOUND_META_LABEL_RE` below instead of this list, because
+ * `buildInboundUserContextPrefix` in core also injects label variants such as
+ * `Location (untrusted metadata):`, `Structured object (untrusted metadata):`,
+ * and arbitrary `<custom-label> (untrusted metadata):` blocks (from
+ * `UntrustedStructuredContext`). Detection must stay forward-compatible with
+ * those without bloating this explicit list every time core adds a new label.
  */
 const INBOUND_META_SENTINELS = [
   "Conversation info (untrusted metadata):",
@@ -555,14 +565,35 @@ const INBOUND_META_SENTINELS = [
 const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
 
 /**
- * Matches JSON lines that look like OpenClaw transport envelope metadata.
- * Narrowed to require specific compound key patterns (e.g. "conversation_info",
- * "sender_name", "channel_id") that appear in actual envelope objects, rather
- * than bare prefixes like "conversation" or "sender" which could appear in
- * legitimate user JSON.
+ * Line-anchored pattern matching any inbound-meta block header injected by
+ * `buildInboundUserContextPrefix`. Covers both `(untrusted metadata):` labels
+ * (Conversation info, Sender, Forwarded, Location, Structured object, plus any
+ * future `<label> (untrusted metadata):` produced from `UntrustedStructuredContext`)
+ * and `(untrusted, for context):` blocks (Thread starter, Replied message,
+ * Chat history). Anchored to line start AND end of line so a user message
+ * that quotes the phrase mid-sentence is not flagged. The canonical injection
+ * always puts the sentinel alone on its own line followed by a ```json fence,
+ * so requiring `):` to terminate the line catches every real injection while
+ * sidestepping the false-positive risk.
+ *
+ * Label segment is capped at 100 chars to avoid catastrophic backtracking on
+ * pathological inputs.
+ */
+const INBOUND_META_LABEL_RE =
+  /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context)\):[ \t]*$/m;
+
+const UNTRUSTED_CONTEXT_HEADER_RE = /^Untrusted context \(metadata/m;
+
+/**
+ * Matches JSON blobs that look like OpenClaw transport envelope metadata.
+ * Allows `{` on its own line so pretty-printed JSON (the `JSON.stringify(..., null, 2)`
+ * output produced by `formatUntrustedJsonBlock` in core) is also caught when it
+ * leaks outside its ```json fence. Key list mirrors envelope identifiers used
+ * by `buildInboundUserContextPrefix` and stays narrow to avoid false-positives
+ * on legitimate user JSON with bare keys like "conversation" or "sender".
  */
 const ENVELOPE_JSON_LINE_RE =
-  /^\s*\{"(?:conversation_info|sender_name|channel_id|channel_type)"\s*:/m;
+  /^\s*\{\s*(?:\n\s*)?"(?:chat_id|message_id|reply_to_id|sender_id|conversation_label|conversation_info|sender_name|channel_id|channel_type|group_subject|group_channel|group_space|topic_id|thread_label)"\s*:/m;
 
 /**
  * Returns true if `text` looks like it contains OpenClaw-injected envelope or
@@ -573,19 +604,16 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
     return false;
   }
 
-  // Check for any inbound metadata sentinel anchored to line start, to avoid
-  // false-positives when the user quotes a sentinel string mid-sentence
-  // (e.g. "I saw 'Sender (untrusted metadata):' in the API docs").
-  for (const sentinel of INBOUND_META_SENTINELS) {
-    const escapedSentinel = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (new RegExp(`^${escapedSentinel}`, "m").test(text)) {
-      return true;
-    }
+  // Generic line-anchored sentinel match; precompiled at module scope so the
+  // hot-path callers (capture gating, recall filtering) do not pay a regex
+  // compile per invocation.
+  if (INBOUND_META_LABEL_RE.test(text)) {
+    return true;
   }
 
   // Check for "Untrusted context (metadata..." header at the start of a line
   // to avoid false-positives on user messages that quote the phrase mid-line.
-  if (/^Untrusted context \(metadata/m.test(text)) {
+  if (UNTRUSTED_CONTEXT_HEADER_RE.test(text)) {
     return true;
   }
 

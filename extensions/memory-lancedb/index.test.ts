@@ -2265,6 +2265,45 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge('  {"sender_name": "alex"}')).toBe(true);
     expect(looksLikeEnvelopeSludge('{"channel_id": "telegram"}')).toBe(true);
     expect(looksLikeEnvelopeSludge('{"channel_type": "discord"}')).toBe(true);
+    // Real envelope identifiers from buildInboundUserContextPrefix
+    expect(looksLikeEnvelopeSludge('{"chat_id": "abc"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"message_id": "m-1"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"sender_id": "u-1"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"reply_to_id": "m-0"}')).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge detects pretty-printed envelope JSON with brace on its own line", () => {
+    // JSON.stringify(payload, null, 2) puts `{` on its own line. The regex must
+    // catch this shape because envelope JSON inside ```json fences is always
+    // pretty-printed by formatUntrustedJsonBlock in core.
+    const prettyJson = '{\n  "chat_id": "chat-123",\n  "message_id": "m-1"\n}';
+    expect(looksLikeEnvelopeSludge(prettyJson)).toBe(true);
+    const indentedPretty = '  {\n    "sender_name": "alex"\n  }';
+    expect(looksLikeEnvelopeSludge(indentedPretty)).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge detects additional inbound-meta label variants", () => {
+    // buildInboundUserContextPrefix in core injects more (untrusted metadata):
+    // labels than the explicit sentinel list. The generic line-anchored matcher
+    // must catch them so envelope leaks cannot bypass capture gating just by
+    // using a label our explicit list never enumerated.
+    expect(looksLikeEnvelopeSludge("Location (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Structured object (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Calendar event (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Custom plugin label (untrusted metadata):")).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge does not false-positive on mid-line untrusted metadata phrase", () => {
+    expect(
+      looksLikeEnvelopeSludge(
+        "The docs note that 'Foo (untrusted metadata):' is a header style for context blocks",
+      ),
+    ).toBe(false);
+    expect(
+      looksLikeEnvelopeSludge(
+        "I always read API references that mention 'Bar (untrusted, for context):' patterns",
+      ),
+    ).toBe(false);
   });
 
   test("looksLikeEnvelopeSludge does not false-positive on user JSON with bare keys", () => {
@@ -2414,18 +2453,18 @@ describe("memory plugin e2e", () => {
   });
 
   test("shouldCapture does not fire on MEMORY_TRIGGER words inside a chat-history block body", () => {
-    // Regression guard: shouldCapture calls sanitizeForMemoryCapture before
-    // looksLikeEnvelopeSludge, so chat-history bodies must not reach the trigger
-    // check even when they contain trigger phrases.
+    // Regression guard: shouldCapture itself calls looksLikeEnvelopeSludge first,
+    // which rejects any text containing an inbound-meta sentinel. (sanitization
+    // via sanitizeForMemoryCapture happens earlier in the auto-capture hook
+    // path, not inside shouldCapture.) Either layer is enough to prevent a
+    // MEMORY_TRIGGER phrase quoted inside a chat-history block from being
+    // captured as a memory.
     const input = [
       "Thanks",
       "Chat history since last reply (untrusted, for context):",
       "User: hey",
       "Bot: I always recommend TypeScript for all new projects",
     ].join("\n");
-    // "Thanks" alone is too short (< 10 chars) so we expect false; the important
-    // assertion is that the bot line inside the history block does NOT cause a
-    // capture.
     expect(shouldCapture(input)).toBe(false);
   });
 
@@ -2437,6 +2476,27 @@ describe("memory plugin e2e", () => {
 
     const indented = "function foo() {\n  return 42;\n}";
     expect(escapeMemoryForPrompt(indented)).toBe("function foo() {\n  return 42;\n}");
+  });
+
+  test("escapeMemoryForPrompt preserves newlines in multi-line memories that also contain media annotations", () => {
+    // Regression guard: collapsing /\s{2,}/ would flatten newlines/indentation
+    // across the whole memory whenever a [media attached: ...] annotation was
+    // present. Restricting the collapse to spaces and tabs keeps line structure
+    // intact while still cleaning up the double-space left by annotation removal.
+    const input = [
+      "Line one of the memory",
+      "Line two with [media attached: /tmp/p.jpg (image/jpeg)] inline",
+      "Line three of the memory",
+    ].join("\n");
+    const result = escapeMemoryForPrompt(input);
+    // Newlines must survive
+    expect(result.split("\n")).toHaveLength(3);
+    expect(result).toContain("Line one of the memory");
+    expect(result).toContain("Line three of the memory");
+    // The media annotation must be gone
+    expect(result).not.toContain("[media attached");
+    // The double space left around the stripped annotation gets collapsed to one
+    expect(result).not.toMatch(/ {2,}/);
   });
 
   test("looksLikeEnvelopeSludge does not reject messages that quote a sentinel mid-sentence", () => {
