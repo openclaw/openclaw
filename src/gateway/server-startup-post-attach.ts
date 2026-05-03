@@ -148,6 +148,74 @@ async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   return hasInternalHookListeners("gateway", "startup");
 }
 
+async function refreshConfiguredAgentModelsJsonOnStartup(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  log: { warn: (msg: string) => void };
+}): Promise<void> {
+  const [
+    { listAgentIds, resolveAgentDir, resolveAgentWorkspaceDir },
+    { resolveOpenClawAgentDir },
+    { DEFAULT_MODEL, DEFAULT_PROVIDER },
+    { DEFAULT_AGENT_ID },
+    { isCliProvider, resolveConfiguredModelRef, resolveDefaultModelForAgent },
+    { ensureOpenClawModelsJson },
+  ] = await Promise.all([
+    import("../agents/agent-scope.js"),
+    import("../agents/agent-paths.js"),
+    import("../agents/defaults.js"),
+    import("../routing/session-key.js"),
+    import("../agents/model-selection.js"),
+    import("../agents/models-config.js"),
+  ]);
+  const agentIds = listAgentIds(params.cfg);
+  const configuredProviders = new Set<string>();
+  const defaultRef = resolveConfiguredModelRef({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  configuredProviders.add(defaultRef.provider);
+  for (const agentId of agentIds) {
+    configuredProviders.add(resolveDefaultModelForAgent({ cfg: params.cfg, agentId }).provider);
+  }
+  const providerDiscoveryProviderIds = [...configuredProviders].filter(
+    (provider) => !isCliProvider(provider, params.cfg),
+  );
+  const providerDiscoveryOptions =
+    providerDiscoveryProviderIds.length > 0
+      ? {
+          providerDiscoveryProviderIds,
+          providerDiscoveryTimeoutMs: STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS,
+          providerDiscoveryEntriesOnly: true,
+        }
+      : {};
+  const defaultAgentDir = resolveOpenClawAgentDir();
+  const agentDirs = new Map<string, { workspaceDir?: string }>();
+  agentDirs.set(defaultAgentDir, { workspaceDir: params.workspaceDir });
+  for (const agentId of agentIds) {
+    if (agentId === DEFAULT_AGENT_ID && !params.cfg.agents?.list?.length) {
+      continue;
+    }
+    const agentDir = resolveAgentDir(params.cfg, agentId);
+    if (!agentDirs.has(agentDir)) {
+      agentDirs.set(agentDir, { workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId) });
+    }
+  }
+  await Promise.all(
+    [...agentDirs.entries()].map(async ([agentDir, entry]) => {
+      try {
+        await ensureOpenClawModelsJson(params.cfg, agentDir, {
+          ...(entry.workspaceDir ? { workspaceDir: entry.workspaceDir } : {}),
+          ...providerDiscoveryOptions,
+        });
+      } catch (err) {
+        params.log.warn(`startup models.json refresh failed for ${agentDir}: ${String(err)}`);
+      }
+    }),
+  );
+}
+
 async function waitForAcpRuntimeBackendReady(params: {
   backendId?: string;
   timeoutMs?: number;
@@ -420,6 +488,11 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
+        await refreshConfiguredAgentModelsJsonOnStartup({
+          cfg: params.cfg,
+          workspaceDir: params.defaultWorkspaceDir,
+          log: params.log,
+        });
         schedulePrimaryModelPrewarm(
           {
             cfg: params.cfg,
@@ -758,6 +831,7 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const __testing = {
+  refreshConfiguredAgentModelsJsonOnStartup,
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
   resolveGatewayMemoryStartupPolicy,

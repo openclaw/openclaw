@@ -16,7 +16,17 @@ vi.mock("../agents/agent-paths.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: () => "/tmp/workspace",
+  listAgentIds: (cfg: any) =>
+    Array.isArray(cfg?.agents?.list) && cfg.agents.list.length > 0
+      ? cfg.agents.list.map((entry: any) => entry.id)
+      : ["main"],
+  resolveAgentDir: (_cfg: unknown, agentId: unknown) =>
+    agentId === "main" ? "/tmp/main/agent" : `/tmp/${String(agentId)}/agent`,
+  resolveAgentEffectiveModelPrimary: (cfg: any, agentId: string) =>
+    cfg?.agents?.list?.find((entry: any) => entry?.id === agentId)?.model?.primary ??
+    cfg?.agents?.list?.find((entry: any) => entry?.id === agentId)?.model,
+  resolveAgentWorkspaceDir: (_cfg: unknown, agentId: unknown) =>
+    `/tmp/${String(agentId)}-workspace`,
   resolveDefaultAgentId: () => "default",
 }));
 
@@ -36,13 +46,18 @@ vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
   resolveEmbeddedAgentRuntime: () => resolveEmbeddedAgentRuntimeMock(),
 }));
 
+let refreshConfiguredAgentModelsJsonOnStartup: typeof import("./server-startup.js").__testing.refreshConfiguredAgentModelsJsonOnStartup;
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup.js").__testing.prewarmConfiguredPrimaryModel;
 let shouldSkipStartupModelPrewarm: typeof import("./server-startup.js").__testing.shouldSkipStartupModelPrewarm;
 
 describe("gateway startup primary model warmup", () => {
   beforeAll(async () => {
     ({
-      __testing: { prewarmConfiguredPrimaryModel, shouldSkipStartupModelPrewarm },
+      __testing: {
+        refreshConfiguredAgentModelsJsonOnStartup,
+        prewarmConfiguredPrimaryModel,
+        shouldSkipStartupModelPrewarm,
+      },
     } = await import("./server-startup.js"));
   });
 
@@ -73,11 +88,137 @@ describe("gateway startup primary model warmup", () => {
       cfg,
       "/tmp/agent",
       expect.objectContaining({
-        workspaceDir: "/tmp/workspace",
+        workspaceDir: "/tmp/default-workspace",
         providerDiscoveryProviderIds: ["openai-codex"],
         providerDiscoveryTimeoutMs: 5000,
         providerDiscoveryEntriesOnly: true,
       }),
+    );
+    expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes configured non-default agent dirs during startup", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.4",
+          },
+        },
+        list: [{ id: "zed" }, { id: "kim" }],
+      },
+    } as OpenClawConfig;
+
+    await refreshConfiguredAgentModelsJsonOnStartup({
+      cfg,
+      workspaceDir: "/tmp/default-workspace",
+      log: { warn: vi.fn() },
+    });
+
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/default-workspace",
+        providerDiscoveryProviderIds: ["openai-codex"],
+        providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
+      }),
+    );
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/zed/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/zed-workspace",
+        providerDiscoveryProviderIds: ["openai-codex"],
+        providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
+      }),
+    );
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/kim/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/kim-workspace",
+        providerDiscoveryProviderIds: ["openai-codex"],
+        providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
+      }),
+    );
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("refreshes configured custom agent dirs even without a default primary model", async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "zed" }, { id: "kim" }],
+      },
+    } as OpenClawConfig;
+
+    await refreshConfiguredAgentModelsJsonOnStartup({
+      cfg,
+      workspaceDir: "/tmp/default-workspace",
+      log: { warn: vi.fn() },
+    });
+
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/default-workspace",
+        providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
+      }),
+    );
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/zed/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/zed-workspace",
+        providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
+      }),
+    );
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/kim/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/kim-workspace",
+        providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
+      }),
+    );
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(3);
+    expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh the synthetic main agent separately when no agents are configured", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await refreshConfiguredAgentModelsJsonOnStartup({
+      cfg,
+      workspaceDir: "/tmp/default-workspace",
+      log: { warn: vi.fn() },
+    });
+
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledOnce();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/default-workspace",
+        providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
+      }),
+    );
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalledWith(
+      cfg,
+      "/tmp/main/agent",
+      expect.anything(),
     );
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
@@ -170,7 +311,7 @@ describe("gateway startup primary model warmup", () => {
       cfg,
       "/tmp/agent",
       expect.objectContaining({
-        workspaceDir: "/tmp/workspace",
+        workspaceDir: "/tmp/default-workspace",
         providerDiscoveryProviderIds: ["openai-codex"],
         providerDiscoveryTimeoutMs: 5000,
         providerDiscoveryEntriesOnly: true,
