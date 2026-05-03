@@ -155,6 +155,8 @@ export function createTelegramDraftStream(params: {
   let generation = 0;
   let rateLimitedUntilMs = 0;
   let pendingForceNewMessage = false;
+  let backoffRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  let deferredFlush: (() => void) | undefined;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
@@ -267,11 +269,6 @@ export function createTelegramDraftStream(params: {
         resetStreamToNewMessage();
       }
     }
-    const gateWait = acquireChatSendGate(chatId, chatSendIntervalMs);
-    if (gateWait) {
-      await gateWait;
-      if (streamState.stopped && !streamState.final) return false;
-    }
     const trimmed = text.trimEnd();
     if (!trimmed) {
       return false;
@@ -351,6 +348,12 @@ export function createTelegramDraftStream(params: {
       }
     }
 
+    const gateWait = acquireChatSendGate(chatId, chatSendIntervalMs);
+    if (gateWait) {
+      await gateWait;
+      if (streamState.stopped && !streamState.final) return false;
+    }
+
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
     try {
@@ -369,15 +372,16 @@ export function createTelegramDraftStream(params: {
         const retryAfterMs = getTelegramRetryAfterMs(err) ?? 5_000;
         const backoffMs = retryAfterMs + 500;
         rateLimitedUntilMs = Date.now() + backoffMs;
-        // Clear sent-state markers so the retry does not hit the duplicate-text early-exit.
         lastSentText = "";
         lastSentParseMode = undefined;
         params.warn?.(
           `telegram stream preview rate limited; backing off ${retryAfterMs}ms (retry_after from API)`,
         );
-        // Return false immediately without sleeping. The backoff wait is deferred to
-        // the start of the next sendOrEditStreamMessage call. The draft loop only
-        // restores the failed snapshot when no newer update() arrived in-flight.
+        if (backoffRetryTimer) clearTimeout(backoffRetryTimer);
+        backoffRetryTimer = setTimeout(() => {
+          backoffRetryTimer = undefined;
+          deferredFlush?.();
+        }, backoffMs);
         return false;
       }
       if (typeof streamMessageId === "number") {
@@ -401,6 +405,7 @@ export function createTelegramDraftStream(params: {
     state: streamState,
     sendOrEditStreamMessage,
   });
+  deferredFlush = () => void loop.flush();
 
   const clear = async () => {
     const messageId = await takeMessageIdAfterStop({
@@ -422,6 +427,10 @@ export function createTelegramDraftStream(params: {
   };
 
   const discard = async () => {
+    if (backoffRetryTimer) {
+      clearTimeout(backoffRetryTimer);
+      backoffRetryTimer = undefined;
+    }
     await stopForClear();
   };
 
