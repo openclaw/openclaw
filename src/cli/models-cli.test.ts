@@ -168,6 +168,26 @@ describe("models cli", () => {
     expect(command).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Object));
   });
 
+  it("passes --profile-id to models auth login", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai-codex",
+      "--profile-id",
+      "openai-codex:account2",
+    ]);
+
+    expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        profileId: "openai-codex:account2",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it.each([
     {
       label: "set",

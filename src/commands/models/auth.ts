@@ -291,6 +291,7 @@ async function runProviderAuthMethod(params: {
   config: OpenClawConfig;
   agentDir: string;
   workspaceDir: string;
+  profileId?: string;
   provider: ProviderPlugin;
   method: ProviderAuthMethod;
   runtime: RuntimeEnv;
@@ -304,6 +305,7 @@ async function runProviderAuthMethod(params: {
     env: process.env,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
+    profileId: params.profileId,
     prompter: params.prompter,
     runtime: params.runtime,
     allowSecretRefPrompt: false,
@@ -547,6 +549,7 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
 type LoginOptions = {
   provider?: string;
   method?: string;
+  profileId?: string;
   setDefault?: boolean;
   yes?: boolean;
   agent?: string;
@@ -649,6 +652,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     method: chosenMethod,
     runtime,
     prompter,
+    profileId: normalizeOptionalString(opts.profileId),
     setDefault: opts.setDefault,
   });
   maybeLogOpenAICodexNativeSearchTip(runtime, selectedProvider.id);

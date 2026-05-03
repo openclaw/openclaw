@@ -1,10 +1,15 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
+const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./openai-codex-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-auth-login", () => ({
+  loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
 }));
 
 vi.mock("./openai-codex-device-code.js", () => ({
@@ -52,6 +57,7 @@ describe("openai codex provider", () => {
 
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
+    loginOpenAICodexOAuthMock.mockReset();
     loginOpenAICodexDeviceCodeMock.mockReset();
   });
 
@@ -177,6 +183,37 @@ describe("openai codex provider", () => {
         choiceLabel: "OpenAI Codex Device Pairing",
         assistantPriority: -10,
       },
+    });
+  });
+
+  it("honors an explicit profile id for browser OAuth login", async () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const oauthMethod = provider.auth?.find((method) => method.id === "oauth");
+    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+      access:
+        "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1icm93c2VyLTEyMyJ9fQ.signature",
+      refresh: "browser-refresh-token",
+      expires: Date.now() + 60_000,
+    });
+
+    const result = await oauthMethod?.run({
+      config: {},
+      env: process.env,
+      profileId: "openai-codex:account2",
+      prompter: { note: vi.fn(async () => {}) } as never,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
+      isRemote: false,
+      openUrl: async () => {},
+      oauth: { createVpsAwareHandlers: (() => ({})) as never },
+    });
+
+    expect(loginOpenAICodexOAuthMock).toHaveBeenCalledOnce();
+    expect(result?.profiles[0]?.profileId).toBe("openai-codex:account2");
+    expect(result?.profiles[0]?.credential).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      refresh: "browser-refresh-token",
+      accountId: "acct-browser-123",
     });
   });
 

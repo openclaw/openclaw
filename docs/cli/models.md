@@ -173,6 +173,8 @@ provider you choose.
 
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
+Pass `--profile-id <id>` when you need the OAuth result written to a stable
+profile key, for example `openai-codex:account2`.
 Use `openclaw models auth --agent <id> <subcommand>` to write auth results to a
 specific configured agent store. The parent `--agent` flag is honored by
 `add`, `login`, `setup-token`, `paste-token`, and `login-github-copilot`.

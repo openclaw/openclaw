@@ -1679,10 +1679,17 @@ export function registerCapabilityCli(program: Command) {
     .command("login")
     .description("Run provider auth login")
     .requiredOption("--provider <id>", "Provider id")
+    .option("--profile-id <id>", "Auth profile id to write")
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
-        await modelsAuthLoginCommand({ provider: String(opts.provider) }, defaultRuntime);
+        await modelsAuthLoginCommand(
+          {
+            provider: String(opts.provider),
+            profileId: opts.profileId as string | undefined,
+          },
+          defaultRuntime,
+        );
       });
     });
 
