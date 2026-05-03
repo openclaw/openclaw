@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 
 - Google Meet: route stateful CLI session commands through the gateway-owned runtime so joined realtime sessions survive after the starting CLI process exits. Fixes #76344. Thanks @coltonharris-wq.
 - Memory/status: keep plain `openclaw memory status` and `openclaw memory status --json` on the cheap read-only path by reserving vector and embedding provider probes for `--deep` or `--index`. Fixes #76769. Thanks @daruire.
+- Telegram: suppress stale same-session replies when a newer accepted message arrives before an older in-flight Telegram dispatch finalizes. Fixes #76642. Thanks @chinar-amrutkar.
 - Control UI/Sessions: avoid full `sessions.list` reloads for chat-turn `sessions.changed` payloads, so large session stores no longer add multi-second delays while chat responses are being delivered. (#76676) Thanks @VACInc.
 - Gateway/watch: run `doctor --fix --non-interactive` once and retry when the dev Gateway child exits during startup, so stale local plugin install/config state does not leave the tmux watch session disappearing without a repair attempt.
 - Doctor/Telegram: warn when selected Telegram quote replies can suppress `streaming.preview.toolProgress`, and document the `replyToMode` trade-off without changing runtime delivery. Fixes #73487. Thanks @GodsBoy.

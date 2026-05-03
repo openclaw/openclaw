@@ -118,9 +118,7 @@ export function createTelegramReasoningStepState() {
     bufferedFinalAnswer = value;
   };
 
-  const takeBufferedFinalAnswer = (
-    currentGeneration?: number,
-  ): BufferedFinalAnswer | undefined => {
+  const takeBufferedFinalAnswer = (currentGeneration?: number): BufferedFinalAnswer | undefined => {
     if (
       currentGeneration !== undefined &&
       bufferedFinalAnswer?.bufferedGeneration !== undefined &&

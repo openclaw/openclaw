@@ -128,7 +128,7 @@ type TelegramAbortFenceState = {
   activeDispatches: number;
 };
 
-// Abort can arrive on Telegram's control lane ahead of older same-session reply work.
+// Newer accepted turns and authorized aborts can arrive ahead of older same-session reply work.
 const telegramAbortFenceByKey = new Map<string, TelegramAbortFenceState>();
 
 function normalizeTelegramFenceKey(value: unknown): string | undefined {
@@ -607,9 +607,9 @@ export const dispatchTelegramMessage = async ({
           : undefined;
 
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
-  const shouldSupersedeAbortFence =
-    ctxPayload.CommandAuthorized &&
-    isAbortRequestText(ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "");
+  const dispatchText = ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "";
+  const isAbortRequest = isAbortRequestText(dispatchText);
+  const shouldSupersedeAbortFence = isAbortRequest ? ctxPayload.CommandAuthorized : true;
 
   abortFenceGeneration = beginTelegramAbortFence({
     key: dispatchFenceKey,
@@ -907,7 +907,8 @@ export const dispatchTelegramMessage = async ({
                     const _hasMedia = reply.hasMedia;
 
                     const flushBufferedFinalAnswer = async () => {
-                      const buffered = reasoningStepState.takeBufferedFinalAnswer(abortFenceGeneration);
+                      const buffered =
+                        reasoningStepState.takeBufferedFinalAnswer(abortFenceGeneration);
                       if (!buffered) {
                         return;
                       }

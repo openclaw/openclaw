@@ -3468,6 +3468,84 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
   });
 
+  it("ignores stale answer finalization after a newer message supersedes the same session", async () => {
+    let releaseFirstFinal!: () => void;
+    const firstFinalGate = new Promise<void>((resolve) => {
+      releaseFirstFinal = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const secondAnswerDraft = createDraftStream();
+    const secondReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => secondAnswerDraft)
+      .mockImplementationOnce(() => secondReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        await firstFinalGate;
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "New reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    const newReplyDelivered = observeDeliveredReply("New reply final");
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+          MessageSid: "msg-1",
+        } as never,
+      }),
+    });
+
+    await previewVisible;
+
+    const secondPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "newer request",
+          RawBody: "newer request",
+          MessageSid: "msg-2",
+        } as never,
+      }),
+    });
+
+    await newReplyDelivered;
+
+    releaseFirstFinal();
+    await Promise.all([firstPromise, secondPromise]);
+
+    expect(editMessageTelegram).not.toHaveBeenCalledWith(
+      123,
+      1001,
+      "Old reply final",
+      expect.any(Object),
+    );
+    expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
+  });
+
   it("discards hidden short partials instead of flushing a stale preview after abort", async () => {
     let releaseFirstCleanup!: () => void;
     const firstCleanupGate = new Promise<void>((resolve) => {
