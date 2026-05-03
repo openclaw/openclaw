@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 export function isTruthy(value: unknown): boolean {
   if (value === undefined || value === null) {
@@ -22,6 +23,9 @@ export function resolveConfigPath(config: unknown, pathStr: string): unknown {
   let current: unknown = config;
   for (const part of parts) {
     if (typeof current !== "object" || current === null) {
+      return undefined;
+    }
+    if (isBlockedObjectKey(part)) {
       return undefined;
     }
     current = (current as Record<string, unknown>)[part];
