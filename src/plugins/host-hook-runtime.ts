@@ -107,16 +107,20 @@ function trackAgentEventHandler(runId: string, pending: Promise<void>): void {
   });
 }
 
-function waitForTerminalEventHandlers(params: {
-  runId: string;
-  pendingHandlers: Set<Promise<void>>;
-}): Promise<void> {
-  const { pendingHandlers, runId } = params;
-  if (pendingHandlers.size === 0) {
-    return Promise.resolve();
+async function waitForLiveTerminalEventHandlers(runId: string): Promise<"settled"> {
+  for (;;) {
+    const pendingHandlers = getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.get(runId);
+    if (!pendingHandlers || pendingHandlers.size === 0) {
+      return "settled";
+    }
+    await Promise.allSettled(pendingHandlers);
   }
+}
+
+function waitForTerminalEventHandlers(params: { runId: string }): Promise<void> {
+  const { runId } = params;
   let timeout: NodeJS.Timeout | undefined;
-  const settled = Promise.allSettled(pendingHandlers).then(() => "settled" as const);
+  const settled = waitForLiveTerminalEventHandlers(runId);
   // Promise.race bounds the host wait; JavaScript cannot cancel the plugin
   // promises themselves, so timeout also marks the run expired to block late
   // run-context resurrection by handlers that eventually settle.
@@ -340,12 +344,8 @@ export function dispatchPluginAgentEventSubscriptions(params: {
   }
   if (isTerminalEvent) {
     markPluginRunClosed(params.event.runId);
-    const pendingForRun =
-      getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.get(params.event.runId) ??
-      new Set(pendingHandlers);
     void waitForTerminalEventHandlers({
       runId: params.event.runId,
-      pendingHandlers: new Set(pendingForRun),
     }).then(() => {
       clearPluginRunContext({ runId: params.event.runId });
     });

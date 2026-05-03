@@ -315,6 +315,94 @@ describe("plugin run context lifecycle", () => {
     ).toBeUndefined();
   });
 
+  it("waits for terminal handlers added after the first terminal cleanup waiter starts", async () => {
+    let releaseFirstTerminalHandler: (() => void) | undefined;
+    let releaseSecondTerminalHandler: (() => void) | undefined;
+    let firstTerminalHandlerSawContext: unknown;
+    let secondTerminalHandlerSawContext: unknown;
+    let terminalEventsSeen = 0;
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "repeated-terminal-live-wait",
+        name: "Repeated Terminal Live Wait",
+      }),
+      register(api) {
+        api.registerAgentEventSubscription({
+          id: "records",
+          streams: ["tool", "lifecycle"],
+          async handle(event, ctx) {
+            if (event.stream === "tool") {
+              ctx.setRunContext("seen", { runId: event.runId });
+              return;
+            }
+            if (event.data?.phase !== "end") {
+              return;
+            }
+            terminalEventsSeen += 1;
+            if (terminalEventsSeen === 1) {
+              await new Promise<void>((resolve) => {
+                releaseFirstTerminalHandler = resolve;
+              });
+              firstTerminalHandlerSawContext = ctx.getRunContext("seen");
+              return;
+            }
+            await new Promise<void>((resolve) => {
+              releaseSecondTerminalHandler = resolve;
+            });
+            secondTerminalHandlerSawContext = ctx.getRunContext("seen");
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    emitAgentEvent({
+      runId: "run-repeated-terminal-live-wait",
+      stream: "tool",
+      data: { name: "tool" },
+    });
+    await waitForPluginEventHandlers();
+
+    emitAgentEvent({
+      runId: "run-repeated-terminal-live-wait",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    await waitForPluginEventHandlers();
+
+    emitAgentEvent({
+      runId: "run-repeated-terminal-live-wait",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    await waitForPluginEventHandlers();
+
+    releaseFirstTerminalHandler?.();
+    await waitForPluginEventHandlers();
+    expect(firstTerminalHandlerSawContext).toEqual({ runId: "run-repeated-terminal-live-wait" });
+    expect(
+      getPluginRunContext({
+        pluginId: "repeated-terminal-live-wait",
+        get: { runId: "run-repeated-terminal-live-wait", namespace: "seen" },
+      }),
+    ).toEqual({ runId: "run-repeated-terminal-live-wait" });
+
+    releaseSecondTerminalHandler?.();
+    await waitForPluginEventHandlers();
+    await waitForPluginEventHandlers();
+
+    expect(secondTerminalHandlerSawContext).toEqual({ runId: "run-repeated-terminal-live-wait" });
+    expect(
+      getPluginRunContext({
+        pluginId: "repeated-terminal-live-wait",
+        get: { runId: "run-repeated-terminal-live-wait", namespace: "seen" },
+      }),
+    ).toBeUndefined();
+  });
+
   it("clears run context after the terminal subscription grace period", async () => {
     vi.useFakeTimers();
     let releaseTerminalHandler: (() => void) | undefined;
