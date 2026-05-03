@@ -13,6 +13,18 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "xhigh" })).toBe("xhigh");
   });
 
+  it("omits reasoning_effort for gpt-5.4-mini in chat/completions", () => {
+    const model = { provider: "openai", id: "gpt-5.4-mini", api: "openai-completions" };
+    expect(resolveOpenAISupportedReasoningEfforts(model)).toHaveLength(0);
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBeUndefined();
+  });
+
+  it("preserves reasoning_effort for gpt-5.4-mini in responses API", () => {
+    const model = { provider: "openai", id: "gpt-5.4-mini", api: "openai-responses" };
+    expect(resolveOpenAISupportedReasoningEfforts(model)).toContain("medium");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBe("medium");
+  });
+
   it("does not downgrade xhigh when Pi compat metadata declares it explicitly", () => {
     const model = {
       provider: "openai-codex",
