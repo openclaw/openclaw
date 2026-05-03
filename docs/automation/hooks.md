@@ -160,12 +160,12 @@ Npm specs are registry-only (package name + optional exact version or dist-tag).
 
 ## Bundled hooks
 
-| Hook                  | Events                         | What it does                                          |
-| --------------------- | ------------------------------ | ----------------------------------------------------- |
-| session-memory        | `command:new`, `command:reset` | Saves session context to `<workspace>/memory/`        |
-| bootstrap-extra-files | `agent:bootstrap`              | Injects additional bootstrap files from glob patterns |
-| command-logger        | `command`                      | Logs all commands to `~/.openclaw/logs/commands.log`  |
-| boot-md               | `gateway:startup`              | Runs `BOOT.md` when the gateway starts                |
+| Hook                  | Events                         | What it does                                                                             |
+| --------------------- | ------------------------------ | ---------------------------------------------------------------------------------------- |
+| session-memory        | `command:new`, `command:reset` | Saves session context to `<workspace>/memory/` on reset or automatic daily/idle rollover |
+| bootstrap-extra-files | `agent:bootstrap`              | Injects additional bootstrap files from glob patterns                                    |
+| command-logger        | `command`                      | Logs all commands to `~/.openclaw/logs/commands.log`                                     |
+| boot-md               | `gateway:startup`              | Runs `BOOT.md` when the gateway starts                                                   |
 
 Enable any bundled hook:
 
@@ -178,6 +178,14 @@ openclaw hooks enable <hook-name>
 ### session-memory details
 
 Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug.md` using the host local date. Requires `workspace.dir` to be configured.
+
+The hook fires on three triggers:
+
+- An explicit `/new` or `/reset` command from a user.
+- An automatic daily reset (configured by `session.reset.mode: "daily"` and `session.reset.atHour`, the default behavior).
+- An automatic idle reset (configured by `session.reset.idleMinutes`).
+
+Automatic rollovers synthesize the same internal `command:reset` event the manual paths use, with `commandSource` set to `auto:daily` or `auto:idle` so handlers can distinguish them. Low-activity agents that get rolled over without a typed command still get a memory snapshot.
 
 <a id="bootstrap-extra-files"></a>
 

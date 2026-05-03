@@ -115,6 +115,41 @@ dashboards, bridge mode, and Obsidian-friendly workflows.
 </Card>
 </CardGroup>
 
+## Session-end snapshots
+
+When a session ends — either because you typed `/new` or `/reset`, or because
+the session crossed its [daily reset boundary or idle timeout](/concepts/session#session-lifecycle) —
+the bundled `session-memory` hook can capture the pre-reset transcript to a
+dated file at `<workspace>/memory/YYYY-MM-DD-slug.md`, with the slug
+generated from the conversation by an LLM.
+
+This is **opt-in**. Without it, automatic daily and idle rollovers will roll
+the session over silently and the prior conversation will only be preserved
+in the session's archived transcript file. To enable:
+
+```bash
+openclaw hooks enable session-memory
+```
+
+Or in config:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-memory": { "enabled": true }
+      }
+    }
+  }
+}
+```
+
+This is especially relevant for low-activity agents that rarely hit
+[compaction](/concepts/compaction), since the compaction-time memory flush
+below only fires when the context window fills up. See
+[Hooks → session-memory](/automation/hooks#session-memory) for full details.
+
 ## Automatic memory flush
 
 Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw

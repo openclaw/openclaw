@@ -1197,6 +1197,7 @@ Docs: https://docs.openclaw.ai
 - Agents/sessions: keep `sessions_history` recall redaction enabled even when general log redaction is disabled, and clarify that safety-boundary UI/tool/diagnostic payloads still redact independently of `logging.redactSensitive`. Carries forward #72319. Thanks @volcano303 and @BunsDev.
 - Providers/Codex: pass agent and workspace directories into provider stream wrappers so Codex native `web_search` activation can evaluate the correct auth context, and smoke-test the built status-message runtime by resolving the emitted bundle name. Carries forward #67843; refs #65909. Thanks @neilofneils404.
 - Cron/models: keep `payload.model` as a per-job primary that can use configured fallbacks, while still letting `payload.fallbacks: []` make cron runs strict and avoid hidden agent-primary retries. Refs #73023. Thanks @pavelyortho-cyber.
+- Sessions/memory: preserve automatic daily and idle reset hook reasons when rollover freshness comes from `sessionStartedAt` or `lastInteractionAt`, so bundled session-memory still persists pre-reset transcripts after metadata-only session updates. Thanks @jtatum and @vincentkoc.
 - Models/fallbacks: treat user-selected session models as exact choices, so `/model ollama/...` and model-picker switches fail visibly when the selected provider is unreachable instead of answering from an unrelated configured fallback. Fixes #73023. Thanks @pavelyortho-cyber.
 - Codex harness: keep ChatGPT subscription app-server runs from inheriting `CODEX_API_KEY` or `OPENAI_API_KEY`, and fall back to `CODEX_API_KEY` / `OPENAI_API_KEY` app-server login only when no Codex account is available. Fixes #73057. Thanks @holgergruenhagen and @pashpashpash.
 - CLI/model probes: fail local `infer model run` probes when the provider returns no text output, so unreachable local providers and empty completions no longer look like successful smoke tests. Refs #73023. Thanks @pavelyortho-cyber.
@@ -1954,6 +1955,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: keep default tool progress messages visible when answer preview streaming is disabled. (#71825) Thanks @VACInc.
 - Configure/models: clear deselected model fallbacks when updating the model picker allowlist, including provider-scoped setup flows. (#71596) Thanks @rubencu.
 - Agents/streaming: strip namespaced `<antml:thinking>` reasoning tags from streamed assistant replies before user-visible text is emitted. (#69288) Thanks @xialonglee.
+- Sessions/memory: fire the `command:reset` internal hook on automatic daily and idle session rollovers so the bundled `session-memory` hook persists pre-reset transcripts to `<workspace>/memory/YYYY-MM-DD-*.md` for low-activity agents that auto-roll over without an explicit `/reset` or `/new`. Thanks @jtatum.
 
 ## 2026.4.24
 
