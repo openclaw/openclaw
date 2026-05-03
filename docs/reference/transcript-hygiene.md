@@ -117,6 +117,7 @@ inter-session user turns that only have provenance metadata.
 - Image sanitization only.
 - Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts, and drop replayable OpenAI reasoning after a model route switch.
 - Preserve replayable OpenAI Responses reasoning item payloads, including encrypted empty-summary items, so manual/WebSocket replay keeps required `rs_*` state paired with assistant output items.
+- Native ChatGPT Codex Responses is the exception: OpenClaw does not replay prior Responses reasoning/message/function item IDs or session `prompt_cache_key` to avoid stale backend replay across turns.
 - No tool call id sanitization.
 - Tool result pairing repair may move real matched outputs and synthesize Codex-style `aborted` outputs for missing tool calls.
 - No turn validation or reordering.
