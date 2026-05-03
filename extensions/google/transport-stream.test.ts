@@ -504,6 +504,81 @@ describe("google transport stream", () => {
     });
   });
 
+  it("drops poisoned Gemini replay turns and runtime-context entries from replay payloads", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        { role: "user", content: "Junk", timestamp: 0 },
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "hidden runtime context",
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-2.5-pro",
+          stopReason: "stop",
+          timestamp: 2,
+          content: [{ type: "text", text: "NO_REPLY" }],
+        },
+        { role: "user", content: "You alive and ready.", timestamp: 3 },
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "more hidden runtime context",
+          timestamp: 4,
+        },
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-2.5-flash",
+          stopReason: "error",
+          errorMessage: "Google Generative AI API error (400)",
+          timestamp: 5,
+          content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-2.5-pro",
+          stopReason: "stop",
+          timestamp: 6,
+          content: [{ type: "text", text: "Yes." }],
+        },
+        { role: "user", content: "Good", timestamp: 7 },
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "latest hidden runtime context",
+          timestamp: 8,
+        },
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-2.5-pro",
+          stopReason: "error",
+          errorMessage: "Google Generative AI API error (400)",
+          timestamp: 9,
+          content: [],
+        },
+      ],
+    } as never);
+
+    expect(params.contents).toEqual([
+      { role: "user", parts: [{ text: "Junk" }] },
+      { role: "model", parts: [{ text: "NO_REPLY" }] },
+      { role: "user", parts: [{ text: "You alive and ready." }] },
+      { role: "model", parts: [{ text: "Yes." }] },
+      { role: "user", parts: [{ text: "Good" }] },
+    ]);
+  });
+
   it("builds direct Gemini payloads without negative fallback thinking budgets", () => {
     const model = {
       id: "custom-gemini-model",
