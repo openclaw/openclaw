@@ -351,7 +351,10 @@ async function writeSavedMediaBuffer(params: {
       await fs.writeFile(tempDest, params.buffer, { mode: MEDIA_FILE_MODE });
       const handle = await fs.open(tempDest, "r");
       try {
-        await handle.sync();
+        await handle.sync().catch((err: NodeJS.ErrnoException) => {
+          // Windows raises EPERM for fsync on certain file descriptors; treat as best-effort.
+          if (err.code !== "EPERM") throw err;
+        });
       } finally {
         await handle.close();
       }

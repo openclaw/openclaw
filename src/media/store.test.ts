@@ -342,6 +342,28 @@ describe("media store", () => {
       },
     },
     {
+      name: "saves buffer when fsync raises EPERM (Windows behavior) (#76844)",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const originalOpen = fs.open.bind(fs);
+          vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const handle = await originalOpen(...(args as Parameters<typeof fs.open>));
+            const eperm = new Error("operation not permitted") as NodeJS.ErrnoException;
+            eperm.code = "EPERM";
+            vi.spyOn(handle, "sync").mockRejectedValue(eperm);
+            return handle;
+          });
+          const saved = await store.saveMediaBuffer(
+            Buffer.from("docx-content"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "inbound",
+          );
+          const stat = await fs.stat(saved.path);
+          expect(stat.isFile()).toBe(true);
+        });
+      },
+    },
+    {
       name: "rejects traversal media subdirs before saving buffers",
       run: async () => {
         await withTempStore(async (store, home) => {
