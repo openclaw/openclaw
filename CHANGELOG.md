@@ -477,6 +477,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/bundled: append `openclaw doctor --fix` guidance to the bundled-channel load warnings emitted on `ERR_MODULE_NOT_FOUND`, so users hitting unstaged plugin runtime deps (e.g. `nostr-tools`) see an actionable repair hint instead of a bare module-not-found warning. Thanks @BSG2000.
 - Update: repair doctor-migratable legacy config before persisting `openclaw update --channel ...`, so old Slack/Telegram streaming keys do not block switching to beta after a package update. Thanks @vincentkoc.
 - Web fetch: late-bind `web_fetch` config and provider fallback metadata from the active runtime snapshot, matching `web_search` so long-lived tools do not use stale fetch provider settings. Thanks @vincentkoc.
 - Plugins/discovery: demote the source-only TypeScript runtime check on already-installed `origin: "global"` plugin packages from a config-blocking error to a warning and let the runtime fall through to the TypeScript source via jiti, so a single broken installed package no longer blocks `plugins install` for unrelated plugins; install-time rejection of newly-installed source-only packages is unchanged. Thanks @romneyda.
