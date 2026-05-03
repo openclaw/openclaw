@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCommandPayloadCandidates,
   detectCarriedShellBuiltinArgv,
   detectCommandCarrierArgv,
   detectEnvSplitStringFlag,
@@ -70,6 +71,22 @@ describe("command-analysis risks", () => {
       command: "source",
     });
     expect(detectCarriedShellBuiltinArgv(["command", "echo", "eval"])).toBeNull();
+  });
+
+  it("builds executable payload candidates through carriers and shell wrappers", () => {
+    expect(buildCommandPayloadCandidates(["FOO=1", "sudo", "-E", "/approve", "abc"])).toEqual([
+      "/approve abc",
+    ]);
+    expect(buildCommandPayloadCandidates(["env", "-S", "bash -lc '/approve abc deny'"])).toEqual([
+      "bash -lc /approve abc deny",
+      "/approve abc deny",
+    ]);
+    expect(buildCommandPayloadCandidates(["exec", "-a", "openclaw", "/approve", "abc"])).toEqual([
+      "/approve abc",
+    ]);
+    expect(buildCommandPayloadCandidates(["command", "-v", "/approve"])).toEqual([
+      "command -v /approve",
+    ]);
   });
 
   it("checks both effective and original argv for segment inline eval", () => {

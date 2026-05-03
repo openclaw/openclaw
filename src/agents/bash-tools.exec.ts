@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
   type ExecAsk,
@@ -16,7 +17,6 @@ import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
-import { extractShellWrapperInlineCommand } from "../infra/shell-wrapper-resolution.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -1140,207 +1140,17 @@ function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
 }
 
 function rejectUnsafeControlShellCommand(command: string): void {
-  const isEnvAssignmentToken = (token: string): boolean =>
-    /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
-  const commandStandaloneOptions = new Set(["-p", "-v", "-V"]);
-  const envOptionsWithValues = new Set([
-    "-C",
-    "-S",
-    "-u",
-    "--argv0",
-    "--block-signal",
-    "--chdir",
-    "--default-signal",
-    "--ignore-signal",
-    "--split-string",
-    "--unset",
-  ]);
-  const execOptionsWithValues = new Set(["-a"]);
-  const execStandaloneOptions = new Set(["-c", "-l"]);
-  const sudoOptionsWithValues = new Set([
-    "-C",
-    "-D",
-    "-g",
-    "-p",
-    "-R",
-    "-T",
-    "-U",
-    "-u",
-    "--chdir",
-    "--close-from",
-    "--group",
-    "--host",
-    "--other-user",
-    "--prompt",
-    "--role",
-    "--type",
-    "--user",
-  ]);
-  const sudoStandaloneOptions = new Set(["-A", "-E", "--askpass", "--preserve-env"]);
-  const extractEnvSplitStringPayload = (argv: string[]): string[] => {
-    const remaining = [...argv];
-    while (remaining[0] && isEnvAssignmentToken(remaining[0])) {
-      remaining.shift();
-    }
-    if (remaining[0] !== "env") {
-      return [];
-    }
-    remaining.shift();
-    const payloads: string[] = [];
-    while (remaining.length > 0) {
-      while (remaining[0] && isEnvAssignmentToken(remaining[0])) {
-        remaining.shift();
-      }
-      const token: string | undefined = remaining[0];
-      if (!token) {
-        break;
-      }
-      if (token === "--") {
-        remaining.shift();
-        continue;
-      }
-      if (!token.startsWith("-") || token === "-") {
-        break;
-      }
-      const option = remaining.shift()!;
-      const normalized = option.split("=", 1)[0];
-      if (normalized === "-S" || normalized === "--split-string") {
-        const value = option.includes("=")
-          ? option.slice(option.indexOf("=") + 1)
-          : remaining.shift();
-        if (value?.trim()) {
-          payloads.push(value);
-        }
-        continue;
-      }
-      if (envOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
-        remaining.shift();
-      }
-    }
-    return payloads;
-  };
-  const stripApprovalCommandPrefixes = (argv: string[]): string[] => {
-    const remaining = [...argv];
-    while (remaining.length > 0) {
-      while (remaining[0] && isEnvAssignmentToken(remaining[0])) {
-        remaining.shift();
-      }
-
-      const token = remaining[0];
-      if (!token) {
-        break;
-      }
-      if (token === "--") {
-        remaining.shift();
-        continue;
-      }
-      if (token === "env") {
-        remaining.shift();
-        while (remaining.length > 0) {
-          while (remaining[0] && isEnvAssignmentToken(remaining[0])) {
-            remaining.shift();
-          }
-          const envToken = remaining[0];
-          if (!envToken) {
-            break;
-          }
-          if (envToken === "--") {
-            remaining.shift();
-            continue;
-          }
-          if (!envToken.startsWith("-") || envToken === "-") {
-            break;
-          }
-          const option = remaining.shift()!;
-          const normalized = option.split("=", 1)[0];
-          if (envOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
-            remaining.shift();
-          }
-        }
-        continue;
-      }
-      if (token === "command" || token === "builtin") {
-        remaining.shift();
-        while (remaining[0]?.startsWith("-")) {
-          const option = remaining.shift()!;
-          if (option === "--") {
-            break;
-          }
-          if (!commandStandaloneOptions.has(option.split("=", 1)[0])) {
-            continue;
-          }
-        }
-        continue;
-      }
-      if (token === "exec") {
-        remaining.shift();
-        while (remaining[0]?.startsWith("-")) {
-          const option = remaining.shift()!;
-          if (option === "--") {
-            break;
-          }
-          const normalized = option.split("=", 1)[0];
-          if (execStandaloneOptions.has(normalized)) {
-            continue;
-          }
-          if (execOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
-            remaining.shift();
-          }
-        }
-        continue;
-      }
-      if (token === "sudo") {
-        remaining.shift();
-        while (remaining[0]?.startsWith("-")) {
-          const option = remaining.shift()!;
-          if (option === "--") {
-            break;
-          }
-          const normalized = option.split("=", 1)[0];
-          if (sudoStandaloneOptions.has(normalized)) {
-            continue;
-          }
-          if (sudoOptionsWithValues.has(normalized) && !option.includes("=") && remaining[0]) {
-            remaining.shift();
-          }
-        }
-        continue;
-      }
-      break;
-    }
-    return remaining;
-  };
-  const buildCandidates = (argv: string[]): string[] => {
-    const envSplitCandidates = extractEnvSplitStringPayload(argv).flatMap((payload) => {
-      const innerArgv = splitShellArgs(payload);
-      return innerArgv ? buildCandidates(innerArgv) : [payload];
-    });
-    const stripped = stripApprovalCommandPrefixes(argv);
-    const shellWrapperPayload = extractShellWrapperInlineCommand(stripped);
-    const shellWrapperCandidates = shellWrapperPayload
-      ? (() => {
-          const innerArgv = splitShellArgs(shellWrapperPayload);
-          return innerArgv ? buildCandidates(innerArgv) : [shellWrapperPayload];
-        })()
-      : [];
-    return [
-      ...(stripped.length > 0 ? [stripped.join(" ")] : []),
-      ...envSplitCandidates,
-      ...shellWrapperCandidates,
-    ];
-  };
-
   const rawCommand = command.trim();
   const analysis = analyzeShellCommand({ command: rawCommand });
   const candidates = analysis.ok
-    ? analysis.segments.flatMap((segment) => buildCandidates(segment.argv))
+    ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
     : rawCommand
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean)
         .flatMap((line) => {
           const argv = splitShellArgs(line);
-          return argv ? buildCandidates(argv) : [line];
+          return argv ? buildCommandPayloadCandidates(argv) : [line];
         });
   for (const candidate of candidates) {
     if (parseExecApprovalShellCommand(candidate)) {
