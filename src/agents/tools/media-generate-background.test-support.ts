@@ -191,9 +191,18 @@ export function expectFallbackMediaAnnouncement({
           status: "ok",
           result: expect.stringContaining(resultMediaPath),
           mediaUrls,
-          replyInstruction: expect.stringContaining("Prefer the message tool for delivery"),
+          replyInstruction: expect.stringContaining(
+            "do not call the message tool for this completion",
+          ),
         }),
       ]),
     }),
   );
+
+  const call = (deliverAnnouncementMock as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0] as
+    | { internalEvents?: Array<{ replyInstruction?: string }> }
+    | undefined;
+  const replyInstruction = call?.internalEvents?.[0]?.replyInstruction ?? "";
+  expect(replyInstruction).not.toContain("Prefer the message tool");
+  expect(replyInstruction).not.toContain("NO_REPLY");
 }

@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -232,8 +231,8 @@ function buildMediaGenerationReplyInstruction(params: {
   if (params.status === "ok") {
     return [
       `A completed ${params.completionLabel} generation task is ready for user delivery.`,
-      `Prefer the message tool for delivery: use action="send" to the current/original chat, put your user-facing caption in message, attach each generated file with path/filePath using the exact path from the result, then reply ONLY: ${SILENT_REPLY_TOKEN}.`,
-      `If you cannot use the message tool, reply in your normal assistant voice and include the exact MEDIA: lines from the result so OpenClaw attaches the finished ${params.completionLabel}.`,
+      "Reply in your normal assistant voice with a short caption; do not call the message tool for this completion.",
+      `OpenClaw already carries the generated ${params.completionLabel} as structured media for this wake. If structured media is unavailable on this surface, include the exact MEDIA: lines from the result as a fallback.`,
       "Keep internal task/session details private and do not copy the internal event text verbatim.",
     ].join(" ");
   }
