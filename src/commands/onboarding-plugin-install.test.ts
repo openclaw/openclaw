@@ -200,6 +200,7 @@ describe("ensureOnboardingPluginInstalled", () => {
           npmSpec: "@wecom/wecom-openclaw-plugin@1.2.3",
           expectedIntegrity: "sha512-wecom",
         },
+        trustedSourceLinkedOfficialInstall: true,
       },
       prompter: {
         select: vi.fn(async () => "npm"),
@@ -211,7 +212,9 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         spec: "@wecom/wecom-openclaw-plugin@1.2.3",
+        expectedPluginId: "demo-plugin",
         expectedIntegrity: "sha512-wecom",
+        trustedSourceLinkedOfficialInstall: true,
         timeoutMs: 300_000,
       }),
     );

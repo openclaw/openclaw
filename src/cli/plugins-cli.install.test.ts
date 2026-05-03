@@ -675,6 +675,7 @@ describe("plugins cli install", () => {
       expect.objectContaining({
         spec: "@openclaw/brave-plugin",
         expectedPluginId: "brave",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
@@ -708,6 +709,7 @@ describe("plugins cli install", () => {
         expectedPluginId: "wecom",
         expectedIntegrity:
           "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
   });
@@ -728,6 +730,11 @@ describe("plugins cli install", () => {
 
     await expect(runPluginsCommand(["plugins", "install", "wecom"])).rejects.toThrow("__exit__:1");
 
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
     expect(installHooksFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         spec: "@wecom/wecom-openclaw-plugin@2026.4.23",
@@ -843,6 +850,11 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.not.objectContaining({
         expectedPluginId: "brave",
+      }),
+    );
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
