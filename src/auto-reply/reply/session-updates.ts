@@ -274,6 +274,9 @@ export async function incrementCompactionCount(params: {
     updates.outputTokens = undefined;
     updates.cacheRead = undefined;
     updates.cacheWrite = undefined;
+  } else {
+    // No fresh token snapshot available — mark stale so the status line shows (est.)
+    updates.totalTokensFresh = false;
   }
   sessionStore[sessionKey] = {
     ...entry,
