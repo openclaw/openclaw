@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/onboarding: trust optional official plugin installs selected from the official catalog so npm security scanning treats them like other source-linked official install paths. Thanks @vincentkoc.
 - CLI/plugins: keep `plugins enable` and `plugins disable` from creating unconfigured channel config sections, so channel plugins with required setup fields no longer fail validation during lifecycle probes. Thanks @vincentkoc.
 - Agents/sessions: keep delayed `sessions_send` A2A replies alive after soft wait-window timeouts, while preserving terminal run timeouts and avoiding stale target replies in requester sessions. Fixes #76443. Thanks @ryswork1993 and @vincentkoc.
 - CLI/sessions: keep intentional empty agent replies silent after tool-delivered channel output, instead of surfacing a misleading "No reply from agent." fallback. Thanks @vincentkoc.
