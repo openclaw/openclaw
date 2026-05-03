@@ -87,6 +87,10 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-npm
 node "$OPENCLAW_ENTRY" plugins update demo-plugin-npm >/tmp/plugins-npm-update.log 2>&1
 node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-update
 
+run_logged uninstall-npm node "$OPENCLAW_ENTRY" plugins uninstall demo-plugin-npm --force
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-npm-uninstalled.json
+node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-removed
+
 echo "Testing install from git repo and plugin CLI execution..."
 git_fixture_root="$(mktemp -d "/tmp/openclaw-plugin-git.XXXXXX")"
 git_repo="$git_fixture_root/repo"
@@ -105,6 +109,10 @@ node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-git --runtime --json >/tmp/pl
 run_logged exec-git-plugin-cli bash -c 'node "$OPENCLAW_ENTRY" demo-git ping >/tmp/plugins-git-cli.txt'
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-git "$git_repo_url" "$git_ref"
+
+run_logged uninstall-git node "$OPENCLAW_ENTRY" plugins uninstall demo-plugin-git --force
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-git-uninstalled.json
+node scripts/e2e/lib/plugins/assertions.mjs plugin-git-removed
 
 echo "Testing git plugin update from moving ref..."
 git_update_fixture_root="$(mktemp -d "/tmp/openclaw-plugin-git-update.XXXXXX")"
