@@ -19,6 +19,12 @@ export type TelegramMessageContextOptions = {
   commandSource?: "text" | "native";
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
+  /**
+   * Callback-query button taps can be legitimate control actions whose handler
+   * has nothing visible to add.  Suppress the direct-chat silent-reply rewrite
+   * and the Telegram empty-turn fallback for those synthetic turns only.
+   */
+  suppressSilentReplyFallback?: boolean;
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
 };
