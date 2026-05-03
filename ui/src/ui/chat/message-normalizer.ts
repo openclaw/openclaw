@@ -365,6 +365,48 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     }
   }
 
+  const topLevelMediaUrls = [
+    ...(Array.isArray(m.mediaUrls) ? m.mediaUrls : []),
+    ...(typeof m.mediaUrl === "string" ? [m.mediaUrl] : []),
+  ].filter((url, index, urls): url is string => {
+    return typeof url === "string" && url.trim().length > 0 && urls.indexOf(url) === index;
+  });
+  if (isAssistantMessage && topLevelMediaUrls.length > 0) {
+    const existingAttachmentUrls = new Set(
+      content
+        .filter((item): item is Extract<MessageContentItem, { type: "attachment" }> => {
+          return item.type === "attachment";
+        })
+        .map((item) => item.attachment.url),
+    );
+    content = mergeAdjacentTextItems([
+      ...content,
+      ...topLevelMediaUrls.flatMap((url): MessageContentItem[] => {
+        if (existingAttachmentUrls.has(url)) {
+          return [];
+        }
+        existingAttachmentUrls.add(url);
+        if (!isRenderableAssistantAttachment(url)) {
+          return shouldPreserveRelativeAssistantAttachment(url)
+            ? [{ type: "text", text: `MEDIA:${url}` }]
+            : [];
+        }
+        const inferred = inferAttachmentKind(url);
+        return [
+          {
+            type: "attachment",
+            attachment: {
+              url,
+              kind: inferred.kind,
+              label: inferred.label,
+              mimeType: inferred.mimeType,
+            },
+          },
+        ];
+      }),
+    ]);
+  }
+
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();
   const id = typeof m.id === "string" ? m.id : undefined;
   const senderLabel =

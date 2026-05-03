@@ -511,10 +511,15 @@ export async function handleControlUiAssistantMediaRequest(
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,
     });
-    if (mime) {
-      res.setHeader("Content-Type", mime);
-    } else {
-      res.setHeader("Content-Type", "application/octet-stream");
+    const contentType = mime ?? "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
+    if (
+      url.searchParams.get("download") === "1" ||
+      contentType === "text/markdown" ||
+      /\.md$/i.test(localPath)
+    ) {
+      const fileName = path.basename(localPath).replace(/["\r\n]/g, "_") || "download";
+      res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
     }
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));

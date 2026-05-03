@@ -904,7 +904,10 @@ describe("grouped chat rendering", () => {
       ".chat-assistant-attachment-card__link",
     );
     expect(documentLink?.textContent).toContain("user-upload.pdf");
-    expect(documentLink?.getAttribute("href")).toBe("/__openclaw__/media/user-upload.pdf");
+    expect(documentLink?.getAttribute("href")).toBe(
+      "/__openclaw__/media/user-upload.pdf?download=1",
+    );
+    expect(documentLink?.getAttribute("download")).toBe("user-upload.pdf");
   });
 
   it("fetches managed chat images with auth and renders blob previews", async () => {
@@ -1112,8 +1115,9 @@ describe("grouped chat rendering", () => {
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&token=session-token",
     );
     expect(docLink?.getAttribute("href")).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&token=session-token",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&token=session-token&download=1",
     );
+    expect(docLink?.getAttribute("download")).toBe("test-doc.pdf");
     expect(container.textContent).not.toContain("test image.png");
     vi.unstubAllGlobals();
   });
@@ -1197,7 +1201,8 @@ describe("grouped chat rendering", () => {
       ".chat-assistant-attachment-card__link",
     );
     expect(image?.getAttribute("src")).toBe("/media/inbound/test-image.png");
-    expect(docLink?.getAttribute("href")).toBe("/__openclaw__/media/test-doc.pdf");
+    expect(docLink?.getAttribute("href")).toBe("/__openclaw__/media/test-doc.pdf?download=1");
+    expect(docLink?.getAttribute("download")).toBe("test-doc.pdf");
     expect(container.textContent).not.toContain("Unavailable");
   });
 
