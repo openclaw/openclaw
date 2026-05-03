@@ -1320,6 +1320,29 @@ openclaw logs --follow
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
     Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
 
+```json5
+{
+  channels: {
+    discord: {
+      accounts: {
+        mantis: {
+          // Mantis listens to other bots only when they mention her.
+          allowBots: "mentions",
+        },
+        molty: {
+          // Molty listens to all bot-authored Discord messages.
+          allowBots: true,
+          mentionAliases: {
+            // Lets Molty write "@Mantis" and send a real Discord mention.
+            Mantis: "MANTIS_DISCORD_USER_ID",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
   </Accordion>
 
   <Accordion title="Voice STT drops with DecryptionFailed(...)">
