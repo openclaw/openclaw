@@ -139,6 +139,7 @@ function createRepoBundledManifestRegistry(): PluginManifestRegistry {
       description: manifest.description,
       version: manifest.version,
       enabledByDefault: manifest.enabledByDefault === true ? true : undefined,
+      enabledByDefaultOnPlatforms: manifest.enabledByDefaultOnPlatforms,
       kind: manifest.kind,
       channels: manifest.channels ?? [],
       providers: manifest.providers ?? [],
@@ -213,6 +214,9 @@ function createInstalledPluginRecordForManifest(
     origin: record.origin,
     enabled: record.enabledByDefault === true,
     ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    ...(record.enabledByDefaultOnPlatforms?.length
+      ? { enabledByDefaultOnPlatforms: record.enabledByDefaultOnPlatforms }
+      : {}),
     startup: {
       sidecar: record.activation?.onStartup === true,
       memory: hasPluginKind(record, "memory"),
@@ -468,8 +472,24 @@ describe("bundled plugin metadata", () => {
         env: process.env,
         index,
         manifestRegistry,
+        platform: "linux",
       }),
     ).toEqual(EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS);
+  });
+
+  it("auto-starts Bonjour for empty-config macOS Gateway startup", () => {
+    const manifestRegistry = createRepoBundledManifestRegistry();
+    const index = createInstalledPluginIndexForManifests(manifestRegistry);
+
+    expect(
+      resolveGatewayStartupPluginIdsFromRegistry({
+        config: {},
+        env: process.env,
+        index,
+        manifestRegistry,
+        platform: "darwin",
+      }),
+    ).toContain("bonjour");
   });
 
   it("starts Bonjour when explicitly enabled", () => {
@@ -482,6 +502,7 @@ describe("bundled plugin metadata", () => {
         env: process.env,
         index,
         manifestRegistry,
+        platform: "linux",
       }),
     ).toContain("bonjour");
   });

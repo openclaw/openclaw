@@ -46,6 +46,7 @@ import {
   type PluginActivationConfigSource,
   type NormalizedPluginsConfig,
 } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
@@ -1690,7 +1691,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         config: normalized,
         rootConfig: cfg,
-        enabledByDefault: manifestRecord.enabledByDefault,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
         autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
       });
@@ -1729,7 +1730,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         config: normalized,
         rootConfig: cfg,
-        enabledByDefault: manifestRecord.enabledByDefault,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
       });
       const entry = normalized.entries[pluginId];
@@ -2512,7 +2513,7 @@ export async function loadOpenClawPluginCliRegistry(
       origin: candidate.origin,
       config: normalized,
       rootConfig: cfg,
-      enabledByDefault: manifestRecord.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
       autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
     });
@@ -2551,7 +2552,7 @@ export async function loadOpenClawPluginCliRegistry(
       origin: candidate.origin,
       config: normalized,
       rootConfig: cfg,
-      enabledByDefault: manifestRecord.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
     });
     const entry = normalized.entries[pluginId];

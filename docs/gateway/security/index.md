@@ -806,7 +806,7 @@ When the bundled `bonjour` plugin is enabled, the Gateway broadcasts its presenc
 
 **Recommendations:**
 
-1. **Keep Bonjour disabled unless LAN discovery is needed.** Bonjour is opt-in, and direct Gateway URLs, Tailnet, SSH, or wide-area DNS-SD avoid local multicast.
+1. **Keep Bonjour disabled unless LAN discovery is needed.** Bonjour auto-starts on macOS hosts and is opt-in elsewhere; direct Gateway URLs, Tailnet, SSH, or wide-area DNS-SD avoid local multicast.
 
 2. **Minimal mode** (default when Bonjour is enabled, recommended for exposed gateways): omit sensitive fields from mDNS broadcasts:
 

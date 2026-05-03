@@ -10,7 +10,8 @@ title: "Bonjour discovery"
 
 OpenClaw can use Bonjour (mDNS / DNS-SD) to discover an active Gateway (WebSocket endpoint).
 Multicast `local.` browsing is a **LAN-only convenience**. The bundled `bonjour`
-plugin owns LAN advertising and is opt-in. For cross-network discovery, the same
+plugin owns LAN advertising. It auto-starts on macOS hosts and is opt-in on
+Linux, Windows, and containerized Gateway deployments. For cross-network discovery, the same
 beacon can also be published through a configured wide-area DNS-SD domain. Discovery
 is still best-effort and does **not** replace SSH or Tailnet-based connectivity.
 
@@ -161,8 +162,11 @@ The log includes browser state transitions and result‑set changes.
 
 ## When to enable Bonjour
 
-Enable Bonjour when same-LAN auto-discovery is useful for macOS, iOS, Android, or
-other local clients:
+Bonjour auto-starts for empty-config Gateway startup on macOS hosts because the
+local app and nearby iOS/Android nodes commonly rely on same-LAN discovery.
+
+Enable Bonjour explicitly when same-LAN auto-discovery is useful on Linux,
+Windows, or another non-macOS host:
 
 ```bash
 openclaw plugins enable bonjour
@@ -176,7 +180,7 @@ changing plugin enablement.
 ## When to disable Bonjour
 
 Leave Bonjour disabled when LAN multicast advertising is unnecessary, unavailable,
-or harmful. The common case is a Gateway running behind Docker bridge networking,
+or harmful. The common cases are non-macOS servers, Docker bridge networking,
 WSL, or a network policy that drops mDNS multicast. In those environments the
 Gateway is still reachable through its published URL, SSH, Tailnet, or wide-area
 DNS-SD, but LAN auto-discovery is not reliable.
@@ -207,8 +211,8 @@ and the LAN, so advertising from the container rarely makes discovery work.
 
 Important gotchas:
 
-- Bonjour is opt-in. Leaving it disabled does not stop the Gateway; it only skips
-  LAN multicast advertising.
+- Bonjour auto-starts on macOS hosts and is opt-in elsewhere. Leaving it
+  disabled does not stop the Gateway; it only skips LAN multicast advertising.
 - Disabling Bonjour does not change `gateway.bind`; Docker still defaults to
   `OPENCLAW_GATEWAY_BIND=lan` so the published host port can work.
 - Disabling Bonjour does not disable wide-area DNS-SD. Use wide-area discovery
@@ -277,7 +281,8 @@ sequences (e.g. spaces become `\032`).
 
 ## Enabling / disabling / configuration
 
-- `openclaw plugins enable bonjour` enables the bundled LAN discovery plugin.
+- macOS hosts auto-start the bundled LAN discovery plugin by default.
+- `openclaw plugins enable bonjour` enables the bundled LAN discovery plugin on hosts where it is not default-enabled.
 - `openclaw plugins disable bonjour` disables LAN multicast advertising by disabling the bundled plugin.
 - `OPENCLAW_DISABLE_BONJOUR=1` disables LAN multicast advertising without changing plugin config; accepted truthy values are `1`, `true`, `yes`, and `on` (legacy: `OPENCLAW_DISABLE_BONJOUR`).
 - `OPENCLAW_DISABLE_BONJOUR=0` forces LAN multicast advertising on, including inside detected containers; accepted falsy values are `0`, `false`, `no`, and `off`.
