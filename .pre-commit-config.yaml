@@ -97,7 +97,7 @@ repos:
       # swiftlint (same as CI)
       - id: swiftlint
         name: swiftlint
-        entry: swiftlint --config .swiftlint.yml
+        entry: swiftlint lint --config config/swiftlint.yml
         language: system
         pass_filenames: false
         types: [swift]
@@ -105,7 +105,7 @@ repos:
       # swiftformat --lint (same as CI)
       - id: swiftformat
         name: swiftformat
-        entry: swiftformat --lint apps/macos/Sources --config .swiftformat
+        entry: swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
         language: system
         pass_filenames: false
         types: [swift]
