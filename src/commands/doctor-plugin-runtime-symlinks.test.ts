@@ -13,6 +13,7 @@ interface FakeEntry {
 interface FakeSymlink {
   readonly target: string;
   readonly targetExists: boolean;
+  readonly targetErrorCode?: string;
 }
 
 interface FakeTree {
@@ -54,8 +55,9 @@ function makeFs(tree: FakeTree): StalePluginRuntimeSymlinksFs {
       // Resolve through the symlink table when the path is a symlink target.
       const symlinkPointingHere = Object.values(tree.symlinks).find((s) => s.target === file);
       if (symlinkPointingHere && !symlinkPointingHere.targetExists) {
-        const err: NodeJS.ErrnoException = new Error(`ENOENT: stat ${file}`);
-        err.code = "ENOENT";
+        const code = symlinkPointingHere.targetErrorCode ?? "ENOENT";
+        const err: NodeJS.ErrnoException = new Error(`${code}: stat ${file}`);
+        err.code = code;
         throw err;
       }
       // For non-symlink paths or live targets, succeed.
@@ -183,6 +185,56 @@ describe("noteStalePluginRuntimeSymlinks", () => {
     expect(noteFn).toHaveBeenCalledTimes(1);
     const [message] = noteFn.mock.calls[0] ?? [];
     expect(message).toContain("…and 1 more");
+  });
+
+  it("does not flag links whose target stat fails with EACCES", () => {
+    const noteFn = vi.fn();
+    const slackScope = path.join(containingDir, "@slack");
+    const webApiLink = path.join(slackScope, "web-api");
+    const tree: FakeTree = {
+      entries: {
+        [containingDir]: [{ name: "@slack", kind: "dir" }],
+        [slackScope]: [{ name: "web-api", kind: "symlink" }],
+      },
+      symlinks: {
+        [webApiLink]: {
+          target:
+            "/home/user/.openclaw/plugin-runtime-deps/openclaw-2026.4.29-aaa/node_modules/@slack/web-api",
+          targetExists: false,
+          targetErrorCode: "EACCES",
+        },
+      },
+    };
+    noteStalePluginRuntimeSymlinks(packageRoot, { fs: makeFs(tree), noteFn });
+    expect(noteFn).not.toHaveBeenCalled();
+  });
+
+  it("flags links whose target stat fails with ENOTDIR (parent path collapsed)", () => {
+    const noteFn = vi.fn();
+    const slackScope = path.join(containingDir, "@slack");
+    const webApiLink = path.join(slackScope, "web-api");
+    const tree: FakeTree = {
+      entries: {
+        [containingDir]: [{ name: "@slack", kind: "dir" }],
+        [slackScope]: [{ name: "web-api", kind: "symlink" }],
+      },
+      symlinks: {
+        [webApiLink]: {
+          target:
+            "/home/user/.openclaw/plugin-runtime-deps/openclaw-2026.4.26-aaa/node_modules/@slack/web-api",
+          targetExists: false,
+          targetErrorCode: "ENOTDIR",
+        },
+      },
+    };
+    noteStalePluginRuntimeSymlinks(packageRoot, {
+      fs: makeFs(tree),
+      noteFn,
+      shortenPath: (s) => s,
+    });
+    expect(noteFn).toHaveBeenCalledTimes(1);
+    const [message] = noteFn.mock.calls[0] ?? [];
+    expect(message).toContain("@slack/web-api");
   });
 
   it("ignores non-symlink entries even when named like a plugin-runtime package", () => {

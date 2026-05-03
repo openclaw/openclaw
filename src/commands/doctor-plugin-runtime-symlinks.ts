@@ -163,7 +163,15 @@ function inspectCandidate(fullPath: string, fsApi: StalePluginRuntimeSymlinksFs)
   try {
     fsApi.statSync(resolvedTarget);
     return null;
-  } catch {
-    return resolvedTarget;
+  } catch (error) {
+    // Only treat the link as stale when the target is genuinely missing.
+    // Other errno classes (EACCES, EPERM, ELOOP, EMFILE, ENAMETOOLONG, …)
+    // indicate the target may exist but the user's environment can't reach it
+    // right now. Reporting those as "stale" would mislead repair guidance.
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return resolvedTarget;
+    }
+    return null;
   }
 }
