@@ -1,5 +1,17 @@
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveReasoningEffort } from "./thread-lifecycle.js";
+import { buildDeveloperInstructions, resolveReasoningEffort } from "./thread-lifecycle.js";
+
+function createAttemptParams(overrides: Partial<EmbeddedRunAttemptParams> = {}) {
+  return {
+    provider: "openai-codex",
+    modelId: "gpt-5.4",
+    config: {},
+    agentDir: "/tmp/agent",
+    workspaceDir: "/tmp/workspace",
+    ...overrides,
+  } as EmbeddedRunAttemptParams;
+}
 
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
@@ -55,5 +67,21 @@ describe("resolveReasoningEffort (#71946)", () => {
       expect(resolveReasoningEffort("max", "gpt-5.5")).toBeNull();
       expect(resolveReasoningEffort("max", "gpt-4o")).toBeNull();
     });
+  });
+});
+
+describe("buildDeveloperInstructions", () => {
+  it("tells same-session channel replies to answer normally", () => {
+    const prompt = buildDeveloperInstructions(createAttemptParams());
+
+    expect(prompt).toContain(
+      "When replying in the current chat/session, answer normally and let OpenClaw handle delivery when normal final replies are enabled for that channel.",
+    );
+    expect(prompt).toContain(
+      "If the turn says source channel delivery is private or message-tool-only, use the messaging tool for visible output.",
+    );
+    expect(prompt).not.toContain(
+      "If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply",
+    );
   });
 });
