@@ -7,6 +7,18 @@
 
 ## Last Session
 
+- **Date**: 2026-05-03 (dashboard NVIDIA model defaults)
+- **What changed**:
+  - **Dashboard PR #60** (`feat/nvidia-model-management`): added `NVIDIA_API_KEY` as a core API key, defaulted new agent configs to NVIDIA GLM-5.1 with Venice Claude Opus 4.6 fallback, narrowed the model picker to the requested NVIDIA/Venice model set, added model-picker help text, and bootstrapped NVIDIA auth profiles during deploy
+  - **Production deploy**: CI/CD deployed Cloud Run revision `openclaw-dashboard-00236-fxz` (100% traffic) and pushed tag `v2026.5.3.1`
+- **Validation**:
+  - Dashboard: `npx tsc --noEmit`, `npm run build`, GitHub Actions run `25273177168`
+  - Runtime: `https://app.agentglob.com/login` returned `HTTP/2 200`
+
+---
+
+## Last Session (prev)
+
 - **Date**: 2026-04-30 (dashboard GitHub MCP hotfix)
 - **What changed**:
   - **vcode1bot (2ndclaw)**: fixed Telegram outage by removing the Docker-based `github` MCP entry that was crash-looping the gateway with `spawn docker EACCES`; `filesystem` and `brave-search` remain active
@@ -18,7 +30,7 @@
 
 ---
 
-## Last Session (prev)
+## Last Session (prev 2)
 
 - **Date**: 2026-04-20 (vcode1bot coding upgrade)
 - **What changed**:
@@ -28,7 +40,7 @@
 
 ---
 
-## Last Session (prev 2)
+## Last Session (prev 3)
 
 - **Date**: 2026-04-16 (CI runner fix)
 - **What changed**:
@@ -42,7 +54,7 @@
 
 ## Currently In Progress
 
-- Dashboard PR #57: `feat/coding-capability-template` — open, needs review/merge
+- None known
 
 ---
 
@@ -65,17 +77,18 @@
 
 ## Active Branches / PRs
 
-| Repo               | Branch                          | PR  | Status          | Owner   | Files / Areas Touched                    | Validation         | Next Concrete Step                       | Notes                                                                              |
-| ------------------ | ------------------------------- | --- | --------------- | ------- | ---------------------------------------- | ------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| openclaw-dashboard | codex/feat-widget-chat-v1       | #52 | merged+deployed | Codex   | Widget Chat V1 (widget tab, chat API/UI) | npm run build + CI | Monitor production behavior              | Merged to main; Cloud Run deploy run 24422489602 succeeded                         |
-| openclaw-dashboard | codex/fix-port-allocation-drift | #55 | merged+deployed | Codex   | agent creation, port allocation          | npm run build + CI | Monitor new-agent deploy behavior        | skips ports already claimed in live server state before allocation                 |
-| openclaw-dashboard | codex/fix-deploy-port-repair    | #56 | merged+deployed | Codex   | deploy route, port reservation repair    | npm run build + CI | Monitor first-deploy conflict recovery   | auto-repairs stale reserved ports for never-deployed agents                        |
-| openclaw-dashboard | feat/ci-cd-pipeline             | #51 | merged          | Claude  | GitHub Actions, Cloud Run pipeline       | merged             | None                                     | CI/CD auto-deploy live                                                             |
-| openclaw           | fix/deploy-and-control-infra    | #7  | merged          | Claude  | docker-compose.yml                       | n/a                | None                                     | Adds OPENCLAW_SKIP_BROWSER_CONTROL_SERVER env passthrough; merged Apr 15           |
-| openclaw-dashboard | fix/control-deploy-infra        | #53 | merged          | Claude  | control, logs, deploy routes             | merged             | None                                     | Merged Apr 20                                                                      |
-| openclaw-dashboard | feat/coding-capability-template | #57 | review          | Claude  | lib/agent-config-template.ts             | npm run build      | Merge to main (auto-deploys)             | coding=true → qwen3-coder model + filesystem + brave-search MCPs                   |
-| openclaw-dashboard | hotfix/github-mcp-dashboard     | #59 | merged+deployed | Codex   | Tools MCP UI, MCP API route              | tsc + npm build    | Rotate leaked GitHub PAT; monitor setup  | Prod revision `openclaw-dashboard-00234-xh7`; tag `v2026.4.30.hotfix-github-mcp.1` |
-| unknown            | chore/staging-deploy-gcp        | #1  | open, stale     | unknown | GCP deploy workflow                      | unknown            | Verify ownership before reuse or cleanup | Treat as active until verified                                                     |
+| Repo               | Branch                          | PR  | Status          | Owner   | Files / Areas Touched                    | Validation         | Next Concrete Step                       | Notes                                                                                         |
+| ------------------ | ------------------------------- | --- | --------------- | ------- | ---------------------------------------- | ------------------ | ---------------------------------------- | --------------------------------------------------------------------------------------------- |
+| openclaw-dashboard | codex/feat-widget-chat-v1       | #52 | merged+deployed | Codex   | Widget Chat V1 (widget tab, chat API/UI) | npm run build + CI | Monitor production behavior              | Merged to main; Cloud Run deploy run 24422489602 succeeded                                    |
+| openclaw-dashboard | codex/fix-port-allocation-drift | #55 | merged+deployed | Codex   | agent creation, port allocation          | npm run build + CI | Monitor new-agent deploy behavior        | skips ports already claimed in live server state before allocation                            |
+| openclaw-dashboard | codex/fix-deploy-port-repair    | #56 | merged+deployed | Codex   | deploy route, port reservation repair    | npm run build + CI | Monitor first-deploy conflict recovery   | auto-repairs stale reserved ports for never-deployed agents                                   |
+| openclaw-dashboard | feat/ci-cd-pipeline             | #51 | merged          | Claude  | GitHub Actions, Cloud Run pipeline       | merged             | None                                     | CI/CD auto-deploy live                                                                        |
+| openclaw           | fix/deploy-and-control-infra    | #7  | merged          | Claude  | docker-compose.yml                       | n/a                | None                                     | Adds OPENCLAW_SKIP_BROWSER_CONTROL_SERVER env passthrough; merged Apr 15                      |
+| openclaw-dashboard | fix/control-deploy-infra        | #53 | merged          | Claude  | control, logs, deploy routes             | merged             | None                                     | Merged Apr 20                                                                                 |
+| openclaw-dashboard | feat/coding-capability-template | #57 | merged+deployed | Claude  | lib/agent-config-template.ts             | npm run build + CI | None                                     | Merged Apr 20; coding=true previously used qwen3-coder + filesystem + brave-search MCPs       |
+| openclaw-dashboard | hotfix/github-mcp-dashboard     | #59 | merged+deployed | Codex   | Tools MCP UI, MCP API route              | tsc + npm build    | Rotate leaked GitHub PAT; monitor setup  | Prod revision `openclaw-dashboard-00234-xh7`; tag `v2026.4.30.hotfix-github-mcp.1`            |
+| openclaw-dashboard | feat/nvidia-model-management    | #60 | merged+deployed | Codex   | model config, secrets UI, deploy route   | tsc + npm build    | Monitor new-agent model behavior         | Prod revision `openclaw-dashboard-00236-fxz`; tag `v2026.5.3.1`; default `nvidia/z-ai/glm5.1` |
+| unknown            | chore/staging-deploy-gcp        | #1  | open, stale     | unknown | GCP deploy workflow                      | unknown            | Verify ownership before reuse or cleanup | Treat as active until verified                                                                |
 
 ---
 
