@@ -597,6 +597,7 @@ export function runAgentAttempt(params: {
     thinkLevel: params.resolvedThinkLevel,
     fastMode: params.fastMode,
     verboseLevel: params.resolvedVerboseLevel,
+    bashElevated: params.opts.bashElevated,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lane: params.opts.lane,
