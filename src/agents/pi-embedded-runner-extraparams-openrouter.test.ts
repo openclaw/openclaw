@@ -110,6 +110,57 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
     });
   });
 
+  it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push({ headers: options?.headers });
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            params: {
+              response_cache: false,
+              response_cache_ttl_seconds: 60,
+              response_cache_clear: false,
+            },
+            models: {
+              "openrouter/auto": {
+                params: {
+                  responseCache: true,
+                  responseCacheTtlSeconds: 600,
+                  responseCacheClear: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      "openrouter",
+      "auto",
+    );
+
+    void agent.streamFn?.(
+      {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "auto",
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    expect(calls[0]?.headers).toMatchObject({
+      "X-OpenRouter-Cache": "true",
+      "X-OpenRouter-Cache-Clear": "true",
+      "X-OpenRouter-Cache-TTL": "600",
+    });
+  });
+
   it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
     const payload = runExtraParamsPayloadCase({
       provider: "openrouter",

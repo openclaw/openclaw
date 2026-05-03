@@ -88,10 +88,10 @@ function resolveOpenRouterResponseCacheHeaders(
     return undefined;
   }
   const configuredCache = resolveBooleanParam(
-    readExtraParam(extraParams, ["response_cache", "responseCache"]),
+    readExtraParam(extraParams, ["responseCache", "response_cache"]),
   );
   const clearCache = resolveBooleanParam(
-    readExtraParam(extraParams, ["response_cache_clear", "responseCacheClear"]),
+    readExtraParam(extraParams, ["responseCacheClear", "response_cache_clear"]),
   );
   const cacheEnabled = configuredCache ?? (clearCache ? true : undefined);
   if (cacheEnabled === undefined) {
@@ -107,10 +107,10 @@ function resolveOpenRouterResponseCacheHeaders(
 
   const ttl = resolveOpenRouterResponseCacheTtlSeconds(
     readExtraParam(extraParams, [
-      "response_cache_ttl_seconds",
       "responseCacheTtlSeconds",
-      "response_cache_ttl",
+      "response_cache_ttl_seconds",
       "responseCacheTtl",
+      "response_cache_ttl",
     ]),
   );
   if (ttl) {
