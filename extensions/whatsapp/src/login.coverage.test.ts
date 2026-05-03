@@ -109,6 +109,24 @@ describe("loginWeb coverage", () => {
     expect(secondSock.ws.close).toHaveBeenCalled();
   });
 
+  it("forwards QR callback to restart socket after 515 (#76213)", async () => {
+    waitForWaConnectionMock
+      .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
+      .mockResolvedValueOnce(undefined);
+
+    const runtime = { log: vi.fn(), error: vi.fn() } as never;
+    await loginWeb(false, waitForWaConnectionMock as never, runtime);
+
+    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+    const restartCallOpts = createWaSocketMock.mock.calls[1]?.[2] as
+      | { onQr?: (qr: string) => void }
+      | undefined;
+    expect(restartCallOpts?.onQr).toBeDefined();
+    // Invoking onQr should route through runtime.log, not process.stdout
+    restartCallOpts?.onQr?.("test-qr-payload");
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Scan this QR in WhatsApp"));
+  });
+
   it("clears creds and throws when logged out", async () => {
     waitForWaConnectionMock.mockRejectedValueOnce({
       output: { statusCode: 401 },
