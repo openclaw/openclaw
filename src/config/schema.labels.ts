@@ -747,6 +747,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "cron.webhook": "Cron Legacy Webhook (Deprecated)",
   "cron.webhookToken": "Cron Webhook Bearer Token",
   "cron.sessionRetention": "Cron Session Retention",
+  "cron.ghostRunWarningThresholdMs": "Cron Ghost Run Warning Threshold (ms)",
   "cron.runLog": "Cron Run Log Pruning",
   "cron.runLog.maxBytes": "Cron Run Log Max Bytes",
   "cron.runLog.keepLines": "Cron Run Log Keep Lines",

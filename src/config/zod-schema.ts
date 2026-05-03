@@ -634,6 +634,7 @@ export const OpenClawSchema = z
         webhook: HttpUrlSchema.optional(),
         webhookToken: SecretInputSchema.optional().register(sensitive),
         sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
+        ghostRunWarningThresholdMs: z.number().int().nonnegative().optional(),
         runLog: z
           .object({
             maxBytes: z.union([z.string(), z.number()]).optional(),

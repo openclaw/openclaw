@@ -21153,6 +21153,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Controls how long completed cron run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
           },
+          ghostRunWarningThresholdMs: {
+            type: "integer",
+            minimum: 0,
+            maximum: 9007199254740991,
+            title: "Cron Ghost Run Warning Threshold (ms)",
+            description:
+              'Warns when a main-session `systemEvent` cron job using `wakeMode="next-heartbeat"` finishes as `ok` faster than this threshold, because that usually means cron only handed work to the next heartbeat and did not confirm agent processing. Set `0` to disable; default: `50`.',
+          },
           runLog: {
             type: "object",
             properties: {
@@ -28104,6 +28112,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Cron Session Retention",
       help: "Controls how long completed cron run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
       tags: ["storage", "automation"],
+    },
+    "cron.ghostRunWarningThresholdMs": {
+      label: "Cron Ghost Run Warning Threshold (ms)",
+      help: 'Warns when a main-session `systemEvent` cron job using `wakeMode="next-heartbeat"` finishes as `ok` faster than this threshold, because that usually means cron only handed work to the next heartbeat and did not confirm agent processing. Set `0` to disable; default: `50`.',
+      tags: ["automation"],
     },
     "cron.runLog": {
       label: "Cron Run Log Pruning",

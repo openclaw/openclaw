@@ -16,6 +16,10 @@ const {
   cleanupBrowserSessionsForLifecycleEndMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
+  loggerDebugMock,
+  loggerInfoMock,
+  loggerWarnMock,
+  loggerErrorMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatMock: vi.fn(),
@@ -31,6 +35,10 @@ const {
     hasHooks: (hookName: string) => hookName === "cron_changed",
     runCronChanged: runCronChangedMock,
   })),
+  loggerDebugMock: vi.fn(),
+  loggerInfoMock: vi.fn(),
+  loggerWarnMock: vi.fn(),
+  loggerErrorMock: vi.fn(),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -96,6 +104,30 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
 
+vi.mock("../logging.js", () => {
+  const loggerBase = {
+    debug: loggerDebugMock,
+    info: loggerInfoMock,
+    warn: loggerWarnMock,
+    error: loggerErrorMock,
+    isEnabled: vi.fn(() => true),
+  };
+  const logger = {
+    ...loggerBase,
+    child: vi.fn(() => logger),
+  };
+  return {
+    getChildLogger: vi.fn(() => ({
+      debug: loggerDebugMock,
+      info: loggerInfoMock,
+      warn: loggerWarnMock,
+      error: loggerErrorMock,
+    })),
+    createSubsystemLogger: vi.fn(() => logger),
+  };
+});
+
+import { readCronRunLogEntries, resolveCronRunLogPath } from "../cron/run-log.js";
 import { buildGatewayCronService } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
@@ -125,6 +157,10 @@ describe("buildGatewayCronService", () => {
       hasHooks: (hookName: string) => hookName === "cron_changed",
       runCronChanged: runCronChangedMock,
     });
+    loggerDebugMock.mockClear();
+    loggerInfoMock.mockClear();
+    loggerWarnMock.mockClear();
+    loggerErrorMock.mockClear();
   });
 
   it("emits cron_changed hooks with computed next run state", async () => {
@@ -268,6 +304,99 @@ describe("buildGatewayCronService", () => {
         expect.objectContaining({
           sessionKey: "agent:main:discord:channel:ops",
         }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("warns and annotates fast main next-heartbeat systemEvent handoffs", async () => {
+    const cfg = createCronConfig("server-cron-ghost-warning");
+    cfg.cron = {
+      ...cfg.cron,
+      ghostRunWarningThresholdMs: 60_000,
+    };
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "main-next-heartbeat-handoff",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "hello" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(loggerWarnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: job.id,
+          jobName: "main-next-heartbeat-handoff",
+          durationMs: expect.any(Number),
+          thresholdMs: 60_000,
+          wakeMode: "next-heartbeat",
+          sessionTarget: "main",
+          payloadKind: "systemEvent",
+        }),
+        "cron: possible ghost run; next-heartbeat systemEvent finished before confirmed agent processing",
+      );
+
+      const entries = await readCronRunLogEntries(
+        resolveCronRunLogPath({
+          storePath: state.storePath,
+          jobId: job.id,
+        }),
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          jobId: job.id,
+          status: "ok",
+          warnings: ["possible-main-next-heartbeat-ghost-run"],
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("does not warn for fast wakeMode now main systemEvent runs", async () => {
+    const cfg = createCronConfig("server-cron-ghost-warning-now");
+    cfg.cron = {
+      ...cfg.cron,
+      ghostRunWarningThresholdMs: 60_000,
+    };
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "main-now",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "hello" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(loggerWarnMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: job.id,
+          payloadKind: "systemEvent",
+        }),
+        "cron: possible ghost run; next-heartbeat systemEvent finished before confirmed agent processing",
       );
     } finally {
       state.cron.stop();
