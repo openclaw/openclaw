@@ -105,6 +105,56 @@ npm install -g openclaw@latest
 openclaw onboard --install-daemon
 ```
 
+#### macOS setup notes
+
+Before installing OpenClaw on macOS, make sure Xcode Command Line Tools are installed:
+
+```bash
+xcode-select --install
+```
+
+Check Node.js and npm:
+
+```bash
+node --version
+npm --version
+```
+
+If Node.js is missing, install it with Homebrew:
+
+```bash
+brew install node
+```
+
+#### Common setup errors
+
+##### `openclaw: command not found`
+
+Restart your terminal and try again:
+
+```bash
+openclaw onboard --install-daemon
+```
+
+If it still does not work, check that your package manager's global binary path is available in your terminal.
+
+##### Dependency install fails
+
+For source checkouts, reinstall dependencies:
+
+```bash
+rm -rf node_modules
+pnpm install
+```
+
+##### Port already in use
+
+Another process may already be using the required port. Stop the other process or restart your terminal session before running OpenClaw again.
+
+##### Environment variables not detected
+
+After editing `.env` or shell configuration files, restart your terminal so the changes are loaded.
+
 OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so it stays running.
 
 ## Quick start (TL;DR)
