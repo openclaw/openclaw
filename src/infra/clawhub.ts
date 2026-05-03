@@ -555,7 +555,7 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
 
 async function clawhubRequest(
   params: ClawHubRequestParams,
-): Promise<{ response: Response; url: URL }> {
+): Promise<{ response: Response; url: URL; hasToken: boolean }> {
   const url = buildUrl(params);
   const token = normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
   const controller = new AbortController();
@@ -573,7 +573,7 @@ async function clawhubRequest(
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       signal: controller.signal,
     });
-    return { response, url };
+    return { response, url, hasToken: Boolean(token) };
   } finally {
     clearTimeout(timeout);
   }
@@ -588,14 +588,59 @@ async function readErrorBody(response: Response): Promise<string> {
   }
 }
 
+async function buildClawHubError(
+  response: Response,
+  url: URL,
+  hasToken: boolean,
+): Promise<ClawHubRequestError> {
+  let body = await readErrorBody(response);
+  if (response.status === 429) {
+    const suffix = formatRateLimitSuffix(response.headers, hasToken);
+    if (suffix) {
+      body = `${body} ${suffix}`;
+    }
+  }
+  return new ClawHubRequestError({
+    path: url.pathname,
+    status: response.status,
+    body,
+  });
+}
+
+function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
+  const limit =
+    normalizeHeaderValue(headers.get("RateLimit-Limit")) ??
+    normalizeHeaderValue(headers.get("X-RateLimit-Limit"));
+  const remaining =
+    normalizeHeaderValue(headers.get("RateLimit-Remaining")) ??
+    normalizeHeaderValue(headers.get("X-RateLimit-Remaining"));
+  const reset =
+    normalizeHeaderValue(headers.get("RateLimit-Reset")) ??
+    normalizeHeaderValue(headers.get("Retry-After"));
+  const parts: string[] = [];
+  if (limit) {
+    parts.push(`limit ${limit}/min`);
+  }
+  if (remaining) {
+    parts.push(`remaining ${remaining}`);
+  }
+  if (reset) {
+    parts.push(`resets in ${reset}s`);
+  }
+  const segments: string[] = [];
+  if (parts.length > 0) {
+    segments.push(`(rate limit: ${parts.join(", ")})`);
+  }
+  if (!hasToken) {
+    segments.push("Sign in for higher rate limits.");
+  }
+  return segments.join(" ");
+}
+
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
-  const { response, url } = await clawhubRequest(params);
+  const { response, url, hasToken } = await clawhubRequest(params);
   if (!response.ok) {
-    throw new ClawHubRequestError({
-      path: url.pathname,
-      status: response.status,
-      body: await readErrorBody(response),
-    });
+    throw await buildClawHubError(response, url, hasToken);
   }
   return (await response.json()) as T;
 }
@@ -854,7 +899,7 @@ export async function downloadClawHubPackageArchive(params: {
     if (!params.version) {
       throw new Error("ClawPack package downloads require an explicit version.");
     }
-    const { response, url } = await clawhubRequest({
+    const { response, url, hasToken } = await clawhubRequest({
       baseUrl: params.baseUrl,
       path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
         params.version,
@@ -864,11 +909,7 @@ export async function downloadClawHubPackageArchive(params: {
       fetchImpl: params.fetchImpl,
     });
     if (!response.ok) {
-      throw new ClawHubRequestError({
-        path: url.pathname,
-        status: response.status,
-        body: await readErrorBody(response),
-      });
+      throw await buildClawHubError(response, url, hasToken);
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
     const sha256Hex = formatSha256Hex(bytes);
@@ -934,7 +975,7 @@ export async function downloadClawHubPackageArchive(params: {
     : params.tag
       ? { tag: params.tag }
       : undefined;
-  const { response, url } = await clawhubRequest({
+  const { response, url, hasToken } = await clawhubRequest({
     baseUrl: params.baseUrl,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/download`,
     search,
@@ -943,11 +984,7 @@ export async function downloadClawHubPackageArchive(params: {
     fetchImpl: params.fetchImpl,
   });
   if (!response.ok) {
-    throw new ClawHubRequestError({
-      path: url.pathname,
-      status: response.status,
-      body: await readErrorBody(response),
-    });
+    throw await buildClawHubError(response, url, hasToken);
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const sha256Hex = formatSha256Hex(bytes);
@@ -975,7 +1012,7 @@ export async function downloadClawHubSkillArchive(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubDownloadResult> {
-  const { response, url } = await clawhubRequest({
+  const { response, url, hasToken } = await clawhubRequest({
     baseUrl: params.baseUrl,
     path: "/api/v1/download",
     token: params.token,
@@ -988,11 +1025,7 @@ export async function downloadClawHubSkillArchive(params: {
     },
   });
   if (!response.ok) {
-    throw new ClawHubRequestError({
-      path: url.pathname,
-      status: response.status,
-      body: await readErrorBody(response),
-    });
+    throw await buildClawHubError(response, url, hasToken);
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const sha256Hex = formatSha256Hex(bytes);

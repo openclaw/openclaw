@@ -414,6 +414,44 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/declared sha256/);
   });
 
+  it("annotates 429 errors with rate-limit headers and a sign-in hint when unauthenticated", async () => {
+    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("Rate limit exceeded", {
+            status: 429,
+            headers: {
+              "RateLimit-Limit": "30",
+              "RateLimit-Remaining": "0",
+              "RateLimit-Reset": "42",
+            },
+          }),
+      }),
+    ).rejects.toThrow(
+      /Rate limit exceeded \(rate limit: limit 30\/min, remaining 0, resets in 42s\) Sign in for higher rate limits\./,
+    );
+  });
+
+  it("annotates 429 errors with rate-limit headers but no sign-in hint when authenticated", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("Rate limit exceeded", {
+            status: 429,
+            headers: {
+              "RateLimit-Limit": "180",
+              "RateLimit-Remaining": "0",
+              "RateLimit-Reset": "10",
+            },
+          }),
+      }),
+    ).rejects.toThrow(/\(rate limit: limit 180\/min, remaining 0, resets in 10s\)$/);
+  });
+
   it("downloads skill archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubSkillArchive({
       slug: "agentreceipt",
