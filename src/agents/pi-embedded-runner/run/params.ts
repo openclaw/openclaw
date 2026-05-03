@@ -151,7 +151,7 @@ export type RunEmbeddedPiAgentParams = {
     stream: string;
     data: Record<string, unknown>;
     sessionKey?: string;
-  }) => void;
+  }) => void | Promise<void>;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
