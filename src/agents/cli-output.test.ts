@@ -5,7 +5,11 @@ import {
   parseCliJson,
   parseCliJsonl,
 } from "./cli-output.js";
-import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
+import { classifyFailoverReason } from "./pi-embedded-helpers.js";
+import {
+  createClaudeApiErrorFixture,
+  createClaudeNoConversationFoundFixture,
+} from "./test-helpers/claude-api-error-fixture.js";
 
 describe("parseCliJson", () => {
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
@@ -406,6 +410,29 @@ describe("parseCliJsonl", () => {
     const result = extractCliErrorMessage(jsonl);
 
     expect(result).toBe(message);
+  });
+
+  it("extracts runtime errors from result.errors[] (e.g. 'No conversation found ...')", () => {
+    // Regression: claude --resume <stale-uuid> emits the failure as
+    // {"type":"result","is_error":true,"errors":[<msg>],"result":null}.
+    // Without reading the `errors` array, the message never reaches
+    // classifyFailoverReason and the binding stays stale.
+    const { message, jsonl } = createClaudeNoConversationFoundFixture();
+    const result = extractCliErrorMessage(jsonl);
+
+    expect(result).toBe(message);
+  });
+
+  it("classifies extracted result.errors[] message as session_expired", () => {
+    // End-to-end: extract → classify must yield "session_expired" so the
+    // attempt-execution catch block clears cliSessionBindings and retries
+    // without --resume.
+    const { jsonl } = createClaudeNoConversationFoundFixture();
+    const message = extractCliErrorMessage(jsonl);
+    expect(message).toBeTruthy();
+
+    const reason = classifyFailoverReason(message ?? "", { provider: "claude-cli" });
+    expect(reason).toBe("session_expired");
   });
 });
 

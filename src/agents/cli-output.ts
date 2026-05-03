@@ -228,6 +228,24 @@ function collectExplicitCliErrorText(parsed: Record<string, unknown>): string {
     return unwrapCliErrorText(parsed.result);
   }
 
+  // Claude CLI emits errors at runtime as a top-level `errors: string[]`
+  // array on `result` messages with `is_error: true`, e.g.
+  //   {"type":"result","subtype":"error_during_execution","is_error":true,
+  //    "result":null,"errors":["No conversation found with session ID: ..."]}
+  // Without this branch, the inner string is invisible to
+  // classifyFailoverReason → reason defaults to "unknown" → the
+  // session_expired catch in attempt-execution.ts never fires → the
+  // stale cliSessionBindings entry persists → every subsequent turn
+  // fails the same way. See OpenClaw issues #61390, #73073, #70177.
+  if (parsed.is_error === true && Array.isArray(parsed.errors)) {
+    const errorTexts = parsed.errors
+      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      .map((entry) => entry.trim());
+    if (errorTexts.length > 0) {
+      return unwrapCliErrorText(errorTexts.join("; "));
+    }
+  }
+
   if (parsed.type === "assistant") {
     const text = collectCliText(parsed.message);
     if (/^\s*API Error:/i.test(text)) {
