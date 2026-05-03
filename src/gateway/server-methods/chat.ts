@@ -1701,9 +1701,11 @@ async function editUserMessageAndDeleteLaterTurns(params: {
 
     const sessionManager = SessionManager.open(transcriptPath);
     const branch = sessionManager.getBranch();
+    type SessionBranchEntry = (typeof branch)[number];
 
     const editIndex = branch.findIndex(
-      (branchEntry) => branchEntry.type === "message" && branchEntry.id === params.messageId,
+      (branchEntry: SessionBranchEntry) =>
+      branchEntry.type === "message" && branchEntry.id === params.messageId,
     );
 
     if (editIndex < 0) {
@@ -1732,11 +1734,11 @@ async function editUserMessageAndDeleteLaterTurns(params: {
       throw new Error("Message revision conflict.");
     }
 
-    const deletedMessageIds = branch
-      .slice(editIndex + 1)
-      .filter((branchEntry) => branchEntry.type === "message")
-      .map((branchEntry) => branchEntry.id)
-      .filter((id): id is string => typeof id === "string" && id.length > 0);
+   const deletedMessageIds = branch
+    .slice(editIndex + 1)
+    .filter((branchEntry: SessionBranchEntry) => branchEntry.type === "message")
+    .map((branchEntry: SessionBranchEntry) => branchEntry.id)
+    .filter((id: unknown): id is string => typeof id === "string" && id.length > 0);
 
     const editedMessage = {
       ...target.message,

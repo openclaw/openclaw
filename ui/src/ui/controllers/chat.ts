@@ -675,18 +675,9 @@ export async function editUserMessage(
     expectedRevision?: number;
   },
 ) {
-  const sessionKey = state.sessionKey || "main";
+  await requestChatEditUserMessage(state, params);
+  }
 
-  await state.client!.request("chat.edit_user_message", {
-    sessionKey,
-    messageId: params.messageId,
-    content: params.content,
-    expectedRevision: params.expectedRevision,
-    idempotencyKey: crypto.randomUUID(),
-  });
-
-  await loadChatHistory(state);
-}
 export async function sendDetachedChatMessage(
   state: ChatState,
   message: string,
