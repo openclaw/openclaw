@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { ConfigMutationConflictError } from "../config/mutate.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -10,6 +11,7 @@ const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined
 const replaceConfigFileMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: unknown }) => await writeConfigFileMock(params.nextConfig)),
 );
+const commitConfigWithPendingPluginInstallsMock = vi.hoisted(() => vi.fn());
 
 const wizardMocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
@@ -20,6 +22,13 @@ vi.mock("../config/config.js", async () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   writeConfigFile: writeConfigFileMock,
   replaceConfigFile: replaceConfigFileMock,
+}));
+
+vi.mock("../cli/plugins-install-record-commit.js", async () => ({
+  ...(await vi.importActual<typeof import("../cli/plugins-install-record-commit.js")>(
+    "../cli/plugins-install-record-commit.js",
+  )),
+  commitConfigWithPendingPluginInstalls: commitConfigWithPendingPluginInstallsMock,
 }));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
@@ -37,10 +46,13 @@ describe("agents add command", () => {
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
     replaceConfigFileMock.mockClear();
+    commitConfigWithPendingPluginInstallsMock.mockClear();
     wizardMocks.createClackPrompter.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    // Default: commit succeeds
+    commitConfigWithPendingPluginInstallsMock.mockResolvedValue({ config: {} });
   });
 
   it("requires --workspace when flags are present", async () => {
@@ -152,5 +164,67 @@ describe("agents add command", () => {
         sourceIsInheritedMain: true,
       }),
     ).toBe('OAuth profiles stay shared from "main" unless this agent signs in separately.');
+  });
+
+  describe("concurrent config modification handling", () => {
+    it("retries on ConfigMutationConflictError in non-interactive mode", async () => {
+      const initialSnapshot = {
+        ...baseConfigSnapshot,
+        hash: "hash-1",
+        config: { agents: { entries: [] } },
+        sourceConfig: { agents: { entries: [] } },
+      };
+      const updatedSnapshot = {
+        ...baseConfigSnapshot,
+        hash: "hash-2",
+        valid: true,
+        config: { agents: { entries: [{ id: "other-agent" }] } },
+        sourceConfig: { agents: { entries: [{ id: "other-agent" }] } },
+      };
+
+      readConfigFileSnapshotMock
+        .mockResolvedValueOnce(initialSnapshot)
+        .mockResolvedValueOnce(updatedSnapshot);
+
+      // First call fails with conflict, second succeeds
+      commitConfigWithPendingPluginInstallsMock
+        .mockRejectedValueOnce(
+          new ConfigMutationConflictError("config changed", { currentHash: "hash-2" }),
+        )
+        .mockResolvedValueOnce({
+          config: { agents: { entries: [{ id: "work" }, { id: "other-agent" }] } },
+        });
+
+      await agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, { hasFlags: true });
+
+      // Should have been called twice (initial + retry)
+      expect(commitConfigWithPendingPluginInstallsMock).toHaveBeenCalledTimes(2);
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+    });
+
+    it("gives up after max retries in non-interactive mode", async () => {
+      const snapshot = {
+        ...baseConfigSnapshot,
+        hash: "hash-1",
+        valid: true,
+        config: { agents: { entries: [] } },
+        sourceConfig: { agents: { entries: [] } },
+      };
+
+      readConfigFileSnapshotMock.mockResolvedValue(snapshot);
+
+      // Always fail with conflict
+      commitConfigWithPendingPluginInstallsMock.mockRejectedValue(
+        new ConfigMutationConflictError("config changed", { currentHash: "hash-new" }),
+      );
+
+      await expect(
+        agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, { hasFlags: true }),
+      ).rejects.toThrow(ConfigMutationConflictError);
+
+      // Should have retried 5 times (default max)
+      expect(commitConfigWithPendingPluginInstallsMock).toHaveBeenCalledTimes(5);
+    });
   });
 });

@@ -12,7 +12,10 @@ import {
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { ConfigMutationConflictError } from "../config/mutate.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { saveJsonFile } from "../infra/json-file.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
@@ -48,6 +51,51 @@ type AgentsAddOptions = {
   nonInteractive?: boolean;
   json?: boolean;
 };
+
+const CONFIG_COMMIT_MAX_RETRIES = 5;
+const CONFIG_COMMIT_RETRY_DELAY_MS = 100;
+
+/**
+ * Commit config with retry logic to handle concurrent modifications.
+ * When multiple `agents add` commands run in parallel, they can race on the
+ * config file. This function retries on ConfigMutationConflictError, re-reading
+ * the latest config and re-applying the agent changes.
+ */
+async function commitConfigWithRetry(params: {
+  getNextConfig: (latestConfig: OpenClawConfig) => OpenClawConfig;
+  initialConfig: OpenClawConfig;
+  initialBaseHash: string | undefined;
+  maxRetries?: number;
+}): Promise<{ config: OpenClawConfig }> {
+  const maxRetries = params.maxRetries ?? CONFIG_COMMIT_MAX_RETRIES;
+  let currentConfig = params.initialConfig;
+  let currentBaseHash = params.initialBaseHash;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const nextConfig = params.getNextConfig(currentConfig);
+      const result = await commitConfigWithPendingPluginInstalls({
+        nextConfig,
+        ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+      });
+      return { config: result.config };
+    } catch (err) {
+      if (err instanceof ConfigMutationConflictError && attempt < maxRetries - 1) {
+        // Config was mutated by another process. Re-read and retry.
+        await new Promise((resolve) => setTimeout(resolve, CONFIG_COMMIT_RETRY_DELAY_MS));
+        const freshSnapshot = await readConfigFileSnapshot();
+        currentBaseHash = freshSnapshot.hash ?? undefined;
+        currentConfig = freshSnapshot.valid
+          ? (freshSnapshot.sourceConfig ?? freshSnapshot.config)
+          : currentConfig;
+        continue;
+      }
+      throw err;
+    }
+  }
+  // Should not reach here, but satisfy TypeScript
+  throw new Error("Config commit failed after max retries");
+}
 
 async function copyPortableAuthProfiles(params: {
   destAuthPath: string;
@@ -136,18 +184,43 @@ export async function agentsAddCommand(
       ? resolveUserPath(opts.agentDir.trim())
       : resolveAgentDir(cfg, agentId);
     const model = opts.model?.trim();
-    const nextConfig = applyAgentConfig(cfg, {
+
+    // Build the config transformation function for retry logic.
+    // This allows us to re-apply the same changes on a fresh config if
+    // another process modified the config file between read and write.
+    const buildNextConfig = (latestConfig: OpenClawConfig) => {
+      const withAgent = applyAgentConfig(latestConfig, {
+        agentId,
+        name: nameInput,
+        workspace: workspaceDir,
+        agentDir,
+        ...(model ? { model } : {}),
+      });
+      const bindingParse = parseBindingSpecs({
+        agentId,
+        specs: opts.bind,
+        config: withAgent,
+      });
+      // Note: binding parse errors are checked before retry loop
+      const bindingResult =
+        bindingParse.bindings.length > 0
+          ? applyAgentBindings(withAgent, bindingParse.bindings)
+          : { config: withAgent, added: [], updated: [], skipped: [], conflicts: [] };
+      return bindingResult.config;
+    };
+
+    // Pre-check binding parse errors before entering retry loop
+    const initialNextConfig = applyAgentConfig(cfg, {
       agentId,
       name: nameInput,
       workspace: workspaceDir,
       agentDir,
       ...(model ? { model } : {}),
     });
-
     const bindingParse = parseBindingSpecs({
       agentId,
       specs: opts.bind,
-      config: nextConfig,
+      config: initialNextConfig,
     });
     if (bindingParse.errors.length > 0) {
       runtime.error(bindingParse.errors.join("\n"));
@@ -156,12 +229,14 @@ export async function agentsAddCommand(
     }
     const bindingResult =
       bindingParse.bindings.length > 0
-        ? applyAgentBindings(nextConfig, bindingParse.bindings)
-        : { config: nextConfig, added: [], updated: [], skipped: [], conflicts: [] };
+        ? applyAgentBindings(initialNextConfig, bindingParse.bindings)
+        : { config: initialNextConfig, added: [], updated: [], skipped: [], conflicts: [] };
 
-    await commitConfigWithPendingPluginInstalls({
-      nextConfig: bindingResult.config,
-      ...(baseHash !== undefined ? { baseHash } : {}),
+    // Commit with retry logic to handle concurrent config modifications
+    await commitConfigWithRetry({
+      getNextConfig: buildNextConfig,
+      initialConfig: cfg,
+      initialBaseHash: baseHash,
     });
     if (!opts.json) {
       logConfigUpdated(runtime);
@@ -416,10 +491,22 @@ export async function agentsAddCommand(
       }
     }
 
-    const committed = await commitConfigWithPendingPluginInstalls({
-      nextConfig,
-      ...(baseHash !== undefined ? { baseHash } : {}),
-    });
+    let committed;
+    try {
+      committed = await commitConfigWithPendingPluginInstalls({
+        nextConfig,
+        ...(baseHash !== undefined ? { baseHash } : {}),
+      });
+    } catch (err) {
+      if (err instanceof ConfigMutationConflictError) {
+        runtime.error(
+          "Config was modified by another process during wizard. Please re-run the command.",
+        );
+        runtime.exit(1);
+        return;
+      }
+      throw err;
+    }
     nextConfig = committed.config;
     logConfigUpdated(runtime);
     await ensureWorkspaceAndSessions(workspaceDir, runtime, {
