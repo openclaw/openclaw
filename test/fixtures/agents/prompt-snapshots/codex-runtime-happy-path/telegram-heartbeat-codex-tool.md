@@ -210,16 +210,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 1934
   },
   "totalTextOnly": {
-    "chars": 30483,
-    "roughTokens": 7621
+    "chars": 30623,
+    "roughTokens": 7656
   },
   "totalWithDynamicToolsJson": {
-    "chars": 81357,
-    "roughTokens": 20340
+    "chars": 81497,
+    "roughTokens": 20375
   },
   "userInputText": {
-    "chars": 468,
-    "roughTokens": 117
+    "chars": 608,
+    "roughTokens": 152
   }
 }
 ```
@@ -544,7 +544,7 @@ Sender (untrusted metadata):
 }
 ```
 
-Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.
+Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
 ````
 
 ### Tools: Dynamic Tool Catalog

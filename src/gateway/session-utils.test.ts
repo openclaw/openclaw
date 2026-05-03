@@ -59,7 +59,7 @@ function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
 function createModelDefaultsConfig(params: {
   primary: string;
   models?: Record<string, Record<string, never>>;
-  agentRuntime?: { id: string; fallback?: "pi" | "none" };
+  agentRuntime?: { id: string };
 }): OpenClawConfig {
   return {
     agents: {
@@ -886,9 +886,9 @@ describe("gateway session utils", () => {
             primary: "openai/gpt-5.4",
             fallbacks: ["openai-codex/gpt-5.4"],
           },
-          agentRuntime: { id: "pi", fallback: "pi" },
+          agentRuntime: { id: "pi" },
         },
-        list: [{ id: "main", default: true, agentRuntime: { id: "claude-cli", fallback: "none" } }],
+        list: [{ id: "main", default: true, agentRuntime: { id: "claude-cli" } }],
       },
     } as OpenClawConfig;
 
@@ -902,52 +902,19 @@ describe("gateway session utils", () => {
       },
       agentRuntime: {
         id: "claude-cli",
-        fallback: "none",
         source: "agent",
       },
     });
   });
 
-  test("listAgentsForGateway reports effective env runtime fallback override", () => {
-    const previousFallback = process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
-    process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "pi";
-    try {
-      const cfg = {
-        session: { mainKey: "main" },
-        agents: {
-          defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
-          },
-          list: [{ id: "main", default: true }],
-        },
-      } as OpenClawConfig;
-
-      const result = listAgentsForGateway(cfg);
-      expect(result.agents[0]).toMatchObject({
-        id: "main",
-        agentRuntime: {
-          id: "codex",
-          fallback: "pi",
-          source: "env",
-        },
-      });
-    } finally {
-      if (previousFallback === undefined) {
-        delete process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
-      } else {
-        process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = previousFallback;
-      }
-    }
-  });
-
-  test("listAgentsForGateway preserves fallback-only agent runtime overrides", () => {
+  test("listAgentsForGateway reports explicit plugin runtime metadata", () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: {
         defaults: {
-          agentRuntime: { id: "auto", fallback: "pi" },
+          agentRuntime: { id: "codex" },
         },
-        list: [{ id: "main", default: true, agentRuntime: { fallback: "none" } }],
+        list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
 
@@ -955,9 +922,8 @@ describe("gateway session utils", () => {
     expect(result.agents[0]).toMatchObject({
       id: "main",
       agentRuntime: {
-        id: "auto",
-        fallback: "none",
-        source: "agent",
+        id: "codex",
+        source: "defaults",
       },
     });
   });
@@ -1278,7 +1244,7 @@ describe("listSessionsFromStore selected model display", () => {
   test("separates Claude CLI runtime metadata from canonical model identity", () => {
     const cfg = createModelDefaultsConfig({
       primary: "anthropic/claude-opus-4-7",
-      agentRuntime: { id: "claude-cli", fallback: "none" },
+      agentRuntime: { id: "claude-cli" },
     });
 
     const result = listSessionsFromStore({
@@ -1299,7 +1265,6 @@ describe("listSessionsFromStore selected model display", () => {
     expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
     expect(result.sessions[0]?.agentRuntime).toEqual({
       id: "claude-cli",
-      fallback: "none",
       source: "defaults",
     });
   });
@@ -1310,7 +1275,7 @@ describe("listSessionsFromStore selected model display", () => {
       models: {
         "anthropic/claude-opus-4-7": {},
       },
-      agentRuntime: { id: "claude-cli", fallback: "none" },
+      agentRuntime: { id: "claude-cli" },
     });
 
     const result = listSessionsFromStore({
@@ -1466,7 +1431,7 @@ describe("resolveSessionDisplayModelIdentityRef", () => {
   test("canonicalizes CLI runtime provider to the selected model provider", () => {
     const cfg = createModelDefaultsConfig({
       primary: "anthropic/claude-opus-4-7",
-      agentRuntime: { id: "claude-cli", fallback: "none" },
+      agentRuntime: { id: "claude-cli" },
     });
 
     expect(
@@ -1485,7 +1450,7 @@ describe("resolveSessionDisplayModelIdentityRef", () => {
       models: {
         "anthropic/claude-opus-4-7": {},
       },
-      agentRuntime: { id: "claude-cli", fallback: "none" },
+      agentRuntime: { id: "claude-cli" },
     });
 
     expect(
