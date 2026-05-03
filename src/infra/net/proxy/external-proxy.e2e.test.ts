@@ -1,13 +1,14 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer, request as httpRequest, type Server } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import * as net from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
+import { withTempDir } from "../../../test-helpers/temp-dir.js";
+import { resolveSystemBin } from "../../resolve-system-bin.js";
 
 const CHILD_PROCESS_TIMEOUT_MS = process.env.CI ? 45_000 : 15_000;
 const PROBE_TIMEOUT_MS = process.env.CI ? 15_000 : 5_000;
@@ -15,91 +16,93 @@ const PROXY_TUNNEL_SOCKETS = new WeakMap<Server, Set<Duplex>>();
 type DiscordTlsFixture = {
   caPath: string;
   cert: string;
-  cleanup: () => void;
   key: string;
 };
 
-function createDiscordTlsFixture(): DiscordTlsFixture {
-  const dir = mkdtempSync(join(tmpdir(), "openclaw-discord-tls-"));
-  try {
-    const caKeyPath = join(dir, "ca-key.pem");
-    const caCertPath = join(dir, "ca-cert.pem");
-    const serverKeyPath = join(dir, "server-key.pem");
-    const serverCsrPath = join(dir, "server.csr");
-    const serverCertPath = join(dir, "server-cert.pem");
-    const extPath = join(dir, "server-ext.cnf");
-
-    execFileSync(
-      "openssl",
-      [
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-keyout",
-        caKeyPath,
-        "-out",
-        caCertPath,
-        "-days",
-        "1",
-        "-subj",
-        "/CN=OpenClaw Proxy Test CA",
-      ],
-      { stdio: "ignore" },
-    );
-    execFileSync(
-      "openssl",
-      [
-        "req",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-keyout",
-        serverKeyPath,
-        "-out",
-        serverCsrPath,
-        "-subj",
-        "/CN=discord.com",
-      ],
-      { stdio: "ignore" },
-    );
-    writeFileSync(extPath, "subjectAltName=DNS:discord.com\n");
-    execFileSync(
-      "openssl",
-      [
-        "x509",
-        "-req",
-        "-in",
-        serverCsrPath,
-        "-CA",
-        caCertPath,
-        "-CAkey",
-        caKeyPath,
-        "-CAcreateserial",
-        "-out",
-        serverCertPath,
-        "-days",
-        "1",
-        "-sha256",
-        "-extfile",
-        extPath,
-      ],
-      { stdio: "ignore" },
-    );
-
-    return {
-      caPath: caCertPath,
-      cert: readFileSync(serverCertPath, "utf8"),
-      cleanup: () => {
-        rmSync(dir, { force: true, recursive: true });
-      },
-      key: readFileSync(serverKeyPath, "utf8"),
-    };
-  } catch (err) {
-    rmSync(dir, { force: true, recursive: true });
-    throw err;
+function createDiscordTlsFixture(dir: string): DiscordTlsFixture {
+  const openssl = resolveSystemBin("openssl");
+  if (!openssl) {
+    throw new Error("openssl is required to generate proxy TLS test certificates");
   }
+  const caKeyPath = join(dir, "ca-key.pem");
+  const caCertPath = join(dir, "ca-cert.pem");
+  const serverKeyPath = join(dir, "server-key.pem");
+  const serverCsrPath = join(dir, "server.csr");
+  const serverCertPath = join(dir, "server-cert.pem");
+  const extPath = join(dir, "server-ext.cnf");
+
+  execFileSync(
+    openssl,
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      caKeyPath,
+      "-out",
+      caCertPath,
+      "-days",
+      "1",
+      "-subj",
+      "/CN=OpenClaw Proxy Test CA",
+    ],
+    { stdio: "ignore" },
+  );
+  execFileSync(
+    openssl,
+    [
+      "req",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      serverKeyPath,
+      "-out",
+      serverCsrPath,
+      "-subj",
+      "/CN=discord.com",
+    ],
+    { stdio: "ignore" },
+  );
+  writeFileSync(extPath, "subjectAltName=DNS:discord.com\n");
+  execFileSync(
+    openssl,
+    [
+      "x509",
+      "-req",
+      "-in",
+      serverCsrPath,
+      "-CA",
+      caCertPath,
+      "-CAkey",
+      caKeyPath,
+      "-CAcreateserial",
+      "-out",
+      serverCertPath,
+      "-days",
+      "1",
+      "-sha256",
+      "-extfile",
+      extPath,
+    ],
+    { stdio: "ignore" },
+  );
+
+  return {
+    caPath: caCertPath,
+    cert: readFileSync(serverCertPath, "utf8"),
+    key: readFileSync(serverKeyPath, "utf8"),
+  };
+}
+
+async function withDiscordTlsFixture<T>(
+  run: (fixture: DiscordTlsFixture) => Promise<T>,
+): Promise<T> {
+  return await withTempDir({ prefix: "openclaw-discord-tls-" }, async (dir) => {
+    return await run(createDiscordTlsFixture(dir));
+  });
 }
 
 async function listenOnLoopback(server: Server): Promise<number> {
@@ -455,8 +458,7 @@ describe("SSRF external proxy routing", () => {
   });
 
   it("preserves the target TLS hostname for Node HTTPS requests through the managed proxy", async () => {
-    const tlsFixture = createDiscordTlsFixture();
-    try {
+    await withDiscordTlsFixture(async (tlsFixture) => {
       tlsTarget = createHttpsServer({ key: tlsFixture.key, cert: tlsFixture.cert }, (_req, res) => {
         res.writeHead(209, { "content-type": "text/plain" });
         res.end("discord target tls ok");
@@ -520,8 +522,6 @@ describe("SSRF external proxy routing", () => {
       expect(child.stdout).toContain('"status":209');
       expect(child.stdout).toContain('"body":"discord target tls ok"');
       expect(seenConnectTargets).toContain(`discord.com:${tlsTargetPort}`);
-    } finally {
-      tlsFixture.cleanup();
-    }
+    });
   });
 });
