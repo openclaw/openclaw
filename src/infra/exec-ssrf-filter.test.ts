@@ -253,7 +253,35 @@ describe("exec-ssrf-filter", () => {
       expect(filterExecCommandSsrF({ command: "wget http://10.0.0.1/file" }).allowed).toBe(false);
     });
 
-    it("blocks httpx to localhost", () => {
+    // Regression tests for P1 bypass fixes
+    it("blocks curl -L localhost (bypass fix)", () => {
+      // Previously: -L was in CURL_OPTIONS_WITH_VALUE, URL was skipped
+      // Now: -L is standalone, URL should be blocked
+      expect(filterExecCommandSsrF({ command: "curl -L http://127.0.0.1/status" }).allowed).toBe(false);
+    });
+
+    it("blocks curl -I localhost (bypass fix)", () => {
+      // Previously: -I was in CURL_OPTIONS_WITH_VALUE, URL was skipped
+      expect(filterExecCommandSsrF({ command: "curl -I http://localhost/api" }).allowed).toBe(false);
+    });
+
+    it("blocks curl -k localhost (bypass fix)", () => {
+      // Previously: -k was in CURL_OPTIONS_WITH_VALUE, URL was skipped
+      expect(filterExecCommandSsrF({ command: "curl -k https://127.0.0.1/test" }).allowed).toBe(false);
+    });
+
+    it("blocks curl --url=localhost (bypass fix)", () => {
+      // Previously: --url= format was skipped entirely
+      // Now: URL-bearing options are validated
+      expect(filterExecCommandSsrF({ command: "curl --url=http://127.0.0.1/status" }).allowed).toBe(false);
+    });
+
+    it("blocks wget -q localhost (bypass fix)", () => {
+      // Previously: -q was in WGET_OPTIONS_WITH_VALUE, URL was skipped
+      expect(filterExecCommandSsrF({ command: "wget -q http://localhost/file" }).allowed).toBe(false);
+    });
+
+    it("httpx to localhost", () => {
       expect(filterExecCommandSsrF({ command: "httpx http://localhost" }).allowed).toBe(false);
     });
 
@@ -299,14 +327,21 @@ describe("exec-ssrf-filter", () => {
       expect(result.allowed).toBe(false);
     });
 
-    it("fails open for unparseable commands", () => {
-      // Malformed shell syntax should be allowed (fail open)
-      // The actual execution will still be subject to other security checks
-      expect(filterExecCommandSsrF({ command: "echo 'unclosed quote" })).toEqual({ allowed: true });
+    it("fails closed for unparseable commands", () => {
+      // Malformed shell syntax should be blocked (fail closed for security)
+      // Unknown syntax could hide blocked destinations
+      expect(filterExecCommandSsrF({ command: "echo 'unclosed quote" })).toEqual({
+        allowed: false,
+        reason: "Unable to parse shell command for SSRF validation",
+      });
     });
 
     it("handles empty command", () => {
-      expect(filterExecCommandSsrF({ command: "" })).toEqual({ allowed: true });
+      // Empty command can't be parsed, fail closed
+      expect(filterExecCommandSsrF({ command: "" })).toEqual({
+        allowed: false,
+        reason: "Unable to parse shell command for SSRF validation",
+      });
     });
 
     it("handles commands with only options", () => {

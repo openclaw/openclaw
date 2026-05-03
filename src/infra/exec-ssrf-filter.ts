@@ -131,9 +131,6 @@ const CURL_OPTIONS_WITH_VALUE = new Set([
   "--help",
   "-M",
   "--manual",
-  "-L",
-  "--location",
-  "--location-trusted",
   "-f",
   "--fail",
   "--fail-early",
@@ -154,12 +151,6 @@ const CURL_OPTIONS_WITH_VALUE = new Set([
   "--disable",
   "-r",
   "--range",
-  "-I",
-  "--head",
-  "-i",
-  "--include",
-  "-k",
-  "--insecure",
   "-n",
   "--netrc",
   "--netrc-optional",
@@ -178,8 +169,6 @@ const CURL_OPTIONS_WITH_VALUE = new Set([
   "--proto-redir",
   "--alt-svc",
   "--hsts",
-  "-4",
-  "--ipv4",
   "-6",
   "--ipv6",
   "--dns-interface",
@@ -237,7 +226,6 @@ const CURL_STANDALONE_OPTIONS = new Set([
   "--ipv4",
   "-6",
   "--ipv6",
-  "--compressed",
   "--compressed-ssh",
   "--create-dirs",
   "--create-file-mode",
@@ -349,8 +337,6 @@ const WGET_OPTIONS_WITH_VALUE = new Set([
   "--append-output",
   "-d",
   "--debug",
-  "-q",
-  "--quiet",
   "-v",
   "--verbose",
   "-B",
@@ -625,14 +611,21 @@ function extractUrlsFromCurlArgs(args: string[]): string[] {
       continue;
     }
 
-    // Skip standalone options
-    if (CURL_STANDALONE_OPTIONS.has(arg) || arg.startsWith("-")) {
+    // Check option=value format (URL-bearing options)
+    if (arg.includes("=")) {
+      const [option, value] = arg.split("=");
+      // curl --url= and -u= options contain URLs
+      if (option === "--url" || option === "-u") {
+        if (isHttpUrl(value)) {
+          urls.push(value);
+        }
+      }
       i += 1;
       continue;
     }
 
-    // Skip option=value format
-    if (arg.includes("=") && arg.startsWith("--")) {
+    // Skip standalone options
+    if (CURL_STANDALONE_OPTIONS.has(arg) || arg.startsWith("-")) {
       i += 1;
       continue;
     }
@@ -671,8 +664,9 @@ function extractUrlsFromWgetArgs(args: string[]): string[] {
       continue;
     }
 
-    // Skip option=value format
-    if (arg.includes("=") && arg.startsWith("--")) {
+    // Check option=value format
+    if (arg.includes("=")) {
+      // wget doesn't have URL-bearing options in this format, but skip safely
       i += 1;
       continue;
     }
@@ -760,9 +754,12 @@ export function filterExecCommandSsrF(params: {
   const analysis = analyzeShellCommand({ command });
 
   if (!analysis.ok) {
-    // If we can't parse the command, allow it (fail open for parsing issues)
-    // The actual execution will still be subject to other security checks
-    return { allowed: true };
+    // If we can't parse the command, fail closed for security
+    // Unknown shell syntax could hide blocked destinations (command substitution, etc.)
+    return {
+      allowed: false,
+      reason: "Unable to parse shell command for SSRF validation",
+    };
   }
 
   // Check each segment for network tools
