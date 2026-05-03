@@ -1130,6 +1130,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             workspaceDir: effectiveWorkspace,
             messageProvider: resolvedMessageProvider,
             metrics: beforeHookMetrics,
+            onHookMessages: params.onCompactionHookMessages,
           });
           const { messageCountOriginal } = beforeHookMetrics;
           const diagEnabled = log.isEnabled("debug");
@@ -1314,6 +1315,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
+            onHookMessages: params.onCompactionHookMessages,
           });
           return {
             ok: true,
