@@ -16,6 +16,15 @@ export type MessageCliHelpers = {
   runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
 };
 
+const TELEGRAM_GATEWAY_OWNED_CLI_ACTIONS = new Set([
+  "send",
+  "poll",
+  "react",
+  "delete",
+  "edit",
+  "topic-create",
+  "topic-edit",
+]);
 const GATEWAY_STOP_TIMEOUT_MS = 2500;
 const ACTIONS_WITHOUT_STOP_HOOKS = new Set(["read"]);
 
@@ -63,6 +72,14 @@ function resolveMessagePluginLoadOptions(
   return { scope: "configured-channels" };
 }
 
+function shouldPreloadMessagePlugins(action: string, opts: Record<string, unknown>): boolean {
+  if (opts.dryRun === true || !TELEGRAM_GATEWAY_OWNED_CLI_ACTIONS.has(action)) {
+    return true;
+  }
+  const explicitChannel = resolveMessageSecretScope({ channel: opts.channel }).channel;
+  return explicitChannel !== "telegram";
+}
+
 export function createMessageCliHelpers(
   message: Command,
   messageChannelOptions: string,
@@ -86,7 +103,9 @@ export function createMessageCliHelpers(
     await runCommandWithRuntime(
       defaultRuntime,
       async () => {
-        ensurePluginRegistryLoaded(resolveMessagePluginLoadOptions(opts));
+        if (shouldPreloadMessagePlugins(action, opts)) {
+          ensurePluginRegistryLoaded(resolveMessagePluginLoadOptions(opts));
+        }
         const deps = createDefaultDeps();
         await messageCommand(
           {

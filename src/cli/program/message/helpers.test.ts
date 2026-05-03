@@ -121,6 +121,51 @@ describe("runMessageAction", () => {
     });
   });
 
+  it("keeps explicit Telegram sends on the normal command path without local plugin preload", async () => {
+    await runSendAction({
+      channel: "telegram",
+      account: "default",
+      target: "@ops",
+      media: "./diagram.png",
+      presentation: '{"blocks":[{"type":"buttons","buttons":[{"label":"OK","value":"ok"}]}]}',
+      delivery: '{"pin":true}',
+      forceDocument: true,
+    });
+
+    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "send",
+        channel: "telegram",
+        accountId: "default",
+        target: "@ops",
+        message: "hi",
+        media: "./diagram.png",
+        presentation: '{"blocks":[{"type":"buttons","buttons":[{"label":"OK","value":"ok"}]}]}',
+        delivery: '{"pin":true}',
+        forceDocument: true,
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expectNoAccountFieldInPassedOptions();
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps Telegram dry-runs on the local preload path for local validation", async () => {
+    await runSendAction({
+      channel: "telegram",
+      target: "@ops",
+      dryRun: true,
+    });
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["telegram"],
+    });
+    expect(messageCommandMock).toHaveBeenCalled();
+  });
+
   it("loads configured channel plugins for mixed broadcast target prefixes", async () => {
     const runMessageAction = createRunMessageAction();
 
