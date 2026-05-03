@@ -5,6 +5,11 @@ import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  listOfficialExternalPluginCatalogEntries,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
+} from "../plugins/official-external-plugin-catalog.js";
+import {
   applyExclusiveSlotSelection,
   buildPluginSnapshotReport,
   enablePluginInConfig,
@@ -34,6 +39,19 @@ import {
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
 const ORIGINAL_OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const PROFILE_STATE_ROOT = "/tmp/openclaw-ledger-profile";
+
+const OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY = listOfficialExternalPluginCatalogEntries()
+  .map((entry) => {
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    const install = resolveOfficialExternalPluginInstall(entry);
+    const npmSpec = install?.npmSpec?.trim();
+    if (!pluginId || !npmSpec || install?.expectedIntegrity) {
+      return null;
+    }
+    return { pluginId, npmSpec };
+  })
+  .filter((entry): entry is { pluginId: string; npmSpec: string } => Boolean(entry))
+  .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 
 function cliInstallPath(pluginId: string): string {
   return installedPluginRoot(CLI_STATE_ROOT, pluginId);
@@ -713,6 +731,41 @@ describe("plugins cli install", () => {
       }),
     );
   });
+
+  it.each(OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY)(
+    "keeps official external npm installs trusted without integrity for $pluginId",
+    async ({ pluginId, npmSpec }) => {
+      const cfg = createEmptyPluginConfig();
+      const enabledCfg = createEnabledPluginConfig(pluginId);
+      loadConfig.mockReturnValue(cfg);
+      findBundledPluginSourceMock.mockReturnValue(undefined);
+      installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult(pluginId));
+      enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+      applyExclusiveSlotSelection.mockReturnValue({
+        config: enabledCfg,
+        warnings: [],
+      });
+
+      await runPluginsCommand(["plugins", "install", pluginId]);
+
+      expect(findBundledPluginSourceMock).toHaveBeenCalledWith({
+        lookup: { kind: "pluginId", value: pluginId },
+      });
+      expect(installPluginFromClawHub).not.toHaveBeenCalled();
+      expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spec: npmSpec,
+          expectedPluginId: pluginId,
+          trustedSourceLinkedOfficialInstall: true,
+        }),
+      );
+      expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          expectedIntegrity: expect.any(String),
+        }),
+      );
+    },
+  );
 
   it("passes official external catalog integrity to hook-pack fallback", async () => {
     loadConfig.mockReturnValue(createEmptyPluginConfig());

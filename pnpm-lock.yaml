@@ -184,9 +184,6 @@ importers:
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
-      sqlite-vec:
-        specifier: 0.1.9
-        version: 0.1.9
       tar:
         specifier: 7.5.13
         version: 7.5.13
@@ -220,6 +217,10 @@ importers:
       zod:
         specifier: ^4.4.1
         version: 4.4.1
+    optionalDependencies:
+      sqlite-vec:
+        specifier: 0.1.9
+        version: 0.1.9
     devDependencies:
       '@copilotkit/aimock':
         specifier: 1.16.4
