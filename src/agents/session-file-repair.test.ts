@@ -117,7 +117,7 @@ describe("repairSessionFileIfNeeded", () => {
         errorMessage: "transient stream failure",
       },
     };
-    // Follow-up so the session doesn't end on assistant (trailing-trim is tested separately).
+    // Follow-up keeps this case focused on empty error-turn repair.
     const followUp = {
       type: "message",
       id: "msg-3",
@@ -172,6 +172,7 @@ describe("repairSessionFileIfNeeded", () => {
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
+    expect(result.droppedBlankUserMessages).toBe(0);
     expect(debug.mock.calls[0]?.[0]).toContain("rewrote 1 user message(s)");
 
     const repaired = await fs.readFile(file, "utf-8");
@@ -292,7 +293,7 @@ describe("repairSessionFileIfNeeded", () => {
         stopReason: "stop",
       },
     };
-    // Follow-up so the session doesn't end on assistant (trailing-trim is tested separately).
+    // Follow-up keeps this case focused on silent-reply preservation.
     const followUp = {
       type: "message",
       id: "msg-3",
@@ -507,7 +508,7 @@ describe("repairSessionFileIfNeeded", () => {
         stopReason: "error",
       },
     };
-    // Follow-up so the session doesn't end on assistant (trailing-trim is tested separately).
+    // Follow-up keeps this case focused on idempotent empty error-turn repair.
     const followUp = {
       type: "message",
       id: "msg-3",

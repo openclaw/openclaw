@@ -10,6 +10,7 @@ type RepairReport = {
   repaired: boolean;
   droppedLines: number;
   rewrittenAssistantMessages?: number;
+  droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
   backupPath?: string;
   reason?: string;
@@ -66,7 +67,10 @@ function rewriteAssistantEntryWithEmptyContent(entry: SessionMessageEntry): Sess
   };
 }
 
-type UserEntryRepair = { kind: "rewrite"; entry: SessionMessageEntry } | { kind: "keep" };
+type UserEntryRepair =
+  | { kind: "drop" }
+  | { kind: "rewrite"; entry: SessionMessageEntry }
+  | { kind: "keep" };
 
 function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEntryRepair {
   const content = entry.message.content;
@@ -134,6 +138,7 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
 function buildRepairSummaryParts(params: {
   droppedLines: number;
   rewrittenAssistantMessages: number;
+  droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
 }): string {
   const parts: string[] = [];
@@ -142,6 +147,9 @@ function buildRepairSummaryParts(params: {
   }
   if (params.rewrittenAssistantMessages > 0) {
     parts.push(`rewrote ${params.rewrittenAssistantMessages} assistant message(s)`);
+  }
+  if (params.droppedBlankUserMessages > 0) {
+    parts.push(`dropped ${params.droppedBlankUserMessages} blank user message(s)`);
   }
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
@@ -176,6 +184,7 @@ export async function repairSessionFileIfNeeded(params: {
   const entries: unknown[] = [];
   let droppedLines = 0;
   let rewrittenAssistantMessages = 0;
+  let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
 
   for (const line of lines) {
@@ -197,6 +206,10 @@ export async function repairSessionFileIfNeeded(params: {
         ((entry as { message: { role?: unknown } }).message?.role ?? undefined) === "user"
       ) {
         const repairedUser = repairUserEntryWithBlankTextContent(entry as SessionMessageEntry);
+        if (repairedUser.kind === "drop") {
+          droppedBlankUserMessages += 1;
+          continue;
+        }
         if (repairedUser.kind === "rewrite") {
           entries.push(repairedUser.entry);
           rewrittenUserMessages += 1;
@@ -220,7 +233,12 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
-  if (droppedLines === 0 && rewrittenAssistantMessages === 0 && rewrittenUserMessages === 0) {
+  if (
+    droppedLines === 0 &&
+    rewrittenAssistantMessages === 0 &&
+    droppedBlankUserMessages === 0 &&
+    rewrittenUserMessages === 0
+  ) {
     return { repaired: false, droppedLines: 0 };
   }
 
@@ -252,6 +270,7 @@ export async function repairSessionFileIfNeeded(params: {
       repaired: false,
       droppedLines,
       rewrittenAssistantMessages,
+      droppedBlankUserMessages,
       rewrittenUserMessages,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
@@ -261,6 +280,7 @@ export async function repairSessionFileIfNeeded(params: {
     `session file repaired: ${buildRepairSummaryParts({
       droppedLines,
       rewrittenAssistantMessages,
+      droppedBlankUserMessages,
       rewrittenUserMessages,
     })} (${path.basename(sessionFile)})`,
   );
@@ -268,6 +288,7 @@ export async function repairSessionFileIfNeeded(params: {
     repaired: true,
     droppedLines,
     rewrittenAssistantMessages,
+    droppedBlankUserMessages,
     rewrittenUserMessages,
     backupPath,
   };
