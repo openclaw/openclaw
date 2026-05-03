@@ -132,6 +132,24 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: ["demo-cli"],
       },
       {
+        id: "microsoft",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+        contracts: { speechProviders: ["microsoft"] },
+      },
+      {
+        id: "tts-local-cli",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+        contracts: { speechProviders: ["tts-local-cli", "cli"] },
+      },
+      {
         id: "anthropic",
         channels: [],
         origin: "bundled",
@@ -574,6 +592,70 @@ describe("resolveGatewayStartupPluginIds", () => {
         providerIds: ["demo-provider"],
       }),
       ["demo-channel", "browser", "memory-core"],
+    ],
+    [
+      "includes configured bundled speech providers at startup",
+      {
+        channels: {},
+        messages: { tts: { provider: "microsoft" } },
+      } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes bundled speech providers configured by provider block",
+      {
+        channels: {},
+        messages: { tts: { providers: { "tts-local-cli": { command: "say" } } } },
+      } as OpenClawConfig,
+      ["browser", "tts-local-cli", "memory-core"],
+    ],
+    [
+      "maps legacy edge TTS selection to the Microsoft speech plugin",
+      {
+        channels: {},
+        messages: { tts: { provider: "edge" } },
+      } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes active persona speech providers at startup",
+      {
+        channels: {},
+        messages: {
+          tts: {
+            persona: "narrator",
+            personas: {
+              narrator: {
+                label: "Narrator",
+                provider: "microsoft",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "honors disabled speech provider config blocks at startup",
+      {
+        channels: {},
+        messages: {
+          tts: {
+            provider: "microsoft",
+            providers: { microsoft: { enabled: false } },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "honors explicit plugin disablement for configured speech providers",
+      {
+        channels: {},
+        messages: { tts: { provider: "microsoft" } },
+        plugins: { entries: { microsoft: { enabled: false } } },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
     ],
     [
       "includes explicitly enabled non-channel sidecars in startup scope",
