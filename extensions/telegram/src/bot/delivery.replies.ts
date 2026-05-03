@@ -390,6 +390,7 @@ async function deliverMediaReply(params: {
         send: (effectiveParams) =>
           params.bot.api.sendAnimation(params.chatId, file, { ...effectiveParams }),
       });
+      params.runtime.log?.(`telegram sendAnimation ok chat=${params.chatId} message=${result.message_id}`);
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
@@ -403,6 +404,7 @@ async function deliverMediaReply(params: {
         send: (effectiveParams) =>
           params.bot.api.sendPhoto(params.chatId, file, { ...effectiveParams }),
       });
+      params.runtime.log?.(`telegram sendPhoto ok chat=${params.chatId} message=${result.message_id}`);
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
@@ -416,6 +418,7 @@ async function deliverMediaReply(params: {
         send: (effectiveParams) =>
           params.bot.api.sendVideo(params.chatId, file, { ...effectiveParams }),
       });
+      params.runtime.log?.(`telegram sendVideo ok chat=${params.chatId} message=${result.message_id}`);
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
@@ -444,6 +447,7 @@ async function deliverMediaReply(params: {
           if (firstDeliveredMessageId == null) {
             firstDeliveredMessageId = result.message_id;
           }
+          params.runtime.log?.(`telegram sendVoice ok chat=${params.chatId} message=${result.message_id}`);
           markDelivered(params.progress);
         };
         await params.onVoiceRecording?.();
@@ -523,6 +527,7 @@ async function deliverMediaReply(params: {
           send: (effectiveParams) =>
             params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
         });
+        params.runtime.log?.(`telegram sendAudio ok chat=${params.chatId} message=${result.message_id}`);
         if (firstDeliveredMessageId == null) {
           firstDeliveredMessageId = result.message_id;
         }
@@ -537,6 +542,7 @@ async function deliverMediaReply(params: {
         send: (effectiveParams) =>
           params.bot.api.sendDocument(params.chatId, file, { ...effectiveParams }),
       });
+      params.runtime.log?.(`telegram sendDocument ok chat=${params.chatId} message=${result.message_id}`);
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
