@@ -2004,6 +2004,10 @@ describe("syncPluginsForUpdateChannel", () => {
         spec: "@openclaw/legacy-chat",
         mode: "update",
         expectedPluginId: "legacy-chat",
+      }),
+    );
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
         trustedSourceLinkedOfficialInstall: true,
       }),
     );
@@ -2150,6 +2154,10 @@ describe("syncPluginsForUpdateChannel", () => {
         spec: "@openclaw/legacy-chat",
         mode: "update",
         expectedPluginId: "legacy-chat",
+      }),
+    );
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
         trustedSourceLinkedOfficialInstall: true,
       }),
     );
