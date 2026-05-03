@@ -145,4 +145,57 @@ describe("resolveDiscordToken", () => {
     expect(res.token).toBe("");
     expect(res.source).toBe("none");
   });
+
+  it("does not substitute env DISCORD_BOT_TOKEN for a non-env config SecretRef", () => {
+    // Operator wired a file-source SecretRef (e.g. Vault, sealed file). The plugin
+    // cannot resolve that ref from raw config, so it must report the token as
+    // unavailable rather than silently substituting an unrelated env token —
+    // otherwise the wrong bot account could come up under DISCORD_BOT_TOKEN.
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "file", provider: "default", id: "/discord/token" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  });
+
+  it("does not substitute env DISCORD_BOT_TOKEN for an env SecretRef pointing at a different env var", () => {
+    // Same intent-preservation: an env SecretRef whose id is not DISCORD_BOT_TOKEN
+    // (e.g. a per-deployment alias like DISCORD_PROD_BOT_TOKEN that the operator
+    // expects to pre-populate) must not be silently substituted by the bare
+    // DISCORD_BOT_TOKEN env fallback.
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_PROD_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  });
+
+  it("does not substitute env DISCORD_BOT_TOKEN for an exec-source SecretRef", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "exec", provider: "vault", id: "discord/bot-token" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  });
 });

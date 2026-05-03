@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord: tolerate unresolved `channels.discord.token` SecretRef objects in the externalized `@openclaw/discord` channel-startup path on 2026.5.2, so SecretRefs whose intent matches the existing `DISCORD_BOT_TOKEN` env fallback (`{ source: "env", id: "DISCORD_BOT_TOKEN" }`) fall through to the env fallback instead of crashing channel start with `unresolved SecretRef ... Resolve this command against an active gateway runtime snapshot before reading it.`. Non-env SecretRefs (file/exec/alternate env id) and account-level SecretRefs preserve operator intent — they remain configured-but-unresolved and surface a user-actionable `Discord bot token missing for account ...` error from `createDiscordRestClient` rather than silently substituting an unrelated env token. Fixes #76371. (#76385)
 - Gateway: preserve stack diagnostics when `chat.send` or agent attachment parsing/staging fails, improving image-send failure triage. Refs #63432. (#75135) Thanks @keen0206.
 - Maintainer workflow: push prepared PR heads through GitHub's verified commit API by default and require an explicit override before git-protocol pushes can publish unsigned commits. Thanks @BunsDev.
 - Feishu: resolve setup/status probes through the selected/default account so multi-account configs with account-scoped app credentials show as configured and probeable. Fixes #72930. Thanks @brokemac79.
