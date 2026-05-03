@@ -17,7 +17,7 @@ import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
 import { replaceConfigFile } from "../config/mutate.js";
-import { isNixMode } from "../config/paths.js";
+import { isNixMode, resolveStateDir } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -897,6 +897,7 @@ export async function startGatewayServer(
         healthInterval: runtimeState.healthInterval,
         dedupeCleanup: runtimeState.dedupeCleanup,
         mediaCleanup: runtimeState.mediaCleanup,
+        sessionArchiveCleanup: runtimeState.sessionArchiveCleanup,
         agentUnsub: runtimeState.agentUnsub,
         heartbeatUnsub: runtimeState.heartbeatUnsub,
         transcriptUnsub: runtimeState.transcriptUnsub,
@@ -952,6 +953,9 @@ export async function startGatewayServer(
         ...(typeof cfgAtStart.media?.ttlHours === "number"
           ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
           : {}),
+        sessionArchiveCleanupStateDir: resolveStateDir(process.env),
+        sessionArchiveCleanupCfg: cfgAtStart,
+        sessionArchiveCleanupLog: { warn: (msg: string) => log.warn(msg) },
         skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
         getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,
         setSkillsRefreshTimer: (timer) => {
@@ -967,6 +971,7 @@ export async function startGatewayServer(
       runtimeState.healthInterval = earlyRuntime.maintenance.healthInterval;
       runtimeState.dedupeCleanup = earlyRuntime.maintenance.dedupeCleanup;
       runtimeState.mediaCleanup = earlyRuntime.maintenance.mediaCleanup;
+      runtimeState.sessionArchiveCleanup = earlyRuntime.maintenance.sessionArchiveCleanup;
     }
 
     Object.assign(

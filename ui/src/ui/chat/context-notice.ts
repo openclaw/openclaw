@@ -128,12 +128,13 @@ export function renderContextNotice(
       </svg>
       <span>${model.pct}% context used</span>
       <span class="context-notice__detail">${model.detail}</span>
-      ${canRenderCompact
-        ? html`
+      ${
+        canRenderCompact
+          ? html`
             <button
-              class="context-notice__action ${options.compactBusy
-                ? "context-notice__action--busy"
-                : ""}"
+              class="context-notice__action ${
+                options.compactBusy ? "context-notice__action--busy" : ""
+              }"
               type="button"
               title="Compact session context"
               aria-label="Compact recommended session context"
@@ -151,7 +152,8 @@ export function renderContextNotice(
               <span>${options.compactBusy ? "Compacting" : "Compact"}</span>
             </button>
           `
-        : nothing}
+          : nothing
+      }
     </div>
   `;
 }

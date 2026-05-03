@@ -36,14 +36,18 @@ export function renderDreamingRestartConfirmation(props: DreamingRestartConfirma
         <div class="callout danger" style="margin-top: 12px;">
           ${t("dreaming.restartConfirmation.warning")}
         </div>
-        ${props.hasError
-          ? html`<div class="exec-approval-error">${t("dreaming.restartConfirmation.failed")}</div>`
-          : nothing}
+        ${
+          props.hasError
+            ? html`<div class="exec-approval-error">${t("dreaming.restartConfirmation.failed")}</div>`
+            : nothing
+        }
         <div class="exec-approval-actions">
           <button class="btn danger" ?disabled=${props.loading} @click=${props.onConfirm}>
-            ${props.loading
-              ? t("dreaming.restartConfirmation.restarting")
-              : t("dreaming.restartConfirmation.confirm")}
+            ${
+              props.loading
+                ? t("dreaming.restartConfirmation.restarting")
+                : t("dreaming.restartConfirmation.confirm")
+            }
           </button>
           <button class="btn" ?disabled=${props.loading} @click=${props.onCancel}>
             ${t("common.cancel")}

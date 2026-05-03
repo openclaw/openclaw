@@ -460,9 +460,11 @@ export function renderMessageGroup(
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
           ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
-          ${opts.onDelete
-            ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
-            : nothing}
+          ${
+            opts.onDelete
+              ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
+              : nothing
+          }
         </div>
       </div>
     </div>
@@ -769,9 +771,11 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
     <div class="chat-reply-pill">
       <span class="chat-reply-pill__icon">${icons.messageSquare}</span>
       <span class="chat-reply-pill__label">
-        ${replyTarget.kind === "current"
-          ? "Replying to current message"
-          : `Replying to ${replyTarget.id}`}
+        ${
+          replyTarget.kind === "current"
+            ? "Replying to current message"
+            : `Replying to ${replyTarget.id}`
+        }
       </span>
     </div>
   `;
@@ -1068,9 +1072,11 @@ function renderAssistantAttachmentStatusCard(params: {
           >${params.badge}</span
         >
       </div>
-      ${params.reason
-        ? html`<div class="chat-assistant-attachment-card__reason">${params.reason}</div>`
-        : nothing}
+      ${
+        params.reason
+          ? html`<div class="chat-assistant-attachment-card__reason">${params.reason}</div>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -1122,22 +1128,28 @@ function renderAssistantAttachments(
             <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
               <div class="chat-assistant-attachment-card__header">
                 <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
-                ${!attachmentUrl
-                  ? html`<span
+                ${
+                  !attachmentUrl
+                    ? html`<span
                       class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
                       >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
                     >`
-                  : attachment.isVoiceNote
-                    ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
-                    : nothing}
+                    : attachment.isVoiceNote
+                      ? html`
+                          <span class="chat-assistant-attachment-badge">Voice note</span>
+                        `
+                      : nothing
+                }
               </div>
-              ${attachmentUrl
-                ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>`
-                : availability.status === "unavailable"
-                  ? html`<div class="chat-assistant-attachment-card__reason">
+              ${
+                attachmentUrl
+                  ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>`
+                  : availability.status === "unavailable"
+                    ? html`<div class="chat-assistant-attachment-card__reason">
                       ${availability.reason}
                     </div>`
-                  : nothing}
+                    : nothing
+              }
             </div>
           `;
         }
@@ -1392,18 +1404,21 @@ function renderGroupedMessage(
   return html`
     <div class="${bubbleClasses}">
       ${renderReplyPill(normalizedMessage.replyTarget)}
-      ${hasActions
-        ? html`<div class="chat-bubble-actions">
+      ${
+        hasActions
+          ? html`<div class="chat-bubble-actions">
             ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
             ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
           </div>`
-        : nothing}
-      ${isToolMessage
-        ? html`
+          : nothing
+      }
+      ${
+        isToolMessage
+          ? html`
             <div
-              class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${toolMessageExpanded
-                ? "is-open"
-                : ""}"
+              class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${
+                toolMessageExpanded ? "is-open" : ""
+              }"
             >
               <button
                 class="chat-tool-msg-summary"
@@ -1413,14 +1428,17 @@ function renderGroupedMessage(
               >
                 <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
                 <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
-                ${toolSummaryLabel
-                  ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
-                  : toolPreview
-                    ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
-                    : nothing}
+                ${
+                  toolSummaryLabel
+                    ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
+                    : toolPreview
+                      ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
+                      : nothing
+                }
               </button>
-              ${toolMessageExpanded
-                ? html`
+              ${
+                toolMessageExpanded
+                  ? html`
                     <div class="chat-tool-msg-body">
                       ${renderMessageImages(images, imageRenderOptions)}
                       ${renderAssistantAttachments(
@@ -1430,13 +1448,16 @@ function renderGroupedMessage(
                         opts.assistantAttachmentAuthToken,
                         opts.onRequestUpdate,
                       )}
-                      ${reasoningMarkdown
-                        ? html`<div class="chat-thinking">
+                      ${
+                        reasoningMarkdown
+                          ? html`<div class="chat-thinking">
                             ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                           </div>`
-                        : nothing}
-                      ${jsonResult
-                        ? html`<details
+                          : nothing
+                      }
+                      ${
+                        jsonResult
+                          ? html`<details
                             class="chat-json-collapse"
                             ?open=${Boolean(opts.autoExpandToolCalls)}
                           >
@@ -1448,36 +1469,40 @@ function renderGroupedMessage(
                             </summary>
                             <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                           </details>`
-                        : markdown
-                          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                          : markdown
+                            ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                               ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
                             </div>`
-                          : nothing}
-                      ${hasToolCards
-                        ? singleToolCard && !markdown && !hasImages
-                          ? renderExpandedToolCardContent(
-                              singleToolCard,
-                              onOpenSidebar,
-                              opts.canvasHostUrl,
-                              opts.embedSandboxMode ?? "scripts",
-                              opts.allowExternalEmbedUrls ?? false,
-                            )
-                          : renderInlineToolCards(toolCards, {
-                              messageKey,
-                              onOpenSidebar,
-                              isToolExpanded: opts.isToolExpanded,
-                              onToggleToolExpanded: opts.onToggleToolExpanded,
-                              canvasHostUrl: opts.canvasHostUrl,
-                              embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-                              allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-                            })
-                        : nothing}
+                            : nothing
+                      }
+                      ${
+                        hasToolCards
+                          ? singleToolCard && !markdown && !hasImages
+                            ? renderExpandedToolCardContent(
+                                singleToolCard,
+                                onOpenSidebar,
+                                opts.canvasHostUrl,
+                                opts.embedSandboxMode ?? "scripts",
+                                opts.allowExternalEmbedUrls ?? false,
+                              )
+                            : renderInlineToolCards(toolCards, {
+                                messageKey,
+                                onOpenSidebar,
+                                isToolExpanded: opts.isToolExpanded,
+                                onToggleToolExpanded: opts.onToggleToolExpanded,
+                                canvasHostUrl: opts.canvasHostUrl,
+                                embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                                allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                              })
+                          : nothing
+                      }
                     </div>
                   `
-                : nothing}
+                  : nothing
+              }
             </div>
           `
-        : html`
+          : html`
             ${renderMessageImages(images, imageRenderOptions)}
             ${renderAssistantAttachments(
               visibleAttachments,
@@ -1486,47 +1511,56 @@ function renderGroupedMessage(
               opts.assistantAttachmentAuthToken,
               opts.onRequestUpdate,
             )}
-            ${reasoningMarkdown
-              ? html`<div class="chat-thinking">
+            ${
+              reasoningMarkdown
+                ? html`<div class="chat-thinking">
                   ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                 </div>`
-              : nothing}
-            ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
-              ? html`${assistantViewBlocks.map(
-                  (block) => html`${renderToolPreview(block.preview, "chat_message", {
-                    onOpenSidebar,
-                    rawText: block.rawText ?? null,
-                    canvasHostUrl: opts.canvasHostUrl,
-                    embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-                  })}
+                : nothing
+            }
+            ${
+              normalizedRole === "assistant" && assistantViewBlocks.length > 0
+                ? html`${assistantViewBlocks.map(
+                    (block) => html`${renderToolPreview(block.preview, "chat_message", {
+                      onOpenSidebar,
+                      rawText: block.rawText ?? null,
+                      canvasHostUrl: opts.canvasHostUrl,
+                      embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                    })}
                   ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
-                )}`
-              : nothing}
-            ${jsonResult
-              ? html`<details class="chat-json-collapse">
+                  )}`
+                : nothing
+            }
+            ${
+              jsonResult
+                ? html`<details class="chat-json-collapse">
                   <summary class="chat-json-summary">
                     <span class="chat-json-badge">JSON</span>
                     <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
                   </summary>
                   <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
-              : markdown
-                ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                : markdown
+                  ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                     ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
                   </div>`
-                : nothing}
-            ${hasToolCards
-              ? renderInlineToolCards(toolCards, {
-                  messageKey,
-                  onOpenSidebar,
-                  isToolExpanded: opts.isToolExpanded,
-                  onToggleToolExpanded: opts.onToggleToolExpanded,
-                  canvasHostUrl: opts.canvasHostUrl,
-                  embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-                  allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-                })
-              : nothing}
-          `}
+                  : nothing
+            }
+            ${
+              hasToolCards
+                ? renderInlineToolCards(toolCards, {
+                    messageKey,
+                    onOpenSidebar,
+                    isToolExpanded: opts.isToolExpanded,
+                    onToggleToolExpanded: opts.onToggleToolExpanded,
+                    canvasHostUrl: opts.canvasHostUrl,
+                    embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                    allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                  })
+                : nothing
+            }
+          `
+      }
     </div>
   `;
 }

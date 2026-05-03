@@ -53,17 +53,19 @@ export function renderDebug(props: DebugProps) {
         <div class="stack" style="margin-top: 12px;">
           <div>
             <div class="muted">${t("debug.status")}</div>
-            ${securitySummary
-              ? html`<div class="callout ${securityTone}" style="margin-top: 8px;">
+            ${
+              securitySummary
+                ? html`<div class="callout ${securityTone}" style="margin-top: 8px;">
                   ${t("debug.security.audit")}:
-                  ${securityLabel}${info > 0
-                    ? ` · ${t("debug.security.info", { count: String(info) })}`
-                    : ""}.
+                  ${securityLabel}${
+                    info > 0 ? ` · ${t("debug.security.info", { count: String(info) })}` : ""
+                  }.
                   ${t("debug.security.runPrefix")}
                   <span class="mono">openclaw security audit --deep</span>
                   ${t("debug.security.runSuffix")}
                 </div>`
-              : nothing}
+                : nothing
+            }
             <pre class="code-block">${JSON.stringify(props.status ?? {}, null, 2)}</pre>
           </div>
           <div>
@@ -88,9 +90,11 @@ export function renderDebug(props: DebugProps) {
               @change=${(e: Event) =>
                 props.onCallMethodChange((e.target as HTMLSelectElement).value)}
             >
-              ${!props.callMethod
-                ? html` <option value="" disabled>${t("debug.selectMethod")}</option> `
-                : nothing}
+              ${
+                !props.callMethod
+                  ? html` <option value="" disabled>${t("debug.selectMethod")}</option> `
+                  : nothing
+              }
               ${props.methods.map((m) => html`<option value=${m}>${m}</option>`)}
             </select>
           </label>
@@ -107,12 +111,16 @@ export function renderDebug(props: DebugProps) {
         <div class="row" style="margin-top: 12px;">
           <button class="btn primary" @click=${props.onCall}>${t("common.call")}</button>
         </div>
-        ${props.callError
-          ? html`<div class="callout danger" style="margin-top: 12px;">${props.callError}</div>`
-          : nothing}
-        ${props.callResult
-          ? html`<pre class="code-block" style="margin-top: 12px;">${props.callResult}</pre>`
-          : nothing}
+        ${
+          props.callError
+            ? html`<div class="callout danger" style="margin-top: 12px;">${props.callError}</div>`
+            : nothing
+        }
+        ${
+          props.callResult
+            ? html`<pre class="code-block" style="margin-top: 12px;">${props.callResult}</pre>`
+            : nothing
+        }
       </div>
     </section>
 
@@ -127,9 +135,10 @@ ${JSON.stringify(props.models ?? [], null, 2)}</pre
     <section class="card" style="margin-top: 18px;">
       <div class="card-title">${t("debug.eventLogTitle")}</div>
       <div class="card-sub">${t("debug.eventLogSubtitle")}</div>
-      ${props.eventLog.length === 0
-        ? html` <div class="muted" style="margin-top: 12px">${t("debug.noEvents")}</div> `
-        : html`
+      ${
+        props.eventLog.length === 0
+          ? html` <div class="muted" style="margin-top: 12px">${t("debug.noEvents")}</div> `
+          : html`
             <div class="list debug-event-log" style="margin-top: 12px;">
               ${props.eventLog.map(
                 (evt) => html`
@@ -147,7 +156,8 @@ ${formatEventPayload(evt.payload)}</pre
                 `,
               )}
             </div>
-          `}
+          `
+      }
     </section>
   `;
 }

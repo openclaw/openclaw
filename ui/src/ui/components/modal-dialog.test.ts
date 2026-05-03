@@ -45,10 +45,7 @@ function restoreDescriptor(name: "showModal" | "close", descriptor?: PropertyDes
 async function renderModal() {
   render(
     html`
-      <openclaw-modal-dialog
-        label="Confirm action"
-        description="Review the operation before continuing."
-      >
+      <openclaw-modal-dialog label="Confirm action" description="Review the operation before continuing.">
         <section>
           <h2 id="modal-title">Confirm action</h2>
           <p id="modal-description">Review the operation before continuing.</p>

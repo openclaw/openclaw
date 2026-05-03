@@ -42,14 +42,18 @@ export function renderTelegramCard(params: {
           <div>
             <span class="label">${t("common.lastInbound")}</span>
             <span
-              >${account.lastInboundAt
-                ? formatRelativeTimestamp(account.lastInboundAt)
-                : t("common.na")}</span
+              >${
+                account.lastInboundAt
+                  ? formatRelativeTimestamp(account.lastInboundAt)
+                  : t("common.na")
+              }</span
             >
           </div>
-          ${account.lastError
-            ? html` <div class="account-card-error">${account.lastError}</div> `
-            : nothing}
+          ${
+            account.lastError
+              ? html` <div class="account-card-error">${account.lastError}</div> `
+              : nothing
+          }
         </div>
       </div>
     `;
@@ -66,15 +70,19 @@ export function renderTelegramCard(params: {
           ${telegramAccounts.map((account) => renderAccountCard(account))}
         </div>
 
-        ${telegram?.lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">${telegram.lastError}</div>`
-          : nothing}
-        ${telegram?.probe
-          ? html`<div class="callout" style="margin-top: 12px;">
+        ${
+          telegram?.lastError
+            ? html`<div class="callout danger" style="margin-top: 12px;">${telegram.lastError}</div>`
+            : nothing
+        }
+        ${
+          telegram?.probe
+            ? html`<div class="callout" style="margin-top: 12px;">
               ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
               ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
             </div>`
-          : nothing}
+            : nothing
+        }
         ${renderChannelConfigSection({ channelId: "telegram", props })}
 
         <div class="row" style="margin-top: 12px;">

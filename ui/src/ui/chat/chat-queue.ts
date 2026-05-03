@@ -23,20 +23,27 @@ export function renderChatQueue(props: ChatQueueProps) {
               class="chat-queue__item ${item.kind === "steered" ? "chat-queue__item--steered" : ""}"
             >
               <div class="chat-queue__main">
-                ${item.kind === "steered"
-                  ? html`<span class="chat-queue__badge">Steered</span>`
-                  : nothing}
+                ${
+                  item.kind === "steered"
+                    ? html`
+                        <span class="chat-queue__badge">Steered</span>
+                      `
+                    : nothing
+                }
                 <div class="chat-queue__text">
-                  ${item.text ||
-                  (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                  ${
+                    item.text ||
+                    (item.attachments?.length ? `Image (${item.attachments.length})` : "")
+                  }
                 </div>
               </div>
               <div class="chat-queue__actions">
-                ${props.canAbort &&
-                props.onQueueSteer &&
-                item.kind !== "steered" &&
-                !item.localCommandName
-                  ? html`
+                ${
+                  props.canAbort &&
+                  props.onQueueSteer &&
+                  item.kind !== "steered" &&
+                  !item.localCommandName
+                    ? html`
                       <button
                         class="btn chat-queue__steer"
                         type="button"
@@ -48,7 +55,8 @@ export function renderChatQueue(props: ChatQueueProps) {
                         <span>Steer</span>
                       </button>
                     `
-                  : nothing}
+                    : nothing
+                }
                 <button
                   class="btn chat-queue__remove"
                   type="button"

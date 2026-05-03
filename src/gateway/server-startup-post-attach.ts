@@ -318,6 +318,24 @@ export async function startGatewaySidecars(params: {
     }
   });
 
+  await measureStartup(params.startupTrace, "sidecars.session-archive", async () => {
+    try {
+      const [{ resolveStateDir }, { sweepSessionArchiveFiles }] = await Promise.all([
+        import("../config/paths.js"),
+        import("./session-archive-cleanup.js"),
+      ]);
+      const stateDir = resolveStateDir(process.env);
+      const archiveResult = await sweepSessionArchiveFiles({ stateDir, cfg: params.cfg });
+      if (archiveResult.removed > 0) {
+        params.log.warn(
+          `session archive cleanup: removed ${archiveResult.removed} stale files across ${archiveResult.directories} directories`,
+        );
+      }
+    } catch (err) {
+      params.log.warn(`session archive cleanup failed on startup: ${String(err)}`);
+    }
+  });
+
   await measureStartup(params.startupTrace, "sidecars.gmail-watch", async () => {
     if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
       const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");

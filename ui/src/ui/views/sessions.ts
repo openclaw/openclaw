@@ -289,9 +289,11 @@ export function renderSessions(props: SessionsProps) {
         <div>
           <div class="card-title">${t("sessionsView.title")}</div>
           <div class="card-sub">
-            ${props.result
-              ? t("sessionsView.store", { path: props.result.path })
-              : t("sessionsView.subtitle")}
+            ${
+              props.result
+                ? t("sessionsView.store", { path: props.result.path })
+                : t("sessionsView.subtitle")
+            }
           </div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -359,9 +361,11 @@ export function renderSessions(props: SessionsProps) {
         </label>
       </div>
 
-      ${props.error
-        ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
-        : nothing}
+      ${
+        props.error
+          ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
+          : nothing
+      }
 
       <div class="data-table-wrapper">
         <div class="data-table-toolbar">
@@ -375,8 +379,9 @@ export function renderSessions(props: SessionsProps) {
           </div>
         </div>
 
-        ${props.selectedKeys.size > 0
-          ? html`
+        ${
+          props.selectedKeys.size > 0
+            ? html`
               <div class="data-table-bulk-bar">
                 <span
                   >${t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span
@@ -393,20 +398,26 @@ export function renderSessions(props: SessionsProps) {
                 </button>
               </div>
             `
-          : nothing}
+            : nothing
+        }
 
         <div class="data-table-container">
           <table class="data-table">
             <thead>
               <tr>
                 <th class="data-table-checkbox-col">
-                  ${paginated.length > 0
-                    ? html`<input
+                  ${
+                    paginated.length > 0
+                      ? html`<input
                         type="checkbox"
-                        .checked=${paginated.length > 0 &&
-                        paginated.every((r) => props.selectedKeys.has(r.key))}
-                        .indeterminate=${paginated.some((r) => props.selectedKeys.has(r.key)) &&
-                        !paginated.every((r) => props.selectedKeys.has(r.key))}
+                        .checked=${
+                          paginated.length > 0 &&
+                          paginated.every((r) => props.selectedKeys.has(r.key))
+                        }
+                        .indeterminate=${
+                          paginated.some((r) => props.selectedKeys.has(r.key)) &&
+                          !paginated.every((r) => props.selectedKeys.has(r.key))
+                        }
                         @change=${() => {
                           const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
                           if (allSelected) {
@@ -417,7 +428,8 @@ export function renderSessions(props: SessionsProps) {
                         }}
                         aria-label=${t("sessionsView.selectAllOnPage")}
                       />`
-                    : nothing}
+                      : nothing
+                  }
                 </th>
                 ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
                 <th>${t("sessionsView.label")}</th>
@@ -432,8 +444,9 @@ export function renderSessions(props: SessionsProps) {
               </tr>
             </thead>
             <tbody>
-              ${paginated.length === 0
-                ? html`
+              ${
+                paginated.length === 0
+                  ? html`
                     <tr>
                       <td
                         colspan="11"
@@ -443,13 +456,15 @@ export function renderSessions(props: SessionsProps) {
                       </td>
                     </tr>
                   `
-                : paginated.flatMap((row) => renderRows(row, props))}
+                  : paginated.flatMap((row) => renderRows(row, props))
+              }
             </tbody>
           </table>
         </div>
 
-        ${totalRows > 0
-          ? html`
+        ${
+          totalRows > 0
+            ? html`
               <div class="data-table-pagination">
                 <div class="data-table-pagination__info">
                   ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
@@ -476,7 +491,8 @@ export function renderSessions(props: SessionsProps) {
                 </div>
               </div>
             `
-          : nothing}
+            : nothing
+        }
       </div>
     </section>
   `;
@@ -542,8 +558,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}
           title=${keyCellTitle}
         >
-          ${canLink
-            ? html`<a
+          ${
+            canLink
+              ? html`<a
                 href=${chatUrl}
                 class="session-link"
                 @click=${(e: MouseEvent) => {
@@ -564,10 +581,13 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                 }}
                 >${friendlyKeyLabel ?? row.key}</a
               >`
-            : (friendlyKeyLabel ?? row.key)}
-          ${showDisplayName
-            ? html`<span class="muted session-key-display-name">${displayName}</span>`
-            : nothing}
+              : (friendlyKeyLabel ?? row.key)
+          }
+          ${
+            showDisplayName
+              ? html`<span class="muted session-key-display-name">${displayName}</span>`
+              : nothing
+          }
         </div>
       </td>
       <td>
@@ -590,20 +610,24 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td>
         <div style="display: grid; gap: 6px;">
           <span class="muted" style="font-size: 12px;">
-            ${checkpointCount > 0
-              ? checkpointCount === 1
-                ? t("sessionsView.checkpoint", { count: String(checkpointCount) })
-                : t("sessionsView.checkpoints", { count: String(checkpointCount) })
-              : t("common.none")}
+            ${
+              checkpointCount > 0
+                ? checkpointCount === 1
+                  ? t("sessionsView.checkpoint", { count: String(checkpointCount) })
+                  : t("sessionsView.checkpoints", { count: String(checkpointCount) })
+                : t("common.none")
+            }
           </span>
-          ${latestCheckpoint
-            ? html`
+          ${
+            latestCheckpoint
+              ? html`
                 <span style="font-size: 12px;">
                   ${formatCheckpointReason(latestCheckpoint.reason)} ·
                   ${formatRelativeTimestamp(latestCheckpoint.createdAt)}
                 </span>
               `
-            : nothing}
+              : nothing
+          }
           <button
             class="btn btn--sm"
             ?disabled=${props.checkpointLoadingKey === row.key}
@@ -691,13 +715,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
               <div
                 style="padding: 14px 16px; border-top: 1px solid var(--border); background: var(--surface-2, rgba(127, 127, 127, 0.05));"
               >
-                ${props.checkpointLoadingKey === row.key
-                  ? html`<div class="muted">${t("sessionsView.loadingCheckpoints")}</div>`
-                  : checkpointError
-                    ? html`<div class="callout danger">${checkpointError}</div>`
-                    : checkpointItems.length === 0
-                      ? html`<div class="muted">${t("sessionsView.noCheckpoints")}</div>`
-                      : html`
+                ${
+                  props.checkpointLoadingKey === row.key
+                    ? html`<div class="muted">${t("sessionsView.loadingCheckpoints")}</div>`
+                    : checkpointError
+                      ? html`<div class="callout danger">${checkpointError}</div>`
+                      : checkpointItems.length === 0
+                        ? html`<div class="muted">${t("sessionsView.noCheckpoints")}</div>`
+                        : html`
                           <div style="display: grid; gap: 10px;">
                             ${checkpointItems.map(
                               (checkpoint) => html`
@@ -715,16 +740,19 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                                       ${formatCheckpointDelta(checkpoint)}
                                     </span>
                                   </div>
-                                  ${checkpoint.summary
-                                    ? html`<div style="white-space: pre-wrap;">
+                                  ${
+                                    checkpoint.summary
+                                      ? html`<div style="white-space: pre-wrap;">
                                         ${checkpoint.summary}
                                       </div>`
-                                    : html`<div class="muted">${t("sessionsView.noSummary")}</div>`}
+                                      : html`<div class="muted">${t("sessionsView.noSummary")}</div>`
+                                  }
                                   <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                                     <button
                                       class="btn btn--sm"
-                                      ?disabled=${props.checkpointBusyKey ===
-                                      checkpoint.checkpointId}
+                                      ?disabled=${
+                                        props.checkpointBusyKey === checkpoint.checkpointId
+                                      }
                                       @click=${() =>
                                         props.onBranchFromCheckpoint(
                                           row.key,
@@ -735,8 +763,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                                     </button>
                                     <button
                                       class="btn btn--sm"
-                                      ?disabled=${props.checkpointBusyKey ===
-                                      checkpoint.checkpointId}
+                                      ?disabled=${
+                                        props.checkpointBusyKey === checkpoint.checkpointId
+                                      }
                                       @click=${() =>
                                         props.onRestoreCheckpoint(row.key, checkpoint.checkpointId)}
                                     >
@@ -747,7 +776,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                               `,
                             )}
                           </div>
-                        `}
+                        `
+                }
               </div>
             </td>
           </tr>`,

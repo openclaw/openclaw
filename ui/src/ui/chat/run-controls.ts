@@ -18,9 +18,10 @@ export type ChatRunControlsProps = {
 export function renderChatRunControls(props: ChatRunControlsProps) {
   return html`
     <div class="agent-chat__toolbar-right">
-      ${props.canAbort
-        ? nothing
-        : html`
+      ${
+        props.canAbort
+          ? nothing
+          : html`
             <button
               class="btn btn--ghost"
               @click=${props.onNewSession}
@@ -29,7 +30,8 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
             >
               ${icons.plus}
             </button>
-          `}
+          `
+      }
       <button
         class="btn btn--ghost"
         @click=${props.onExport}
@@ -40,8 +42,9 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
         ${icons.download}
       </button>
 
-      ${props.canAbort
-        ? html`
+      ${
+        props.canAbort
+          ? html`
             <button
               class="chat-send-btn"
               @click=${() => {
@@ -65,7 +68,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
               ${icons.stop}
             </button>
           `
-        : html`
+          : html`
             <button
               class="chat-send-btn"
               @click=${() => {
@@ -80,7 +83,8 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
             >
               ${icons.send}
             </button>
-          `}
+          `
+      }
     </div>
   `;
 }

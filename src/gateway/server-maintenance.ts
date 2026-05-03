@@ -1,4 +1,5 @@
 import type { HealthSummary } from "../commands/health.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
@@ -13,6 +14,7 @@ import {
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { sweepSessionArchiveFiles } from "./session-archive-cleanup.js";
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -45,11 +47,15 @@ export function startGatewayMaintenanceTimers(params: {
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   mediaCleanupTtlMs?: number;
+  sessionArchiveCleanupStateDir?: string;
+  sessionArchiveCleanupCfg?: OpenClawConfig;
+  sessionArchiveCleanupLog?: { warn: (msg: string) => void };
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
+  sessionArchiveCleanup: ReturnType<typeof setInterval> | null;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -164,8 +170,45 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   }, 60_000);
 
+  // Periodic session archive cleanup (runs regardless of media config).
+  let sessionArchiveCleanup: ReturnType<typeof setInterval> | null = null;
+  if (params.sessionArchiveCleanupStateDir) {
+    const stateDir = params.sessionArchiveCleanupStateDir;
+    const archiveCfg = params.sessionArchiveCleanupCfg;
+    const archiveLog = params.sessionArchiveCleanupLog;
+    let sessionArchiveCleanupInFlight: Promise<void> | null = null;
+    const runSessionArchiveCleanup = () => {
+      if (sessionArchiveCleanupInFlight) {
+        return sessionArchiveCleanupInFlight;
+      }
+      sessionArchiveCleanupInFlight = sweepSessionArchiveFiles({ stateDir, cfg: archiveCfg })
+        .then((result) => {
+          if (result.removed > 0) {
+            archiveLog?.warn(`session archive cleanup: removed ${result.removed} stale files`);
+          }
+        })
+        .catch((err) => {
+          params.logHealth.error(`session archive cleanup failed: ${formatError(err)}`);
+        })
+        .finally(() => {
+          sessionArchiveCleanupInFlight = null;
+        });
+      return sessionArchiveCleanupInFlight;
+    };
+
+    sessionArchiveCleanup = setInterval(() => {
+      void runSessionArchiveCleanup();
+    }, 60 * 60_000);
+  }
+
   if (typeof params.mediaCleanupTtlMs !== "number") {
-    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
+    return {
+      tickInterval,
+      healthInterval,
+      dedupeCleanup,
+      mediaCleanup: null,
+      sessionArchiveCleanup,
+    };
   }
 
   let mediaCleanupInFlight: Promise<void> | null = null;
@@ -192,5 +235,5 @@ export function startGatewayMaintenanceTimers(params: {
 
   void runMediaCleanup();
 
-  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup };
+  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup, sessionArchiveCleanup };
 }

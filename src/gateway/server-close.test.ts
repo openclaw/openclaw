@@ -88,6 +88,7 @@ function createGatewayCloseTestDeps(
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: null,
+    sessionArchiveCleanup: null,
     agentUnsub: null,
     heartbeatUnsub: null,
     transcriptUnsub: null,

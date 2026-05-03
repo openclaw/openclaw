@@ -86,6 +86,9 @@ export async function startGatewayEarlyRuntime(params: {
   agentRunSeq: Parameters<typeof startGatewayMaintenanceTimers>[0]["agentRunSeq"];
   nodeSendToSession: Parameters<typeof startGatewayMaintenanceTimers>[0]["nodeSendToSession"];
   mediaCleanupTtlMs?: number;
+  sessionArchiveCleanupStateDir?: string;
+  sessionArchiveCleanupCfg?: OpenClawConfig;
+  sessionArchiveCleanupLog?: { warn: (msg: string) => void };
   skillsRefreshDelayMs: number;
   getSkillsRefreshTimer: () => ReturnType<typeof setTimeout> | null;
   setSkillsRefreshTimer: (timer: ReturnType<typeof setTimeout> | null) => void;
@@ -140,6 +143,15 @@ export async function startGatewayEarlyRuntime(params: {
         nodeSendToSession: params.nodeSendToSession,
         ...(typeof params.mediaCleanupTtlMs === "number"
           ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }
+          : {}),
+        ...(params.sessionArchiveCleanupStateDir
+          ? { sessionArchiveCleanupStateDir: params.sessionArchiveCleanupStateDir }
+          : {}),
+        ...(params.sessionArchiveCleanupCfg
+          ? { sessionArchiveCleanupCfg: params.sessionArchiveCleanupCfg }
+          : {}),
+        ...(params.sessionArchiveCleanupLog
+          ? { sessionArchiveCleanupLog: params.sessionArchiveCleanupLog }
           : {}),
       });
 

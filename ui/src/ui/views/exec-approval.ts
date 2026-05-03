@@ -51,11 +51,13 @@ function renderExecBody(request: ExecApprovalRequestPayload) {
 
 function renderPluginBody(active: ExecApprovalRequest) {
   return html`
-    ${active.pluginDescription
-      ? html`<pre class="exec-approval-command mono" style="white-space:pre-wrap">
+    ${
+      active.pluginDescription
+        ? html`<pre class="exec-approval-command mono" style="white-space:pre-wrap">
 ${active.pluginDescription}</pre
         >`
-      : nothing}
+        : nothing
+    }
     <div class="exec-approval-meta">
       ${renderMetaRow(t("execApproval.labels.severity"), active.pluginSeverity)}
       ${renderMetaRow(t("execApproval.labels.plugin"), active.pluginId)}
@@ -96,16 +98,20 @@ export function renderExecApprovalPrompt(state: AppViewState) {
             <div id=${titleId} class="exec-approval-title">${title}</div>
             <div id=${descriptionId} class="exec-approval-sub">${remaining}</div>
           </div>
-          ${queueCount > 1
-            ? html`<div class="exec-approval-queue">
+          ${
+            queueCount > 1
+              ? html`<div class="exec-approval-queue">
                 ${t("execApproval.pending", { count: String(queueCount) })}
               </div>`
-            : nothing}
+              : nothing
+          }
         </div>
         ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
-        ${state.execApprovalError
-          ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
-          : nothing}
+        ${
+          state.execApprovalError
+            ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
+            : nothing
+        }
         <div class="exec-approval-actions">
           <button
             class="btn primary"

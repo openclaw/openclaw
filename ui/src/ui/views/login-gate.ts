@@ -85,9 +85,9 @@ export function renderLoginGate(state: AppViewState) {
               <button
                 type="button"
                 class="btn btn--icon ${state.loginShowGatewayPassword ? "active" : ""}"
-                title=${state.loginShowGatewayPassword
-                  ? t("login.hidePassword")
-                  : t("login.showPassword")}
+                title=${
+                  state.loginShowGatewayPassword ? t("login.hidePassword") : t("login.showPassword")
+                }
                 aria-label=${t("login.togglePasswordVisibility")}
                 aria-pressed=${state.loginShowGatewayPassword}
                 @click=${() => {
@@ -102,11 +102,13 @@ export function renderLoginGate(state: AppViewState) {
             ${t("common.connect")}
           </button>
         </div>
-        ${state.lastError
-          ? html`<div class="callout danger" style="margin-top: 14px;">
+        ${
+          state.lastError
+            ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${state.lastError}</div>
             </div>`
-          : ""}
+            : ""
+        }
         <div class="login-gate__help">
           <div class="login-gate__help-title">${t("overview.connection.title")}</div>
           <ol class="login-gate__steps">

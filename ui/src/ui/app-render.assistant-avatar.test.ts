@@ -22,12 +22,17 @@ vi.mock("../local-storage.ts", () => ({
 vi.mock("./views/config-quick.ts", () => ({
   renderQuickSettings: (props: QuickSettingsProps) => {
     quickSettingsProps.current = props;
-    return html`<div data-testid="quick-settings"></div>`;
+    return html`
+      <div data-testid="quick-settings"></div>
+    `;
   },
 }));
 
 vi.mock("./views/chat.ts", () => ({
-  renderChat: () => html`<div data-testid="chat"></div>`,
+  renderChat: () =>
+    html`
+      <div data-testid="chat"></div>
+    `,
 }));
 
 vi.mock("./icons.ts", () => ({

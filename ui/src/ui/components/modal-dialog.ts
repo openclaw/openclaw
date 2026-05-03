@@ -109,12 +109,16 @@ export class OpenClawModalDialog extends LitElement {
         @cancel=${this.handleCancel}
         @keydown=${this.handleKeydown}
       >
-        ${this.label
-          ? html`<span id=${labelId} class="visually-hidden">${this.label}</span>`
-          : nothing}
-        ${this.description
-          ? html`<span id=${descriptionId} class="visually-hidden">${this.description}</span>`
-          : nothing}
+        ${
+          this.label
+            ? html`<span id=${labelId} class="visually-hidden">${this.label}</span>`
+            : nothing
+        }
+        ${
+          this.description
+            ? html`<span id=${descriptionId} class="visually-hidden">${this.description}</span>`
+            : nothing
+        }
         <slot></slot>
       </dialog>
     `;

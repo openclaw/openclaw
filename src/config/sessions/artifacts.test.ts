@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatSessionArchiveTimestamp,
   isCompactionCheckpointTranscriptFileName,
+  isOrphanedSessionTmpFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isTrajectoryPointerArtifactName,
@@ -110,5 +111,20 @@ describe("session artifact helpers", () => {
     expect(parseSessionArchiveTimestamp(file, "deleted")).toBe(now);
     expect(parseSessionArchiveTimestamp(file, "reset")).toBeNull();
     expect(parseSessionArchiveTimestamp("keep.deleted.keep.jsonl", "deleted")).toBeNull();
+  });
+
+  it("detects orphaned .tmp files from writeTextAtomic", () => {
+    expect(
+      isOrphanedSessionTmpFileName("sessions.json.550e8400-e29b-41d4-a716-446655440000.tmp"),
+    ).toBe(true);
+    expect(isOrphanedSessionTmpFileName("abc.jsonl.a1b2c3d4-e5f6-7890-abcd-ef1234567890.tmp")).toBe(
+      true,
+    );
+    // Bare .tmp without UUID — not an orphan from writeTextAtomic.
+    expect(isOrphanedSessionTmpFileName("foo.tmp")).toBe(false);
+    expect(isOrphanedSessionTmpFileName("foo.bar.tmp")).toBe(false);
+    // Normal session files are not tmp artifacts.
+    expect(isOrphanedSessionTmpFileName("abc.jsonl")).toBe(false);
+    expect(isOrphanedSessionTmpFileName("sessions.json")).toBe(false);
   });
 });

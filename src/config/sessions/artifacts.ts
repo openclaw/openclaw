@@ -101,6 +101,17 @@ function restoreSessionArchiveTimestamp(raw: string): string {
   return `${datePart}T${timePart.replace(/-/g, ":")}`;
 }
 
+/**
+ * Matches orphaned `.tmp` files left behind by `writeTextAtomic()` when the
+ * atomic rename fails or the process exits mid-write. The pattern is
+ * `{original}.{uuid}.tmp` where the UUID is a standard v4 format.
+ */
+const ORPHAN_TMP_RE = /\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/;
+
+export function isOrphanedSessionTmpFileName(fileName: string): boolean {
+  return ORPHAN_TMP_RE.test(fileName);
+}
+
 export function parseSessionArchiveTimestamp(
   fileName: string,
   reason: SessionArchiveReason,

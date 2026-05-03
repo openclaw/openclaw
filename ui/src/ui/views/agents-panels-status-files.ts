@@ -250,19 +250,24 @@ export function renderAgentChannels(params: {
         <div class="muted" style="margin-top: 8px;">
           ${t("agents.channels.lastRefresh", { time: lastSuccessLabel })}
         </div>
-        ${params.error
-          ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
-          : nothing}
-        ${!params.snapshot
-          ? html`
+        ${
+          params.error
+            ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
+            : nothing
+        }
+        ${
+          !params.snapshot
+            ? html`
               <div class="callout info" style="margin-top: 12px">
                 ${t("agents.channels.loadHint")}
               </div>
             `
-          : nothing}
-        ${entries.length === 0
-          ? html` <div class="muted" style="margin-top: 16px">${t("agents.channels.empty")}</div>`
-          : html`
+            : nothing
+        }
+        ${
+          entries.length === 0
+            ? html` <div class="muted" style="margin-top: 16px">${t("agents.channels.empty")}</div>`
+            : html`
               <div class="list" style="margin-top: 16px;">
                 ${entries.map((entry) => {
                   const summary = summarizeChannelAccounts(entry.accounts);
@@ -293,8 +298,9 @@ export function renderAgentChannels(params: {
                         <div>${status}</div>
                         <div>${configLabel}</div>
                         <div>${enabled}</div>
-                        ${summary.configured === 0
-                          ? html`
+                        ${
+                          summary.configured === 0
+                            ? html`
                               <div>
                                 <a
                                   href="https://docs.openclaw.ai/channels"
@@ -305,16 +311,20 @@ export function renderAgentChannels(params: {
                                 >
                               </div>
                             `
-                          : nothing}
-                        ${extras.length > 0
-                          ? extras.map((extra) => html`<div>${extra.label}: ${extra.value}</div>`)
-                          : nothing}
+                            : nothing
+                        }
+                        ${
+                          extras.length > 0
+                            ? extras.map((extra) => html`<div>${extra.label}: ${extra.value}</div>`)
+                            : nothing
+                        }
                       </div>
                     </div>
                   `;
                 })}
               </div>
-            `}
+            `
+        }
       </section>
     </section>
   `;
@@ -353,11 +363,13 @@ export function renderAgentCron(params: {
           <div class="stat">
             <div class="stat-label">${t("common.enabled")}</div>
             <div class="stat-value">
-              ${params.status
-                ? params.status.enabled
-                  ? t("common.yes")
-                  : t("common.no")
-                : t("common.na")}
+              ${
+                params.status
+                  ? params.status.enabled
+                    ? t("common.yes")
+                    : t("common.no")
+                  : t("common.na")
+              }
             </div>
           </div>
           <div class="stat">
@@ -369,26 +381,31 @@ export function renderAgentCron(params: {
             <div class="stat-value">${formatNextRun(params.status?.nextWakeAtMs ?? null)}</div>
           </div>
         </div>
-        ${params.error
-          ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
-          : nothing}
+        ${
+          params.error
+            ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
+            : nothing
+        }
       </section>
     </section>
     <section class="card">
       <div class="card-title">${t("agents.cronPanel.agentJobsTitle")}</div>
       <div class="card-sub">${t("agents.cronPanel.agentJobsSubtitle")}</div>
-      ${jobs.length === 0
-        ? html` <div class="muted" style="margin-top: 16px">${t("agents.cronPanel.noJobs")}</div>`
-        : html`
+      ${
+        jobs.length === 0
+          ? html` <div class="muted" style="margin-top: 16px">${t("agents.cronPanel.noJobs")}</div>`
+          : html`
             <div class="list" style="margin-top: 16px;">
               ${jobs.map(
                 (job) => html`
                   <div class="list-item">
                     <div class="list-main">
                       <div class="list-title">${job.name}</div>
-                      ${job.description
-                        ? html`<div class="list-sub">${job.description}</div>`
-                        : nothing}
+                      ${
+                        job.description
+                          ? html`<div class="list-sub">${job.description}</div>`
+                          : nothing
+                      }
                       <div class="chip-row" style="margin-top: 6px;">
                         <span class="chip">${formatCronSchedule(job)}</span>
                         <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
@@ -413,7 +430,8 @@ export function renderAgentCron(params: {
                 `,
               )}
             </div>
-          `}
+          `
+      }
     </section>
   `;
 }
@@ -483,46 +501,54 @@ export function renderAgentFiles(params: {
           ${params.agentFilesLoading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
-      ${list
-        ? html`<div class="muted mono" style="margin-top: 8px;">
+      ${
+        list
+          ? html`<div class="muted mono" style="margin-top: 8px;">
             ${t("agents.files.workspace")}: <span>${list.workspace}</span>
           </div>`
-        : nothing}
-      ${params.agentFilesError
-        ? html`<div class="callout danger" style="margin-top: 12px;">
+          : nothing
+      }
+      ${
+        params.agentFilesError
+          ? html`<div class="callout danger" style="margin-top: 12px;">
             ${params.agentFilesError}
           </div>`
-        : nothing}
-      ${!list
-        ? html`
+          : nothing
+      }
+      ${
+        !list
+          ? html`
             <div class="callout info" style="margin-top: 12px">${t("agents.files.loadHint")}</div>
           `
-        : files.length === 0
-          ? html` <div class="muted" style="margin-top: 16px">${t("agents.files.empty")}</div> `
-          : html`
+          : files.length === 0
+            ? html` <div class="muted" style="margin-top: 16px">${t("agents.files.empty")}</div> `
+            : html`
               <div class="agent-tabs" style="margin-top: 14px;">
                 ${files.map((file) => {
                   const isActive = active === file.name;
                   const label = file.name.replace(/\.md$/i, "");
                   return html`
                     <button
-                      class="agent-tab ${isActive ? "active" : ""} ${file.missing
-                        ? "agent-tab--missing"
-                        : ""}"
+                      class="agent-tab ${isActive ? "active" : ""} ${
+                        file.missing ? "agent-tab--missing" : ""
+                      }"
                       @click=${() => params.onSelectFile(file.name)}
                     >
-                      ${label}${file.missing
-                        ? html` <span class="agent-tab-badge">${t("agents.files.missing")}</span> `
-                        : nothing}
+                      ${label}${
+                        file.missing
+                          ? html` <span class="agent-tab-badge">${t("agents.files.missing")}</span> `
+                          : nothing
+                      }
                     </button>
                   `;
                 })}
               </div>
-              ${!activeEntry
-                ? html` <div class="muted" style="margin-top: 16px">
+              ${
+                !activeEntry
+                  ? html` <div class="muted" style="margin-top: 16px">
                     ${t("agents.files.selectFile")}
                   </div>`
-                : html`
+                  : html`
                     <div class="agent-file-header" style="margin-top: 14px;">
                       <div>
                         <div class="agent-file-sub mono">${activeEntry.path}</div>
@@ -557,13 +583,15 @@ export function renderAgentFiles(params: {
                         </button>
                       </div>
                     </div>
-                    ${activeEntry.missing
-                      ? html`
+                    ${
+                      activeEntry.missing
+                        ? html`
                           <div class="callout info" style="margin-top: 10px">
                             ${t("agents.files.missingHint")}
                           </div>
                         `
-                      : nothing}
+                        : nothing
+                    }
                     <label class="field agent-file-field" style="margin-top: 12px;">
                       <span>${t("agents.files.content")}</span>
                       <textarea
@@ -691,8 +719,10 @@ export function renderAgentFiles(params: {
                         </div>
                       </div>
                     </dialog>
-                  `}
-            `}
+                  `
+              }
+            `
+      }
     </section>
   `;
 }

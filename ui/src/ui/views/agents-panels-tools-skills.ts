@@ -367,41 +367,49 @@ export function renderAgentTools(params: {
         </div>
       </div>
 
-      ${!params.configForm
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Load the gateway config to adjust tool profiles.
-            </div>
-          `
-        : nothing}
-      ${hasAgentAllow
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              This agent is using an explicit allowlist in config. Tool overrides are managed in the
-              Config tab.
-            </div>
-          `
-        : nothing}
-      ${hasGlobalAllow
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Global tools.allow is set. Agent overrides cannot enable tools that are globally
-              blocked.
-            </div>
-          `
-        : nothing}
-      ${params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
-        ? html`
-            <div class="callout info" style="margin-top: 12px">Loading runtime tool catalog…</div>
-          `
-        : nothing}
-      ${params.toolsCatalogError
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Could not load runtime tool catalog. Showing built-in fallback list instead.
-            </div>
-          `
-        : nothing}
+      ${
+        !params.configForm
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Load the gateway config to adjust tool profiles.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        hasAgentAllow
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                This agent is using an explicit allowlist in config. Tool overrides are managed in the Config tab.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        hasGlobalAllow
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Global tools.allow is set. Agent overrides cannot enable tools that are globally blocked.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
+          ? html`
+              <div class="callout info" style="margin-top: 12px">Loading runtime tool catalog…</div>
+            `
+          : nothing
+      }
+      ${
+        params.toolsCatalogError
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Could not load runtime tool catalog. Showing built-in fallback list instead.
+              </div>
+            `
+          : nothing
+      }
 
       <div class="agent-tools-overview">
         <div class="agent-tools-overview__primary">
@@ -411,33 +419,32 @@ export function renderAgentTools(params: {
               What this agent can use in the current chat session.
               <span class="mono">${params.runtimeSessionKey || "no session"}</span>
             </div>
-            ${!params.runtimeSessionMatchesSelectedAgent
-              ? html`
-                  <div class="callout info" style="margin-top: 12px">
-                    Switch chat to this agent to view its live runtime tools.
-                  </div>
-                `
-              : params.toolsEffectiveLoading &&
-                  !params.toolsEffectiveResult &&
-                  !params.toolsEffectiveError
+            ${
+              !params.runtimeSessionMatchesSelectedAgent
                 ? html`
                     <div class="callout info" style="margin-top: 12px">
-                      Loading available tools…
+                      Switch chat to this agent to view its live runtime tools.
                     </div>
                   `
-                : params.toolsEffectiveError
+                : params.toolsEffectiveLoading &&
+                    !params.toolsEffectiveResult &&
+                    !params.toolsEffectiveError
                   ? html`
-                      <div class="callout info" style="margin-top: 12px">
-                        Could not load available tools for this session.
-                      </div>
+                      <div class="callout info" style="margin-top: 12px">Loading available tools…</div>
                     `
-                  : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
+                  : params.toolsEffectiveError
                     ? html`
                         <div class="callout info" style="margin-top: 12px">
-                          No tools are available for this session right now.
+                          Could not load available tools for this session.
                         </div>
                       `
-                    : html`
+                    : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
+                      ? html`
+                          <div class="callout info" style="margin-top: 12px">
+                            No tools are available for this session right now.
+                          </div>
+                        `
+                      : html`
                         <div class="agent-tools-runtime">
                           ${visibleEffectiveTools.map((tool) => {
                             const anchorId = toToolAnchorId(tool.id);
@@ -454,8 +461,9 @@ export function renderAgentTools(params: {
                               </a>
                             `;
                           })}
-                          ${hiddenEffectiveToolCount > 0
-                            ? html`
+                          ${
+                            hiddenEffectiveToolCount > 0
+                              ? html`
                                 <span
                                   class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
                                   title=${`${hiddenEffectiveToolCount} more live tools are available in the groups below.`}
@@ -463,9 +471,11 @@ export function renderAgentTools(params: {
                                   +${hiddenEffectiveToolCount} more live tools
                                 </span>
                               `
-                            : nothing}
+                              : nothing
+                          }
                         </div>
-                      `}
+                      `
+            }
           </div>
 
           <div class="agent-tools-pane">
@@ -536,9 +546,11 @@ export function renderAgentTools(params: {
                 <span class="agent-tools-group__summary-main">
                   <span class="agent-tools-group__title">
                     ${section.label}
-                    ${section.source === "plugin" && section.pluginId
-                      ? html`<span class="agent-pill">Plugin: ${section.pluginId}</span>`
-                      : nothing}
+                    ${
+                      section.source === "plugin" && section.pluginId
+                        ? html`<span class="agent-pill">Plugin: ${section.pluginId}</span>`
+                        : nothing
+                    }
                   </span>
                   <span class="agent-tools-group__preview" aria-label="Tool preview">
                     ${previewTools.map(
@@ -547,17 +559,21 @@ export function renderAgentTools(params: {
                           >${tool.label}</span
                         >`,
                     )}
-                    ${remainingPreviewCount > 0
-                      ? html`<span>+${remainingPreviewCount} more</span>`
-                      : nothing}
+                    ${
+                      remainingPreviewCount > 0
+                        ? html`<span>+${remainingPreviewCount} more</span>`
+                        : nothing
+                    }
                   </span>
                 </span>
                 <span class="agent-tools-group__counts">
                   <span>${formatCountLabel(section.tools.length, "Tool")}</span>
                   <span>${formatCountLabel(enabledSectionCount, "Enabled Tool")}</span>
-                  ${activeSectionCount > 0
-                    ? html`<span>${formatCountLabel(activeSectionCount, "Live Tool")}</span>`
-                    : nothing}
+                  ${
+                    activeSectionCount > 0
+                      ? html`<span>${formatCountLabel(activeSectionCount, "Live Tool")}</span>`
+                      : nothing
+                  }
                 </span>
               </summary>
               <div class="agent-tools-list agent-tools-list--stacked">
@@ -624,8 +640,9 @@ export function renderAgentTools(params: {
                             <div class="label">Source</div>
                             <div>${formatToolSourceLabel(section, tool)}</div>
                           </div>
-                          ${defaultProfiles.length > 0
-                            ? html`
+                          ${
+                            defaultProfiles.length > 0
+                              ? html`
                                 <div class="agent-tool-detail agent-tool-detail--inline">
                                   <div class="label">Default Presets</div>
                                   <div class="agent-tool-badges">
@@ -636,15 +653,18 @@ export function renderAgentTools(params: {
                                   </div>
                                 </div>
                               `
-                            : nothing}
+                              : nothing
+                          }
                           <div class="agent-tool-detail agent-tool-detail--inline">
                             <div class="label">Current Session</div>
                             <div>
-                              ${activeEntry
-                                ? `Available now via ${renderEffectiveToolBadge(activeEntry)}.`
-                                : params.runtimeSessionMatchesSelectedAgent
-                                  ? "Not available in this chat session right now."
-                                  : "Switch chat to this agent to inspect live availability."}
+                              ${
+                                activeEntry
+                                  ? `Available now via ${renderEffectiveToolBadge(activeEntry)}.`
+                                  : params.runtimeSessionMatchesSelectedAgent
+                                    ? "Not available in this chat session right now."
+                                    : "Switch chat to this agent to inspect live availability."
+                              }
                             </div>
                           </div>
                           <a class="agent-tool-jump" href="#${anchorId}"> Link to This Tool </a>
@@ -709,9 +729,11 @@ export function renderAgentSkills(params: {
           <div class="card-title">Skills</div>
           <div class="card-sub">
             Per-agent skill allowlist and workspace skills.
-            ${totalCount > 0
-              ? html`<span class="mono">${enabledCount}/${totalCount}</span>`
-              : nothing}
+            ${
+              totalCount > 0
+                ? html`<span class="mono">${enabledCount}/${totalCount}</span>`
+                : nothing
+            }
           </div>
         </div>
         <div class="row" style="gap: 8px; flex-wrap: wrap;">
@@ -762,34 +784,40 @@ export function renderAgentSkills(params: {
         </div>
       </div>
 
-      ${!params.configForm
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Load the gateway config to set per-agent skills.
-            </div>
-          `
-        : nothing}
-      ${usingAllowlist
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              This agent uses a custom skill allowlist.
-            </div>
-          `
-        : html`
-            <div class="callout info" style="margin-top: 12px">
-              All skills are enabled. Disabling any skill will create a per-agent allowlist.
-            </div>
-          `}
-      ${!reportReady && !params.loading
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Load skills for this agent to view workspace-specific entries.
-            </div>
-          `
-        : nothing}
-      ${params.error
-        ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
-        : nothing}
+      ${
+        !params.configForm
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Load the gateway config to set per-agent skills.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        usingAllowlist
+          ? html`
+              <div class="callout info" style="margin-top: 12px">This agent uses a custom skill allowlist.</div>
+            `
+          : html`
+              <div class="callout info" style="margin-top: 12px">
+                All skills are enabled. Disabling any skill will create a per-agent allowlist.
+              </div>
+            `
+      }
+      ${
+        !reportReady && !params.loading
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Load skills for this agent to view workspace-specific entries.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        params.error
+          ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
+          : nothing
+      }
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field" style="flex: 1;">
@@ -805,9 +833,12 @@ export function renderAgentSkills(params: {
         <div class="muted">${filtered.length} shown</div>
       </div>
 
-      ${filtered.length === 0
-        ? html` <div class="muted" style="margin-top: 16px">No skills found.</div> `
-        : html`
+      ${
+        filtered.length === 0
+          ? html`
+              <div class="muted" style="margin-top: 16px">No skills found.</div>
+            `
+          : html`
             <div class="agent-skills-groups" style="margin-top: 16px;">
               ${groups.map((group) =>
                 renderAgentSkillGroup(group, {
@@ -819,7 +850,8 @@ export function renderAgentSkills(params: {
                 }),
               )}
             </div>
-          `}
+          `
+      }
     </section>
   `;
 }
@@ -875,12 +907,16 @@ function renderAgentSkillRow(
         <div class="list-title">${skill.emoji ? `${skill.emoji} ` : ""}${skill.name}</div>
         <div class="list-sub">${skill.description}</div>
         ${renderSkillStatusChips({ skill })}
-        ${missing.length > 0
-          ? html`<div class="muted" style="margin-top: 6px;">Missing: ${missing.join(", ")}</div>`
-          : nothing}
-        ${reasons.length > 0
-          ? html`<div class="muted" style="margin-top: 6px;">Reason: ${reasons.join(", ")}</div>`
-          : nothing}
+        ${
+          missing.length > 0
+            ? html`<div class="muted" style="margin-top: 6px;">Missing: ${missing.join(", ")}</div>`
+            : nothing
+        }
+        ${
+          reasons.length > 0
+            ? html`<div class="muted" style="margin-top: 6px;">Reason: ${reasons.join(", ")}</div>`
+            : nothing
+        }
       </div>
       <div class="list-meta">
         <label class="cfg-toggle">

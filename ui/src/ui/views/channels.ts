@@ -83,9 +83,11 @@ export function renderChannels(props: ChannelsProps) {
           ${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : t("common.na")}
         </div>
       </div>
-      ${props.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
-        : nothing}
+      ${
+        props.lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
+          : nothing
+      }
       <pre class="code-block" style="margin-top: 12px;">
 ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
       </pre
@@ -199,13 +201,14 @@ function renderGenericChannelCard(
       <div class="card-title">${label}</div>
       <div class="card-sub">${t("channels.generic.subtitle")}</div>
       ${accountCountLabel}
-      ${accounts.length > 0
-        ? html`
+      ${
+        accounts.length > 0
+          ? html`
             <div class="account-card-list">
               ${accounts.map((account) => renderGenericAccount(account))}
             </div>
           `
-        : html`
+          : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
                 <span class="label">${t("common.configured")}</span>
@@ -220,10 +223,13 @@ function renderGenericChannelCard(
                 <span>${formatNullableBoolean(displayState.connected)}</span>
               </div>
             </div>
-          `}
-      ${lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${lastError}</div>`
-        : nothing}
+          `
+      }
+      ${
+        lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${lastError}</div>`
+          : nothing
+      }
       ${renderChannelConfigSection({ channelId: key, props })}
     </div>
   `;
@@ -303,14 +309,18 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
         <div>
           <span class="label">${t("common.lastInbound")}</span>
           <span
-            >${account.lastInboundAt
-              ? formatRelativeTimestamp(account.lastInboundAt)
-              : t("common.na")}</span
+            >${
+              account.lastInboundAt
+                ? formatRelativeTimestamp(account.lastInboundAt)
+                : t("common.na")
+            }</span
           >
         </div>
-        ${account.lastError
-          ? html` <div class="account-card-error">${account.lastError}</div> `
-          : nothing}
+        ${
+          account.lastError
+            ? html` <div class="account-card-error">${account.lastError}</div> `
+            : nothing
+        }
       </div>
     </div>
   `;
