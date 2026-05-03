@@ -544,7 +544,9 @@ export async function startGatewayBonjourAdvertiser(
             svc,
           )}): ${classification.formatted}`,
         );
-        requestCiaoRecovery?.(classification);
+        if (classification.kind !== "no-valid-addresses") {
+          requestCiaoRecovery?.(classification);
+        }
         return;
       }
       logger.warn(

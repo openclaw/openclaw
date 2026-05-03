@@ -435,6 +435,32 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
+  it("suppresses no-valid-addresses advertise failure without triggering recovery (#76499)", async () => {
+    enableAdvertiserUnitMode();
+
+    const noValidAddressError = Object.assign(
+      new Error("Could not find valid addresses for interface 'fly-redis'"),
+      { name: "AssertionError" },
+    );
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockRejectedValue(noValidAddressError);
+    mockCiaoService({ advertise, destroy, serviceState: "unannounced" });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Should log the advertise failure but NOT trigger recovery (createService called once).
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("no-valid-addresses"));
+    expect(createService).toHaveBeenCalledTimes(1);
+
+    await started.stop();
+  });
+
   it("recovers when ciao cancellation escapes the advertiser", async () => {
     enableAdvertiserUnitMode();
 
