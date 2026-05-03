@@ -553,6 +553,68 @@ describe("resolvePluginTools optional tools", () => {
     );
   });
 
+  it("does not reuse a partial active registry for wildcard-selected plugin tools", () => {
+    const context = createContext();
+    const config = context.config;
+    const optionalEntry = createOptionalDemoEntry();
+    const multiEntry: MockRegistryToolEntry = {
+      pluginId: "multi",
+      optional: false,
+      source: "/tmp/multi.js",
+      names: ["other_tool"],
+      declaredNames: ["other_tool"],
+      factory: () => makeTool("other_tool"),
+    };
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "multi",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["other_tool"],
+          },
+        },
+        {
+          id: "optional-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: {
+            tools: ["optional_tool"],
+          },
+        },
+      ],
+    });
+    setActivePluginRegistry?.(
+      createToolRegistry([multiEntry]) as never,
+      "partial-test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+    loadOpenClawPluginsMock.mockReturnValue(createToolRegistry([multiEntry, optionalEntry]));
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context,
+        toolAllowlist: ["*", "optional-demo"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["other_tool", "optional_tool"]);
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activate: false,
+        onlyPluginIds: ["multi", "optional-demo"],
+        toolDiscovery: true,
+      }),
+    );
+  });
+
   it("warns when cold registry load still does not provide the selected plugin tools", () => {
     const context = {
       ...createContext(),

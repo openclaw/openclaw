@@ -670,7 +670,8 @@ function registryHasScopedPluginTools(
   if (scopedPluginIds.size === 0) {
     return true;
   }
-  return registry.tools.some((entry) => scopedPluginIds.has(entry.pluginId));
+  const registryPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
+  return Array.from(scopedPluginIds).every((pluginId) => registryPluginIds.has(pluginId));
 }
 
 function resolvePluginToolLoadState(params: {
