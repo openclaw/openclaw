@@ -40,7 +40,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -1440,6 +1440,35 @@ export async function runAgentTurnWithFallback(params: {
             });
             return (async () => {
               let lifecycleTerminalEmitted = false;
+              let lastBridgedAssistantText: string | undefined;
+              let assistantBridgeUnsubscribed = false;
+              const rawUnsubscribeAssistantBridge = onAgentEvent((evt) => {
+                if (evt.runId !== runId || evt.stream !== "assistant") {
+                  return;
+                }
+                if (params.followupRun.run.silentExpected) {
+                  return;
+                }
+                const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
+                if (text === undefined || text === lastBridgedAssistantText) {
+                  return;
+                }
+                lastBridgedAssistantText = text;
+                void (async () => {
+                  const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
+                  if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                    return;
+                  }
+                  await params.opts.onPartialReply({ text: textForTyping });
+                })().catch(() => undefined);
+              });
+              const unsubscribeAssistantBridge = () => {
+                if (assistantBridgeUnsubscribed) {
+                  return;
+                }
+                assistantBridgeUnsubscribed = true;
+                rawUnsubscribeAssistantBridge();
+              };
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
@@ -1485,6 +1514,8 @@ export async function runAgentTurnWithFallback(params: {
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );
+
+                unsubscribeAssistantBridge();
 
                 // CLI backends don't emit streaming assistant events, so we need to
                 // emit one with the final text so server-chat can populate its buffer
@@ -1534,6 +1565,7 @@ export async function runAgentTurnWithFallback(params: {
                 lifecycleTerminalEmitted = true;
                 throw err;
               } finally {
+                unsubscribeAssistantBridge();
                 // Defensive backstop: never let a CLI run complete without a terminal
                 // lifecycle event, otherwise downstream consumers can hang.
                 if (!lifecycleTerminalEmitted) {
