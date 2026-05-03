@@ -33,6 +33,9 @@ function toOnboardingPluginInstallEntry(
     pluginId: entry.pluginId ?? entry.id,
     label: entry.meta.label,
     install: entry.install,
+    ...(entry.trustedSourceLinkedOfficialInstall
+      ? { trustedSourceLinkedOfficialInstall: true }
+      : {}),
   };
 }
 

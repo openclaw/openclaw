@@ -279,6 +279,7 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   extensionsDir: string;
   expectedPluginId?: string;
   expectedIntegrity?: string;
+  trustedSourceLinkedOfficialInstall?: boolean;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false }> {
   const result = await installPluginFromNpmSpec({
@@ -287,6 +288,9 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
     spec: params.spec,
     ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
     ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
+    ...(params.trustedSourceLinkedOfficialInstall
+      ? { trustedSourceLinkedOfficialInstall: true }
+      : {}),
     extensionsDir: params.extensionsDir,
     logger: createPluginInstallLogger(params.runtime),
   });
@@ -787,6 +791,7 @@ export async function runPluginInstallCommand(params: {
       extensionsDir,
       expectedPluginId: officialExternalPlan.pluginId,
       expectedIntegrity: officialExternalPlan.expectedIntegrity,
+      trustedSourceLinkedOfficialInstall: true,
       runtime,
     });
     if (!npmResult.ok) {
