@@ -1313,6 +1313,67 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
+
+  it("includes non-optional browser tool when toolAllowlist is empty (full profile)", () => {
+    const browserEntry: MockRegistryToolEntry = {
+      pluginId: "browser",
+      optional: false,
+      source: "/tmp/browser.js",
+      names: ["browser"],
+      declaredNames: ["browser"],
+      factory: () => makeTool("browser"),
+    };
+    setRegistry([browserEntry]);
+
+    // Empty toolAllowlist simulates tools.profile: "full" where no explicit
+    // allow list exists. Non-optional plugin tools must still be resolved.
+    const tools = resolvePluginTools(createResolveToolsParams({ toolAllowlist: [] }));
+
+    expectResolvedToolNames(tools, ["browser"]);
+  });
+
+  it("includes non-optional browser tool when toolAllowlist is undefined (full profile)", () => {
+    const browserEntry: MockRegistryToolEntry = {
+      pluginId: "browser",
+      optional: false,
+      source: "/tmp/browser.js",
+      names: ["browser"],
+      declaredNames: ["browser"],
+      factory: () => makeTool("browser"),
+    };
+    setRegistry([browserEntry]);
+
+    // Undefined toolAllowlist is the other variant of "no explicit allowlist".
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["browser"]);
+  });
+
+  it("includes non-optional browser tool when toolAllowlist has wildcard (#76507)", () => {
+    const browserEntry: MockRegistryToolEntry = {
+      pluginId: "browser",
+      optional: false,
+      source: "/tmp/browser.js",
+      names: ["browser"],
+      declaredNames: ["browser"],
+      factory: () => makeTool("browser"),
+    };
+    setRegistry([browserEntry]);
+
+    // Wildcard allowlist from tools.profile: "full" explicitly grants all tools.
+    const tools = resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] }));
+
+    expectResolvedToolNames(tools, ["browser"]);
+  });
+
+  it("includes optional tools when wildcard allowlist is active (#76507)", () => {
+    setOptionalDemoRegistry();
+
+    // Wildcard must grant optional tools too.
+    const tools = resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] }));
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+  });
 });
 
 describe("buildPluginToolMetadataKey", () => {
