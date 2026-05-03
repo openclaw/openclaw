@@ -127,16 +127,8 @@ export function isSlackStreamingEnabled(params: {
 
 export function shouldEnableSlackPreviewStreaming(params: {
   mode: "off" | "partial" | "block" | "progress";
-  isDirectMessage: boolean;
-  threadTs?: string;
 }): boolean {
-  if (params.mode === "off") {
-    return false;
-  }
-  if (!params.isDirectMessage) {
-    return true;
-  }
-  return Boolean(params.threadTs);
+  return params.mode !== "off";
 }
 
 export function shouldInitializeSlackDraftStream(params: {
@@ -456,8 +448,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     !sourceRepliesAreToolOnly &&
     shouldEnableSlackPreviewStreaming({
       mode: slackStreaming.mode,
-      isDirectMessage: prepared.isDirectMessage,
-      threadTs: streamThreadHint,
     });
   const streamingEnabled =
     !sourceRepliesAreToolOnly &&
