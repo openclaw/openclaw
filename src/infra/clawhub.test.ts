@@ -414,7 +414,7 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/declared sha256/);
   });
 
-  it("annotates 429 errors with rate-limit headers and a sign-in hint when unauthenticated", async () => {
+  it("annotates 429 errors with the reset hint and a sign-in hint when unauthenticated", async () => {
     process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
     await expect(
       searchClawHubSkills({
@@ -429,9 +429,7 @@ describe("clawhub helpers", () => {
             },
           }),
       }),
-    ).rejects.toThrow(
-      /Rate limit exceeded \(rate limit: limit 30\/min, remaining 0, resets in 42s\) Sign in for higher rate limits\./,
-    );
+    ).rejects.toThrow(/Rate limit exceeded \(resets in 42s\) Sign in for higher rate limits\.$/);
   });
 
   it("degrades gracefully on 429 when the response carries no rate-limit headers", async () => {
@@ -444,7 +442,7 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
   });
 
-  it("annotates 429 errors with rate-limit headers but no sign-in hint when authenticated", async () => {
+  it("annotates 429 errors with the reset hint but no sign-in hint when authenticated", async () => {
     process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
     await expect(
       searchClawHubSkills({
@@ -459,7 +457,21 @@ describe("clawhub helpers", () => {
             },
           }),
       }),
-    ).rejects.toThrow(/\(rate limit: limit 180\/min, remaining 0, resets in 10s\)$/);
+    ).rejects.toThrow(/Rate limit exceeded \(resets in 10s\)$/);
+  });
+
+  it("skips the reset suffix on 429 when Retry-After is an HTTP-date", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("Rate limit exceeded", {
+            status: 429,
+            headers: { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" },
+          }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded$/);
   });
 
   it("downloads skill archives to sanitized temp paths and cleans them up", async () => {

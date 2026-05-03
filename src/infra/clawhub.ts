@@ -608,28 +608,12 @@ async function buildClawHubError(
 }
 
 function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
-  const limit =
-    normalizeHeaderValue(headers.get("RateLimit-Limit")) ??
-    normalizeHeaderValue(headers.get("X-RateLimit-Limit"));
-  const remaining =
-    normalizeHeaderValue(headers.get("RateLimit-Remaining")) ??
-    normalizeHeaderValue(headers.get("X-RateLimit-Remaining"));
   const reset =
     normalizeHeaderValue(headers.get("RateLimit-Reset")) ??
     normalizeHeaderValue(headers.get("Retry-After"));
-  const parts: string[] = [];
-  if (limit) {
-    parts.push(`limit ${limit}/min`);
-  }
-  if (remaining) {
-    parts.push(`remaining ${remaining}`);
-  }
-  if (reset) {
-    parts.push(`resets in ${reset}s`);
-  }
   const segments: string[] = [];
-  if (parts.length > 0) {
-    segments.push(`(rate limit: ${parts.join(", ")})`);
+  if (reset && Number.isFinite(Number(reset))) {
+    segments.push(`(resets in ${reset}s)`);
   }
   if (!hasToken) {
     segments.push("Sign in for higher rate limits.");
