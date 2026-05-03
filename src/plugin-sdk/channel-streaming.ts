@@ -3,8 +3,10 @@ import type {
   BlockStreamingCoalesceConfig,
   ChannelDeliveryStreamingConfig,
   ChannelPreviewStreamingConfig,
+  ChannelStreamingProgressConfig,
   ChannelStreamingConfig,
   SlackChannelStreamingConfig,
+  StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -14,6 +16,7 @@ export type {
   ChannelPreviewStreamingConfig,
   ChannelStreamingBlockConfig,
   ChannelStreamingConfig,
+  ChannelStreamingProgressConfig,
   ChannelStreamingPreviewConfig,
   SlackChannelStreamingConfig,
   StreamingMode,
@@ -44,6 +47,10 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function asInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
 function normalizeStreamingMode(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -52,7 +59,7 @@ function normalizeStreamingMode(value: unknown): string | null {
   return normalized || null;
 }
 
-function parsePreviewStreamingMode(value: unknown): "off" | "partial" | "block" | null {
+function parsePreviewStreamingMode(value: unknown): StreamingMode | null {
   const normalized = normalizeStreamingMode(value);
   if (
     normalized === "off" ||
@@ -60,7 +67,7 @@ function parsePreviewStreamingMode(value: unknown): "off" | "partial" | "block" 
     normalized === "block" ||
     normalized === "progress"
   ) {
-    return normalized === "progress" ? "partial" : normalized;
+    return normalized;
   }
   return null;
 }
@@ -72,6 +79,33 @@ function asBlockStreamingCoalesceConfig(value: unknown): BlockStreamingCoalesceC
 function asBlockStreamingChunkConfig(value: unknown): BlockStreamingChunkConfig | undefined {
   return asObjectRecord(value) as BlockStreamingChunkConfig | undefined;
 }
+
+function asProgressConfig(value: unknown): ChannelStreamingProgressConfig | undefined {
+  return asObjectRecord(value) as ChannelStreamingProgressConfig | undefined;
+}
+
+export const DEFAULT_PROGRESS_DRAFT_LABELS = [
+  "Thinking",
+  "Shelling",
+  "Scuttling",
+  "Clawing",
+  "Pinching",
+  "Molting",
+  "Bubbling",
+  "Tiding",
+  "Reefing",
+  "Cracking",
+  "Sifting",
+  "Brining",
+  "Nautiling",
+  "Krilling",
+  "Barnacling",
+  "Lobstering",
+  "Tidepooling",
+  "Pearling",
+  "Snapping",
+  "Surfacing",
+] as const;
 
 export function getChannelStreamingConfigObject(
   entry: StreamingCompatEntry | null | undefined,
@@ -121,7 +155,32 @@ export function resolveChannelStreamingPreviewToolProgress(
   defaultValue = true,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
-  return asBoolean(config?.preview?.toolProgress) ?? defaultValue;
+  return (
+    asBoolean(config?.progress?.toolProgress) ??
+    asBoolean(config?.preview?.toolProgress) ??
+    defaultValue
+  );
+}
+
+export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
+  entry: StreamingCompatEntry | null | undefined,
+  options?: {
+    draftStreamActive?: boolean;
+    previewToolProgressEnabled?: boolean;
+    previewStreamingEnabled?: boolean;
+  },
+): boolean {
+  if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
+    return false;
+  }
+  const mode = resolveChannelPreviewStreamMode(entry, "off");
+  if (mode === "off") {
+    return false;
+  }
+  if (mode === "progress") {
+    return true;
+  }
+  return options?.previewToolProgressEnabled ?? resolveChannelStreamingPreviewToolProgress(entry);
 }
 
 export function resolveChannelStreamingNativeTransport(
@@ -134,7 +193,7 @@ export function resolveChannelStreamingNativeTransport(
 export function resolveChannelPreviewStreamMode(
   entry: StreamingCompatEntry | null | undefined,
   defaultMode: "off" | "partial",
-): "off" | "partial" | "block" {
+): StreamingMode {
   const parsedStreaming = parsePreviewStreamingMode(
     getChannelStreamingConfigObject(entry)?.mode ?? entry?.streaming,
   );
@@ -150,4 +209,81 @@ export function resolveChannelPreviewStreamMode(
     return entry.streaming ? "partial" : "off";
   }
   return defaultMode;
+}
+
+export function resolveChannelProgressDraftConfig(
+  entry: StreamingCompatEntry | null | undefined,
+): ChannelStreamingProgressConfig {
+  return asProgressConfig(getChannelStreamingConfigObject(entry)?.progress) ?? {};
+}
+
+function normalizeProgressLabels(labels: unknown): string[] {
+  if (!Array.isArray(labels)) {
+    return [...DEFAULT_PROGRESS_DRAFT_LABELS];
+  }
+  const normalized = labels
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
+  return normalized.length > 0 ? normalized : [...DEFAULT_PROGRESS_DRAFT_LABELS];
+}
+
+function hashProgressSeed(seed: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+export function resolveChannelProgressDraftLabel(params: {
+  entry?: StreamingCompatEntry | null;
+  seed?: string;
+  random?: () => number;
+}): string | undefined {
+  const progress = resolveChannelProgressDraftConfig(params.entry);
+  if (progress.label === false) {
+    return undefined;
+  }
+  if (typeof progress.label === "string" && progress.label.trim() && progress.label !== "auto") {
+    return progress.label.trim();
+  }
+  const labels = normalizeProgressLabels(progress.labels);
+  const index =
+    typeof params.seed === "string" && params.seed.length > 0
+      ? hashProgressSeed(params.seed) % labels.length
+      : Math.floor(Math.max(0, Math.min(0.999999, params.random?.() ?? 0)) * labels.length);
+  return labels[index] ?? labels[0];
+}
+
+export function resolveChannelProgressDraftMaxLines(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = 8,
+): number {
+  const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLines);
+  return configured && configured > 0 ? configured : defaultValue;
+}
+
+export function formatChannelProgressDraftText(params: {
+  entry?: StreamingCompatEntry | null;
+  lines: string[];
+  seed?: string;
+  random?: () => number;
+  formatLine?: (line: string) => string;
+  bullet?: string;
+}): string {
+  const label = resolveChannelProgressDraftLabel({
+    entry: params.entry,
+    seed: params.seed,
+    random: params.random,
+  });
+  const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
+  const formatLine = params.formatLine ?? ((line: string) => line);
+  const bullet = params.bullet ?? "•";
+  const lines = params.lines
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => line.length > 0)
+    .slice(-maxLines)
+    .map((line) => `${bullet} ${formatLine(line)}`);
+  return [label, ...lines].filter((line): line is string => Boolean(line)).join("\n");
 }

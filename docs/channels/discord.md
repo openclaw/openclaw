@@ -660,7 +660,7 @@ Default slash command settings:
   </Accordion>
 
   <Accordion title="Live stream preview">
-    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. `channels.discord.streaming` takes `off` (default) | `partial` | `block` | `progress`. `progress` maps to `partial` on Discord; `streamMode` is a legacy alias and is auto-migrated.
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. `channels.discord.streaming` takes `off` (default) | `partial` | `block` | `progress`. `progress` keeps one editable status draft and updates it with tool progress until final delivery; `streamMode` is a legacy alias and is auto-migrated.
 
     Default stays `off` because Discord preview edits hit rate limits quickly when multiple bots or gateways share an account.
 

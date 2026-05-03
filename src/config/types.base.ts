@@ -34,6 +34,17 @@ export type BlockStreamingChunkConfig = {
   breakPreference?: "paragraph" | "newline" | "sentence";
 };
 
+export type ChannelStreamingProgressConfig = {
+  /** Initial progress title. "auto" picks from labels; false hides the title. Default: "auto". */
+  label?: string | false;
+  /** Candidate labels for label="auto". Defaults to OpenClaw's built-in progress labels. */
+  labels?: string[];
+  /** Maximum number of progress lines to keep below the label. Default: 8. */
+  maxLines?: number;
+  /** Include compact tool/task progress in the draft. Default: true. */
+  toolProgress?: boolean;
+};
+
 export type ChannelStreamingPreviewConfig = {
   /** Chunking thresholds for preview-draft updates while streaming. */
   chunk?: BlockStreamingChunkConfig;
@@ -69,6 +80,7 @@ export type ChannelStreamingConfig = {
    */
   nativeTransport?: boolean;
   preview?: ChannelStreamingPreviewConfig;
+  progress?: ChannelStreamingProgressConfig;
   block?: ChannelStreamingBlockConfig;
 };
 
@@ -76,12 +88,12 @@ export type ChannelDeliveryStreamingConfig = Pick<ChannelStreamingConfig, "chunk
 
 export type ChannelPreviewStreamingConfig = Pick<
   ChannelStreamingConfig,
-  "mode" | "chunkMode" | "preview" | "block"
+  "mode" | "chunkMode" | "preview" | "progress" | "block"
 >;
 
 export type SlackChannelStreamingConfig = Pick<
   ChannelStreamingConfig,
-  "mode" | "chunkMode" | "preview" | "block" | "nativeTransport"
+  "mode" | "chunkMode" | "preview" | "progress" | "block" | "nativeTransport"
 >;
 
 export type MarkdownTableMode = "off" | "bullets" | "code" | "block";

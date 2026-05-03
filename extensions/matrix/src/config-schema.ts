@@ -66,7 +66,16 @@ const matrixNetworkSchema = z
 
 const matrixStreamingSchema = z
   .object({
-    mode: z.enum(["partial", "quiet", "off"]).optional(),
+    mode: z.enum(["partial", "quiet", "progress", "off"]).optional(),
+    progress: z
+      .object({
+        label: z.union([z.string(), z.literal(false)]).optional(),
+        labels: z.array(z.string()).optional(),
+        maxLines: z.number().int().positive().optional(),
+        toolProgress: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     preview: z
       .object({
         toolProgress: z.boolean().optional(),
@@ -99,7 +108,7 @@ export const MatrixConfigSchema = z.object({
   contextVisibility: ContextVisibilityModeSchema.optional(),
   blockStreaming: z.boolean().optional(),
   streaming: z
-    .union([z.enum(["partial", "quiet", "off"]), z.boolean(), matrixStreamingSchema])
+    .union([z.enum(["partial", "quiet", "progress", "off"]), z.boolean(), matrixStreamingSchema])
     .optional(),
   replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),

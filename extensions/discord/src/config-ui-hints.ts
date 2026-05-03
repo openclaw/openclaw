@@ -31,11 +31,11 @@ export const discordChannelConfigUiHints = {
   },
   streaming: {
     label: "Discord Streaming Mode",
-    help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
+    help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are auto-mapped.',
   },
   "streaming.mode": {
     label: "Discord Streaming Mode",
-    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord.',
+    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress".',
   },
   "streaming.chunkMode": {
     label: "Discord Chunk Mode",

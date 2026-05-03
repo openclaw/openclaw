@@ -13,9 +13,12 @@ import {
   resolveChannelSourceReplyDeliveryMode,
 } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
+  formatChannelProgressDraftText,
+  resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingNativeTransport,
   resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -39,11 +42,7 @@ import {
 } from "../../interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "../../limits.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
-import {
-  applyAppendOnlyStreamUpdate,
-  buildStatusFinalPreviewText,
-  resolveSlackStreamingConfig,
-} from "../../stream-mode.js";
+import { applyAppendOnlyStreamUpdate, resolveSlackStreamingConfig } from "../../stream-mode.js";
 import type { SlackStreamSession } from "../../streaming.js";
 import {
   appendSlackStream,
@@ -776,24 +775,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const slackBlocks = readSlackReplyBlocks(payload);
       const trimmedFinalText = reply.trimmedText;
 
-      if (previewStreamingEnabled && streamMode === "status_final" && hasStreamedMessage) {
-        try {
-          const statusChannelId = draftStream?.channelId();
-          const statusMessageId = draftStream?.messageId();
-          if (statusChannelId && statusMessageId) {
-            await ctx.app.client.chat.update({
-              token: ctx.botToken,
-              channel: statusChannelId,
-              ts: statusMessageId,
-              text: "Status: complete. Final answer posted below.",
-            });
-          }
-        } catch (err) {
-          logVerbose(`slack: status_final completion update failed (${formatErrorMessage(err)})`);
-        }
-        hasStreamedMessage = false;
-      }
-
       const result = await deliverFinalizableDraftPreview({
         kind: info.kind,
         payload,
@@ -813,7 +794,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         buildFinalEdit: () => {
           if (
             !previewStreamingEnabled ||
-            streamMode === "status_final" ||
             reply.hasMedia ||
             payload.isError ||
             (trimmedFinalText.length === 0 && !slackBlocks?.length)
@@ -892,11 +872,18 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const streamMode = slackStreaming.draftMode;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(account.config);
+  const suppressDefaultToolProgressMessages =
+    resolveChannelStreamingSuppressDefaultToolProgressMessages(account.config, {
+      draftStreamActive: Boolean(draftStream),
+      previewToolProgressEnabled,
+      previewStreamingEnabled,
+    });
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: string[] = [];
   let appendRenderedText = "";
   let appendSourceText = "";
   let statusUpdateCount = 0;
+  const progressSeed = `${account.accountId}:${message.channel}`;
 
   const pushPreviewToolProgress = (line?: string) => {
     if (!draftStream || !previewToolProgressEnabled || previewToolProgressSuppressed) {
@@ -911,9 +898,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     if (previous === escaped) {
       return;
     }
-    previewToolProgressLines = [...previewToolProgressLines, escaped].slice(-8);
+    previewToolProgressLines = [...previewToolProgressLines, escaped].slice(
+      -resolveChannelProgressDraftMaxLines(account.config),
+    );
     draftStream.update(
-      ["Working…", ...previewToolProgressLines.map((entry) => `• ${entry}`)].join("\n"),
+      formatChannelProgressDraftText({
+        entry: account.config,
+        lines: previewToolProgressLines,
+        seed: progressSeed,
+      }),
     );
     hasStreamedMessage = true;
   };
@@ -924,10 +917,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return;
     }
 
-    previewToolProgressSuppressed = true;
-    previewToolProgressLines = [];
-
     if (streamMode === "append") {
+      previewToolProgressSuppressed = true;
+      previewToolProgressLines = [];
       const next = applyAppendOnlyStreamUpdate({
         incoming: trimmed,
         rendered: appendRenderedText,
@@ -948,11 +940,19 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (statusUpdateCount > 1 && statusUpdateCount % 4 !== 0) {
         return;
       }
-      draftStream?.update(buildStatusFinalPreviewText(statusUpdateCount));
+      draftStream?.update(
+        formatChannelProgressDraftText({
+          entry: account.config,
+          lines: previewToolProgressLines,
+          seed: progressSeed,
+        }),
+      );
       hasStreamedMessage = true;
       return;
     }
 
+    previewToolProgressSuppressed = true;
+    previewToolProgressLines = [];
     draftStream?.update(trimmed);
     hasStreamedMessage = true;
   };
@@ -1015,7 +1015,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                 hasRepliedRef,
                 disableBlockStreaming,
                 onModelSelected,
-                suppressDefaultToolProgressMessages: previewToolProgressEnabled ? true : undefined,
+                suppressDefaultToolProgressMessages: suppressDefaultToolProgressMessages
+                  ? true
+                  : undefined,
                 onPartialReply: useStreaming
                   ? undefined
                   : !previewStreamingEnabled
