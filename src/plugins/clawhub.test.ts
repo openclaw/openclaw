@@ -463,6 +463,50 @@ describe("installPluginFromClawHub", () => {
     );
   });
 
+  it("supplements legacy zip artifact resolver responses with version verification metadata", async () => {
+    fetchClawHubPackageArtifactMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+      },
+      version: "2026.3.22",
+      artifact: {
+        kind: "legacy-zip",
+        format: "zip",
+        sha256: "1111111111111111111111111111111111111111111111111111111111111111",
+        downloadUrl: "https://clawhub.ai/api/v1/packages/demo/download?version=2026.3.22",
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      pluginId: "demo",
+      clawhub: {
+        artifactKind: "legacy-zip",
+        artifactFormat: "zip",
+        integrity: DEMO_ARCHIVE_INTEGRITY,
+      },
+    });
+    expect(fetchClawHubPackageVersionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifact: "archive",
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+  });
+
   it("falls back to version metadata when the ClawHub artifact resolver route is missing", async () => {
     fetchClawHubPackageArtifactMock.mockRejectedValueOnce(
       new ClawHubRequestError({
