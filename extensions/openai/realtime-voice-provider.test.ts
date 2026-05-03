@@ -193,10 +193,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       clientSecret: "client-secret-123",
       offerUrl: "https://api.openai.com/v1/realtime/calls",
       offerHeaders: {
-        originator: "openclaw",
         version: "2026.3.22",
       },
     });
+    // originator and User-Agent are server-side attribution headers; they must not be
+    // forwarded to the browser so that the browser's direct SDP POST to
+    // api.openai.com passes the CORS preflight (#76435).
+    expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).not.toHaveProperty(
+      "originator",
+    );
     expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).not.toHaveProperty(
       "User-Agent",
     );
