@@ -549,7 +549,7 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
     let response = guardedFetch.response;
 
     if (response.status === 401 && trimmedKey) {
-      guardedFetch.release();
+      await guardedFetch.release();
       effectiveKey = "";
       guardedFetch = await fetchWithSsrFGuard({
         url: `${CHUTES_BASE_URL}/models`,
@@ -623,7 +623,7 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
         models.length > 0 ? models : CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
       );
     } finally {
-      guardedFetch.release();
+      await guardedFetch.release();
     }
   } catch (error) {
     log.warn(`Discovery failed: ${String(error)}, using static catalog`);

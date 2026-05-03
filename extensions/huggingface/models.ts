@@ -210,7 +210,7 @@ export async function discoverHuggingfaceModels(
         ? models
         : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
     } finally {
-      release();
+      await release();
     }
   } catch {
     return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
