@@ -354,9 +354,6 @@ export function appendBootstrapPromptWarning(
   return prompt ? `${prompt}\n\n${warningBlock}` : warningBlock;
 }
 
-/** @deprecated Use appendBootstrapPromptWarning. */
-export const prependBootstrapPromptWarning = appendBootstrapPromptWarning;
-
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;
   warningMode: BootstrapPromptWarningMode;

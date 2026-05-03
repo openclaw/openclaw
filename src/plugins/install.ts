@@ -8,9 +8,11 @@ import {
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
+  readManagedNpmRootInstalledDependency,
   removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
   upsertManagedNpmRootDependency,
+  type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
 import {
   formatPrereleaseResolutionError,
@@ -221,10 +223,11 @@ async function rollbackManagedNpmPluginInstall(params: {
         "--no-audit",
         "--no-fund",
         "--prefix",
-        params.npmRoot,
+        ".",
         params.packageName,
       ],
       {
+        cwd: params.npmRoot,
         timeoutMs: Math.max(params.timeoutMs, 300_000),
         env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
       },
@@ -251,6 +254,23 @@ async function rollbackManagedNpmPluginInstall(params: {
       `Failed to remove managed npm dependency ${params.packageName}: ${String(error)}`,
     );
   }
+}
+
+function resolveInstalledNpmResolutionMismatch(params: {
+  packageName: string;
+  expected: NpmSpecResolution;
+  installed: ManagedNpmRootInstalledDependency | null;
+}): string | null {
+  if (!params.installed) {
+    return `npm install did not record package-lock metadata for ${params.packageName}`;
+  }
+  if (params.expected.version && params.installed.version !== params.expected.version) {
+    return `npm install resolved ${params.packageName} to version ${params.installed.version ?? "unknown"}, expected ${params.expected.version}`;
+  }
+  if (params.expected.integrity && params.installed.integrity !== params.expected.integrity) {
+    return `npm install resolved ${params.packageName} with integrity ${params.installed.integrity ?? "unknown"}, expected ${params.expected.integrity}`;
+  }
+  return null;
 }
 
 type PackageInstallCommonParams = InstallSafetyOverrides & {
@@ -1224,9 +1244,10 @@ export async function installPluginFromNpmSpec(
         noFund: true,
       }),
       "--prefix",
-      npmRoot,
+      ".",
     ],
     {
+      cwd: npmRoot,
       timeoutMs: Math.max(timeoutMs, 300_000),
       env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
     },
@@ -1239,6 +1260,44 @@ export async function installPluginFromNpmSpec(
     return {
       ok: false,
       error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+    };
+  }
+
+  let installedDependency: ManagedNpmRootInstalledDependency | null;
+  try {
+    installedDependency = await readManagedNpmRootInstalledDependency({
+      npmRoot,
+      packageName: parsedSpec.name,
+    });
+  } catch (error) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: parsedSpec.name,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
+    return {
+      ok: false,
+      error: `Failed to verify npm install metadata for ${parsedSpec.name}: ${String(error)}`,
+    };
+  }
+  const resolutionMismatch = resolveInstalledNpmResolutionMismatch({
+    packageName: parsedSpec.name,
+    expected: npmResolution,
+    installed: installedDependency,
+  });
+  if (resolutionMismatch) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: parsedSpec.name,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
+    return {
+      ok: false,
+      error: resolutionMismatch,
     };
   }
 
