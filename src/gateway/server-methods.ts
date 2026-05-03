@@ -9,6 +9,7 @@ import {
 } from "./protocol/startup-unavailable.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { agentHandlers } from "./server-methods/agent.js";
+import { agentsWorkspaceHandlers } from "./server-methods/agents-workspace.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { artifactsHandlers } from "./server-methods/artifacts.js";
 import { channelsHandlers } from "./server-methods/channels.js";
@@ -115,6 +116,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentHandlers,
   ...agentsHandlers,
   ...artifactsHandlers,
+  ...agentsWorkspaceHandlers,
 };
 
 export async function handleGatewayRequest(

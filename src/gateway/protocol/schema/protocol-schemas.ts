@@ -53,6 +53,23 @@ import {
   ToolsInvokeResultSchema,
 } from "./agents-models-skills.js";
 import {
+  AgentsWorkspaceDeleteParamsSchema,
+  AgentsWorkspaceDeleteResultSchema,
+  AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResultSchema,
+  AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResultSchema,
+  AgentsWorkspaceMkdirParamsSchema,
+  AgentsWorkspaceMkdirResultSchema,
+  AgentsWorkspaceMoveParamsSchema,
+  AgentsWorkspaceMoveResultSchema,
+  AgentsWorkspaceSetParamsSchema,
+  AgentsWorkspaceSetResultSchema,
+  AgentsWorkspaceStatParamsSchema,
+  AgentsWorkspaceStatResultSchema,
+  WorkspaceEntrySchema,
+} from "./agents-workspace.js";
+import {
   ArtifactSummarySchema,
   ArtifactsDownloadParamsSchema,
   ArtifactsDownloadResultSchema,
@@ -428,6 +445,39 @@ export const ProtocolSchemas = {
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
+  AgentsWorkspaceDeleteParams: AgentsWorkspaceDeleteParamsSchema,
+  AgentsWorkspaceDeleteResult: AgentsWorkspaceDeleteResultSchema,
+  AgentsWorkspaceGetParams: AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResult: AgentsWorkspaceGetResultSchema,
+  AgentsWorkspaceListParams: AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResult: AgentsWorkspaceListResultSchema,
+  AgentsWorkspaceMkdirParams: AgentsWorkspaceMkdirParamsSchema,
+  AgentsWorkspaceMkdirResult: AgentsWorkspaceMkdirResultSchema,
+  AgentsWorkspaceMoveParams: AgentsWorkspaceMoveParamsSchema,
+  AgentsWorkspaceMoveResult: AgentsWorkspaceMoveResultSchema,
+  AgentsWorkspaceSetParams: AgentsWorkspaceSetParamsSchema,
+  AgentsWorkspaceSetResult: AgentsWorkspaceSetResultSchema,
+  AgentsWorkspaceStatParams: AgentsWorkspaceStatParamsSchema,
+  AgentsWorkspaceStatResult: AgentsWorkspaceStatResultSchema,
+  WorkspaceEntry: WorkspaceEntrySchema,
 } satisfies Record<string, TSchema>;
 
 export const PROTOCOL_VERSION = 3 as const;
+
+export {
+  AgentsWorkspaceDeleteParamsSchema,
+  AgentsWorkspaceDeleteResultSchema,
+  AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResultSchema,
+  AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResultSchema,
+  AgentsWorkspaceMkdirParamsSchema,
+  AgentsWorkspaceMkdirResultSchema,
+  AgentsWorkspaceMoveParamsSchema,
+  AgentsWorkspaceMoveResultSchema,
+  AgentsWorkspaceSetParamsSchema,
+  AgentsWorkspaceSetResultSchema,
+  AgentsWorkspaceStatParamsSchema,
+  AgentsWorkspaceStatResultSchema,
+  WorkspaceEntrySchema,
+};

@@ -1268,6 +1268,31 @@ export function renderApp(state: AppViewState) {
         void loadToolsCatalog(state, agentId);
         void refreshVisibleToolsEffectiveForCurrentSession(state);
         return;
+      case "workspace": {
+        state.workspaceLoading = true;
+        const requestedAgentId = agentId;
+        void state.client
+          ?.request<import("./types.js").AgentsWorkspaceListResult>("agents.workspace.list", {
+            agentId,
+            path: "",
+          })
+          .then((result) => {
+            if (state.agentsSelectedId !== requestedAgentId) {
+              return;
+            }
+            state.workspaceEntries = result?.entries ?? null;
+            state.workspacePath = result?.path ?? "";
+            state.workspaceLoading = false;
+          })
+          .catch((err) => {
+            if (state.agentsSelectedId !== requestedAgentId) {
+              return;
+            }
+            state.workspaceError = String(err);
+            state.workspaceLoading = false;
+          });
+        return;
+      }
       case "overview":
       case "channels":
       case "cron":
@@ -1302,6 +1327,13 @@ export function renderApp(state: AppViewState) {
     state.toolsCatalogError = null;
     state.toolsCatalogLoading = false;
     resetToolsEffectiveState(state);
+    // Always clear workspace state on agent switch
+    state.workspaceSelectedFile = null;
+    state.workspaceFileContent = null;
+    state.workspaceEditedContent = null;
+    state.workspaceError = null;
+    state.workspacePath = "";
+    state.workspaceEntries = null;
   };
 
   return html`
@@ -1916,6 +1948,13 @@ export function renderApp(state: AppViewState) {
                   drafts: state.agentFileDrafts,
                   saving: state.agentFileSaving,
                 },
+                workspaceEntries: state.workspaceEntries,
+                workspacePath: state.workspacePath,
+                workspaceLoading: state.workspaceLoading,
+                workspaceError: state.workspaceError,
+                workspaceSelectedFile: state.workspaceSelectedFile,
+                workspaceFileContent: state.workspaceFileContent,
+                workspaceEditedContent: state.workspaceEditedContent,
                 agentIdentityLoading: state.agentIdentityLoading,
                 agentIdentityError: state.agentIdentityError,
                 agentIdentityById: state.agentIdentityById,
@@ -1969,6 +2008,35 @@ export function renderApp(state: AppViewState) {
                   }
                   if (panel === "skills" && resolvedAgentId) {
                     void loadAgentSkills(state, resolvedAgentId);
+                  }
+                  if (panel === "workspace" && resolvedAgentId) {
+                    state.workspaceLoading = true;
+                    state.workspaceError = null;
+                    const requestedAgentId = resolvedAgentId;
+                    // Load workspace files
+                    void state.client
+                      ?.request<import("./types.js").AgentsWorkspaceListResult>(
+                        "agents.workspace.list",
+                        {
+                          agentId: resolvedAgentId,
+                          path: "",
+                        },
+                      )
+                      .then((result) => {
+                        if (state.agentsSelectedId !== requestedAgentId) {
+                          return;
+                        }
+                        state.workspaceEntries = result?.entries ?? null;
+                        state.workspacePath = result?.path ?? "";
+                        state.workspaceLoading = false;
+                      })
+                      .catch((err) => {
+                        if (state.agentsSelectedId !== requestedAgentId) {
+                          return;
+                        }
+                        state.workspaceError = String(err);
+                        state.workspaceLoading = false;
+                      });
                   }
                   if (panel === "tools" && resolvedAgentId) {
                     if (
@@ -2188,6 +2256,364 @@ export function renderApp(state: AppViewState) {
                 },
                 onSetDefault: (agentId) => {
                   stageDefaultAgentConfigEntry(state, agentId);
+                },
+                onWorkspaceNavigate: (path) => {
+                  state.workspacePath = path;
+                  state.workspaceSelectedFile = null;
+                  state.workspaceFileContent = null;
+                  state.workspaceEditedContent = null;
+                  state.workspaceError = null;
+                  if (resolvedAgentId) {
+                    state.workspaceLoading = true;
+                    const requestedPath = path;
+                    void state.client
+                      ?.request<import("./types.js").AgentsWorkspaceListResult>(
+                        "agents.workspace.list",
+                        {
+                          agentId: resolvedAgentId,
+                          path,
+                        },
+                      )
+                      .then((result) => {
+                        // Ignore stale responses if user already navigated elsewhere
+                        if (state.workspacePath !== requestedPath) {
+                          return;
+                        }
+                        state.workspaceEntries = result?.entries ?? null;
+                        state.workspaceError = null;
+                        state.workspaceLoading = false;
+                      })
+                      .catch((err) => {
+                        if (state.workspacePath !== requestedPath) {
+                          return;
+                        }
+                        state.workspaceError = String(err);
+                        state.workspaceLoading = false;
+                      });
+                  }
+                },
+                onWorkspaceRefresh: () => {
+                  if (resolvedAgentId) {
+                    state.workspaceLoading = true;
+                    const refreshAgentId = resolvedAgentId;
+                    const refreshPath = state.workspacePath;
+                    void state.client
+                      ?.request<import("./types.js").AgentsWorkspaceListResult>(
+                        "agents.workspace.list",
+                        {
+                          agentId: refreshAgentId,
+                          path: refreshPath,
+                        },
+                      )
+                      .then((result) => {
+                        if (
+                          state.agentsSelectedId !== refreshAgentId ||
+                          state.workspacePath !== refreshPath
+                        ) {
+                          return;
+                        }
+                        state.workspaceEntries = result?.entries ?? null;
+                        state.workspaceError = null;
+                        state.workspaceLoading = false;
+                      })
+                      .catch((err) => {
+                        if (
+                          state.agentsSelectedId !== refreshAgentId ||
+                          state.workspacePath !== refreshPath
+                        ) {
+                          return;
+                        }
+                        state.workspaceError = String(err);
+                        state.workspaceLoading = false;
+                      });
+                  }
+                },
+                onWorkspaceSelectFile: (path) => {
+                  state.workspaceSelectedFile = path;
+                  state.workspaceEditedContent = null;
+                  state.workspaceFileContent = null;
+                  if (resolvedAgentId && path) {
+                    const requestedPath = path;
+                    const requestedAgentId = resolvedAgentId;
+                    void state.client
+                      ?.request<import("./types.js").AgentsWorkspaceGetResult>(
+                        "agents.workspace.get",
+                        {
+                          agentId: resolvedAgentId,
+                          path,
+                          encoding: "utf8",
+                        },
+                      )
+                      .then((result) => {
+                        // Ignore stale responses if user selected a different file or agent
+                        if (
+                          state.workspaceSelectedFile !== requestedPath ||
+                          state.agentsSelectedId !== requestedAgentId
+                        ) {
+                          return;
+                        }
+                        state.workspaceFileContent = result?.content ?? null;
+                      })
+                      .catch((err) => {
+                        if (
+                          state.workspaceSelectedFile !== requestedPath ||
+                          state.agentsSelectedId !== requestedAgentId
+                        ) {
+                          return;
+                        }
+                        state.workspaceError = String(err);
+                      });
+                  }
+                },
+                onWorkspaceContentChange: (content) => {
+                  state.workspaceEditedContent = content;
+                },
+                onWorkspaceSaveFile: (content) => {
+                  if (resolvedAgentId && state.workspaceSelectedFile) {
+                    const savedFile = state.workspaceSelectedFile;
+                    const savedAgentId = resolvedAgentId;
+                    const savedPath = state.workspacePath;
+                    void state.client
+                      ?.request<import("./types.js").AgentsWorkspaceSetResult>(
+                        "agents.workspace.set",
+                        {
+                          agentId: resolvedAgentId,
+                          path: state.workspaceSelectedFile,
+                          content,
+                          encoding: "utf8",
+                        },
+                      )
+                      .then(() => {
+                        // Ignore stale save responses if file or agent changed
+                        if (
+                          state.workspaceSelectedFile === savedFile &&
+                          state.agentsSelectedId === savedAgentId
+                        ) {
+                          state.workspaceFileContent = content;
+                          state.workspaceEditedContent = null;
+                        }
+                        // Refresh file list only if still on the same agent/path
+                        if (
+                          state.agentsPanel === "workspace" &&
+                          state.agentsSelectedId === savedAgentId &&
+                          state.workspacePath === savedPath
+                        ) {
+                          void state.client
+                            ?.request<import("./types.js").AgentsWorkspaceListResult>(
+                              "agents.workspace.list",
+                              {
+                                agentId: savedAgentId,
+                                path: savedPath,
+                              },
+                            )
+                            .then((result) => {
+                              if (
+                                state.agentsSelectedId !== savedAgentId ||
+                                state.workspacePath !== savedPath
+                              ) {
+                                return;
+                              }
+                              state.workspaceEntries = result?.entries ?? null;
+                              state.workspaceError = null;
+                            });
+                        }
+                      })
+                      .catch((err) => {
+                        state.workspaceError = String(err);
+                      });
+                  }
+                },
+                onWorkspaceDeleteFile: (deletePath) => {
+                  if (resolvedAgentId) {
+                    const deleteAgentId = resolvedAgentId;
+                    const deleteListPath = state.workspacePath;
+                    void state.client
+                      ?.request<import("./types.js").AgentsWorkspaceDeleteResult>(
+                        "agents.workspace.delete",
+                        {
+                          agentId: resolvedAgentId,
+                          path: deletePath,
+                        },
+                      )
+                      .then(() => {
+                        // Clear editor if the deleted file was open
+                        if (state.workspaceSelectedFile === deletePath) {
+                          state.workspaceSelectedFile = null;
+                          state.workspaceFileContent = null;
+                          state.workspaceEditedContent = null;
+                        }
+                        // Refresh file list only if still on the same agent/path
+                        if (
+                          state.agentsPanel === "workspace" &&
+                          state.agentsSelectedId === deleteAgentId &&
+                          state.workspacePath === deleteListPath
+                        ) {
+                          void state.client
+                            ?.request<import("./types.js").AgentsWorkspaceListResult>(
+                              "agents.workspace.list",
+                              {
+                                agentId: deleteAgentId,
+                                path: deleteListPath,
+                              },
+                            )
+                            .then((result) => {
+                              if (
+                                state.agentsSelectedId !== deleteAgentId ||
+                                state.workspacePath !== deleteListPath
+                              ) {
+                                return;
+                              }
+                              state.workspaceEntries = result?.entries ?? null;
+                            });
+                        }
+                      })
+                      .catch((err) => {
+                        state.workspaceError = String(err);
+                      });
+                  }
+                },
+                onWorkspaceMkdir: (name) => {
+                  if (resolvedAgentId && name) {
+                    const path = state.workspacePath ? `${state.workspacePath}/${name}` : name;
+                    const mkdirAgentId = resolvedAgentId;
+                    const mkdirListPath = state.workspacePath;
+                    void state.client
+                      ?.request<import("./types.js").AgentsWorkspaceMkdirResult>(
+                        "agents.workspace.mkdir",
+                        {
+                          agentId: resolvedAgentId,
+                          path,
+                        },
+                      )
+                      .then(() => {
+                        // Refresh file list only if still on the same agent/path
+                        if (
+                          state.agentsPanel === "workspace" &&
+                          state.agentsSelectedId === mkdirAgentId &&
+                          state.workspacePath === mkdirListPath
+                        ) {
+                          void state.client
+                            ?.request<import("./types.js").AgentsWorkspaceListResult>(
+                              "agents.workspace.list",
+                              {
+                                agentId: mkdirAgentId,
+                                path: mkdirListPath,
+                              },
+                            )
+                            .then((result) => {
+                              if (
+                                state.agentsSelectedId !== mkdirAgentId ||
+                                state.workspacePath !== mkdirListPath
+                              ) {
+                                return;
+                              }
+                              state.workspaceEntries = result?.entries ?? null;
+                            });
+                        }
+                      })
+                      .catch((err) => {
+                        state.workspaceError = String(err);
+                      });
+                  }
+                },
+                onWorkspaceUpload: async (files) => {
+                  if (!resolvedAgentId || !files.length) {
+                    return;
+                  }
+                  const uploadAgentId = resolvedAgentId;
+                  const uploadListPath = state.workspacePath;
+                  for (const file of files) {
+                    try {
+                      const filePath = uploadListPath
+                        ? `${uploadListPath}/${file.name}`
+                        : file.name;
+                      // Use base64 encoding to preserve binary data for all file types
+                      const buffer = await file.arrayBuffer();
+                      const bytes = new Uint8Array(buffer);
+                      // Chunked encoding to avoid quadratic string concatenation
+                      const chunkSize = 8192;
+                      let binaryStr = "";
+                      for (let i = 0; i < bytes.length; i += chunkSize) {
+                        binaryStr += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+                      }
+                      const base64 = btoa(binaryStr);
+                      await state.client?.request<import("./types.js").AgentsWorkspaceSetResult>(
+                        "agents.workspace.set",
+                        {
+                          agentId: uploadAgentId,
+                          path: filePath,
+                          content: base64,
+                          encoding: "base64",
+                        },
+                      );
+                    } catch (err) {
+                      state.workspaceError = String(err);
+                    }
+                  }
+                  // Refresh file list only if still on the same agent/path
+                  if (
+                    state.agentsPanel === "workspace" &&
+                    state.agentsSelectedId === uploadAgentId &&
+                    state.workspacePath === uploadListPath
+                  ) {
+                    void state.client
+                      ?.request<import("./types.js").AgentsWorkspaceListResult>(
+                        "agents.workspace.list",
+                        {
+                          agentId: uploadAgentId,
+                          path: uploadListPath,
+                        },
+                      )
+                      .then((result) => {
+                        if (
+                          state.agentsSelectedId !== uploadAgentId ||
+                          state.workspacePath !== uploadListPath
+                        ) {
+                          return;
+                        }
+                        state.workspaceEntries = result?.entries ?? null;
+                      })
+                      .catch((err) => {
+                        state.workspaceError = String(err);
+                      });
+                  }
+                },
+                onWorkspaceDownload: (downloadPath) => {
+                  if (!resolvedAgentId || !downloadPath) {
+                    return;
+                  }
+                  void state.client
+                    ?.request<import("./types.js").AgentsWorkspaceGetResult>(
+                      "agents.workspace.get",
+                      {
+                        agentId: resolvedAgentId,
+                        path: downloadPath,
+                        encoding: "base64",
+                      },
+                    )
+                    .then((result) => {
+                      if (result && result.content != null) {
+                        const fileName = downloadPath.split("/").pop() || "download";
+                        // Decode base64 to binary for correct file download
+                        const binaryStr = atob(result.content);
+                        const bytes = new Uint8Array(binaryStr.length);
+                        for (let i = 0; i < binaryStr.length; i++) {
+                          bytes[i] = binaryStr.charCodeAt(i);
+                        }
+                        const blob = new Blob([bytes], {
+                          type: "application/octet-stream",
+                        });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = fileName;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }
+                    })
+                    .catch((err) => {
+                      state.workspaceError = String(err);
+                    });
                 },
               }),
             )
