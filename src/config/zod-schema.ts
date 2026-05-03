@@ -1087,7 +1087,7 @@ export const OpenClawSchema = z
       .optional(),
     proxy: ProxyConfigSchema,
   })
-  .strict()
+  .passthrough()
   .superRefine((cfg, ctx) => {
     const agents = cfg.agents?.list ?? [];
     if (agents.length === 0) {
