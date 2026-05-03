@@ -668,4 +668,86 @@ describe("buildInboundUserContextPrefix", () => {
     expect(history[0]?.["body"]).toBe("body-5");
     expect(history.at(-1)?.["body"]).toBe("body-24");
   });
+
+  // Multi-agent group context (#56692): per-history-entry bot-targeting fields
+  // and reply-target bot username use the `undefined` (= absent) vs `null`
+  // (= explicitly no bot) semantics.
+  describe("multi-agent group bot targeting", () => {
+    it("emits mentioned_bot and replied_to_bot per history entry, omitting undefined", () => {
+      const text = buildInboundUserContextPrefix({
+        ChatType: "group",
+        InboundHistory: [
+          { sender: "Alice", body: "hey @mybot", timestamp: 1, mentionedBot: "mybot" },
+          {
+            sender: "Bob",
+            body: "yes please",
+            timestamp: 2,
+            repliedToBot: "otherbot",
+          },
+          { sender: "Carol", body: "hello world", timestamp: 3, mentionedBot: null },
+          { sender: "Dave", body: "no metadata here", timestamp: 4 },
+        ],
+      } as TemplateContext);
+
+      const history = parseHistoryPayload(text);
+      expect(history).toHaveLength(4);
+      expect(history[0]?.["mentioned_bot"]).toBe("mybot");
+      expect(history[0]).not.toHaveProperty("replied_to_bot");
+      expect(history[1]?.["replied_to_bot"]).toBe("otherbot");
+      expect(history[1]).not.toHaveProperty("mentioned_bot");
+      expect(history[2]?.["mentioned_bot"]).toBeNull();
+      expect(history[2]).not.toHaveProperty("replied_to_bot");
+      expect(history[3]).not.toHaveProperty("mentioned_bot");
+      expect(history[3]).not.toHaveProperty("replied_to_bot");
+    });
+
+    it("includes replied_to_bot in reply context when ReplyToBotUsername is set", () => {
+      const text = buildInboundUserContextPrefix({
+        ChatType: "group",
+        ReplyToBody: "previous bot reply",
+        ReplyToSender: "otherbot",
+        ReplyToBotUsername: "otherbot",
+      } as TemplateContext);
+
+      const replyPayload = parseUntrustedJsonBlock(
+        text,
+        "Replied message (untrusted, for context):",
+      ) as Record<string, unknown>;
+      expect(replyPayload["replied_to_bot"]).toBe("otherbot");
+      expect(replyPayload["sender_label"]).toBe("otherbot");
+      expect(replyPayload["body"]).toBe("previous bot reply");
+    });
+
+    it("omits replied_to_bot when ReplyToBotUsername is absent (backward compat)", () => {
+      const text = buildInboundUserContextPrefix({
+        ChatType: "group",
+        ReplyToBody: "human follow-up",
+        ReplyToSender: "Alice",
+      } as TemplateContext);
+
+      const replyPayload = parseUntrustedJsonBlock(
+        text,
+        "Replied message (untrusted, for context):",
+      ) as Record<string, unknown>;
+      expect(replyPayload).not.toHaveProperty("replied_to_bot");
+      expect(replyPayload["sender_label"]).toBe("Alice");
+    });
+
+    it("preserves history backward compat when no entries carry bot fields", () => {
+      const text = buildInboundUserContextPrefix({
+        ChatType: "group",
+        InboundHistory: [
+          { sender: "Alice", body: "ping", timestamp: 1 },
+          { sender: "Bob", body: "pong", timestamp: 2 },
+        ],
+      } as TemplateContext);
+
+      const history = parseHistoryPayload(text);
+      expect(history).toHaveLength(2);
+      for (const entry of history) {
+        expect(entry).not.toHaveProperty("mentioned_bot");
+        expect(entry).not.toHaveProperty("replied_to_bot");
+      }
+    });
+  });
 });

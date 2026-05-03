@@ -32,6 +32,21 @@ export type HistoryEntry = {
   body: string;
   timestamp?: number;
   messageId?: string;
+  /**
+   * Bot username mentioned in this message.
+   * - `undefined` = data not populated by the channel plugin (legacy / backward compat)
+   * - `null` = explicitly no bot was mentioned
+   * - `string` = the (lowercased) username of the bot mentioned, without leading `@`
+   *
+   * Used by multi-agent group chats so the current agent can see whether prior
+   * messages were addressed to itself or a sibling bot.
+   */
+  mentionedBot?: string | null;
+  /**
+   * Bot username this message is a reply-to.
+   * Same `undefined` / `null` / `string` semantics as `mentionedBot`.
+   */
+  repliedToBot?: string | null;
 };
 
 export function buildHistoryContext(params: {

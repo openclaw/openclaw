@@ -268,12 +268,17 @@ export function buildInboundUserContextPrefix(
 
   const replyToBody = sanitizePromptBody(ctx.ReplyToBody);
   if (replyToBody) {
+    const replyPayload: Record<string, unknown> = {
+      sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
+      is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
+      body: replyToBody,
+    };
+    const repliedToBot = normalizePromptMetadataString(ctx.ReplyToBotUsername);
+    if (repliedToBot) {
+      replyPayload.replied_to_bot = repliedToBot;
+    }
     blocks.push(
-      formatUntrustedJsonBlock("Replied message (untrusted, for context):", {
-        sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
-        is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
-        body: replyToBody,
-      }),
+      formatUntrustedJsonBlock("Replied message (untrusted, for context):", replyPayload),
     );
   }
 
@@ -318,11 +323,26 @@ export function buildInboundUserContextPrefix(
     blocks.push(
       formatUntrustedJsonBlock(
         "Chat history since last reply (untrusted, for context):",
-        boundedHistory.map((entry) => ({
-          sender: sanitizePromptBody(entry.sender),
-          timestamp_ms: entry.timestamp,
-          body: sanitizePromptBody(entry.body),
-        })),
+        boundedHistory.map((entry) => {
+          const mapped: Record<string, unknown> = {
+            sender: sanitizePromptBody(entry.sender),
+            timestamp_ms: entry.timestamp,
+            body: sanitizePromptBody(entry.body),
+          };
+          if (entry.mentionedBot !== undefined) {
+            mapped.mentioned_bot =
+              entry.mentionedBot === null
+                ? null
+                : (normalizePromptMetadataString(entry.mentionedBot) ?? null);
+          }
+          if (entry.repliedToBot !== undefined) {
+            mapped.replied_to_bot =
+              entry.repliedToBot === null
+                ? null
+                : (normalizePromptMetadataString(entry.repliedToBot) ?? null);
+          }
+          return mapped;
+        }),
       ),
     );
   }
