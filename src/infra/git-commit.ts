@@ -6,6 +6,8 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveGitHeadPath } from "./git-root.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
+declare const __OPENCLAW_GIT_COMMIT__: string | undefined;
+
 const formatCommit = (value?: string | null) => {
   if (!value) {
     return null;
@@ -27,6 +29,7 @@ export type CommitMetadataReaders = {
   readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
   readBuildInfoCommit?: () => string | null;
   readPackageJsonCommit?: () => string | null;
+  readInjectedCommit?: () => string | null;
 };
 
 function isMissingPathError(error: unknown): boolean {
@@ -187,6 +190,12 @@ const readCommitFromPackageJson = () => {
   }
 };
 
+const readCommitFromInjectedDefine = (): string | null => {
+  // Replaced by tsdown at build time with a string literal. Dev runs from source
+  // leave it undefined; the `typeof` guard lets us fall through to live git.
+  return typeof __OPENCLAW_GIT_COMMIT__ === "string" ? formatCommit(__OPENCLAW_GIT_COMMIT__) : null;
+};
+
 const readCommitFromBuildInfo = () => {
   try {
     const require = createRequire(import.meta.url);
@@ -229,6 +238,11 @@ export const resolveCommitHash = (
   const searchDir = resolveCommitSearchDir(options);
   if (cachedGitCommitBySearchDir.has(searchDir)) {
     return cachedGitCommitBySearchDir.get(searchDir) ?? null;
+  }
+  // Baked-in commit is authoritative for built binaries — it cannot drift as HEAD moves.
+  const injectedCommit = readers.readInjectedCommit?.() ?? readCommitFromInjectedDefine();
+  if (injectedCommit) {
+    return cacheGitCommit(searchDir, injectedCommit);
   }
   const packageRoot = resolveOpenClawPackageRootSync({
     cwd: options.cwd,
