@@ -1422,6 +1422,7 @@ describe("codex command", () => {
     });
     expect(startCodexConversationThread).toHaveBeenCalledWith({
       pluginConfig: undefined,
+      config: {},
       sessionFile,
       workspaceDir: "/repo",
       threadId: "thread-123",

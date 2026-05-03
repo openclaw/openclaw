@@ -25,6 +25,7 @@ import {
 } from "./protocol.js";
 import {
   clearCodexAppServerBinding,
+  isCodexAppServerNativeAuthProfileId,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
   type CodexAppServerThreadBinding,
@@ -57,19 +58,24 @@ export async function startOrResumeThread(params: {
       await clearCodexAppServerBinding(params.params.sessionFile);
     } else {
       try {
+        const authProfileId = params.params.authProfileId ?? binding.authProfileId;
         const response = assertCodexThreadResumeResponse(
           await params.client.request(
             "thread/resume",
             buildThreadResumeParams(params.params, {
               threadId: binding.threadId,
+              authProfileId,
               appServer: params.appServer,
               developerInstructions: params.developerInstructions,
               config: params.config,
             }),
           ),
         );
-        const boundAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
-        const fallbackModelProvider = resolveCodexAppServerModelProvider(params.params.provider);
+        const boundAuthProfileId = authProfileId;
+        const fallbackModelProvider = resolveCodexAppServerModelProvider({
+          provider: params.params.provider,
+          authProfileId: boundAuthProfileId,
+        });
         await writeCodexAppServerBinding(params.params.sessionFile, {
           threadId: response.thread.id,
           cwd: params.cwd,
@@ -112,7 +118,10 @@ export async function startOrResumeThread(params: {
       }),
     ),
   );
-  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
+  const modelProvider = resolveCodexAppServerModelProvider({
+    provider: params.params.provider,
+    authProfileId: params.params.authProfileId,
+  });
   const createdAt = new Date().toISOString();
   await writeCodexAppServerBinding(params.params.sessionFile, {
     threadId: response.thread.id,
@@ -147,7 +156,10 @@ export function buildThreadStartParams(
     config?: JsonObject;
   },
 ): CodexThreadStartParams {
-  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
+  const modelProvider = resolveCodexAppServerModelProvider({
+    provider: params.provider,
+    authProfileId: params.authProfileId,
+  });
   return {
     model: params.modelId,
     ...(modelProvider ? { modelProvider } : {}),
@@ -169,12 +181,16 @@ export function buildThreadResumeParams(
   params: EmbeddedRunAttemptParams,
   options: {
     threadId: string;
+    authProfileId?: string;
     appServer: CodexAppServerRuntimeOptions;
     developerInstructions?: string;
     config?: JsonObject;
   },
 ): CodexThreadResumeParams {
-  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
+  const modelProvider = resolveCodexAppServerModelProvider({
+    provider: params.provider,
+    authProfileId: options.authProfileId ?? params.authProfileId,
+  });
   return {
     threadId: options.threadId,
     model: params.modelId,
@@ -326,14 +342,28 @@ function buildUserInput(
   ];
 }
 
-function resolveCodexAppServerModelProvider(provider: string): string | undefined {
-  const normalized = provider.trim();
-  if (!normalized || normalized === "codex") {
+function resolveCodexAppServerModelProvider(params: {
+  provider: string;
+  authProfileId?: string;
+}): string | undefined {
+  const normalized = params.provider.trim();
+  const normalizedLower = normalized.toLowerCase();
+  if (!normalized || normalizedLower === "codex") {
     // `codex` is OpenClaw's virtual provider; let Codex app-server keep its
     // native provider/auth selection instead of forcing the legacy OpenAI path.
     return undefined;
   }
-  return normalized === "openai-codex" ? "openai" : normalized;
+  if (
+    isCodexAppServerNativeAuthProfileId(params.authProfileId) &&
+    (normalizedLower === "openai" || normalizedLower === "openai-codex")
+  ) {
+    // When OpenClaw is forwarding ChatGPT/Codex OAuth, forcing the public
+    // OpenAI model provider makes app-server call api.openai.com without the
+    // ChatGPT bearer and fails with "Missing bearer or basic authentication".
+    // Omit the provider so app-server keeps its native account-backed route.
+    return undefined;
+  }
+  return normalizedLower === "openai-codex" ? "openai" : normalized;
 }
 
 // Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) use the

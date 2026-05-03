@@ -5,6 +5,7 @@ import type {
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   codexSandboxPolicyForTurn,
@@ -49,6 +50,7 @@ type CodexConversationRunOptions = {
 
 type CodexConversationStartParams = {
   pluginConfig?: unknown;
+  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionFile: string;
   workspaceDir?: string;
   threadId?: string;
@@ -81,7 +83,10 @@ export async function startCodexConversationThread(
   const workspaceDir =
     params.workspaceDir?.trim() || resolveCodexDefaultWorkspaceDir(params.pluginConfig);
   const existingBinding = await readCodexAppServerBinding(params.sessionFile);
-  const authProfileId = params.authProfileId ?? existingBinding?.authProfileId;
+  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
+    authProfileId: params.authProfileId ?? existingBinding?.authProfileId,
+    config: params.config,
+  });
   if (params.threadId?.trim()) {
     await attachExistingThread({
       pluginConfig: params.pluginConfig,
