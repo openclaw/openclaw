@@ -648,7 +648,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   const webSearchConfig = params.config.tools?.web?.search;
   const webSearchProvider =
     webSearchConfig?.enabled !== false && typeof webSearchConfig?.provider === "string"
-      ? params.config.tools.web.search.provider
+      ? webSearchConfig.provider
       : undefined;
   const webSearchPluginId = resolvePluginIdForConfiguredWebSearchProvider(
     webSearchProvider,
