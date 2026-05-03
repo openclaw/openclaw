@@ -874,6 +874,7 @@ export async function startGatewayServer(
     refreshGatewayHealthSnapshot({
       ...opts,
       getRuntimeSnapshot,
+      getEventLoopHealth: readinessEventLoopHealth.snapshot,
     });
   const createCloseHandler =
     () => async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
@@ -1221,6 +1222,7 @@ export async function startGatewayServer(
       findRunningWizard,
       purgeWizardSession,
       getRuntimeSnapshot,
+      getEventLoopHealth: readinessEventLoopHealth.snapshot,
       startChannel,
       stopChannel,
       markChannelLoggedOut,
