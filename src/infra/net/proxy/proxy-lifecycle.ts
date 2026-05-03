@@ -85,6 +85,15 @@ export function _resetGlobalAgentBootstrapForTests(): void {
   cachedBootstrapGlobalAgent = undefined;
 }
 
+/** Test-only: force resolver to treat global-agent as absent (`null`) or let it resolve (`undefined`). */
+export function _setCachedGlobalAgentBootstrapForTests(
+  value: (() => void) | null | undefined,
+): void {
+  cachedBootstrapGlobalAgent = value;
+  globalAgentBootstrapped = false;
+  globalAgentBootstrapUnavailable = false;
+}
+
 function resolveGlobalAgentBootstrap(): (() => void) | null {
   if (cachedBootstrapGlobalAgent !== undefined) {
     return cachedBootstrapGlobalAgent;
@@ -404,8 +413,14 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   try {
     injectedEnvSnapshot = injectProxyEnv(proxyUrl);
     forceResetGlobalDispatcher();
-    await resolveGlobalAgentBootstrapAsync();
+    const bootstrapFn = await resolveGlobalAgentBootstrapAsync();
     bootstrapNodeHttpStack(proxyUrl);
+    if (!bootstrapFn) {
+      throw new Error(
+        "proxy: the global-agent package is required when proxy.enabled is true but could not be loaded; " +
+          "install dependencies from the OpenClaw package root (for example `pnpm install`) or run `openclaw doctor --fix`.",
+      );
+    }
     registration = {
       proxyUrl,
       stopped: false,

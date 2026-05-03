@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Proxy: when `proxy.enabled` is true, fail activation with a clear error if the `global-agent` package cannot be loaded instead of leaving proxy env set without Node `http`/`https` hooks. Refs #72115.
 - Agents/sessions: keep delayed `sessions_send` A2A replies alive after soft wait-window timeouts, while preserving terminal run timeouts and avoiding stale target replies in requester sessions. Fixes #76443. Thanks @ryswork1993 and @vincentkoc.
 - CLI/sessions: keep intentional empty agent replies silent after tool-delivered channel output, instead of surfacing a misleading "No reply from agent." fallback. Thanks @vincentkoc.
 - Config/doctor: cap `.clobbered.*` forensic snapshots per config path and serialize snapshot writes so repeated `doctor --fix` recovery loops cannot flood the config directory. Fixes #76454; carries forward #65649. Thanks @JUSTICEESSIELP, @rsnow, and @vincentkoc.
