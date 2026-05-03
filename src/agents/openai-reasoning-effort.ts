@@ -26,6 +26,11 @@ function normalizeModelId(id: string | null | undefined): string {
   return normalizeLowercaseStringOrEmpty(id ?? "").replace(/-\d{4}-\d{2}-\d{2}$/u, "");
 }
 
+export function isOpenAIGpt54MiniModel(model: OpenAIReasoningModel): boolean {
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  return /^gpt-5\.4-mini(?:-|$)/u.test(id);
+}
+
 export function normalizeOpenAIReasoningEffort(effort: string): string {
   return effort === "minimal" ? "minimal" : effort;
 }
@@ -79,14 +84,6 @@ export function resolveOpenAISupportedReasoningEfforts(
   }
   if (/^gpt-5\.[2-9](?:\.\d+)?-pro(?:-|$)/u.test(id)) {
     return GPT_PRO_REASONING_EFFORTS;
-  }
-  const api = normalizeLowercaseStringOrEmpty(typeof model.api === "string" ? model.api : "");
-  if (api === "openai-responses" || api === "openai-codex-responses") {
-    if (/^gpt-5\.4-mini(?:-|$)/u.test(id)) {
-      return GPT_52_REASONING_EFFORTS;
-    }
-  } else if (/^gpt-5\.4-mini(?:-|$)/u.test(id)) {
-    return [];
   }
   if (/^gpt-5\.[2-9](?:\.\d+)?(?:-|$)/u.test(id)) {
     return GPT_52_REASONING_EFFORTS;

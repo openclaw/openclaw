@@ -13,10 +13,10 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "xhigh" })).toBe("xhigh");
   });
 
-  it("omits reasoning_effort for gpt-5.4-mini in Chat Completions", () => {
+  it("preserves reasoning_effort metadata for gpt-5.4-mini in Chat Completions", () => {
     const model = { provider: "openai", id: "gpt-5.4-mini", api: "openai-completions" };
-    expect(resolveOpenAISupportedReasoningEfforts(model)).toHaveLength(0);
-    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBeUndefined();
+    expect(resolveOpenAISupportedReasoningEfforts(model)).toContain("medium");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBe("medium");
   });
 
   it("preserves reasoning_effort for gpt-5.4-mini in Responses", () => {
