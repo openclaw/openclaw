@@ -1225,7 +1225,6 @@ export async function installPluginFromNpmSpec(
       }),
       "--prefix",
       npmRoot,
-      spec,
     ],
     {
       timeoutMs: Math.max(timeoutMs, 300_000),
