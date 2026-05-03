@@ -266,11 +266,33 @@ async function readRecentTranscriptTailLinesAsync(
   }
 }
 
+const MAX_TRANSCRIPT_PARSE_LINE_BYTES = 256 * 1024;
+const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
+
+function isOversizedTranscriptLine(line: string): boolean {
+  return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
+}
+
+function buildOversizedTranscriptRecord(): TailTranscriptRecord {
+  return {
+    record: {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
+        __openclaw: { truncated: true, reason: "oversized" },
+      },
+    },
+  };
+}
+
 function normalizeTailEntryString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function parseTailTranscriptRecord(line: string): TailTranscriptRecord | null {
+  if (isOversizedTranscriptLine(line)) {
+    return buildOversizedTranscriptRecord();
+  }
   try {
     const parsed = JSON.parse(line) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -1097,6 +1119,9 @@ function resolvePositiveUsageNumber(value: unknown): number | undefined {
 function extractUsageSnapshotFromTranscriptLine(
   line: string,
 ): SessionTranscriptUsageSnapshot | null {
+  if (isOversizedTranscriptLine(line)) {
+    return null;
+  }
   try {
     const parsed = JSON.parse(line) as Record<string, unknown>;
     const message =
