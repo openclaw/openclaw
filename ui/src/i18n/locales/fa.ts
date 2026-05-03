@@ -725,6 +725,16 @@ export const fa: TranslationMap = {
       dailyCsv: "CSV روزانه",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "کشِ استفاده در پس‌زمینه در حال بازسازی است. مجموع‌های نمایش‌داده‌شده ممکن است قدیمی باشند.",
+      title: "{status}: {pending} در انتظار، {stale} قدیمی، {cached} کش‌شده",
+      status: {
+        refreshing: "در حال تازه‌سازی",
+        stale: "قدیمی",
+        partial: "جزئی",
+      },
+    },
     empty: {
       title: "با یک بازه تاریخ شروع کنید",
       subtitle:

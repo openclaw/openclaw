@@ -715,8 +715,7 @@ export function renderUsage(props: UsageProps) {
         ${cacheStatusTitle
           ? html`
               <div class="callout warning usage-callout usage-cache-warning">
-                Usage cache is rebuilding in the background. Displayed totals may be stale.
-                ${cacheStatusTitle}
+                ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
               </div>
             `
           : nothing}

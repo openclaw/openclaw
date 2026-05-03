@@ -729,6 +729,16 @@ export const uk: TranslationMap = {
       dailyCsv: "Щоденний CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Кеш використання перебудовується у фоновому режимі. Відображені підсумки можуть бути застарілими.",
+      title: "{status}: {pending} очікує, {stale} застаріло, {cached} кешовано",
+      status: {
+        refreshing: "оновлення",
+        stale: "застаріло",
+        partial: "частково",
+      },
+    },
     empty: {
       title: "Почніть із діапазону дат",
       subtitle:
