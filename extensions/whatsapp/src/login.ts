@@ -6,6 +6,7 @@ import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
 import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
+import { renderQrTerminal } from "./qr-terminal.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 import { resolveWhatsAppSocketTiming } from "./socket-timing.js";
 
@@ -19,9 +20,22 @@ export async function loginWeb(
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const socketTiming = resolveWhatsAppSocketTiming(cfg);
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
-  let sock = await createWaSocket(true, verbose, {
+  let sock = await createWaSocket(false, verbose, {
     authDir: account.authDir,
     ...socketTiming,
+    onQr: (qr: string) => {
+      // Route QR heading and ASCII art through the runtime so non-default
+      // runtimes (e.g. gateway-side) receive the output instead of having it
+      // written directly to process.stdout via console.log.
+      runtime.log("Scan this QR in WhatsApp (Linked Devices):");
+      void renderQrTerminal(qr, { small: true })
+        .then((art) => {
+          runtime.log(art.endsWith("\n") ? art.slice(0, -1) : art);
+        })
+        .catch((err) => {
+          runtime.error(`failed rendering WhatsApp QR: ${String(err)}`);
+        });
+    },
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
