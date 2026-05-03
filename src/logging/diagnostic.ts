@@ -54,6 +54,8 @@ const webhookStats = {
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
 const MIN_STUCK_SESSION_WARN_MS = 1_000;
 const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
+const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 10 * 60_000;
+const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 5;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
@@ -82,6 +84,7 @@ type RecoverStuckSession = (params: {
   sessionKey?: string;
   ageMs: number;
   queueDepth?: number;
+  allowActiveAbort?: boolean;
 }) => void | Promise<void>;
 
 type DiagnosticLivenessSample = {
@@ -125,6 +128,7 @@ function recoverStuckSession(params: {
   sessionKey?: string;
   ageMs: number;
   queueDepth?: number;
+  allowActiveAbort?: boolean;
 }) {
   stuckSessionRecoveryRuntimePromise ??= import("./diagnostic-stuck-session-recovery.runtime.js");
   void stuckSessionRecoveryRuntimePromise
@@ -342,6 +346,26 @@ export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
     return DEFAULT_STUCK_SESSION_WARN_MS;
   }
   return rounded;
+}
+
+function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
+  return Math.max(
+    MIN_STALLED_EMBEDDED_RUN_ABORT_MS,
+    stuckSessionWarnMs * STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER,
+  );
+}
+
+function isStalledEmbeddedRunRecoveryEligible(params: {
+  classification: SessionAttentionClassification | undefined;
+  ageMs: number;
+  stuckSessionWarnMs: number;
+}): boolean {
+  return (
+    params.classification?.eventType === "session.stalled" &&
+    params.classification.classification === "stalled_agent_run" &&
+    params.classification.activeWorkKind === "embedded_run" &&
+    params.ageMs >= resolveStalledEmbeddedRunAbortMs(params.stuckSessionWarnMs)
+  );
 }
 
 export function logWebhookReceived(params: {
@@ -594,6 +618,13 @@ export function logSessionAttention(
     activity,
     staleMs: params.thresholdMs,
   });
+  const recoveryEligible =
+    classification.recoveryEligible ||
+    isStalledEmbeddedRunRecoveryEligible({
+      classification,
+      ageMs: params.ageMs,
+      stuckSessionWarnMs: params.thresholdMs,
+    });
   if (classification.eventType === "session.stuck") {
     const nextWarnAgeMs =
       state.lastStuckWarnAgeMs === undefined
@@ -617,7 +648,7 @@ export function logSessionAttention(
       state.queueDepth
     } reason=${classification.reason} classification=${classification.classification}${
       classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
-    } recovery=${classification.recoveryEligible ? "checking" : "none"}`,
+    } recovery=${recoveryEligible ? "checking" : "none"}`,
   );
   const baseEvent = {
     sessionId: state.sessionId,
@@ -815,6 +846,20 @@ export function startDiagnosticHeartbeat(
             sessionKey: state.sessionKey,
             ageMs,
             queueDepth: state.queueDepth,
+          });
+        } else if (
+          isStalledEmbeddedRunRecoveryEligible({
+            classification,
+            ageMs,
+            stuckSessionWarnMs,
+          })
+        ) {
+          void (opts?.recoverStuckSession ?? recoverStuckSession)({
+            sessionId: state.sessionId,
+            sessionKey: state.sessionKey,
+            ageMs,
+            queueDepth: state.queueDepth,
+            allowActiveAbort: true,
           });
         }
       }

@@ -1273,6 +1273,7 @@ export async function runEmbeddedAttempt(
       runtimeChannel,
       runtimeCapabilities,
       agentId: sessionAgentId,
+      trigger: params.trigger,
     };
     const promptContribution =
       params.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??

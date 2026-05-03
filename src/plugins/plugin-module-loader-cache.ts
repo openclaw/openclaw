@@ -34,8 +34,67 @@ export type PluginModuleLoaderCacheEntry = {
   cacheKey: string;
   scopedCacheKey: string;
 };
+export type PluginModuleLoaderStatsSnapshot = {
+  calls: number;
+  nativeHits: number;
+  nativeMisses: number;
+  sourceTransformForced: number;
+  sourceTransformFallbacks: number;
+  topSourceTransformTargets: Array<{ target: string; count: number }>;
+};
 
 const DEFAULT_PLUGIN_MODULE_LOADER_CACHE_ENTRIES = 128;
+const MAX_TRACKED_SOURCE_TRANSFORM_TARGETS = 24;
+const pluginModuleLoaderStats = {
+  calls: 0,
+  nativeHits: 0,
+  nativeMisses: 0,
+  sourceTransformForced: 0,
+  sourceTransformFallbacks: 0,
+  sourceTransformTargets: new Map<string, number>(),
+};
+
+function recordSourceTransformTarget(target: string): void {
+  const current = pluginModuleLoaderStats.sourceTransformTargets.get(target) ?? 0;
+  pluginModuleLoaderStats.sourceTransformTargets.set(target, current + 1);
+  if (pluginModuleLoaderStats.sourceTransformTargets.size <= MAX_TRACKED_SOURCE_TRANSFORM_TARGETS) {
+    return;
+  }
+  let leastUsedTarget: string | undefined;
+  let leastUsedCount = Number.POSITIVE_INFINITY;
+  for (const [candidate, count] of pluginModuleLoaderStats.sourceTransformTargets) {
+    if (count < leastUsedCount) {
+      leastUsedTarget = candidate;
+      leastUsedCount = count;
+    }
+  }
+  if (leastUsedTarget) {
+    pluginModuleLoaderStats.sourceTransformTargets.delete(leastUsedTarget);
+  }
+}
+
+export function getPluginModuleLoaderStats(): PluginModuleLoaderStatsSnapshot {
+  return {
+    calls: pluginModuleLoaderStats.calls,
+    nativeHits: pluginModuleLoaderStats.nativeHits,
+    nativeMisses: pluginModuleLoaderStats.nativeMisses,
+    sourceTransformForced: pluginModuleLoaderStats.sourceTransformForced,
+    sourceTransformFallbacks: pluginModuleLoaderStats.sourceTransformFallbacks,
+    topSourceTransformTargets: [...pluginModuleLoaderStats.sourceTransformTargets]
+      .toSorted((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, 8)
+      .map(([target, count]) => ({ target, count })),
+  };
+}
+
+export function resetPluginModuleLoaderStatsForTest(): void {
+  pluginModuleLoaderStats.calls = 0;
+  pluginModuleLoaderStats.nativeHits = 0;
+  pluginModuleLoaderStats.nativeMisses = 0;
+  pluginModuleLoaderStats.sourceTransformForced = 0;
+  pluginModuleLoaderStats.sourceTransformFallbacks = 0;
+  pluginModuleLoaderStats.sourceTransformTargets.clear();
+}
 
 export function createPluginModuleLoaderCache(
   maxEntries = DEFAULT_PLUGIN_MODULE_LOADER_CACHE_ENTRIES,
@@ -139,11 +198,15 @@ function createPluginModuleLoader(params: {
   // jiti's alias rewriting to surface a narrow SDK slice), route every
   // target through jiti so those alias rewrites still apply.
   if (!params.tryNative) {
-    return ((target: string, ...rest: unknown[]) =>
-      (getLoadWithSourceTransform() as (t: string, ...a: unknown[]) => unknown)(
+    return ((target: string, ...rest: unknown[]) => {
+      pluginModuleLoaderStats.calls += 1;
+      pluginModuleLoaderStats.sourceTransformForced += 1;
+      recordSourceTransformTarget(target);
+      return (getLoadWithSourceTransform() as (t: string, ...a: unknown[]) => unknown)(
         target,
         ...rest,
-      )) as PluginModuleLoader;
+      );
+    }) as PluginModuleLoader;
   }
   // Otherwise prefer native require() for already-compiled JS artifacts
   // (the bundled plugin public surfaces shipped in dist/). jiti's transform
@@ -153,10 +216,15 @@ function createPluginModuleLoader(params: {
   // async-module fallbacks `tryNativeRequireJavaScriptModule` declines to
   // handle.
   return ((target: string, ...rest: unknown[]) => {
+    pluginModuleLoaderStats.calls += 1;
     const native = tryNativeRequireJavaScriptModule(target, { allowWindows: true });
     if (native.ok) {
+      pluginModuleLoaderStats.nativeHits += 1;
       return native.moduleExport;
     }
+    pluginModuleLoaderStats.nativeMisses += 1;
+    pluginModuleLoaderStats.sourceTransformFallbacks += 1;
+    recordSourceTransformTarget(target);
     return (getLoadWithSourceTransform() as (t: string, ...a: unknown[]) => unknown)(
       target,
       ...rest,

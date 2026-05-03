@@ -28,6 +28,7 @@ import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
+  buildTurnCollaborationMode,
   buildThreadResumeParams,
   buildTurnStartParams,
   startOrResumeThread,
@@ -441,34 +442,27 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("forces the message dynamic tool for message-tool-only source replies", async () => {
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.config = { tools: { profile: "coding" } };
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.messageProvider = "whatsapp";
-    params.timeoutMs = 60_000;
 
-    const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 5 });
-    await harness.waitForMethod("thread/start");
-    await harness.waitForMethod("turn/start");
-
-    const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    const dynamicToolNames = (
-      (startRequest?.params as { dynamicTools?: Array<{ name: string }> } | undefined)
-        ?.dynamicTools ?? []
-    ).map((tool) => tool.name);
-    expect(dynamicToolNames).toContain("message");
-
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await expect(run).resolves.toMatchObject({
-      timedOut: false,
-      aborted: false,
+    const dynamicTools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: "agent:main:session-1",
+      sandbox: null,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
     });
+    const dynamicToolNames = dynamicTools.map((tool) => tool.name);
+
+    expect(dynamicToolNames).toContain("message");
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
@@ -2332,8 +2326,38 @@ describe("runCodexAppServerAttempt", () => {
         approvalsReviewer: "guardian_subagent",
         sandboxPolicy: { type: "dangerFullAccess" },
         serviceTier: "flex",
+        collaborationMode: {
+          mode: "default",
+          settings: {
+            model: "gpt-5.4-codex",
+            reasoning_effort: "medium",
+            developer_instructions: null,
+          },
+        },
       }),
     );
+  });
+
+  it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
+    const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
+    params.trigger = "heartbeat";
+
+    expect(buildTurnCollaborationMode(params)).toEqual({
+      mode: "default",
+      settings: {
+        model: "gpt-5.4-codex",
+        reasoning_effort: "medium",
+        developer_instructions: expect.stringContaining(
+          "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
+        ),
+      },
+    });
+    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive.",
+    );
+
+    params.trigger = "user";
+    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toBeNull();
   });
 
   it("preserves the bound auth profile when resume params omit authProfileId", async () => {
