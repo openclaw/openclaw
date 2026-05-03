@@ -4,7 +4,7 @@ import path from "node:path";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { isGatewayArgv } from "./gateway-process-argv.js";
+import { isGatewayArgv, parseProcCmdline, parseWindowsCmdline } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
@@ -42,6 +42,7 @@ const POLL_SPAWN_TIMEOUT_MS = 400;
  * providing a hard stop against corrupted process tables or ppid cycles.
  */
 const MAX_ANCESTOR_WALK_DEPTH = 32;
+const CMDLINE_READ_TIMEOUT_MS = 1000;
 
 const restartLog = createSubsystemLogger("restart");
 let sleepSyncOverride: ((ms: number) => void) | null = null;
@@ -102,6 +103,44 @@ function readParentPidFromProc(pid: number): number | null {
     // the walk" regression test.
     return null;
   }
+}
+
+function readUnixProcessArgsSync(pid: number): string[] | null {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return null;
+  }
+  if (process.platform === "linux") {
+    try {
+      return parseProcCmdline(readFileSync(`/proc/${pid}/cmdline`, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const res = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+      timeout: CMDLINE_READ_TIMEOUT_MS,
+    });
+    if (res.error || res.status !== 0) {
+      return null;
+    }
+    const command = res.stdout.trim();
+    return command ? parseWindowsCmdline(command) : null;
+  } catch {
+    return null;
+  }
+}
+
+function isOpenClawGatewayLsofEntry(pid: number, command: string): boolean {
+  const normalizedCommand = normalizeLowercaseStringOrEmpty(command);
+  if (normalizedCommand.includes("openclaw")) {
+    return true;
+  }
+  if (!/^(node|nodejs|bun)$/.test(normalizedCommand)) {
+    return false;
+  }
+  const args = readUnixProcessArgsSync(pid);
+  return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
 }
 
 /**
@@ -178,15 +217,14 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
   const pids: number[] = [];
   let currentPid: number | undefined;
   let currentCmd: string | undefined;
+  const maybePushCurrent = () => {
+    if (currentPid != null && currentCmd && isOpenClawGatewayLsofEntry(currentPid, currentCmd)) {
+      pids.push(currentPid);
+    }
+  };
   for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
     if (line.startsWith("p")) {
-      if (
-        currentPid != null &&
-        currentCmd &&
-        normalizeLowercaseStringOrEmpty(currentCmd).includes("openclaw")
-      ) {
-        pids.push(currentPid);
-      }
+      maybePushCurrent();
       const parsed = Number.parseInt(line.slice(1), 10);
       currentPid = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
       currentCmd = undefined;
@@ -194,13 +232,7 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
       currentCmd = line.slice(1);
     }
   }
-  if (
-    currentPid != null &&
-    currentCmd &&
-    normalizeLowercaseStringOrEmpty(currentCmd).includes("openclaw")
-  ) {
-    pids.push(currentPid);
-  }
+  maybePushCurrent();
   // Deduplicate: dual-stack listeners (IPv4 + IPv6) cause lsof to emit the
   // same PID twice. Return each PID at most once to avoid double-killing.
   // Exclude self and ancestors — terminating any ancestor cascade-kills the

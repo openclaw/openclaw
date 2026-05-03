@@ -256,6 +256,39 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(pids).not.toContain(process.pid);
     });
 
+    it("detects node-launched OpenClaw gateways by inspecting the process argv", () => {
+      const stalePid = process.pid + 1500;
+      mockReadFileSync.mockImplementation((path: unknown): string => {
+        if (path === `/proc/${stalePid}/cmdline`) {
+          return [
+            "/usr/bin/node",
+            "/opt/homebrew/lib/node_modules/openclaw/dist/index.js",
+            "gateway",
+            "--port",
+            "18789",
+            "",
+          ].join("\0");
+        }
+        const error: NodeJS.ErrnoException = new Error("ENOENT");
+        error.code = "ENOENT";
+        throw error;
+      });
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command === "lsof") {
+          return createLsofResult({ stdout: lsofOutput([{ pid: stalePid, cmd: "node" }]) });
+        }
+        if (command === "ps") {
+          return createLsofResult({
+            stdout:
+              "/opt/homebrew/opt/node/bin/node /opt/homebrew/lib/node_modules/openclaw/dist/index.js gateway --port 18789\n",
+          });
+        }
+        return createLsofResult({ status: 1 });
+      });
+
+      expect(findGatewayPidsOnPortSync(18789)).toEqual([stalePid]);
+    });
+
     it("excludes ancestor pids so a sidecar cannot kill its parent gateway — regression for #68451", () => {
       // Regression: openclaw-weixin sidecar (child of the gateway) invoked
       // cleanStaleGatewayProcessesSync during init. lsof reported the parent

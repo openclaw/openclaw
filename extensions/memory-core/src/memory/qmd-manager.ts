@@ -62,11 +62,12 @@ const log = createSubsystemLogger("memory");
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 const QMD_WATCH_STABILITY_MS = 200;
+const DEFAULT_QMD_WATCH_MAX_FILES = 2_000;
+const QMD_WATCH_MAX_FILES_ENV = "OPENCLAW_QMD_WATCH_MAX_FILES";
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
-const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
 const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
   factor: 1.2,
@@ -147,10 +148,6 @@ function getQmdUpdateQueueState(): QmdUpdateQueueState {
   }));
 }
 
-function _hasHanScript(value: string): boolean {
-  return HAN_SCRIPT_RE.test(value);
-}
-
 function normalizeHanBm25Query(query: string): string {
   const trimmed = query.trim();
   // Keep Han/CJK BM25 queries intact so OpenClaw search semantics match direct qmd search.
@@ -198,6 +195,36 @@ function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
     .map((segment) => normalizeLowercaseStringOrEmpty(segment));
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
 }
+
+function resolveQmdWatchMaxFiles(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[QMD_WATCH_MAX_FILES_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_QMD_WATCH_MAX_FILES;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_QMD_WATCH_MAX_FILES;
+  }
+  return parsed;
+}
+
+function hasGlobSyntax(pattern: string): boolean {
+  return /[*?[\]{}()!+@]/.test(pattern);
+}
+
+function isMarkdownWatchCandidate(filePath: string, pattern: string): boolean {
+  const normalizedPattern = normalizeLowercaseStringOrEmpty(pattern);
+  if (!normalizedPattern.includes(".md") && !normalizedPattern.includes(".markdown")) {
+    return true;
+  }
+  const normalizedPath = normalizeLowercaseStringOrEmpty(filePath);
+  return normalizedPath.endsWith(".md") || normalizedPath.endsWith(".markdown");
+}
+
+type WatchCandidateCount = {
+  count: number;
+  truncated: boolean;
+};
 
 type CollectionRoot = {
   path: string;
@@ -1522,9 +1549,22 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     const watchPaths = new Set<string>();
+    const maxWatchFiles = resolveQmdWatchMaxFiles();
+    let candidateFiles = 0;
     for (const collection of this.qmd.collections) {
       if (collection.kind === "sessions") {
         continue;
+      }
+      const counted = this.countCollectionWatchCandidates(
+        collection,
+        maxWatchFiles - candidateFiles,
+      );
+      candidateFiles += counted.count;
+      if (counted.truncated || candidateFiles > maxWatchFiles) {
+        log.warn(
+          `qmd watcher skipped for agent "${this.agentId}" because collection "${collection.name}" exceeds maxFiles=${maxWatchFiles}; relying on boot/manual/interval/search sync`,
+        );
+        return;
       }
       watchPaths.add(this.resolveCollectionWatchPath(collection));
     }
@@ -1533,7 +1573,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const watchPathList = Array.from(watchPaths);
     const startTime = Date.now();
-    log.info(`qmd watcher starting for agent "${this.agentId}" paths=${watchPathList.length}`);
+    log.info(
+      `qmd watcher starting for agent "${this.agentId}" paths=${watchPathList.length} candidates=${candidateFiles} maxFiles=${maxWatchFiles}`,
+    );
     this.watcher = chokidar.watch(watchPathList, {
       ignoreInitial: true,
       ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
@@ -1551,9 +1593,82 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.watcher.on("unlink", markDirty);
     this.watcher.once("ready", () => {
       log.info(
-        `qmd watcher ready for agent "${this.agentId}" paths=${watchPathList.length} durationMs=${Date.now() - startTime}`,
+        `qmd watcher ready for agent "${this.agentId}" paths=${watchPathList.length} candidates=${candidateFiles} durationMs=${Date.now() - startTime}`,
       );
     });
+  }
+
+  private countCollectionWatchCandidates(
+    collection: ManagedCollection,
+    remainingBudget: number,
+  ): WatchCandidateCount {
+    if (remainingBudget <= 0) {
+      return { count: 0, truncated: true };
+    }
+    const collectionPath = path.normalize(collection.path);
+    const pattern = collection.pattern.trim();
+    if (!pattern) {
+      return { count: 0, truncated: false };
+    }
+    if (!hasGlobSyntax(pattern)) {
+      const filePath = path.join(collectionPath, pattern);
+      try {
+        const stat = fsSync.statSync(filePath);
+        if (stat.isFile()) {
+          return {
+            count: !shouldIgnoreMemoryWatchPath(filePath) ? 1 : 0,
+            truncated: false,
+          };
+        }
+        if (stat.isDirectory()) {
+          return this.countDirectoryWatchCandidates(filePath, pattern, remainingBudget);
+        }
+        return { count: 0, truncated: false };
+      } catch {
+        return { count: 0, truncated: false };
+      }
+    }
+    return this.countDirectoryWatchCandidates(collectionPath, pattern, remainingBudget);
+  }
+
+  private countDirectoryWatchCandidates(
+    rootPath: string,
+    pattern: string,
+    remainingBudget: number,
+  ): WatchCandidateCount {
+    const limit = remainingBudget + 1;
+    let count = 0;
+    const stack = [rootPath];
+    while (stack.length > 0) {
+      const dir = stack.pop();
+      if (!dir || shouldIgnoreMemoryWatchPath(dir)) {
+        continue;
+      }
+      let entries: import("node:fs").Dirent[];
+      try {
+        entries = fsSync.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        const entryPath = path.join(dir, entry.name);
+        if (shouldIgnoreMemoryWatchPath(entryPath) || entry.isSymbolicLink()) {
+          continue;
+        }
+        if (entry.isDirectory()) {
+          stack.push(entryPath);
+          continue;
+        }
+        if (!entry.isFile() || !isMarkdownWatchCandidate(entryPath, pattern)) {
+          continue;
+        }
+        count += 1;
+        if (count >= limit) {
+          return { count, truncated: true };
+        }
+      }
+    }
+    return { count, truncated: false };
   }
 
   private resolveCollectionWatchPath(collection: ManagedCollection): string {
