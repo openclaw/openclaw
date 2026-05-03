@@ -1605,6 +1605,71 @@ describe("discoverOpenClawPlugins", () => {
       expect(result.diagnostics.some((diag) => diag.message.includes("suspicious ownership"))).toBe(
         shouldBlockForMismatch,
       );
+      if (shouldBlockForMismatch) {
+        expect(result.diagnostics).toContainEqual(
+          expect.objectContaining({
+            pluginId: "owner-mismatch",
+          }),
+        );
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("deduplicates blocked candidate diagnostics", () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    mkdirSafe(globalExt);
+    const blockedDir = path.join(globalExt, "blocked-plugin");
+    mkdirSafe(blockedDir);
+    fs.writeFileSync(path.join(blockedDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.chmodSync(blockedDir, 0o777);
+
+    try {
+      const result = discoverOpenClawPlugins({
+        env: {
+          ...buildDiscoveryEnv(stateDir),
+          OPENCLAW_PLUGINS_PATHS: blockedDir,
+        },
+      });
+      const blockedDiagnostics = result.diagnostics.filter(
+        (diag) =>
+          diag.pluginId === "blocked-plugin" &&
+          diag.message.includes("blocked plugin candidate: world-writable path"),
+      );
+      expect(blockedDiagnostics).toHaveLength(1);
+    } finally {
+      fs.chmodSync(blockedDir, 0o755);
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "uses native manifest ids for blocked index-file directory diagnostics",
+    () => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "alias-dir");
+      mkdirSafe(pluginDir);
+      writePluginManifest({ pluginDir, id: "actual-id" });
+      writePluginEntry(path.join(pluginDir, "index.ts"));
+      fs.chmodSync(pluginDir, 0o777);
+
+      try {
+        const result = discoverOpenClawPlugins({
+          extraPaths: [pluginDir],
+          env: {
+            ...buildDiscoveryEnv(stateDir),
+          },
+        });
+        expect(result.candidates).toHaveLength(0);
+        expect(result.diagnostics).toContainEqual(
+          expect.objectContaining({
+            pluginId: "actual-id",
+            source: expect.stringMatching(/alias-dir$/),
+            message: expect.stringContaining("blocked plugin candidate: world-writable path"),
+          }),
+        );
+      } finally {
+        fs.chmodSync(pluginDir, 0o755);
+      }
     },
   );
 
