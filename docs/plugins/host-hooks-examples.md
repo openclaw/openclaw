@@ -94,6 +94,11 @@ export default definePluginEntry({
 });
 ```
 
+Companion PRs add additional SDK surfaces that are referenced later in this
+recipe guide but are not available on current stable `main` until those PRs
+merge: session actions (#75578), host-mediated attachments (#75581), scheduled
+turn helpers (#75588), and guarded `SessionEntry` slot mirrors (#75609).
+
 If you only need one host-hook surface, you can ignore the others. Composition
 is opt-in and lazy — registering nothing in a category means the plugin does
 not participate in that category.
@@ -115,6 +120,7 @@ plugin id key the storage.
 
 ```typescript
 // from src/plugins/host-hooks.ts
+// sessionEntrySlotKey/sessionEntrySlotSchema are companion #75609 fields.
 export type PluginSessionExtensionRegistration = {
   namespace: string;
   description: string;
@@ -137,6 +143,16 @@ export type PluginSessionExtensionProjectionContext = {
 stored value as a `pluginExtensions` row entry with `{ pluginId, namespace,
 value }`. Pass `project()` when you want to _transform_ what clients see (for
 example, hide secrets, or return a different shape than what you persist).
+
+`GatewaySessionRow.pluginExtensions` is an array of projection entries, not a
+nested object. Clients may derive a convenience map like
+`pluginExtensionsByPlugin[pluginId][namespace]`, but that map is client-owned.
+
+<Note>
+  `sessionEntrySlotKey` and `sessionEntrySlotSchema` are companion #75609
+  additions. Until #75609 merges, use the `pluginExtensions[]` projection array
+  for Gateway session rows.
+</Note>
 
 You can also set `sessionEntrySlotKey` when one non-plugin reader needs a
 stable top-level `SessionEntry` field instead of a `pluginExtensions[]`
@@ -216,11 +232,13 @@ sequenceDiagram
   UI->>GW: sessions.pluginPatch({pluginId, namespace, value: {...}})
   GW->>Reg: lookup (pluginId, namespace) — reject if unknown
   Reg->>Store: write namespaced state
-  Store-->>GW: raw state saved
-  GW->>Plugin: build session row, invoke project({sessionKey, sessionId, state})
+  Store-->>GW: { ok, key, value }
+  GW-->>UI: { ok, key, value }
+  GW-->>UI: sessions.changed notification
+  UI->>GW: refresh session row
+  GW->>Plugin: build row projection with project({sessionKey, sessionId, state})
   Plugin-->>GW: pluginExtensions[] projection entry
-  GW->>Store: mirror projected value to SessionEntry.reviewStatus
-  GW-->>UI: live row update
+  GW-->>UI: refreshed row (and #75609 slot mirror when enabled)
 ```
 
 **Real-world example: Review Concierge session state**
@@ -313,6 +331,8 @@ export default definePluginEntry({
 Lets privileged Control UI / mobile / desktop / internal clients update
 plugin-owned session state through the Gateway, with namespace-and-plugin-id
 validation at the wire. The Gateway method requires `operator.admin` scope.
+The RPC returns `{ ok, key, value }`; session-row projection happens on the
+subsequent session refresh, not as a nested object in the patch response.
 
 **Contract**
 
@@ -355,16 +375,18 @@ sequenceDiagram
   participant Store as Session Store
 
   UI->>GW: sessions.pluginPatch(params)
-  GW->>GW: validate params shape
+  GW->>GW: validate params shape and operator.admin scope
   GW->>Reg: lookup (pluginId, namespace) — must be registered
   alt unknown plugin or namespace
-    Reg-->>GW: 404 unknown plugin session extension
-    GW-->>UI: error: unknown plugin session extension: id/namespace
+    Reg-->>GW: unknown plugin session extension
+    GW-->>UI: JSON-RPC INVALID_REQUEST error: "unknown plugin session extension: id/namespace"
   else registered
-    Reg->>Store: write patched value (or unset)
-    Store->>Reg: invoke project() callback
-    Reg-->>GW: updated session row
+    GW->>Store: write patched value (or unset)
+    Store-->>GW: persisted namespace value
     GW-->>UI: { ok: true, key, value }
+    GW-->>UI: sessions.changed notification
+    UI->>GW: sessions.list/detail refresh
+    GW->>Reg: project pluginExtensions[] for session row
   end
 ```
 
@@ -538,10 +560,10 @@ export default definePluginEntry({
 - **`idempotencyKey` is plugin-scoped per session.** If two plugins both
   enqueue with the same key, both fire. The dedup is `(pluginId, sessionKey,
 idempotencyKey)`.
-- **A drain consumes all of this session's queue, including from
-  transiently-inactive plugins.** This is intentional (the drain is the
-  consume boundary). If you need to reschedule across registry hot-reload,
-  re-enqueue from your reload hook.
+- **A drain only delivers active loaded plugins with prompt injection enabled.**
+  Records for inactive or disabled plugins are discarded when any drain happens
+  for that session. If you need to survive a registry hot-reload, re-enqueue
+  from your reload hook.
 
 ---
 
@@ -1343,6 +1365,11 @@ row. The plugin only ships data — never UI code.
 
 ### 11. Host-mediated session actions: `api.registerSessionAction(...)`
 
+<Note>
+  Companion implementation: #75578. `api.registerSessionAction(...)` is not
+  available on current stable `main` until that PR merges.
+</Note>
+
 **What it does**
 
 Registers a typed action that trusted clients can invoke through the host. The
@@ -1379,7 +1406,6 @@ api.registerSessionAction({
       sessionKey: ctx.sessionKey,
       placement: "prepend_context",
       text: `Deployment decision: ${decision}`,
-      priority: 100,
       idempotencyKey: `deploy:${decision}`,
     });
     return { data: { decision }, continueAgent: true };
@@ -1395,6 +1421,11 @@ operation.
 ---
 
 ### 12. Host-mediated attachments: `api.sendSessionAttachment(...)`
+
+<Note>
+  Companion implementation: #75581. `api.sendSessionAttachment(...)` is not
+  available on current stable `main` until that PR merges.
+</Note>
 
 **What it does**
 
@@ -1425,6 +1456,11 @@ structured result instead; attachment delivery is bundled-only.
 
 ### 13. Scheduled follow-up turns: `api.scheduleSessionTurn(...)`
 
+<Note>
+  Companion implementation: #75588. `api.scheduleSessionTurn(...)` is not
+  available on current stable `main` until that PR merges.
+</Note>
+
 **What it does**
 
 Registers a plugin-owned follow-up turn through the host scheduler. The host
@@ -1451,6 +1487,14 @@ the plugin; the host seam only owns scheduling, validation, and cleanup.
 ---
 
 ### 14. Plugin-owned event emission: `api.emitAgentEvent(...)`
+
+<Note>
+  This recipe is a future/candidate plugin-facing event-emission seam. There is
+  no `api.emitAgentEvent(...)` method on current stable `OpenClawPluginApi`;
+  do not implement against this name until a companion implementation PR adds
+  it. Current plugins can subscribe to sanitized host streams with
+  `api.registerAgentEventSubscription(...)`.
+</Note>
 
 **What it does**
 
@@ -1926,7 +1970,7 @@ host-driven cleanup. This table is the contract:
 
 | Reason    | Persistent extensions  | Pending injections | Run context | Scheduler jobs                            | Lifecycle callback             |
 | --------- | ---------------------- | ------------------ | ----------- | ----------------------------------------- | ------------------------------ |
-| `restart` | preserved              | preserved          | preserved   | preserved (cleanup callbacks **skipped**) | called with `reason:"restart"` |
+| `restart` | preserved              | preserved          | cleared     | preserved (cleanup callbacks **skipped**) | called with `reason:"restart"` |
 | `disable` | removed                | removed            | cleared     | removed                                   | called with `reason:"disable"` |
 | `reset`   | removed (for session)  | removed (session)  | cleared     | removed (session)                         | called with `reason:"reset"`   |
 | `delete`  | removed (all sessions) | removed (all)      | cleared     | removed (all)                             | called with `reason:"delete"`  |
@@ -1937,7 +1981,9 @@ host-driven cleanup. This table is the contract:
 > fire. If you call them on restart, the surviving job has nothing left to
 > do when it fires. So the host preserves both the job and its underlying
 > resources, and the cleanup callback runs only when the job actually
-> stops being preserved (disable / reset / delete).
+> stops being preserved (disable / reset / delete). Run context is still
+> cleared on restart because it is per-run scratch state, not durable plugin
+> session state.
 
 ---
 
