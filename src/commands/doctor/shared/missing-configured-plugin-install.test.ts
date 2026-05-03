@@ -423,7 +423,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         id: "acpx",
         label: "ACPX Runtime",
         install: {
-          npmSpec: "@openclaw/acpx@beta",
+          npmSpec: "@openclaw/acpx",
           defaultChoice: "npm",
         },
       },
@@ -442,13 +442,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
 
     expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
-        spec: "@openclaw/acpx@beta",
+        spec: "@openclaw/acpx",
         expectedPluginId: "acpx",
         trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(result.changes).toEqual([
-      'Installed missing configured plugin "acpx" from @openclaw/acpx@beta.',
+      'Installed missing configured plugin "acpx" from @openclaw/acpx.',
     ]);
   });
 

@@ -489,7 +489,7 @@ describe("updateNpmInstalledPlugins", () => {
     await updateNpmInstalledPlugins({
       config: createNpmInstallConfig({
         pluginId: "acpx",
-        spec: "@openclaw/acpx@beta",
+        spec: "@openclaw/acpx",
         installPath,
         resolvedName: "@openclaw/acpx",
         resolvedSpec: "@openclaw/acpx@2026.5.2-beta.1",
@@ -500,7 +500,7 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        spec: "@openclaw/acpx@beta",
+        spec: "@openclaw/acpx",
         expectedPluginId: "acpx",
         trustedSourceLinkedOfficialInstall: true,
       }),
