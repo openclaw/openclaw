@@ -161,15 +161,20 @@ export async function buildChannelSummary(
     const anyEnabled = entries.some((entry) => entry.enabled);
     const fallbackEntry =
       entries.find((entry) => entry.accountId === defaultAccountId) ?? entries[0];
-    const summary = plugin.status?.buildChannelSummary
-      ? await plugin.status.buildChannelSummary({
-          account: fallbackEntry?.account ?? {},
-          cfg: effective,
-          defaultAccountId,
-          snapshot:
-            fallbackEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
-        })
-      : undefined;
+    // Only build channel summary when there are actually configured accounts.
+    // Passing a default/fallback accountId with no real config produces phantom
+    // "not configured" entries that confuse the status display.
+    const hasRealAccounts = accountIds.length > 0 || configuredEntries.length > 0;
+    const summary =
+      hasRealAccounts && plugin.status?.buildChannelSummary
+        ? await plugin.status.buildChannelSummary({
+            account: fallbackEntry?.account ?? {},
+            cfg: effective,
+            defaultAccountId,
+            snapshot:
+              fallbackEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
+          })
+        : undefined;
 
     const summaryRecord = summary;
     const statusState =
@@ -214,7 +219,11 @@ export async function buildChannelSummary(
       line += ` auth ${formatTimeAgo(authAgeMs)}`;
     }
 
-    lines.push(tint(line, statusColor));
+    // Suppress status line entirely when there are no real accounts and no configured entries.
+    // This prevents phantom "not configured" lines for channels that have no accounts.
+    if (hasRealAccounts) {
+      lines.push(tint(line, statusColor));
+    }
 
     if (configuredEntries.length > 0) {
       for (const entry of configuredEntries) {

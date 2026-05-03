@@ -308,4 +308,30 @@ describe("buildChannelSummary", () => {
 
     expect(lines).toEqual(["Fallback: not configured"]);
   });
+
+  it("does not show phantom default account when no accounts are configured", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "feishu",
+          plugin: makeFallbackSummaryPlugin({
+            enabled: true,
+            configured: false,
+            accountIds: [], // no real accounts configured
+            defaultAccountId: "default",
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const lines = await buildChannelSummary({ channels: {} } as never, {
+      colorize: false,
+      includeAllowFrom: false,
+    });
+
+    // Should not render "not configured" for a default account that has no real config
+    expect(lines).not.toContain("not configured");
+    expect(lines).toEqual([]);
+  });
 });
