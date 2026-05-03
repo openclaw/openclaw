@@ -164,7 +164,7 @@ openclaw infer model run --local --model ollama/qwen2.5vl:7b --prompt "Describe 
 
 Notes:
 
-- Local `model run` is the narrowest CLI smoke for provider/model/auth health because it sends only the supplied prompt to the selected model.
+- Local `model run` is the narrowest CLI smoke for provider/model/auth health. It sends the supplied prompt with a minimal default system prompt (`"You are a helpful assistant."`) so providers that require a non-empty system prompt (such as `openai-codex-responses`) succeed without an agent session context.
 - Local `model run --file` keeps that lean path and attaches image content directly to the single user message. Common image files such as PNG, JPEG, and WebP work when their MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called.
 - `model run --file` is best when you want to test the selected multimodal text model directly. Use `infer image describe` when you want OpenClaw's image-understanding provider selection and default image-model routing.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
