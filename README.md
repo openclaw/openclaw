@@ -105,7 +105,7 @@ npm install -g openclaw@latest
 openclaw onboard --install-daemon
 ```
 
-#### macOS setup notes
+### macOS setup notes
 
 Before installing OpenClaw on macOS, make sure Xcode Command Line Tools are installed:
 
