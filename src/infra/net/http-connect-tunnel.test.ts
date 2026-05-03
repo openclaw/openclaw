@@ -6,9 +6,16 @@ class FakeSocket extends EventEmitter {
   public readonly unshifted: Buffer[] = [];
   public destroyed = false;
   public writable = true;
+  public readonly alpnProtocol: string | false;
+  public readonly emitSecureConnectOnConnect: boolean;
 
-  constructor(private readonly response?: string) {
+  constructor(
+    private readonly response?: string,
+    options: { alpnProtocol?: string | false; emitSecureConnectOnConnect?: boolean } = {},
+  ) {
     super();
+    this.alpnProtocol = options.alpnProtocol ?? "h2";
+    this.emitSecureConnectOnConnect = options.emitSecureConnectOnConnect ?? true;
   }
 
   write(data: string): void {
@@ -64,7 +71,11 @@ const {
         if (!nextTargetTlsSocket) {
           throw new Error("nextTargetTlsSocket not set");
         }
-        return nextTargetTlsSocket;
+        const socket = nextTargetTlsSocket;
+        if (socket.emitSecureConnectOnConnect) {
+          queueMicrotask(() => socket.emit("secureConnect"));
+        }
+        return socket;
       }
       if (!nextProxyTlsSocket) {
         throw new Error("nextProxyTlsSocket not set");
@@ -171,6 +182,82 @@ describe("openHttpConnectTunnel", () => {
       `Proxy-Authorization: Basic ${Buffer.from("user:secret").toString("base64")}`,
     );
     expect(proxySocket.destroyed).toBe(true);
+  });
+
+  it("rejects malformed proxy credentials through the normal cleanup path", async () => {
+    const proxySocket = new FakeSocket();
+    setNextNetSocket(proxySocket);
+    const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
+
+    await expect(
+      openHttpConnectTunnel({
+        proxyUrl: "http://%E0%A4%A@proxy.example:8080",
+        targetHost: "api.push.apple.com",
+        targetPort: 443,
+      }),
+    ).rejects.toThrow("Proxy CONNECT failed via http://proxy.example:8080: URI malformed");
+    expect(proxySocket.destroyed).toBe(true);
+  });
+
+  it("caps unterminated CONNECT response headers", async () => {
+    const proxySocket = new FakeSocket(`HTTP/1.1 200 ${"a".repeat(17 * 1024)}`);
+    setNextNetSocket(proxySocket);
+    const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
+
+    await expect(
+      openHttpConnectTunnel({
+        proxyUrl: "http://proxy.example:8080",
+        targetHost: "api.push.apple.com",
+        targetPort: 443,
+      }),
+    ).rejects.toThrow(
+      "Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT response headers exceeded 16384 bytes",
+    );
+    expect(proxySocket.destroyed).toBe(true);
+  });
+
+  it("waits for APNs TLS secureConnect before resolving", async () => {
+    const proxySocket = new FakeSocket("HTTP/1.1 200 Connection Established\r\n\r\n");
+    const targetTlsSocket = new FakeSocket(undefined, { emitSecureConnectOnConnect: false });
+    setNextNetSocket(proxySocket);
+    setNextTargetTlsSocket(targetTlsSocket);
+    const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
+
+    let resolved = false;
+    const tunnel = openHttpConnectTunnel({
+      proxyUrl: "http://proxy.example:8080",
+      targetHost: "api.push.apple.com",
+      targetPort: 443,
+    }).then((socket) => {
+      resolved = true;
+      return socket;
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(resolved).toBe(false);
+
+    targetTlsSocket.emit("secureConnect");
+
+    await expect(tunnel).resolves.toBe(targetTlsSocket);
+  });
+
+  it("rejects APNs TLS tunnels that do not negotiate h2", async () => {
+    const proxySocket = new FakeSocket("HTTP/1.1 200 Connection Established\r\n\r\n");
+    const targetTlsSocket = new FakeSocket(undefined, { alpnProtocol: "http/1.1" });
+    setNextNetSocket(proxySocket);
+    setNextTargetTlsSocket(targetTlsSocket);
+    const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
+
+    await expect(
+      openHttpConnectTunnel({
+        proxyUrl: "http://proxy.example:8080",
+        targetHost: "api.push.apple.com",
+        targetPort: 443,
+      }),
+    ).rejects.toThrow(
+      "Proxy CONNECT failed via http://proxy.example:8080: APNs TLS tunnel negotiated http/1.1 instead of h2",
+    );
+    expect(targetTlsSocket.destroyed).toBe(true);
   });
 
   it("rejects and destroys the proxy socket when CONNECT times out", async () => {

@@ -8,6 +8,8 @@ export type HttpConnectTunnelParams = {
   timeoutMs?: number;
 };
 
+const MAX_CONNECT_RESPONSE_HEADER_BYTES = 16 * 1024;
+
 function redactProxyUrl(proxyUrl: string): string {
   try {
     const parsed = new URL(proxyUrl);
@@ -55,13 +57,15 @@ function writeConnectRequest(socket: net.Socket, proxy: URL, target: string): vo
   socket.write([...headers, "", ""].join("\r\n"));
 }
 
-export async function openHttpConnectTunnel(params: HttpConnectTunnelParams): Promise<net.Socket> {
+export async function openHttpConnectTunnel(
+  params: HttpConnectTunnelParams,
+): Promise<tls.TLSSocket> {
   const proxy = new URL(params.proxyUrl);
   if (proxy.protocol !== "http:" && proxy.protocol !== "https:") {
     throw new Error(`Unsupported proxy protocol for APNs HTTP/2 CONNECT tunnel: ${proxy.protocol}`);
   }
 
-  return await new Promise<net.Socket>((resolve, reject) => {
+  return await new Promise<tls.TLSSocket>((resolve, reject) => {
     let proxySocket: net.Socket | tls.TLSSocket | undefined;
     let targetTlsSocket: tls.TLSSocket | undefined;
     let timeout: NodeJS.Timeout | undefined;
@@ -84,6 +88,12 @@ export async function openHttpConnectTunnel(params: HttpConnectTunnelParams): Pr
       proxySocket?.off("secureConnect", onConnected);
     };
 
+    const cleanupTargetTlsListeners = () => {
+      targetTlsSocket?.off("secureConnect", onTargetSecureConnect);
+      targetTlsSocket?.off("error", onTargetTlsError);
+      targetTlsSocket?.off("close", onTargetTlsClose);
+    };
+
     const fail = (err: unknown) => {
       if (settled) {
         return;
@@ -91,6 +101,7 @@ export async function openHttpConnectTunnel(params: HttpConnectTunnelParams): Pr
       settled = true;
       clearTimer();
       cleanupProxyListeners();
+      cleanupTargetTlsListeners();
       targetTlsSocket?.destroy();
       proxySocket?.destroy();
       reject(formatTunnelFailure(params.proxyUrl, err));
@@ -104,6 +115,7 @@ export async function openHttpConnectTunnel(params: HttpConnectTunnelParams): Pr
       settled = true;
       clearTimer();
       cleanupProxyListeners();
+      cleanupTargetTlsListeners();
       resolve(socket);
     };
 
@@ -113,18 +125,41 @@ export async function openHttpConnectTunnel(params: HttpConnectTunnelParams): Pr
         return;
       }
       const target = `${params.targetHost}:${params.targetPort}`;
-      writeConnectRequest(proxySocket, proxy, target);
+      try {
+        writeConnectRequest(proxySocket, proxy, target);
+      } catch (err) {
+        fail(err);
+      }
     }
 
     function onData(chunk: Buffer | string): void {
       const nextChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "latin1");
       responseBuffer = Buffer.concat([responseBuffer, nextChunk]);
       const headerEnd = responseBuffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1 || !proxySocket) {
+      if (headerEnd === -1) {
+        if (responseBuffer.length > MAX_CONNECT_RESPONSE_HEADER_BYTES) {
+          fail(
+            new Error(
+              `Proxy CONNECT response headers exceeded ${MAX_CONNECT_RESPONSE_HEADER_BYTES} bytes`,
+            ),
+          );
+        }
+        return;
+      }
+      if (!proxySocket) {
+        fail(new Error("Proxy socket missing after CONNECT response"));
+        return;
+      }
+      const bodyOffset = headerEnd + 4;
+      if (bodyOffset > MAX_CONNECT_RESPONSE_HEADER_BYTES) {
+        fail(
+          new Error(
+            `Proxy CONNECT response headers exceeded ${MAX_CONNECT_RESPONSE_HEADER_BYTES} bytes`,
+          ),
+        );
         return;
       }
 
-      const bodyOffset = headerEnd + 4;
       if (responseBuffer.length > bodyOffset) {
         proxySocket.unshift(responseBuffer.subarray(bodyOffset));
       }
@@ -136,12 +171,39 @@ export async function openHttpConnectTunnel(params: HttpConnectTunnelParams): Pr
       }
 
       cleanupProxyListeners();
-      targetTlsSocket = tls.connect({
-        socket: proxySocket,
-        servername: params.targetHost,
-        ALPNProtocols: ["h2"],
-      });
+      try {
+        targetTlsSocket = tls.connect({
+          socket: proxySocket,
+          servername: params.targetHost,
+          ALPNProtocols: ["h2"],
+        });
+        targetTlsSocket.once("secureConnect", onTargetSecureConnect);
+        targetTlsSocket.once("error", onTargetTlsError);
+        targetTlsSocket.once("close", onTargetTlsClose);
+      } catch (err) {
+        fail(err);
+      }
+    }
+
+    function onTargetSecureConnect(): void {
+      if (!targetTlsSocket) {
+        fail(new Error("APNs TLS socket missing after secureConnect"));
+        return;
+      }
+      if (targetTlsSocket.alpnProtocol !== "h2") {
+        const negotiated = targetTlsSocket.alpnProtocol || "no ALPN protocol";
+        fail(new Error(`APNs TLS tunnel negotiated ${negotiated} instead of h2`));
+        return;
+      }
       succeed(targetTlsSocket);
+    }
+
+    function onTargetTlsError(err: Error): void {
+      fail(err);
+    }
+
+    function onTargetTlsClose(): void {
+      fail(new Error("APNs TLS tunnel closed before secureConnect"));
     }
 
     function onEnd(): void {

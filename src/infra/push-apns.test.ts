@@ -15,7 +15,8 @@ const testAuthPrivateKey = generateKeyPairSync("ec", {
   namedCurve: "prime256v1",
 }).privateKey.export({ format: "pem", type: "pkcs8" });
 
-const testApnsServerKey = `-----BEGIN PRIVATE KEY-----
+const testApnsServerKey = `-----BEGIN PRIVATE KEY-----`; // pragma: allowlist secret
+const testApnsServerKeyPem = `${testApnsServerKey}
 MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC1l/DDGxT//Ma2
 1EC7ON4lb+9IOrHHd437rv5DBhMt7ZXpzmfZuXyJWd/RI3ljiCcJeXwTYdzLsyaR
 aMRUnbzOoaI5/9LRdwmo007Y/US1ZxSjXW3L+vl3+QtiAUt6GDBZo49jB/LSCgu3
@@ -170,7 +171,7 @@ async function startFakeApnsServer(): Promise<{
 }> {
   const requests: CapturedApnsRequest[] = [];
   const server = http2.createSecureServer({
-    key: testApnsServerKey,
+    key: testApnsServerKeyPem,
     cert: testApnsServerCert,
     allowHTTP1: false,
   });
