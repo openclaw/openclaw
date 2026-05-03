@@ -253,7 +253,7 @@ describe("buildInlineKeyboard", () => {
         },
       },
       {
-        name: "keeps button style fields",
+        name: "strips internal button style fields before sending to Telegram",
         input: [
           [
             {
@@ -269,7 +269,6 @@ describe("buildInlineKeyboard", () => {
               {
                 text: "Option A",
                 callback_data: "cmd:a",
-                style: "primary",
               },
             ],
           ],
