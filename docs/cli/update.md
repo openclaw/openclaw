@@ -2,6 +2,7 @@
 summary: "CLI reference for `openclaw update` (safe-ish source update + gateway auto-restart)"
 read_when:
   - You want to update a source checkout safely
+  - You are debugging `openclaw update` output or options
   - You need to understand `--update` shorthand behavior
 title: "Update"
 ---
@@ -41,6 +42,14 @@ openclaw --update
   detected during post-update plugin sync.
 - `--timeout <seconds>`: per-step timeout (default is 1800s).
 - `--yes`: skip confirmation prompts (for example downgrade confirmation).
+
+`openclaw update` does not have a `--verbose` flag. Use `--dry-run` to preview
+the planned channel/tag/install/restart actions, `--json` for machine-readable
+results, and `openclaw update status --json` when you only need channel and
+availability details. If you are debugging Gateway logs around an update,
+console verbosity and file log level are separate: Gateway `--verbose` affects
+terminal/WebSocket output, while file logs require `logging.level: "debug"` or
+`"trace"` in config. See [Gateway logging](/gateway/logging).
 
 <Warning>
 Downgrades require confirmation because older versions can break configuration.
