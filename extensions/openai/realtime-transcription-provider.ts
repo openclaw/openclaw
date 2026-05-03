@@ -104,9 +104,10 @@ function createOpenAIRealtimeTranscriptionSession(
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
         const error = new Error(detail);
-        config.onError?.(error);
         if (!transport.isReady()) {
           transport.failConnect(error);
+        } else {
+          config.onError?.(error);
         }
         return;
       }
