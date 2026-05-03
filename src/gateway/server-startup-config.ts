@@ -183,9 +183,8 @@ export function createRuntimeSecretsActivator(params: {
         await readVaultOAuthCredential(authStore).catch(() => undefined);
         const cachedVaultCredential = getCachedVaultOAuthCredential();
         if (authStore && cachedVaultCredential) {
+          authStore.profiles[cachedVaultCredential.profileId] = cachedVaultCredential.credential;
           const runtimeAuthStore = cloneAuthProfileStore(authStore);
-          runtimeAuthStore.profiles[cachedVaultCredential.profileId] =
-            cachedVaultCredential.credential;
           setRuntimeAuthProfileStoreSnapshot(runtimeAuthStore);
         }
         const prepared = await prepareRuntimeSecretsSnapshot({

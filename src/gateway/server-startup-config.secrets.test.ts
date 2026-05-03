@@ -191,6 +191,15 @@ describe("gateway startup config secret preflight", () => {
       activate: false,
     });
 
+    const seededStore = prepareRuntimeSecretsSnapshot.mock.calls[0]?.[0]?.loadAuthStore?.() as
+      | { profiles?: Record<string, { provider?: string; type?: string }> }
+      | undefined;
+    expect(seededStore?.profiles?.["openai-codex:default"]).toEqual(
+      expect.objectContaining({
+        type: "oauth",
+        provider: "openai-codex",
+      }),
+    );
     expect(runtimeSnapshotMocks.setRuntimeAuthProfileStoreSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
         profiles: expect.objectContaining({
