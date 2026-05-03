@@ -43,7 +43,7 @@ function startGatewayModelCatalogRefresh(
   const config = (params?.getConfig ?? getRuntimeConfig)();
   const refreshGeneration = staleGeneration;
   const refresh = resolveLoadModelCatalog(params)
-    .then((loadModelCatalog) => loadModelCatalog({ config }))
+    .then((loadModelCatalog) => loadModelCatalog({ config, readOnly: true }))
     .then((catalog) => {
       if (catalog.length > 0 && refreshGeneration === staleGeneration) {
         lastSuccessfulCatalog = catalog;

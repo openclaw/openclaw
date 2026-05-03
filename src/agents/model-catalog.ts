@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -161,12 +162,73 @@ export function loadManifestModelCatalog(params: {
   });
 }
 
+function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
+  return entries.sort((a, b) => {
+    const p = a.provider.localeCompare(b.provider);
+    if (p !== 0) return p;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function normalizePersistedModelCatalogEntry(
+  providerRaw: string,
+  entry: Record<string, unknown>,
+): ModelCatalogEntry | undefined {
+  const id = normalizeOptionalString(entry?.id as string) ?? "";
+  if (!id) return undefined;
+  const provider = normalizeProviderId(providerRaw);
+  if (!provider) return undefined;
+  const name = normalizeOptionalString((entry?.name as string) ?? id) || id;
+  const contextWindow =
+    typeof entry?.contextWindow === "number" && entry.contextWindow > 0
+      ? entry.contextWindow
+      : undefined;
+  const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
+  const input = Array.isArray(entry?.input) ? entry.input : undefined;
+  const compat =
+    entry?.compat && typeof entry.compat === "object" ? (entry.compat as Record<string, unknown>) : undefined;
+  return { id, name, provider, contextWindow, reasoning, input, compat };
+}
+
+async function loadReadOnlyPersistedModelCatalog(params?: {
+  config?: OpenClawConfig;
+}): Promise<ModelCatalogEntry[]> {
+  const cfg = params?.config ?? getRuntimeConfig();
+  const agentDir = resolveOpenClawAgentDir();
+  const raw = await readFile(join(agentDir, "models.json"), "utf8");
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const models: ModelCatalogEntry[] = [];
+  const providers =
+    parsed?.providers && typeof parsed.providers === "object"
+      ? (parsed.providers as Record<string, Record<string, unknown>>)
+      : {};
+  for (const [providerRaw, providerConfig] of Object.entries(providers)) {
+    if (!Array.isArray(providerConfig?.models)) continue;
+    for (const entry of providerConfig.models as Record<string, unknown>[]) {
+      const normalized = normalizePersistedModelCatalogEntry(providerRaw, entry);
+      if (normalized) models.push(normalized);
+    }
+  }
+  const configuredModels = buildConfiguredModelCatalog({ cfg });
+  if (configuredModels.length > 0) {
+    appendCatalogEntriesIfAbsent(models, configuredModels);
+  }
+  return sortModelCatalogEntries(models);
+}
+
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
   readOnly?: boolean;
 }): Promise<ModelCatalogEntry[]> {
   const readOnly = params?.readOnly === true;
+  if (readOnly) {
+    try {
+      return await loadReadOnlyPersistedModelCatalog(params);
+    } catch {
+      // fall through to full catalog path
+    }
+  }
   if (!readOnly && params?.useCache === false) {
     modelCatalogPromise = null;
   }
@@ -185,14 +247,7 @@ export async function loadModelCatalog(params?: {
       const suffix = extra ? ` ${extra}` : "";
       log.info(`model-catalog stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`);
     };
-    const sortModels = (entries: ModelCatalogEntry[]) =>
-      entries.sort((a, b) => {
-        const p = a.provider.localeCompare(b.provider);
-        if (p !== 0) {
-          return p;
-        }
-        return a.name.localeCompare(b.name);
-      });
+    const sortModels = sortModelCatalogEntries;
     try {
       const cfg = params?.config ?? getRuntimeConfig();
       if (!readOnly) {
@@ -247,18 +302,20 @@ export async function loadModelCatalog(params?: {
         const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
         models.push({ id, name, provider, contextWindow, reasoning, input, compat });
       }
-      const supplemental = await augmentModelCatalogWithProviderPlugins({
-        config: cfg,
-        env: process.env,
-        context: {
+      if (!readOnly) {
+        const supplemental = await augmentModelCatalogWithProviderPlugins({
           config: cfg,
-          agentDir,
           env: process.env,
-          entries: [...models],
-        },
-      });
-      if (supplemental.length > 0) {
-        appendCatalogEntriesIfAbsent(models, supplemental);
+          context: {
+            config: cfg,
+            agentDir,
+            env: process.env,
+            entries: [...models],
+          },
+        });
+        if (supplemental.length > 0) {
+          appendCatalogEntriesIfAbsent(models, supplemental);
+        }
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
 
