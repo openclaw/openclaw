@@ -110,7 +110,12 @@ describe("slackPlugin actions", () => {
 
     expect(discovery?.actions).toContain("send");
     expect(discovery?.capabilities).toEqual(expect.arrayContaining(["presentation"]));
-    expect(discovery?.schema).toBeUndefined();
+    // 2026-04-29: Slack now contributes a schema fragment so the
+    // model-visible `message` tool description spells out fileId vs
+    // messageId for download-file. See message-tools.test.ts for the
+    // full assertions on the description text.
+    expect(discovery?.schema).not.toBeNull();
+    expect(discovery?.schema).toBeDefined();
   });
 
   it("honors the selected Slack account during message tool discovery", () => {
@@ -224,7 +229,12 @@ describe("slackPlugin actions", () => {
     );
   });
 
-  it("does not expose Slack-native message tool schema", () => {
+  it("exposes a Slack-native message tool schema fragment for fileId / messageId", () => {
+    // Updated 2026-04-29 (was: "does not expose Slack-native message tool
+    // schema"). The Slack plugin now contributes parameter descriptions
+    // for fileId and messageId so the model can tell them apart on
+    // download-file vs react/edit/delete/pin actions. The detailed
+    // assertions about description content live in message-tools.test.ts.
     const discovery = slackPlugin.actions?.describeMessageTool({
       cfg: {
         channels: {
@@ -235,7 +245,8 @@ describe("slackPlugin actions", () => {
         },
       } as OpenClawConfig,
     });
-    expect(discovery?.schema).toBeUndefined();
+    expect(discovery?.schema).not.toBeNull();
+    expect(discovery?.schema).toBeDefined();
   });
 
   it("treats interactive reply payloads as structured Slack payloads", () => {

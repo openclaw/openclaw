@@ -335,4 +335,59 @@ describe("handleSlackMessageAction", () => {
       expect.any(Object),
     );
   });
+
+  it("throws a friendly error when download-file gets messageId instead of fileId (Friday-2026-04-29 regression guard)", async () => {
+    // Production-shape failure: the LLM passed the Slack message ts as
+    // messageId and omitted fileId. The strict 'fileId required' was
+    // unrecoverable in one round-trip; this friendlier error tells the
+    // model exactly how to fix the call.
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "download-file",
+          cfg: {},
+          params: {
+            channel: "slack",
+            messageId: "1777423717.666499",
+          },
+        } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/Did you mean to pass fileId\?/i);
+  });
+
+  it("also recognizes the snake_case message_id alias when steering the friendly download-file error", async () => {
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "download-file",
+          cfg: {},
+          params: {
+            channel: "slack",
+            message_id: "1777423717.666499",
+          },
+        } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/Did you mean to pass fileId\?/i);
+  });
+
+  it("still emits the original required-field error when neither fileId nor messageId is provided", async () => {
+    // Don't lose the existing failure mode — callers that omit both fields
+    // shouldn't get the new "did you mean fileId?" wording, because there's
+    // no messageId to confuse for fileId.
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "download-file",
+          cfg: {},
+          params: {},
+        } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/fileId/i);
+  });
 });

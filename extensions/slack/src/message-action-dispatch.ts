@@ -193,6 +193,21 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "download-file") {
+    // Friendly-error guard: a recurring failure shape from LLMs is to pass
+    // the Slack message timestamp as `messageId` (or its snake_case alias
+    // `message_id`) and omit `fileId`. The strict `required: true` check
+    // below would still throw, but with a generic 'fileId required' that
+    // doesn't tell the model how to recover. Surface a targeted hint so
+    // the next tool call can be self-corrected without another retry. See
+    // 2026-04-29 production incident, runId 911b8eff-3eb7-4f59-beaa-fdefe61f44b2.
+    const fileIdRaw = readStringParam(actionParams, "fileId");
+    const messageIdRaw =
+      readStringParam(actionParams, "messageId") ?? readStringParam(actionParams, "message_id");
+    if (!fileIdRaw && messageIdRaw) {
+      throw new Error(
+        `download-file requires fileId (the Slack file id, e.g. F0B0LTT8M36 from event.files[].id), not messageId. Did you mean to pass fileId? messageId is the Slack message timestamp and is used by react / edit / delete / pin actions, not download-file.`,
+      );
+    }
     const fileId = readStringParam(actionParams, "fileId", { required: true });
     const channelId =
       readStringParam(actionParams, "channelId") ?? readStringParam(actionParams, "to");
