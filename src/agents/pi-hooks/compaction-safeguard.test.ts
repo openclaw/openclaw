@@ -47,6 +47,8 @@ const {
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
   formatFileOperations,
+  collectExactPathLiterals,
+  formatExactPathLiterals,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
@@ -55,6 +57,7 @@ const {
   SAFETY_MARGIN,
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
+  MAX_EXACT_PATH_LITERALS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } = __testing;
 
@@ -309,6 +312,65 @@ describe("compaction-safeguard summary budgets", () => {
     expect(section).toContain("<modified-files>");
     expect(section).toContain("...and ");
     expect(section.length).toBeLessThanOrEqual(MAX_FILE_OPS_SECTION_CHARS);
+  });
+
+  it("collects exact path literals from the full compaction input and file operations", () => {
+    const oldPath = "/root/workspace/skills/openclaw-cybersecurity-skills/CONVERSION_Rules.md";
+    const toolPath =
+      "/root/workspace/skills/Anthropic-Cybersecurity-Skills/skills/building-threat-hunt-hypothesis-framework/SKILL.md";
+    const windowsToolPath = "C:\\tmp\\openclaw\\skills\\SKILL.md";
+    const hiddenDetailsPath = "/private/diagnostics/raw-tool-result.json";
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: `Use ${oldPath} after compaction. API docs are at https://api.openai.com/v1/responses.`,
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolName: "read",
+            toolCallId: "call-read",
+            input: { path: toolPath, windowsPath: windowsToolPath },
+          },
+        ],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call-read",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        details: { rawPath: hiddenDetailsPath },
+        timestamp: 3,
+      } as unknown as AgentMessage,
+    ];
+
+    const paths = collectExactPathLiterals({
+      messages,
+      readFiles: ["docs/reference/compaction.md"],
+      modifiedFiles: ["src/agents/pi-hooks/compaction-safeguard.ts"],
+      previousSummary: "Previously inspected /tmp/openclaw/session-log.json.",
+    });
+    const section = formatExactPathLiterals(paths);
+
+    expect(paths).toContain(oldPath);
+    expect(paths).toContain(toolPath);
+    expect(paths).toContain(windowsToolPath);
+    expect(paths).toContain("/tmp/openclaw/session-log.json");
+    expect(paths).toContain("docs/reference/compaction.md");
+    expect(paths).toContain("src/agents/pi-hooks/compaction-safeguard.ts");
+    expect(paths).not.toContain("//api.openai.com/v1/responses");
+    expect(paths).not.toContain(hiddenDetailsPath);
+    expect(section).toContain("<exact-path-literals>");
+    expect(section).toContain(oldPath);
+    expect(section).toContain(toolPath);
+    expect(section).toContain(windowsToolPath);
+    expect(section).not.toContain("C:\\\\tmp\\\\openclaw\\\\skills\\\\SKILL.md");
+    expect(section).not.toContain(hiddenDetailsPath);
+    expect(section.length).toBeLessThanOrEqual(MAX_EXACT_PATH_LITERALS_SECTION_CHARS);
   });
 
   it("caps final compaction summary with a truncation marker", () => {
@@ -1847,6 +1909,59 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(compaction.summary).toContain("## Recent turns preserved verbatim");
     expect(compaction.summary).toContain("latest ask status");
     expect(compaction.summary).toContain("latest assistant reply");
+  });
+
+  it("appends exact path literals so slash-separated paths survive provider compaction", async () => {
+    mockSummarizeInStages.mockReset();
+    registerCompactionProvider({
+      id: "path-provider",
+      label: "Path Provider",
+      summarize: vi.fn().mockResolvedValue("provider summary without paths"),
+    });
+
+    const exactPath = "/root/workspace/skills/openclaw-cybersecurity-skills/CONVERSION_Rules.md";
+    const corruptedPath =
+      "/root/workspace/ skills/ openclaw- cybersecurity- skills/ CONVERSION_ Rules. md";
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "path-provider",
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: `Continue using ${exactPath} after compacting this long session.`,
+            timestamp: 1,
+          },
+        ],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [exactPath],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: null,
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toContain("<exact-path-literals>");
+    expect(compaction.summary).toContain(exactPath);
+    expect(compaction.summary).not.toContain(corruptedPath);
   });
 });
 
