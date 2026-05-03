@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Plugins/tools: keep disabled bundled tool plugins out of explicit runtime allowlist ownership and fall back from loaded-but-empty channel registries to tool-bearing plugin registries, so Active Memory can use bundled `memory-core` search/get tools even when `memory-lancedb` is disabled. Fixes #76603. Thanks @jwong-art.
+- Channels/QQ Bot: resolve structured `clientSecret` SecretRefs before QQ token exchange, expose the QQ Bot secret contract to secrets tooling, and reject legacy `secretref:/...` marker strings. (#74772) Thanks @xialonglee.
 - Plugins/externalization: keep official ACPX, Google Chat, and LINE install specs on production package names, leaving beta-tag probing to the explicit OpenClaw beta update channel. Thanks @vincentkoc.
 - CLI/doctor: keep missing-plugin repair from overriding official catalog metadata with runtime fallbacks, so ACPX repairs preserve the official npm spec during the externalization rollout. Thanks @vincentkoc.
 - Plugins/catalog: preserve ClawHub install specs when generating the packaged channel catalog so future storepack-first channel plugins keep their remote source instead of becoming npm-only. Thanks @vincentkoc.

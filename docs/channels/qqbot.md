@@ -102,6 +102,8 @@ Notes:
 - `openclaw channels add --channel qqbot --token-file ...` provides the
   AppSecret only; the AppID must already be set in config or `QQBOT_APP_ID`.
 - `clientSecret` also accepts SecretRef input, not just a plaintext string.
+- Legacy `secretref:/...` marker strings are not valid `clientSecret` values;
+  use structured SecretRef objects like the example above.
 
 ### Multi-account setup
 
