@@ -61,6 +61,7 @@ let package = Package(
             resources: [
                 .copy("Resources/OpenClaw.icns"),
                 .copy("Resources/DeviceModels"),
+                .copy("Resources/Wallboard"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
