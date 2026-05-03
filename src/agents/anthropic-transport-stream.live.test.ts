@@ -62,8 +62,17 @@ describeLive("anthropic transport stream live", () => {
     const abortReason = new Error("live anthropic stream abort");
     let requestBody = "";
     let requestBodyPromise: Promise<string> | undefined;
+    let responseClosed = false;
+    let resolveResponseClosed: (() => void) | undefined;
+    const responseClosedPromise = new Promise<void>((resolve) => {
+      resolveResponseClosed = resolve;
+    });
 
     const server = http.createServer((request, response) => {
+      response.on("close", () => {
+        responseClosed = true;
+        resolveResponseClosed?.();
+      });
       requestBodyPromise = readRequestBody(request).then((body) => {
         requestBody = body;
         response.writeHead(200, {
@@ -109,9 +118,11 @@ describeLive("anthropic transport stream live", () => {
       if (result === timedOut) {
         throw new Error("Anthropic live SSE stream did not abort within 1000ms");
       }
+      await Promise.race([responseClosedPromise, delay(1_000, undefined)]);
 
       expect(result.stopReason).toBe("aborted");
       expect(result.errorMessage).toBe("live anthropic stream abort");
+      expect(responseClosed).toBe(true);
       const capturedRequestBody = requestBodyPromise
         ? await Promise.race([requestBodyPromise, delay(500, requestBody)])
         : requestBody;

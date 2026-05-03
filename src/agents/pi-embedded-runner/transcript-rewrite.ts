@@ -379,7 +379,10 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
         state,
         appendedEntries: result.appendedEntries,
       });
-      emitSessionTranscriptUpdate(params.sessionFile);
+      emitSessionTranscriptUpdate({
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+      });
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
           `${result.rewrittenEntries === 1 ? "y" : "ies"} ` +

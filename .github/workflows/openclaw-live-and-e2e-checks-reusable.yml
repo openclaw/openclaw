@@ -1248,6 +1248,9 @@ jobs:
           LANES: ${{ inputs.docker_lanes }}
           INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
           INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         run: |
           set -euo pipefail
           mkdir -p .artifacts/docker-tests
@@ -2083,7 +2086,7 @@ jobs:
           fi
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
-              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
               # Keep the release-blocking CI lane on Codex API-key auth. The
               # staged auth-file path remains supported for local maintainer
               # reruns, but it can hang on stale subscription/session state in
@@ -2300,7 +2303,7 @@ jobs:
           fi
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
-              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
               echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
               echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"

@@ -1024,6 +1024,24 @@ describe("handleAbortChat", () => {
     expect(host.chatRunId).toBe("run-main");
   });
 
+  it("queues a session-scoped abort while disconnected after active run state is recovered", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: null,
+      chatMessage: "draft",
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: true }),
+        row("agent:other", { hasActiveRun: true }),
+      ]),
+    });
+
+    await handleAbortChat(host);
+
+    expect(host.pendingAbort).toEqual({ runId: null, sessionKey: "agent:main" });
+    expect(host.chatMessage).toBe("");
+  });
+
   it("keeps the draft when disconnected without an active run", async () => {
     const host = makeHost({
       connected: false,

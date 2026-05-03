@@ -704,6 +704,169 @@ describe("uninstallPlugin", () => {
     }
   });
 
+  it("cleans stale policy references even when plugin code and install records are gone", async () => {
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        allow: ["missing-plugin", "other-plugin"],
+        deny: ["missing-plugin"],
+        slots: {
+          memory: "missing-plugin",
+        },
+      }),
+      pluginId: "missing-plugin",
+      deleteFiles: true,
+    });
+
+    const successfulResult = expectSuccessfulUninstall(result);
+    expect(successfulResult.actions).toEqual({
+      entry: false,
+      install: false,
+      allowlist: true,
+      denylist: true,
+      loadPath: false,
+      memorySlot: true,
+      contextEngineSlot: false,
+      channelConfig: false,
+      directory: false,
+    });
+    expect(successfulResult.config.plugins?.allow).toEqual(["other-plugin"]);
+    expect(successfulResult.config.plugins?.deny).toBeUndefined();
+    expect(successfulResult.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "enabled entry only, no installed code",
+      pluginId: "missing-entry-plugin",
+      config: createPluginConfig({
+        entries: {
+          "missing-entry-plugin": { enabled: true },
+        },
+      }),
+      expectedActions: {
+        entry: true,
+        install: false,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      expectedConfig: {},
+    },
+    {
+      name: "install record and channel config, no runtime plugin",
+      pluginId: "missing-channel-plugin",
+      config: createPluginConfig({
+        installs: {
+          "missing-channel-plugin": createNpmInstallRecord("missing-channel-plugin"),
+        },
+        channels: {
+          "missing-channel-plugin": { enabled: true, token: "stale" },
+          discord: { enabled: true },
+        },
+      }),
+      expectedActions: {
+        entry: false,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: true,
+        directory: false,
+      },
+      expectedConfig: {
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    },
+    {
+      name: "linked path record, missing source directory",
+      pluginId: "missing-linked-plugin",
+      config: createPluginConfig({
+        installs: {
+          "missing-linked-plugin": createPathInstallRecord(
+            "/missing/openclaw/plugin",
+            "/missing/openclaw/plugin",
+          ),
+        },
+        loadPaths: ["/missing/openclaw/plugin", "/keep/this/plugin"],
+      }),
+      expectedActions: {
+        entry: false,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: true,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      expectedConfig: {
+        plugins: {
+          load: {
+            paths: ["/keep/this/plugin"],
+          },
+        },
+      },
+    },
+    {
+      name: "policy and slots only, no entry or install record",
+      pluginId: "missing-policy-plugin",
+      config: createPluginConfig({
+        allow: ["missing-policy-plugin", "other-plugin"],
+        deny: ["missing-policy-plugin"],
+        slots: {
+          memory: "missing-policy-plugin",
+          contextEngine: "missing-policy-plugin",
+        },
+      }),
+      expectedActions: {
+        entry: false,
+        install: false,
+        allowlist: true,
+        denylist: true,
+        loadPath: false,
+        memorySlot: true,
+        contextEngineSlot: true,
+        channelConfig: false,
+        directory: false,
+      },
+      expectedConfig: {
+        plugins: {
+          allow: ["other-plugin"],
+          slots: {
+            memory: "memory-core",
+            contextEngine: "legacy",
+          },
+        },
+      },
+    },
+  ] as const)(
+    "uninstall teardown matrix: $name",
+    async ({ pluginId, config, expectedActions, expectedConfig }) => {
+      const result = await uninstallPlugin({
+        config,
+        pluginId,
+        deleteFiles: true,
+        extensionsDir: path.join(tempDir, "extensions"),
+      });
+
+      const successfulResult = expectSuccessfulUninstall(result);
+      expect(successfulResult.actions).toEqual(expectedActions);
+      expect(successfulResult.config).toEqual(expectedConfig);
+      expect(successfulResult.warnings).toEqual([]);
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("removes config entries", async () => {
     const config = createPluginConfig({
       entries: createSinglePluginEntries(),
@@ -827,6 +990,24 @@ describe("uninstallPlugin", () => {
       }),
     );
     await expect(fs.access(pluginDir)).rejects.toThrow();
+  });
+
+  it("skips npm cleanup when the managed package directory is already absent", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const npmRoot = path.join(stateDir, "npm");
+    const pluginDir = path.join(npmRoot, "node_modules", "missing-plugin");
+
+    const applied = await applyPluginUninstallDirectoryRemoval({
+      target: pluginDir,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "missing-plugin",
+      },
+    });
+
+    expect(applied).toEqual({ directoryRemoved: false, warnings: [] });
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
   it("warns and still removes npm package dirs when npm prune cleanup fails", async () => {
@@ -1056,6 +1237,11 @@ describe("uninstallPlugin", () => {
             clawhubPackage: "clawpack-demo",
             clawhubFamily: "code-plugin",
             clawhubChannel: "official",
+            artifactKind: "npm-pack",
+            artifactFormat: "tgz",
+            npmIntegrity: "sha512-clawpack",
+            npmShasum: "1".repeat(40),
+            npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
             clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             clawpackSpecVersion: 1,
             clawpackManifestSha256:
@@ -1250,6 +1436,11 @@ describe("resolveUninstallDirectoryTarget", () => {
           clawhubPackage: "clawpack-demo",
           clawhubFamily: "code-plugin",
           clawhubChannel: "official",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+          npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
           clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           clawpackSpecVersion: 1,
           clawpackManifestSha256:

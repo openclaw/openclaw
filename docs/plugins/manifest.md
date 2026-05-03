@@ -1149,6 +1149,9 @@ If you are unsure where a piece of metadata belongs, use this rule:
 
 Some pre-runtime plugin metadata intentionally lives in `package.json` under the
 `openclaw` block instead of `openclaw.plugin.json`.
+`openclaw.bundle` and `openclaw.bundle.json` are not OpenClaw plugin contracts;
+native plugins must use `openclaw.plugin.json` plus the supported
+`package.json#openclaw` fields below.
 
 Important examples:
 

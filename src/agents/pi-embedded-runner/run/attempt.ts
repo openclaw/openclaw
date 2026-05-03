@@ -107,6 +107,7 @@ import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settin
 import {
   applyPiAutoCompactionGuard,
   applyPiCompactionSettingsFromConfig,
+  isSilentOverflowProneModel,
 } from "../../pi-settings.js";
 import {
   createClientToolNameConflictError,
@@ -1399,6 +1400,7 @@ export async function runEmbeddedAttempt(
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
+        debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
       const hadSessionFile = await fs
@@ -1474,10 +1476,16 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         contextTokenBudget: params.contextTokenBudget,
       });
-      applyPiAutoCompactionGuard({
+      const piAutoCompactionGuardArgs = {
         settingsManager,
         contextEngineInfo: activeContextEngine?.info,
-      });
+        silentOverflowProneProvider: isSilentOverflowProneModel({
+          provider: params.provider,
+          modelId: params.modelId,
+          baseUrl: params.model.baseUrl ?? undefined,
+        }),
+      };
+      applyPiAutoCompactionGuard(piAutoCompactionGuardArgs);
 
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
@@ -1496,12 +1504,15 @@ export async function runEmbeddedAttempt(
       });
       await resourceLoader.reload();
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
-      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager.
+      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager — same
+      // rehydration also restores Pi's auto-compaction (openclaw#75799), so re-apply
+      // both guards.
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
         contextTokenBudget: params.contextTokenBudget,
       });
+      applyPiAutoCompactionGuard(piAutoCompactionGuardArgs);
       prepStages.mark("session-resource-loader");
 
       // Get hook runner early so it's available when creating tools
@@ -1512,8 +1523,28 @@ export async function runEmbeddedAttempt(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      // Add client tools (OpenResponses hosted tools) to customTools
-      let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+      // Add client tools (OpenResponses hosted tools) to customTools.
+      // Reserve slots synchronously at tool execution entry, before async
+      // before_tool_call hooks run, so parallel client-tool batches preserve
+      // assistant source order even when later hooks finish first.
+      const clientToolCallSlots: Array<{
+        toolCallId: string;
+        name: string;
+        params?: Record<string, unknown>;
+        completed: boolean;
+      }> = [];
+      const clientToolCallSlotIndexes = new Map<string, number>();
+      const reserveClientToolCallSlot = (toolCallId: string, toolName: string) => {
+        if (clientToolCallSlotIndexes.has(toolCallId)) {
+          return;
+        }
+        clientToolCallSlotIndexes.set(toolCallId, clientToolCallSlots.length);
+        clientToolCallSlots.push({
+          toolCallId,
+          name: toolName,
+          completed: false,
+        });
+      };
       const clientToolLoopDetection = resolveToolLoopDetectionConfig({
         cfg: params.config,
         agentId: sessionAgentId,
@@ -1552,8 +1583,33 @@ export async function runEmbeddedAttempt(
       const clientToolDefs = clientTools
         ? toClientToolDefinitions(
             clientTools,
-            (toolName, toolParams) => {
-              clientToolCallDetected = { name: toolName, params: toolParams };
+            {
+              reserve: reserveClientToolCallSlot,
+              complete: (toolCallId, toolName, toolParams) => {
+                reserveClientToolCallSlot(toolCallId, toolName);
+                const slotIndex = clientToolCallSlotIndexes.get(toolCallId);
+                if (slotIndex === undefined) {
+                  return;
+                }
+                const slot = clientToolCallSlots[slotIndex];
+                if (!slot) {
+                  return;
+                }
+                slot.name = toolName;
+                slot.params = toolParams;
+                slot.completed = true;
+              },
+              discard: (toolCallId) => {
+                const slotIndex = clientToolCallSlotIndexes.get(toolCallId);
+                if (slotIndex === undefined) {
+                  return;
+                }
+                const slot = clientToolCallSlots[slotIndex];
+                if (slot) {
+                  slot.completed = false;
+                  slot.params = undefined;
+                }
+              },
             },
             {
               agentId: sessionAgentId,
@@ -3515,6 +3571,17 @@ export async function runEmbeddedAttempt(
       });
       trajectoryEndRecorded = true;
 
+      const completedClientToolCalls = clientToolCallSlots.flatMap((slot) =>
+        slot.completed && slot.params
+          ? [
+              {
+                name: slot.name,
+                params: slot.params,
+              },
+            ]
+          : [],
+      );
+
       return {
         replayMetadata,
         itemLifecycle: getItemLifecycle(),
@@ -3556,8 +3623,10 @@ export async function runEmbeddedAttempt(
         promptCache,
         compactionCount: getCompactionCount(),
         compactionTokensAfter: getLastCompactionTokensAfter(),
-        // Client tool call detected (OpenResponses hosted tools)
-        clientToolCall: clientToolCallDetected ?? undefined,
+        // Client tool calls detected (OpenResponses hosted tools).
+        // Stay `undefined` (not `[]`) when none were detected so downstream
+        // truthiness predicates keep working without a `.length` check.
+        clientToolCalls: completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined,
         yieldDetected: yieldDetected || undefined,
       };
     } finally {

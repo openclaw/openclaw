@@ -75,7 +75,11 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
-import { applyPiCompactionSettingsFromConfig } from "../pi-settings.js";
+import {
+  applyPiAutoCompactionGuard,
+  applyPiCompactionSettingsFromConfig,
+  isSilentOverflowProneModel,
+} from "../pi-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
@@ -913,6 +917,7 @@ async function compactEmbeddedPiSessionDirectOnce(
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
+        debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
       await prewarmSessionFile(params.sessionFile);
@@ -960,11 +965,25 @@ async function compactEmbeddedPiSessionDirectOnce(
       });
       await resourceLoader.reload();
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
-      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager.
+      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager — same
+      // rehydration also restores Pi's auto-compaction (openclaw#75799), so re-apply
+      // both guards. effectiveModel.baseUrl matches the surrounding scope so
+      // auth-profile-injected baseUrls reach the endpoint-class detector.
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
         contextTokenBudget: ctxInfo.tokens,
+      });
+      // contextEngineInfo is intentionally omitted: this guard runs inside the
+      // compaction LLM session, which is not the user-facing agent session and
+      // has no associated context engine.
+      applyPiAutoCompactionGuard({
+        settingsManager,
+        silentOverflowProneProvider: isSilentOverflowProneModel({
+          provider,
+          modelId,
+          baseUrl: effectiveModel.baseUrl ?? undefined,
+        }),
       });
 
       const { customTools } = splitSdkTools({

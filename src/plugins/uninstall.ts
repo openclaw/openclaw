@@ -77,6 +77,10 @@ export function formatUninstallActionLabels(actions: UninstallActions): string[]
   );
 }
 
+function hasUninstallAction(actions: Omit<UninstallActions, "directory">): boolean {
+  return Object.values(actions).some(Boolean);
+}
+
 export function formatUninstallSlotResetPreview(slotKey: "memory" | "contextEngine"): string {
   const actionKey = slotKey === "memory" ? "memorySlot" : "contextEngineSlot";
   return `${UNINSTALL_ACTION_LABELS[actionKey]} (will reset to "${defaultSlotIdForKey(slotKey)}")`;
@@ -489,14 +493,8 @@ export type UninstallPluginParams = {
 export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
   const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
 
-  // Validate plugin exists
   const hasEntry = pluginId in (config.plugins?.entries ?? {});
   const hasInstall = pluginId in (config.plugins?.installs ?? {});
-
-  if (!hasEntry && !hasInstall) {
-    return { ok: false, error: `Plugin not found: ${pluginId}` };
-  }
-
   const installRecord = config.plugins?.installs?.[pluginId];
   const isLinked = isLinkedPathInstallRecord(installRecord);
 
@@ -504,6 +502,10 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
   const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId, {
     channelIds,
   });
+
+  if (!hasEntry && !hasInstall && !hasUninstallAction(configActions)) {
+    return { ok: false, error: `Plugin not found: ${pluginId}` };
+  }
 
   const actions: UninstallActions = {
     ...configActions,
@@ -563,6 +565,10 @@ export async function applyPluginUninstallDirectoryRemoval(
       .then(() => true)
       .catch(() => false)) ?? false;
   const warnings: string[] = [];
+  if (!existed) {
+    return { directoryRemoved: false, warnings };
+  }
+
   if (removal.cleanup?.kind === "npm") {
     const uninstall = await runCommandWithTimeout(
       [

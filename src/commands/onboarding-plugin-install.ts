@@ -8,6 +8,7 @@ import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
+import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
 import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
@@ -272,11 +273,21 @@ function resolveInstallDefaultChoice(params: {
 }): InstallChoice {
   const { cfg, entry, localPath, bundledLocalPath, hasClawHubSpec, hasNpmSpec } = params;
   const hasRemoteSpec = hasClawHubSpec || hasNpmSpec;
+  const entryDefault = entry.install.defaultChoice;
+  const remoteDefault = (): InstallChoice => {
+    if (entryDefault === "clawhub" && hasClawHubSpec) {
+      return "clawhub";
+    }
+    if (entryDefault === "npm" && hasNpmSpec) {
+      return "npm";
+    }
+    return hasNpmSpec ? "npm" : "clawhub";
+  };
   if (!hasRemoteSpec) {
     return localPath ? "local" : "skip";
   }
   if (!localPath) {
-    return hasClawHubSpec ? "clawhub" : "npm";
+    return remoteDefault();
   }
   if (bundledLocalPath) {
     return "local";
@@ -286,19 +297,12 @@ function resolveInstallDefaultChoice(params: {
     return "local";
   }
   if (updateChannel === "stable" || updateChannel === "beta") {
-    return hasClawHubSpec ? "clawhub" : "npm";
-  }
-  const entryDefault = entry.install.defaultChoice;
-  if (entryDefault === "clawhub" && hasClawHubSpec) {
-    return "clawhub";
+    return remoteDefault();
   }
   if (entryDefault === "local") {
     return "local";
   }
-  if (entryDefault === "npm") {
-    return "npm";
-  }
-  return hasClawHubSpec ? "clawhub" : "local";
+  return remoteDefault();
 }
 
 async function promptInstallChoice(params: {
@@ -823,20 +827,9 @@ export async function ensureOnboardingPluginInstalled(params: {
       next = enableResult.config;
       next = recordPluginInstall(next, {
         pluginId: result.pluginId,
-        source: "clawhub",
+        ...buildClawHubPluginInstallRecordFields(result.clawhub),
         spec: clawhubSpec,
         installPath: result.targetDir,
-        version: result.version,
-        integrity: result.clawhub.integrity,
-        resolvedAt: result.clawhub.resolvedAt,
-        clawhubUrl: result.clawhub.clawhubUrl,
-        clawhubPackage: result.clawhub.clawhubPackage,
-        clawhubFamily: result.clawhub.clawhubFamily,
-        clawhubChannel: result.clawhub.clawhubChannel,
-        clawpackSha256: result.clawhub.clawpackSha256,
-        clawpackSpecVersion: result.clawhub.clawpackSpecVersion,
-        clawpackManifestSha256: result.clawhub.clawpackManifestSha256,
-        clawpackSize: result.clawhub.clawpackSize,
       });
       return {
         cfg: next,

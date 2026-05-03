@@ -187,8 +187,15 @@ source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_source_tree "$tmp_dir"
 openclaw_live_stage_node_modules "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
-if [ -d /app/dist/extensions/codex ]; then
+if [ -d /app/dist-runtime/extensions/codex ]; then
+  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
+elif [ -d /app/dist/extensions/codex ]; then
   export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
+elif [ -f "$tmp_dir/extensions/codex/openclaw.plugin.json" ]; then
+  export OPENCLAW_BUNDLED_PLUGINS_DIR="$tmp_dir/extensions"
+else
+  echo "ERROR: staged Codex plugin not found for live harness." >&2
+  exit 1
 fi
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 if [ -n "${OPENCLAW_LIVE_CODEX_TRUSTED_HARNESS_DIR:-}" ] && [ -d "$OPENCLAW_LIVE_CODEX_TRUSTED_HARNESS_DIR" ]; then

@@ -399,6 +399,20 @@ const accountSchema = z.object({
 const configSchema = buildChannelConfigSchema(accountSchema);
 ```
 
+If you already author the contract as JSON Schema or TypeBox, use the direct helper so OpenClaw can skip Zod-to-JSON-Schema conversion on metadata paths:
+
+```typescript
+import { Type } from "typebox";
+import { buildJsonChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+
+const configSchema = buildJsonChannelConfigSchema(
+  Type.Object({
+    token: Type.Optional(Type.String()),
+    allowFrom: Type.Optional(Type.Array(Type.String())),
+  }),
+);
+```
+
 For third-party plugins, the cold-path contract is still the plugin manifest: mirror the generated JSON Schema into `openclaw.plugin.json#channelConfigs` so config schema, setup, and UI surfaces can inspect `channels.<id>` without loading runtime code.
 
 ## Setup wizards
@@ -481,12 +495,12 @@ The `ChannelSetupWizard` type supports `credentials`, `textInputs`, `dmPolicy`, 
 **External plugins:** publish to [ClawHub](/tools/clawhub), then install:
 
 <Tabs>
-  <Tab title="Auto (ClawHub then npm)">
+  <Tab title="npm">
     ```bash
     openclaw plugins install @myorg/openclaw-my-plugin
     ```
 
-    OpenClaw tries ClawHub first and falls back to npm automatically.
+    Bare package specs install from npm during the launch cutover.
 
   </Tab>
   <Tab title="ClawHub only">

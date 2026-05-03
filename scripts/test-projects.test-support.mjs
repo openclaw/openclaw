@@ -361,9 +361,8 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "src/memory-host-sdk/host/embedding-defaults.ts",
-    ["src/memory-host-sdk/host/embeddings.test.ts"],
+    ["packages/memory-host-sdk/src/host/embeddings.test.ts"],
   ],
-  ["src/memory-host-sdk/host/embeddings.ts", ["src/memory-host-sdk/host/embeddings.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [
@@ -633,6 +632,23 @@ function resolveVitestConfigTargetKind(relative) {
 
 function isVitestConfigTargetForKind(kind, targetArg, cwd) {
   return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
+}
+
+function isUnitUiTestTarget(relative) {
+  if (!relative.endsWith(".test.ts")) {
+    return false;
+  }
+  return (
+    relative === "ui/src/ui/app-chat.test.ts" ||
+    relative.startsWith("ui/src/ui/chat/") ||
+    relative === "ui/src/ui/views/agents-utils.test.ts" ||
+    relative === "ui/src/ui/views/channels.test.ts" ||
+    relative === "ui/src/ui/views/chat.test.ts" ||
+    relative === "ui/src/ui/views/dreaming.test.ts" ||
+    relative === "ui/src/ui/views/usage-render-details.test.ts" ||
+    relative === "ui/src/ui/controllers/agents.test.ts" ||
+    relative === "ui/src/ui/controllers/chat.test.ts"
+  );
 }
 
 function resolveChannelContractTargetKind(relative) {
@@ -1038,6 +1054,9 @@ function classifyTarget(arg, cwd) {
     return "plugin";
   }
   if (relative.startsWith("ui/src/")) {
+    if (isUnitUiTestTarget(relative)) {
+      return "unitUi";
+    }
     return "ui";
   }
   if (relative.startsWith("src/utils/")) {

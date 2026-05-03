@@ -1,6 +1,7 @@
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
+  type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
   recoverConfigFromLastKnownGood,
   recoverConfigFromJsonRootSuffix,
@@ -202,11 +203,14 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
   log: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
+  initialSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
   const measure = params.measure ?? (async (_name, run) => await run());
-  let snapshotRead = await measure("config.snapshot.read", () =>
-    readConfigFileSnapshotWithPluginMetadata({ measure }),
-  );
+  let snapshotRead =
+    params.initialSnapshotRead ??
+    (await measure("config.snapshot.read", () =>
+      readConfigFileSnapshotWithPluginMetadata({ measure }),
+    ));
   let configSnapshot = snapshotRead.snapshot;
   let pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
   let wroteConfig = false;
