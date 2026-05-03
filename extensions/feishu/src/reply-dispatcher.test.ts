@@ -286,7 +286,55 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("sets disableBlockStreaming in replyOptions to prevent silent reply drops", async () => {
+  it("disables block streaming by default to prevent silent reply drops", async () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
+  });
+
+  it("enables core block streaming when Feishu blockStreaming is explicitly true", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+        blockStreaming: true,
+      },
+    });
+
+    const { result, options } = createDispatcherHarness();
+    expect(result.replyOptions).toHaveProperty("disableBlockStreaming", false);
+
+    await options.deliver({ text: "plain block" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("plain block", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("keeps core block streaming disabled when Feishu blockStreaming is explicitly false", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+        blockStreaming: false,
+      },
+    });
+
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
