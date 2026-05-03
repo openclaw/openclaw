@@ -3,10 +3,8 @@ import {
   __testing,
   createReplyOperation,
   forceClearReplyRunBySessionId,
-  isReplyRunActiveForSessionId,
   queueReplyRunMessage,
   replyRunRegistry,
-  waitForReplyRunEndBySessionId,
 } from "./reply-run-registry.js";
 
 describe("reply run registry – preflight compaction regression", () => {
