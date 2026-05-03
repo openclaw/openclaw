@@ -14,6 +14,7 @@ import {
   isPrimaryBootstrapRun,
   mergeOrphanedTrailingUserPrompt,
   normalizeMessagesForLlmBoundary,
+  removeSessionManagerLeafEntry,
   prependSystemPromptAddition,
   remapInjectedContextFilesToWorkspace,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -476,6 +477,54 @@ describe("remapInjectedContextFilesToWorkspace", () => {
         content: "outside",
       },
     ]);
+  });
+});
+
+describe("removeSessionManagerLeafEntry", () => {
+  it("removes the persisted leaf entry before rebuilding context", () => {
+    const orphan = { type: "message", id: "orphan-user", parentId: "assistant-1" };
+    const fileEntries = [
+      { type: "session", id: "session-1" },
+      { type: "message", id: "user-1", parentId: null },
+      { type: "message", id: "assistant-1", parentId: "user-1" },
+      orphan,
+    ];
+    const manager = {
+      fileEntries,
+      byId: new Map(fileEntries.map((entry) => [entry.id, entry])),
+      leafId: "orphan-user" as string | null,
+      branch: vi.fn(),
+      resetLeaf: vi.fn(),
+      _rewriteFile: vi.fn(),
+    };
+
+    removeSessionManagerLeafEntry({ sessionManager: manager, leafEntry: orphan });
+
+    expect(manager.fileEntries.map((entry) => entry.id)).toEqual([
+      "session-1",
+      "user-1",
+      "assistant-1",
+    ]);
+    expect(manager.byId.has("orphan-user")).toBe(false);
+    expect(manager.leafId).toBe("assistant-1");
+    expect(manager._rewriteFile).toHaveBeenCalledTimes(1);
+    expect(manager.branch).not.toHaveBeenCalled();
+    expect(manager.resetLeaf).not.toHaveBeenCalled();
+  });
+
+  it("falls back to in-memory branching when the manager cannot rewrite", () => {
+    const manager = {
+      branch: vi.fn(),
+      resetLeaf: vi.fn(),
+    };
+
+    removeSessionManagerLeafEntry({
+      sessionManager: manager,
+      leafEntry: { id: "orphan-user", parentId: "assistant-1" },
+    });
+
+    expect(manager.branch).toHaveBeenCalledWith("assistant-1");
+    expect(manager.resetLeaf).not.toHaveBeenCalled();
   });
 });
 
