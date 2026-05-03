@@ -15,6 +15,13 @@ const defaultGatewayMock = async (
   return { ok: true, params };
 };
 const callGatewayFromCli = vi.fn(defaultGatewayMock);
+const defaultRuntime = {
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: (code: number) => {
+    throw new Error(`__exit__:${code}`);
+  },
+};
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
@@ -26,13 +33,7 @@ vi.mock("./gateway-rpc.js", async () => {
 });
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: (code: number) => {
-      throw new Error(`__exit__:${code}`);
-    },
-  },
+  defaultRuntime,
 }));
 
 const { registerCronCli } = await import("./cron-cli.js");
@@ -58,7 +59,7 @@ type CronUpdatePatch = {
 };
 
 type CronAddParams = {
-  schedule?: { kind?: string; staggerMs?: number };
+  schedule?: { kind?: string; staggerMs?: number; everyMs?: number };
   payload?: { model?: string; thinking?: string; lightContext?: boolean };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
@@ -76,6 +77,8 @@ function buildProgram() {
 function resetGatewayMock() {
   callGatewayFromCli.mockClear();
   callGatewayFromCli.mockImplementation(defaultGatewayMock);
+  defaultRuntime.log.mockClear();
+  defaultRuntime.error.mockClear();
 }
 
 async function runCronCommand(args: string[]): Promise<void> {

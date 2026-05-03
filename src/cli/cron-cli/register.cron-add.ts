@@ -1,4 +1,8 @@
 import type { Command } from "commander";
+import {
+  getHighFrequencyEveryWarningMessage,
+  isHighFrequencyEverySchedule,
+} from "../../cron/high-frequency-warning.js";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
@@ -128,10 +132,8 @@ export function registerCronAddCommand(cron: Command) {
               if (!everyMs) {
                 throw new Error("Invalid --every; use e.g. 10m, 1h, 1d");
               }
-              if (everyMs < 30 * 60 * 1000) {
-                defaultRuntime.error(
-                  "Warning: High-frequency cron (< 30m) may cause session accumulation and silently exhaust the agent context window. Consider using heartbeat or longer intervals.",
-                );
+              if (isHighFrequencyEverySchedule({ kind: "every", everyMs })) {
+                defaultRuntime.log(getHighFrequencyEveryWarningMessage());
               }
               return { kind: "every" as const, everyMs };
             }

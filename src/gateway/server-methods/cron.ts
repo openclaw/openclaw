@@ -1,3 +1,7 @@
+import {
+  getHighFrequencyEveryWarningMessage,
+  isHighFrequencyEverySchedule,
+} from "../../cron/high-frequency-warning.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   readCronRunLogEntriesPage,
@@ -111,11 +115,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (jobCreate.schedule?.kind === "every" && jobCreate.schedule.everyMs < 30 * 60 * 1000) {
-      context.logGateway.warn(
-        { schedule: jobCreate.schedule, name: jobCreate.name },
-        "cron: high-frequency schedule (<30m) may cause session accumulation and silently exhaust agent context",
-      );
+    if (isHighFrequencyEverySchedule(jobCreate.schedule)) {
+      context.logGateway.warn(getHighFrequencyEveryWarningMessage(), {
+        rpcMethod: "cron.add",
+        schedule: jobCreate.schedule,
+      });
     }
     const job = await context.cron.add(jobCreate);
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
@@ -162,6 +166,13 @@ export const cronHandlers: GatewayRequestHandlers = {
           errorShape(ErrorCodes.INVALID_REQUEST, timestampValidation.message),
         );
         return;
+      }
+      if (isHighFrequencyEverySchedule(patch.schedule)) {
+        context.logGateway.warn(getHighFrequencyEveryWarningMessage(), {
+          jobId,
+          rpcMethod: "cron.update",
+          schedule: patch.schedule,
+        });
       }
     }
     const job = await context.cron.update(jobId, patch);

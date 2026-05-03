@@ -1,4 +1,8 @@
 import type { Command } from "commander";
+import {
+  getHighFrequencyEveryWarningMessage,
+  isHighFrequencyEverySchedule,
+} from "../../cron/high-frequency-warning.js";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
@@ -200,6 +204,9 @@ export function registerCronEditCommand(cron: Command) {
               staggerMs:
                 requestedStaggerMs !== undefined ? requestedStaggerMs : existing.schedule.staggerMs,
             };
+          }
+          if (isHighFrequencyEverySchedule(patch.schedule)) {
+            defaultRuntime.log(getHighFrequencyEveryWarningMessage());
           }
 
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
