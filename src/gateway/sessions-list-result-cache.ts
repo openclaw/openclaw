@@ -108,7 +108,10 @@ function buildSessionsListResultCacheKey(params: {
   cfg: OpenClawConfig;
   listParams: SessionsListParams;
 }): string {
-  const storesFp = collectCombinedSessionStoreStatFingerprint(params.cfg);
+  const storesFp = collectCombinedSessionStoreStatFingerprint(
+    params.cfg,
+    params.listParams.agentId,
+  );
   const cfgFp = collectResolvedConfigSourceStatFingerprintSync();
   const paramsKey = buildSessionsListParamsKey(params.listParams);
   const subagentGen = getSubagentRegistryGeneration();

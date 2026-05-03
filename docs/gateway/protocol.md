@@ -398,7 +398,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   </Accordion>
 
   <Accordion title="Session control">
-    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured.
+    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. Responses include a stable `hash`; clients may pass that value back as `lastHash`, and the Gateway may return `{ unchanged: true, hash, ts, count }` when the visible session rows are unchanged.
     - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
     - `sessions.preview` returns bounded transcript previews for specific session keys.

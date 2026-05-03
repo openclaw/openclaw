@@ -358,6 +358,60 @@ describe("collectResolvedConfigSourceStatFingerprintSync", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("keeps scoped cache entries stable when an unrelated agent store changes", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-cache-agent-scope-"));
+    const stateDir = path.join(dir, "state");
+    const tonyStorePath = path.join(stateDir, "agents", "tony", "sessions", "sessions.json");
+    const otherStorePath = path.join(stateDir, "agents", "other", "sessions", "sessions.json");
+    fs.mkdirSync(path.dirname(tonyStorePath), { recursive: true });
+    fs.mkdirSync(path.dirname(otherStorePath), { recursive: true });
+    fs.writeFileSync(tonyStorePath, "{}\n", "utf-8");
+    fs.writeFileSync(otherStorePath, "{}\n", "utf-8");
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_SESSIONS_LIST_RESULT_CACHE_TTL_MS: "1000",
+          OPENCLAW_STATE_DIR: stateDir,
+        },
+        async () => {
+          const cfg = {
+            session: {
+              store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+            },
+          } as never;
+          const listParams = { agentId: "tony", includeGlobal: false, includeUnknown: false };
+
+          writeSessionsListResultCache({
+            cfg,
+            listParams,
+            hash: "hash-tony",
+            result: {
+              ts: Date.now(),
+              path: tonyStorePath,
+              count: 1,
+              defaults: { modelProvider: null, model: null, contextTokens: 1234 },
+              sessions: [],
+            },
+          });
+
+          fs.writeFileSync(otherStorePath, '{"other":{}}\n', "utf-8");
+
+          expect(tryReadSessionsListResultCache({ cfg, listParams })).toMatchObject({
+            hash: "hash-tony",
+            path: tonyStorePath,
+          });
+
+          fs.writeFileSync(tonyStorePath, '{"tony":{}}\n', "utf-8");
+
+          expect(tryReadSessionsListResultCache({ cfg, listParams })).toBeNull();
+        },
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("buildSessionsListParamsKey", () => {

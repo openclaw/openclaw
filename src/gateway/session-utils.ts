@@ -49,6 +49,7 @@ import {
   buildGroupDisplayName,
   loadSessionStore,
   resolveAllAgentSessionStoreTargetsSync,
+  resolveAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveStorePath,
@@ -1200,12 +1201,18 @@ export function resolveGatewaySessionThinkingDefault(params: {
  * Cheap identity for combined session stores: sorted `path:mtime:size` markers.
  * Used to skip `sessions.list` recomputation when backing files are unchanged.
  */
-export function collectCombinedSessionStoreStatFingerprint(cfg: OpenClawConfig): string {
+export function collectCombinedSessionStoreStatFingerprint(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+): string {
   const storeConfig = cfg.session?.store;
   const storePaths: string[] =
     storeConfig && !isStorePathTemplate(storeConfig)
       ? [resolveStorePath(storeConfig)]
-      : resolveAllAgentSessionStoreTargetsSync(cfg).map((t) => t.storePath);
+      : (requestedAgentId
+          ? resolveAgentSessionStoreTargetsSync(cfg, requestedAgentId)
+          : resolveAllAgentSessionStoreTargetsSync(cfg)
+        ).map((t) => t.storePath);
 
   const markers: string[] = [];
   const seen = new Set<string>();
