@@ -1,0 +1,16 @@
+{
+  "scenario": "discord-status-reactions-tool-only",
+  "baseline": {
+    "sha": "0bf06e953fdda290799fc9fb9244a8f67fdae593",
+    "expected": "queued-only",
+    "status": "fail",
+    "reproduced": true
+  },
+  "candidate": {
+    "sha": "d8b82df5d430d41d14331f5fa4f64bb6e97ac4b6",
+    "expected": "queued -> thinking -> done",
+    "status": "pass",
+    "fixed": true
+  },
+  "pass": true
+}
