@@ -113,9 +113,7 @@ describe("memory manager atomic reindex", () => {
   });
 
   it("does not retry non-transient rename failures", async () => {
-    const rename = vi
-      .fn()
-      .mockRejectedValue(Object.assign(new Error("invalid"), { code: "EINVAL" }));
+    const rename = vi.fn().mockRejectedValue(Object.assign(new Error("invalid"), { code: "EINVAL" }));
     const wait = vi.fn().mockResolvedValue(undefined);
 
     await expect(
