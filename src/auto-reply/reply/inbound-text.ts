@@ -7,6 +7,7 @@ export function normalizeInboundTextNewlines(input: string): string {
 
 const BRACKETED_SYSTEM_TAG_RE = /\[\s*(System\s*Message|System|Assistant|Internal)\s*\]/gi;
 const LINE_SYSTEM_PREFIX_RE = /^(\s*)System:(?=\s|$)/gim;
+const NEUTRALIZED_SYSTEM_PREFIX = "External input (not system)";
 
 /**
  * Neutralize user-controlled strings that spoof internal system markers.
@@ -14,5 +15,5 @@ const LINE_SYSTEM_PREFIX_RE = /^(\s*)System:(?=\s|$)/gim;
 export function sanitizeInboundSystemTags(input: string): string {
   return input
     .replace(BRACKETED_SYSTEM_TAG_RE, (_match, tag: string) => `(${tag})`)
-    .replace(LINE_SYSTEM_PREFIX_RE, "$1System (untrusted):");
+    .replace(LINE_SYSTEM_PREFIX_RE, `$1${NEUTRALIZED_SYSTEM_PREFIX}:`);
 }

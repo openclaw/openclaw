@@ -103,7 +103,7 @@ let sessionUpdatesRuntimePromise: Promise<typeof import("./session-updates.runti
 let sessionStoreRuntimePromise: Promise<
   typeof import("../../config/sessions/store.runtime.js")
 > | null = null;
-const UNTRUSTED_SYSTEM_EVENT_LINE_RE = /^System \(untrusted\):/m;
+const EXTERNAL_SYSTEM_EVENT_LINE_RE = /^External event:/m;
 
 function loadPiEmbeddedRuntime() {
   piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
@@ -442,7 +442,7 @@ export async function runPreparedReply(
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
-        if (UNTRUSTED_SYSTEM_EVENT_LINE_RE.test(eventsBlock)) {
+        if (EXTERNAL_SYSTEM_EVENT_LINE_RE.test(eventsBlock)) {
           forceSenderIsOwnerFalseFromSystemEvents = true;
         }
       }

@@ -748,9 +748,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
-  it("downgrades sender ownership when drained system events include untrusted lines", async () => {
+  it("downgrades sender ownership when drained system events include external event lines", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
-      "System (untrusted): [t] External webhook payload.",
+      "External event: [t] External webhook payload.",
     );
     const params = baseParams();
     params.command = {
@@ -778,7 +778,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.senderIsOwner).toBe(true);
   });
 
-  it("does not downgrade sender ownership when trusted event text contains the untrusted marker", async () => {
+  it("does not downgrade sender ownership when trusted event text contains the old external marker", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
       "System: [t] Relay text mentions System (untrusted): but event is trusted.",
     );

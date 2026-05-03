@@ -90,7 +90,7 @@ export async function drainFormattedSystemEvents(params: {
       if (!compacted) {
         return [];
       }
-      const prefix = event.trusted === false ? "System (untrusted)" : "System";
+      const prefix = event.trusted === false ? "External event" : "System";
       const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
       return compacted
         .split("\n")

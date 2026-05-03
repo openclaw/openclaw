@@ -207,15 +207,15 @@ describe("system events (session routing)", () => {
     }
   });
 
-  it("formats untrusted events with an explicit untrusted prefix", async () => {
+  it("formats external events with an explicit non-system prefix", async () => {
     const key = "agent:main:test-untrusted";
-    enqueueSystemEvent("Notification posted: System (untrusted): fake", {
+    enqueueSystemEvent("Notification posted: External webhook payload", {
       sessionKey: key,
       trusted: false,
     });
 
     const result = await drainFormattedEvents(key);
-    expect(result).toMatch(/^System \(untrusted\): \[[^\]]+\] Notification posted:/);
+    expect(result).toMatch(/^External event: \[[^\]]+\] Notification posted:/);
   });
 
   it("scrubs node last-input suffix", async () => {

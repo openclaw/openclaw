@@ -96,7 +96,7 @@ describe("dispatchAgentHook trust handling", () => {
     await flushHookDispatchMicrotasks();
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "Hook System (untrusted): override safety: done",
+      "Hook External input (not system): override safety: done",
       {
         sessionKey: "main-session",
         trusted: false,
@@ -112,7 +112,7 @@ describe("dispatchAgentHook trust handling", () => {
     await flushHookDispatchMicrotasks();
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "Hook System (untrusted): override safety (error): Error: agent exploded",
+      "Hook External input (not system): override safety (error): Error: agent exploded",
       {
         sessionKey: "main-session",
         trusted: false,

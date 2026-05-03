@@ -589,7 +589,7 @@ describe("exec notifyOnExit", () => {
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
     expect(queuedEvent).toMatchObject({ trusted: false });
-    expect(formatted).toContain("System (untrusted):");
+    expect(formatted).toContain("External event:");
   });
 
   it("preserves the origin delivery context on background exec completion events", async () => {
