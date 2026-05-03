@@ -62,11 +62,11 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     vi.unstubAllEnvs();
   });
 
-  it("registers browser placeholders without loading handlers for help", () => {
+  it("registers browser placeholders without loading handlers for help", async () => {
     const program = new Command();
     program.name("openclaw");
 
-    registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
+    await registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
 
     const browser = program.commands.find((command) => command.name() === "browser");
     expect(browser?.commands.map((command) => command.name())).toContain("status");
@@ -83,7 +83,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     const program = new Command();
     program.name("openclaw");
 
-    registerBrowserCli(program, ["node", "openclaw", "browser", "status"]);
+    await registerBrowserCli(program, ["node", "openclaw", "browser", "status"]);
 
     const browser = program.commands.find((command) => command.name() === "browser");
     expect(browser?.commands.map((command) => command.name())).toEqual(["status"]);
@@ -99,7 +99,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     const program = new Command();
     program.name("openclaw");
 
-    registerBrowserCli(program, ["node", "openclaw", "browser", "doctor", "--deep"]);
+    await registerBrowserCli(program, ["node", "openclaw", "browser", "doctor", "--deep"]);
 
     await program.parseAsync(["browser", "doctor", "--deep"], { from: "user" });
 
@@ -113,7 +113,14 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     const program = new Command();
     program.name("openclaw");
 
-    registerBrowserCli(program, ["node", "openclaw", "browser", "--json", "open", "about:blank"]);
+    await registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "--json",
+      "open",
+      "about:blank",
+    ]);
 
     await program.parseAsync(["browser", "--json", "open", "about:blank"], { from: "user" });
 
@@ -123,7 +130,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
 
     const tabsProgram = new Command();
     tabsProgram.name("openclaw");
-    registerBrowserCli(tabsProgram, ["node", "openclaw", "browser", "--json", "tabs"]);
+    await registerBrowserCli(tabsProgram, ["node", "openclaw", "browser", "--json", "tabs"]);
 
     await tabsProgram.parseAsync(["browser", "--json", "tabs"], { from: "user" });
 
@@ -137,7 +144,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     program.name("openclaw");
 
     const argv = ["node", "openclaw", "browser", "--browser-profile", "nuan", "status"];
-    registerBrowserCli(program, argv);
+    await registerBrowserCli(program, argv);
 
     await program.parseAsync(argv);
 
