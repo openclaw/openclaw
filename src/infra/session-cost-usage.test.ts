@@ -569,6 +569,68 @@ describe("session cost usage", () => {
     });
   });
 
+  it("retries queued session summary refreshes when the cache lock is busy", async () => {
+    const root = await makeSessionCostRoot("cost-cache-session-lock-busy");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-lock-busy.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 10,
+            output: 0,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const lockPath = `${cachePath}.lock`;
+      await fs.writeFile(
+        lockPath,
+        `${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`,
+        "utf-8",
+      );
+
+      try {
+        const cold = await loadSessionCostSummaryFromCache({
+          sessionId: "sess-cache-lock-busy",
+          sessionFile,
+        });
+        expect(cold.summary).toBeNull();
+
+        await new Promise((resolve) => setTimeout(resolve, 75));
+        const stillMissing = await loadSessionCostSummaryFromCache({
+          sessionId: "sess-cache-lock-busy",
+          sessionFile,
+          requestRefresh: false,
+        });
+        expect(stillMissing.summary).toBeNull();
+      } finally {
+        await fs.rm(lockPath, { force: true });
+      }
+
+      await waitFor(async () => {
+        const warm = await loadSessionCostSummaryFromCache({
+          sessionId: "sess-cache-lock-busy",
+          sessionFile,
+          requestRefresh: false,
+        });
+        return warm.summary?.totalTokens === 10;
+      });
+    });
+  });
+
   it("summarizes a single session file", async () => {
     const root = await makeSessionCostRoot("cost-session");
     const sessionFile = path.join(root, "session.jsonl");

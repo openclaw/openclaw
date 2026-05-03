@@ -93,6 +93,8 @@ type UsageCostRefreshState = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
+type UsageCostRefreshResult = "refreshed" | "busy";
+
 const usageCostRefreshes = new Map<string, UsageCostRefreshState>();
 
 type UsageCostCachedUsageEntry = CostUsageTotals & { timestamp: number };
@@ -1009,11 +1011,11 @@ export async function refreshCostUsageCache(params?: {
   agentId?: string;
   maxFiles?: number;
   sessionFiles?: string[];
-}): Promise<void> {
+}): Promise<UsageCostRefreshResult> {
   const cachePath = resolveUsageCostCachePath(params?.agentId);
   const lock = await acquireUsageCostCacheRefreshLock(cachePath);
   if (!lock.acquired) {
-    return;
+    return "busy";
   }
   try {
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
@@ -1057,6 +1059,7 @@ export async function refreshCostUsageCache(params?: {
 
     cache.updatedAt = Date.now();
     await writeUsageCostCache(cachePath, cache);
+    return "refreshed";
   } finally {
     await lock.release();
   }
@@ -1222,14 +1225,18 @@ function mergeUsageCostRefreshRequest(
   }
 }
 
-function scheduleUsageCostRefresh(agentId: string, state: UsageCostRefreshState): void {
+function scheduleUsageCostRefresh(
+  agentId: string,
+  state: UsageCostRefreshState,
+  delayMs = 0,
+): void {
   if (state.running || state.timer) {
     return;
   }
   const timer = setTimeout(() => {
     state.timer = undefined;
     void runQueuedUsageCostRefresh(agentId, state);
-  }, 0);
+  }, delayMs);
   timer.unref?.();
   state.timer = timer;
 }
@@ -1239,23 +1246,35 @@ async function runQueuedUsageCostRefresh(
   state: UsageCostRefreshState,
 ): Promise<void> {
   state.running = true;
+  let retryDelayMs = 0;
   try {
     while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
+      const fullRefreshRequested = state.fullRefreshRequested;
       const sessionFiles = [...state.pendingSessionFiles];
       state.pendingSessionFiles.clear();
       state.fullRefreshRequested = false;
-      await refreshCostUsageCache({
+      const result = await refreshCostUsageCache({
         config: state.config,
         agentId: state.agentId,
         sessionFiles,
       });
+      if (result === "busy") {
+        if (fullRefreshRequested) {
+          state.fullRefreshRequested = true;
+        }
+        for (const sessionFile of sessionFiles) {
+          state.pendingSessionFiles.add(sessionFile);
+        }
+        retryDelayMs = 50;
+        break;
+      }
     }
   } catch (error) {
     logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
   } finally {
     state.running = false;
     if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
-      scheduleUsageCostRefresh(agentId, state);
+      scheduleUsageCostRefresh(agentId, state, retryDelayMs);
     } else {
       usageCostRefreshes.delete(agentId);
     }
