@@ -358,6 +358,30 @@ describe("cron service store seam coverage", () => {
               state: {},
             },
             {
+              id: "kind-only-cron-job",
+              name: "kind only cron job",
+              enabled: true,
+              schedule: { kind: "cron" },
+              payload: { kind: "systemEvent", text: "tick" },
+              state: {},
+            },
+            {
+              id: "kind-only-every-job",
+              name: "kind only every job",
+              enabled: true,
+              schedule: { kind: "every" },
+              payload: { kind: "systemEvent", text: "tick" },
+              state: {},
+            },
+            {
+              id: "kind-only-at-job",
+              name: "kind only at job",
+              enabled: true,
+              schedule: { kind: "at" },
+              payload: { kind: "systemEvent", text: "tick" },
+              state: {},
+            },
+            {
               id: "missing-payload-job",
               name: "missing payload job",
               enabled: true,
@@ -397,15 +421,27 @@ describe("cron service store seam coverage", () => {
       expect.stringContaining("ignoring malformed persisted job"),
     );
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: "missing-payload-job", index: 2 }),
+      expect.objectContaining({ jobId: "kind-only-cron-job", index: 2 }),
       expect.stringContaining("ignoring malformed persisted job"),
     );
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: "missing-agent-message-job", index: 3 }),
+      expect.objectContaining({ jobId: "kind-only-every-job", index: 3 }),
       expect.stringContaining("ignoring malformed persisted job"),
     );
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: "missing-system-text-job", index: 4 }),
+      expect.objectContaining({ jobId: "kind-only-at-job", index: 4 }),
+      expect.stringContaining("ignoring malformed persisted job"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "missing-payload-job", index: 5 }),
+      expect.stringContaining("ignoring malformed persisted job"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "missing-agent-message-job", index: 6 }),
+      expect.stringContaining("ignoring malformed persisted job"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "missing-system-text-job", index: 7 }),
       expect.stringContaining("ignoring malformed persisted job"),
     );
 
@@ -417,6 +453,9 @@ describe("cron service store seam coverage", () => {
     expect(persisted.jobs.map((job) => job.id)).toEqual([
       "valid-job",
       "missing-schedule-job",
+      "kind-only-cron-job",
+      "kind-only-every-job",
+      "kind-only-at-job",
       "missing-payload-job",
       "missing-agent-message-job",
       "missing-system-text-job",

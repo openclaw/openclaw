@@ -33,8 +33,22 @@ function isSupportedSchedule(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  const kind = (value as { kind?: unknown }).kind;
-  return kind === "at" || kind === "every" || kind === "cron";
+  const schedule = value as {
+    kind?: unknown;
+    at?: unknown;
+    everyMs?: unknown;
+    expr?: unknown;
+  };
+  if (schedule.kind === "at") {
+    return typeof schedule.at === "string" && schedule.at.trim().length > 0;
+  }
+  if (schedule.kind === "every") {
+    return typeof schedule.everyMs === "number" && Number.isFinite(schedule.everyMs);
+  }
+  if (schedule.kind === "cron") {
+    return typeof schedule.expr === "string" && schedule.expr.trim().length > 0;
+  }
+  return false;
 }
 
 function isSupportedPayload(value: unknown): boolean {
