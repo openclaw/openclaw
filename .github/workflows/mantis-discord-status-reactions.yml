@@ -1,0 +1,367 @@
+name: Mantis Discord Status Reactions
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Ref, tag, or SHA expected to reproduce queued-only behavior
+        required: true
+        default: 0bf06e953fdda290799fc9fb9244a8f67fdae593
+        type: string
+      candidate_ref:
+        description: Ref, tag, or SHA expected to show queued -> thinking -> done
+        required: true
+        default: main
+        type: string
+      pr_number:
+        description: Optional bug or fix PR number to receive the QA evidence comment
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: mantis-discord-status-reactions-${{ inputs.baseline_ref }}-${{ inputs.candidate_ref }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.33.0"
+  OPENCLAW_BUILD_PRIVATE_QA: "1"
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+
+jobs:
+  authorize_actor:
+    name: Authorize workflow actor
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - name: Require maintainer-level repository access
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            const permission = data.permission;
+            core.info(`Actor ${context.actor} permission: ${permission}`);
+            if (!allowed.has(permission)) {
+              core.setFailed(
+                `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
+              );
+            }
+
+  validate_refs:
+    name: Validate selected refs
+    needs: authorize_actor
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      baseline_revision: ${{ steps.validate.outputs.baseline_revision }}
+      candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate refs are trusted
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+          validate_ref() {
+            local label="$1"
+            local input_ref="$2"
+            local revision=""
+            local reason=""
+
+            revision="$(git rev-parse "${input_ref}^{commit}")"
+            if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
+              reason="main-ancestor"
+            elif git tag --points-at "$revision" | grep -Eq '^v'; then
+              reason="release-tag"
+            else
+              local pr_head_count
+              pr_head_count="$(
+                gh api \
+                  -H "Accept: application/vnd.github+json" \
+                  "repos/${GITHUB_REPOSITORY}/commits/${revision}/pulls" \
+                  --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${revision}"'")] | length'
+              )"
+              if [[ "$pr_head_count" != "0" ]]; then
+                reason="open-pr-head"
+              fi
+            fi
+
+            if [[ -z "$reason" ]]; then
+              echo "${label} ref '${input_ref}' resolved to ${revision}, which is not trusted for this secret-bearing Mantis run." >&2
+              exit 1
+            fi
+
+            echo "${label}_revision=${revision}" >> "$GITHUB_OUTPUT"
+            {
+              echo "${label}: \`${input_ref}\`"
+              echo "${label} SHA: \`${revision}\`"
+              echo "${label} trust reason: \`${reason}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          validate_ref baseline "$BASELINE_REF"
+          validate_ref candidate "$CANDIDATE_REF"
+
+  run_status_reactions:
+    name: Run Discord status reaction before/after
+    needs: validate_refs
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 180
+    environment: qa-live-shared
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Build Mantis harness
+        run: pnpm build
+
+      - name: Prepare baseline and candidate worktrees
+        shell: bash
+        env:
+          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+        run: |
+          set -euo pipefail
+
+          worktree_root=".artifacts/qa-e2e/mantis/discord-status-reactions-worktrees"
+          mkdir -p "$worktree_root"
+          git worktree add --detach "$worktree_root/baseline" "$BASELINE_SHA"
+          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+
+          for lane in baseline candidate; do
+            lane_dir="$worktree_root/${lane}"
+            echo "Installing ${lane} worktree dependencies"
+            pnpm --dir "$lane_dir" install --frozen-lockfile
+            echo "Building ${lane} worktree"
+            pnpm --dir "$lane_dir" build
+          done
+
+      - name: Run baseline and candidate
+        id: run_mantis
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENAI_API_KEY
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
+          root=".artifacts/qa-e2e/mantis/discord-status-reactions"
+          worktree_root=".artifacts/qa-e2e/mantis/discord-status-reactions-worktrees"
+          mkdir -p "$root"
+          echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
+
+          run_lane() {
+            local lane="$1"
+            local repo_root="$worktree_root/$lane"
+            local output_dir=".artifacts/qa-e2e/mantis/discord-status-reactions/$lane"
+            pnpm openclaw qa discord \
+              --repo-root "$repo_root" \
+              --output-dir "$output_dir" \
+              --provider-mode live-frontier \
+              --model openai/gpt-5.4 \
+              --alt-model openai/gpt-5.4 \
+              --fast \
+              --credential-source convex \
+              --credential-role ci \
+              --scenario discord-status-reactions-tool-only \
+              --allow-failures
+            rm -rf "$root/$lane"
+            mkdir -p "$root/$lane"
+            cp -a "$repo_root/$output_dir/." "$root/$lane/"
+          }
+
+          run_lane baseline
+          run_lane candidate
+
+          baseline_status="$(jq -r '.scenarios[0].status' "$root/baseline/discord-qa-summary.json")"
+          candidate_status="$(jq -r '.scenarios[0].status' "$root/candidate/discord-qa-summary.json")"
+
+          jq -n \
+            --arg baseline_status "$baseline_status" \
+            --arg candidate_status "$candidate_status" \
+            --arg baseline_sha "${{ needs.validate_refs.outputs.baseline_revision }}" \
+            --arg candidate_sha "${{ needs.validate_refs.outputs.candidate_revision }}" \
+            '{
+              scenario: "discord-status-reactions-tool-only",
+              baseline: { sha: $baseline_sha, expected: "queued-only", status: $baseline_status, reproduced: ($baseline_status == "fail") },
+              candidate: { sha: $candidate_sha, expected: "queued -> thinking -> done", status: $candidate_status, fixed: ($candidate_status == "pass") },
+              pass: (($baseline_status == "fail") and ($candidate_status == "pass"))
+            }' > "$root/comparison.json"
+
+          {
+            echo "# Mantis Discord Status Reactions"
+            echo
+            echo "- Scenario: \`discord-status-reactions-tool-only\`"
+            echo "- Baseline status: \`${baseline_status}\`"
+            echo "- Candidate status: \`${candidate_status}\`"
+            echo "- Baseline screenshot: \`baseline/discord-status-reactions-tool-only-timeline.png\`"
+            echo "- Candidate screenshot: \`candidate/discord-status-reactions-tool-only-timeline.png\`"
+          } > "$root/mantis-report.md"
+
+          cat "$root/mantis-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$baseline_status" != "fail" ]]; then
+            echo "Baseline did not reproduce queued-only behavior." >&2
+            exit 1
+          fi
+          if [[ "$candidate_status" != "pass" ]]; then
+            echo "Candidate did not show queued -> thinking -> done." >&2
+            exit 1
+          fi
+
+      - name: Upload Mantis status reaction artifacts
+        id: upload_artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mantis-discord-status-reactions-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run_mantis.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Comment PR with inline QA screenshots
+        if: ${{ always() && inputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_PR: ${{ inputs.pr_number }}
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+          BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$TARGET_PR" =~ ^[0-9]+$ ]]; then
+            echo "pr_number must be numeric, got '${TARGET_PR}'." >&2
+            exit 1
+          fi
+
+          root=".artifacts/qa-e2e/mantis/discord-status-reactions"
+          for required in \
+            "$root/comparison.json" \
+            "$root/baseline/discord-status-reactions-tool-only-timeline.png" \
+            "$root/candidate/discord-status-reactions-tool-only-timeline.png"
+          do
+            if [[ ! -f "$required" ]]; then
+              echo "Missing required QA evidence file: $required" >&2
+              exit 1
+            fi
+          done
+
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${TARGET_PR}" --jq '.number' >/dev/null
+
+          artifact_root="mantis/discord-status-reactions/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          artifacts_worktree="$(mktemp -d)"
+          git init --quiet "$artifacts_worktree"
+          git -C "$artifacts_worktree" config user.name "github-actions[bot]"
+          git -C "$artifacts_worktree" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$artifacts_worktree" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          if git -C "$artifacts_worktree" fetch --quiet origin qa-artifacts; then
+            git -C "$artifacts_worktree" checkout --quiet -B qa-artifacts FETCH_HEAD
+          else
+            git -C "$artifacts_worktree" checkout --quiet --orphan qa-artifacts
+          fi
+
+          mkdir -p "$artifacts_worktree/$artifact_root"
+          cp "$root/baseline/discord-status-reactions-tool-only-timeline.png" "$artifacts_worktree/$artifact_root/baseline.png"
+          cp "$root/candidate/discord-status-reactions-tool-only-timeline.png" "$artifacts_worktree/$artifact_root/candidate.png"
+          cp "$root/comparison.json" "$artifacts_worktree/$artifact_root/comparison.json"
+          cp "$root/mantis-report.md" "$artifacts_worktree/$artifact_root/mantis-report.md"
+
+          git -C "$artifacts_worktree" add "$artifact_root"
+          if git -C "$artifacts_worktree" diff --cached --quiet; then
+            echo "No QA screenshot artifact changes to publish."
+          else
+            git -C "$artifacts_worktree" commit --quiet -m "qa: publish Mantis Discord screenshots for PR ${TARGET_PR}"
+            git -C "$artifacts_worktree" push --quiet origin HEAD:qa-artifacts
+          fi
+
+          encoded_artifact_root="${artifact_root// /%20}"
+          raw_base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/qa-artifacts/${encoded_artifact_root}"
+          baseline_status="$(jq -r '.baseline.status' "$root/comparison.json")"
+          candidate_status="$(jq -r '.candidate.status' "$root/comparison.json")"
+          pass="$(jq -r '.pass' "$root/comparison.json")"
+          comment_file="$(mktemp)"
+          cat > "$comment_file" <<EOF
+          <!-- mantis-discord-status-reactions -->
+          ## Mantis Discord Status Reactions QA
+
+          Summary: Mantis reran Discord status reactions against the known queued-only baseline and the candidate ref. The baseline reproduced the bug, while the candidate showed the expected queued -> thinking -> done reaction sequence.
+
+          - Scenario: \`discord-status-reactions-tool-only\`
+          - Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - Artifact: ${ARTIFACT_URL}
+          - Baseline: \`${baseline_status}\` at \`${BASELINE_SHA}\`
+          - Candidate: \`${candidate_status}\` at \`${CANDIDATE_SHA}\`
+          - Overall: \`${pass}\`
+
+          | Baseline queued-only | Candidate queued -> thinking -> done |
+          | --- | --- |
+          | <img src="${raw_base}/baseline.png" width="420" alt="Baseline Discord status reaction timeline"> | <img src="${raw_base}/candidate.png" width="420" alt="Candidate Discord status reaction timeline"> |
+
+          Raw QA files: https://github.com/${GITHUB_REPOSITORY}/tree/qa-artifacts/${artifact_root}
+          EOF
+
+          comment_id="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TARGET_PR}/comments" \
+              --jq '.[] | select(.body | contains("<!-- mantis-discord-status-reactions -->")) | .id' \
+              | tail -n 1
+          )"
+
+          if [[ -n "$comment_id" ]]; then
+            comment_payload="$(mktemp)"
+            jq -n --rawfile body "$comment_file" '{ body: $body }' > "$comment_payload"
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" --input "$comment_payload" >/dev/null
+            echo "Updated Mantis QA screenshot comment on PR #${TARGET_PR}."
+          else
+            gh pr comment "$TARGET_PR" --body-file "$comment_file"
+            echo "Created Mantis QA screenshot comment on PR #${TARGET_PR}."
+          fi

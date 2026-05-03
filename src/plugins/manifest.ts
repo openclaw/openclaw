@@ -1714,6 +1714,10 @@ export type OpenClawPackageManifest = {
   setupEntry?: string;
   runtimeSetupEntry?: string;
   setupFeatures?: OpenClawPackageSetupFeatures;
+  plugin?: {
+    id?: string;
+    label?: string;
+  };
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
   startup?: OpenClawPackageStartup;
@@ -1737,6 +1741,8 @@ export type PackageManifest = {
   name?: string;
   version?: string;
   description?: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
 } & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
 
 export function getPackageManifestMetadata(

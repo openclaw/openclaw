@@ -19,6 +19,12 @@ const descriptorCache = new Map<string, CachedPluginToolDescriptor[]>();
 let descriptorCacheObjectIds = new WeakMap<object, number>();
 let nextDescriptorCacheObjectId = 1;
 
+export type PluginToolDescriptorConfigCacheKeyMemo = WeakMap<object, string | number | null>;
+
+export function createPluginToolDescriptorConfigCacheKeyMemo(): PluginToolDescriptorConfigCacheKeyMemo {
+  return new WeakMap();
+}
+
 export function resetPluginToolDescriptorCache(): void {
   descriptorCache.clear();
   descriptorCacheObjectIds = new WeakMap();
@@ -47,34 +53,57 @@ function getDescriptorCacheObjectId(value: object | null | undefined): number | 
   return next;
 }
 
+function stripDescriptorVolatileConfigFields(
+  value: NonNullable<PluginLoadOptions["config"]>,
+): NonNullable<PluginLoadOptions["config"]> {
+  if (typeof value !== "object") {
+    return value;
+  }
+  if (!("meta" in value) && !("wizard" in value)) {
+    return value;
+  }
+  const { meta: _meta, wizard: _wizard, ...stableConfig } = value as Record<string, unknown>;
+  return stableConfig as NonNullable<PluginLoadOptions["config"]>;
+}
+
 function getDescriptorConfigCacheKey(
   value: PluginLoadOptions["config"] | null | undefined,
+  memo?: PluginToolDescriptorConfigCacheKeyMemo,
 ): string | number | null {
   if (!value) {
     return null;
   }
-  try {
-    return resolveRuntimeConfigCacheKey(value);
-  } catch {
-    return getDescriptorCacheObjectId(value);
+  const cached = memo?.get(value);
+  if (cached !== undefined) {
+    return cached;
   }
+  let resolved: string | number | null;
+  try {
+    resolved = resolveRuntimeConfigCacheKey(stripDescriptorVolatileConfigFields(value));
+  } catch {
+    resolved = getDescriptorCacheObjectId(value);
+  }
+  memo?.set(value, resolved);
+  return resolved;
 }
 
 function buildDescriptorContextCacheKey(params: {
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
+  configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
 }): string {
   const { ctx } = params;
   return JSON.stringify({
-    config: getDescriptorConfigCacheKey(ctx.config),
-    runtimeConfig: getDescriptorConfigCacheKey(ctx.runtimeConfig),
-    currentRuntimeConfig: getDescriptorConfigCacheKey(params.currentRuntimeConfig),
+    config: getDescriptorConfigCacheKey(ctx.config, params.configCacheKeyMemo),
+    runtimeConfig: getDescriptorConfigCacheKey(ctx.runtimeConfig, params.configCacheKeyMemo),
+    currentRuntimeConfig: getDescriptorConfigCacheKey(
+      params.currentRuntimeConfig,
+      params.configCacheKeyMemo,
+    ),
     fsPolicy: ctx.fsPolicy ?? null,
     workspaceDir: ctx.workspaceDir ?? null,
     agentDir: ctx.agentDir ?? null,
     agentId: ctx.agentId ?? null,
-    sessionKey: ctx.sessionKey ?? null,
-    sessionId: ctx.sessionId ?? null,
     browser: ctx.browser ?? null,
     messageChannel: ctx.messageChannel ?? null,
     agentAccountId: ctx.agentAccountId ?? null,
@@ -92,6 +121,7 @@ export function buildPluginToolDescriptorCacheKey(params: {
   contractToolNames: readonly string[];
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
+  configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
 }): string {
   return JSON.stringify({
     version: PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION,
@@ -103,6 +133,7 @@ export function buildPluginToolDescriptorCacheKey(params: {
     context: buildDescriptorContextCacheKey({
       ctx: params.ctx,
       currentRuntimeConfig: params.currentRuntimeConfig,
+      configCacheKeyMemo: params.configCacheKeyMemo,
     }),
   });
 }

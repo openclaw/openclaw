@@ -91,12 +91,14 @@ export function normalizeUpgradeSurvivorBaselineSpec(raw) {
   }
   const spec = value.startsWith("openclaw@") ? value : `openclaw@${value}`;
   if (
-    !/^openclaw@(?:beta|latest|[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[0-9]+|beta\.[0-9]+))?)$/u.test(spec)
+    !/^openclaw@(?:alpha|beta|latest|[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[0-9]+|alpha\.[0-9]+|beta\.[0-9]+))?)$/u.test(
+      spec,
+    )
   ) {
     throw new Error(
       `invalid published upgrade survivor baseline: ${JSON.stringify(
         value,
-      )}. Expected openclaw@latest, openclaw@beta, or openclaw@YYYY.M.D.`,
+      )}. Expected openclaw@latest, openclaw@beta, openclaw@alpha, or openclaw@YYYY.M.D.`,
     );
   }
   return spec;
@@ -325,7 +327,11 @@ function laneCredentialRequirements(poolLane) {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
-  if (poolLane.name === "openwebui" || poolLane.name === "openai-web-search-minimal") {
+  if (
+    poolLane.name === "openwebui" ||
+    poolLane.name === "openai-web-search-minimal" ||
+    poolLane.name === "live-codex-npm-plugin"
+  ) {
     credentials.push("openai");
   }
   return credentials;

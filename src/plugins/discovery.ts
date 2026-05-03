@@ -32,6 +32,10 @@ import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from ".
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginSourceRoots } from "./roots.js";
+import {
+  normalizePluginDependencySpecs,
+  type PluginDependencySpecMap,
+} from "./status-dependencies.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
@@ -61,6 +65,8 @@ export type PluginCandidate = {
   packageDescription?: string;
   packageDir?: string;
   packageManifest?: OpenClawPackageManifest;
+  packageDependencies?: PluginDependencySpecMap;
+  packageOptionalDependencies?: PluginDependencySpecMap;
   bundledManifest?: PluginManifest;
   bundledManifestPath?: string;
 };
@@ -494,6 +500,10 @@ function addCandidate(params: {
   }
   params.seen.add(resolved);
   const manifest = params.manifest ?? null;
+  const packageDependencies = normalizePluginDependencySpecs({
+    dependencies: manifest?.dependencies,
+    optionalDependencies: manifest?.optionalDependencies,
+  });
   params.candidates.push({
     idHint: params.idHint,
     source: resolved,
@@ -508,6 +518,8 @@ function addCandidate(params: {
     packageDescription: normalizeOptionalString(manifest?.description),
     packageDir: params.packageDir,
     packageManifest: getPackageManifestMetadata(manifest ?? undefined),
+    packageDependencies: packageDependencies.dependencies,
+    packageOptionalDependencies: packageDependencies.optionalDependencies,
     bundledManifest: params.bundledManifest,
     bundledManifestPath: params.bundledManifestPath,
   });
@@ -518,6 +530,7 @@ function discoverBundleInRoot(params: {
   origin: PluginOrigin;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  manifest?: PackageManifest | null;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
@@ -554,6 +567,8 @@ function discoverBundleInRoot(params: {
     bundleFormat,
     ownershipUid: params.ownershipUid,
     workspaceDir: params.workspaceDir,
+    manifest: params.manifest,
+    packageDir: params.rootDir,
     realpathCache: params.realpathCache,
   });
   return "added";
@@ -683,6 +698,7 @@ function discoverInDirectory(params: {
       origin: params.origin,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      manifest,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
@@ -882,6 +898,7 @@ function discoverFromPath(params: {
       origin: params.origin,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      manifest,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,

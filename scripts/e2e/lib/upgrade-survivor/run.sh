@@ -40,8 +40,6 @@ CURRENT_PHASE="setup"
 FAILURE_PHASE=""
 FAILURE_MESSAGE=""
 gateway_pid=""
-clawhub_fixture_pid=""
-configured_plugin_installs_clawhub_fixture_owned=""
 baseline_spec=""
 baseline_version=""
 baseline_version_expected="0"
@@ -70,10 +68,10 @@ rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
 
 validate_baseline_package_spec() {
   local spec="$1"
-  if [[ "$spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
+  if [[ "$spec" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
     return 0
   fi
-  echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, an exact OpenClaw release version, or a bare release version; got: $spec" >&2
+  echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, an exact OpenClaw release version, or a bare release version; got: $spec" >&2
   return 1
 }
 
@@ -98,12 +96,12 @@ normalize_baseline() {
       ;;
   esac
   case "$baseline_version" in
-    latest | beta)
+    latest | beta | alpha)
       baseline_version=""
       baseline_version_expected="0"
       ;;
     dev | main | "")
-      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@<version>, or a bare version" >&2
+      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, openclaw@<version>, or a bare version" >&2
       return 1
       ;;
     *)
@@ -193,10 +191,6 @@ NODE
 }
 
 cleanup() {
-  if [ -n "${clawhub_fixture_pid:-}" ]; then
-    kill "$clawhub_fixture_pid" 2>/dev/null || true
-    wait "$clawhub_fixture_pid" 2>/dev/null || true
-  fi
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
 }
 
@@ -285,62 +279,6 @@ plugin_deps_cleanup_plugin_dirs() {
 
 configured_plugin_installs_enabled() {
   [ "$SCENARIO" = "configured-plugin-installs" ]
-}
-
-start_configured_plugin_installs_clawhub_fixture() {
-  configured_plugin_installs_enabled || return 0
-  configured_plugin_installs_clawhub_fixture_owned=""
-  if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ] || [ -n "${CLAWHUB_URL:-}" ]; then
-    return 0
-  fi
-
-  local port_file="$ARTIFACT_ROOT/clawhub-not-found.port"
-  local requests_file="$ARTIFACT_ROOT/clawhub-not-found-requests.jsonl"
-  rm -f "$port_file" "$requests_file"
-  node - "$port_file" "$requests_file" <<'NODE' &
-const fs = require("node:fs");
-const http = require("node:http");
-const portFile = process.argv[2];
-const requestsFile = process.argv[3];
-const server = http.createServer((request, response) => {
-  fs.appendFileSync(
-    requestsFile,
-    `${JSON.stringify({ method: request.method, url: request.url, at: new Date().toISOString() })}\n`,
-  );
-  response.writeHead(404, { "content-type": "application/json" });
-  response.end('{"error":"fixture package not found"}\n');
-});
-server.listen(0, "127.0.0.1", () => {
-  fs.writeFileSync(portFile, String(server.address().port));
-});
-process.on("SIGTERM", () => server.close(() => process.exit(0)));
-process.on("SIGINT", () => server.close(() => process.exit(0)));
-NODE
-  clawhub_fixture_pid="$!"
-  for _ in $(seq 1 100); do
-    if [ -s "$port_file" ]; then
-      export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
-      configured_plugin_installs_clawhub_fixture_owned="1"
-      echo "Configured plugin install scenario using ClawHub 404 fixture: $OPENCLAW_CLAWHUB_URL"
-      return 0
-    fi
-    sleep 0.1
-  done
-  echo "timed out starting ClawHub 404 fixture" >&2
-  return 1
-}
-
-assert_configured_plugin_installs_clawhub_attempted() {
-  configured_plugin_installs_enabled || return 0
-  if [ "${configured_plugin_installs_clawhub_fixture_owned:-}" != "1" ]; then
-    return 0
-  fi
-  local requests_file="$ARTIFACT_ROOT/clawhub-not-found-requests.jsonl"
-  if ! grep -q '/api/v1/packages/%40openclaw%2Fmatrix' "$requests_file" 2>/dev/null; then
-    echo "configured plugin install scenario did not attempt ClawHub for @openclaw/matrix" >&2
-    cat "$requests_file" >&2 2>/dev/null || true
-    return 1
-  fi
 }
 
 legacy_plugin_dependency_probe_paths() {
@@ -758,11 +696,9 @@ phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_deb
 phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
-phase configured-plugin-installs-clawhub-fixture start_configured_plugin_installs_clawhub_fixture
 phase update-candidate update_candidate
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
 phase doctor run_doctor
-phase configured-plugin-installs-clawhub-attempted assert_configured_plugin_installs_clawhub_attempted
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
 phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config

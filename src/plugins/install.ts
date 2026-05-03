@@ -8,6 +8,13 @@ import {
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
+  readManagedNpmRootInstalledDependency,
+  removeManagedNpmRootDependency,
+  resolveManagedNpmRootDependencySpec,
+  upsertManagedNpmRootDependency,
+  type ManagedNpmRootInstalledDependency,
+} from "../infra/npm-managed-root.js";
+import {
   formatPrereleaseResolutionError,
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
@@ -197,6 +204,73 @@ function buildBlockedInstallResult(params: {
         ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED }
         : {}),
   };
+}
+
+async function rollbackManagedNpmPluginInstall(params: {
+  npmRoot: string;
+  packageName: string;
+  targetDir: string;
+  timeoutMs: number;
+  logger: PluginInstallLogger;
+}): Promise<void> {
+  try {
+    await runCommandWithTimeout(
+      [
+        "npm",
+        "uninstall",
+        "--loglevel=error",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--prefix",
+        ".",
+        params.packageName,
+      ],
+      {
+        cwd: params.npmRoot,
+        timeoutMs: Math.max(params.timeoutMs, 300_000),
+        env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+      },
+    );
+  } catch (error) {
+    params.logger.warn?.(
+      `Failed to run npm uninstall rollback for ${params.packageName}: ${String(error)}`,
+    );
+  }
+  try {
+    await fs.rm(params.targetDir, { recursive: true, force: true });
+  } catch (error) {
+    params.logger.warn?.(
+      `Failed to remove failed plugin install directory ${params.targetDir}: ${String(error)}`,
+    );
+  }
+  try {
+    await removeManagedNpmRootDependency({
+      npmRoot: params.npmRoot,
+      packageName: params.packageName,
+    });
+  } catch (error) {
+    params.logger.warn?.(
+      `Failed to remove managed npm dependency ${params.packageName}: ${String(error)}`,
+    );
+  }
+}
+
+function resolveInstalledNpmResolutionMismatch(params: {
+  packageName: string;
+  expected: NpmSpecResolution;
+  installed: ManagedNpmRootInstalledDependency | null;
+}): string | null {
+  if (!params.installed) {
+    return `npm install did not record package-lock metadata for ${params.packageName}`;
+  }
+  if (params.expected.version && params.installed.version !== params.expected.version) {
+    return `npm install resolved ${params.packageName} to version ${params.installed.version ?? "unknown"}, expected ${params.expected.version}`;
+  }
+  if (params.expected.integrity && params.installed.integrity !== params.expected.integrity) {
+    return `npm install resolved ${params.packageName} with integrity ${params.installed.integrity ?? "unknown"}, expected ${params.expected.integrity}`;
+  }
+  return null;
 }
 
 type PackageInstallCommonParams = InstallSafetyOverrides & {
@@ -745,6 +819,9 @@ async function scanAndLinkInstalledPackage(params: {
     subject: `Plugin "${params.pluginId}"`,
     scan: async () =>
       await params.runtime.scanInstalledPackageDependencyTree({
+        allowManagedNpmRootPackagePeerSymlinks:
+          params.dependencyScanRootDir !== undefined &&
+          path.resolve(params.dependencyScanRootDir) !== path.resolve(params.installedDir),
         logger: params.logger,
         packageDir: params.dependencyScanRootDir ?? params.installedDir,
         pluginId: params.pluginId,
@@ -1149,7 +1226,14 @@ export async function installPluginFromNpmSpec(
   }
 
   logger.info?.(`Installing ${spec} into ${npmRoot}…`);
-  await fs.mkdir(npmRoot, { recursive: true });
+  await upsertManagedNpmRootDependency({
+    npmRoot,
+    packageName: parsedSpec.name,
+    dependencySpec: resolveManagedNpmRootDependencySpec({
+      parsedSpec,
+      resolution: npmResolution,
+    }),
+  });
   const install = await runCommandWithTimeout(
     [
       "npm",
@@ -1160,18 +1244,60 @@ export async function installPluginFromNpmSpec(
         noFund: true,
       }),
       "--prefix",
-      npmRoot,
-      spec,
+      ".",
     ],
     {
+      cwd: npmRoot,
       timeoutMs: Math.max(timeoutMs, 300_000),
       env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
     },
   );
   if (install.code !== 0) {
+    await removeManagedNpmRootDependency({
+      npmRoot,
+      packageName: parsedSpec.name,
+    });
     return {
       ok: false,
       error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+    };
+  }
+
+  let installedDependency: ManagedNpmRootInstalledDependency | null;
+  try {
+    installedDependency = await readManagedNpmRootInstalledDependency({
+      npmRoot,
+      packageName: parsedSpec.name,
+    });
+  } catch (error) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: parsedSpec.name,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
+    return {
+      ok: false,
+      error: `Failed to verify npm install metadata for ${parsedSpec.name}: ${String(error)}`,
+    };
+  }
+  const resolutionMismatch = resolveInstalledNpmResolutionMismatch({
+    packageName: parsedSpec.name,
+    expected: npmResolution,
+    installed: installedDependency,
+  });
+  if (resolutionMismatch) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: parsedSpec.name,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
+    return {
+      ok: false,
+      error: resolutionMismatch,
     };
   }
 
@@ -1181,6 +1307,7 @@ export async function installPluginFromNpmSpec(
     dependencyScanRootDir: npmRoot,
     logger,
     expectedPluginId,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     mode: effectiveMode,
     installPolicyRequest: {
       kind: "plugin-npm",
@@ -1188,6 +1315,13 @@ export async function installPluginFromNpmSpec(
     },
   });
   if (!result.ok) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: parsedSpec.name,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
     return result;
   }
   return {

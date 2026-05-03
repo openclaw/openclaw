@@ -17,6 +17,7 @@ import {
   parseImageMode,
   resolveCliModelSwitchProbeTarget,
   resolveCliBackendLiveArgs,
+  resolveCliBackendLiveModelSelection,
   parseJsonStringArray,
   restoreCliBackendLiveEnv,
   shouldRunCliImageProbe,
@@ -204,25 +205,34 @@ describeLive("gateway live (cli backend)", () => {
       logCliBackendLiveStep("env-ready", { port });
 
       const rawModel = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
-      const parsed = parseModelRef(rawModel, "claude-cli");
-      if (!parsed) {
-        throw new Error(
-          `OPENCLAW_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${rawModel}`,
-        );
-      }
-
-      const providerId = parsed.provider;
-      const modelKey = `${providerId}/${parsed.model}`;
+      const initialParsed = parseModelRef(rawModel, "claude-cli");
+      const initialProviderId = initialParsed?.provider ?? "";
+      const initialModelKey = initialParsed
+        ? `${initialProviderId}/${initialParsed.model}`
+        : rawModel;
+      const initialModelSwitchTarget = resolveCliModelSwitchProbeTarget(
+        initialProviderId,
+        initialModelKey,
+      );
+      const modelSelection = resolveCliBackendLiveModelSelection({
+        rawModel,
+        defaultProvider: "claude-cli",
+        modelSwitchTarget: initialModelSwitchTarget,
+      });
+      const providerId = modelSelection.providerId;
+      const modelKey = modelSelection.cliModelKey;
+      const configModelKey = modelSelection.configModelKey;
       const backendResolved = resolveCliBackendConfig(providerId);
       const enableCliImageProbe = shouldRunCliImageProbe(providerId);
       const enableCliMcpProbe = shouldRunCliMcpProbe(providerId);
       const enableCliModelSwitchProbe = shouldRunCliModelSwitchProbe(providerId, modelKey);
       const modelSwitchTarget = enableCliModelSwitchProbe
-        ? resolveCliModelSwitchProbeTarget(providerId, modelKey)
+        ? modelSelection.configModelSwitchTarget
         : undefined;
       logCliBackendLiveStep("model-selected", {
         providerId,
         modelKey,
+        configModelKey,
         enableCliImageProbe,
         enableCliMcpProbe,
         enableCliModelSwitchProbe,
@@ -328,7 +338,7 @@ describeLive("gateway live (cli backend)", () => {
                 providers: {
                   ...cfg.models?.providers,
                   openai: {
-                    ...openAiProviderConfigForCodexCli(modelKey),
+                    ...openAiProviderConfigForCodexCli(configModelKey),
                     ...cfg.models?.providers?.openai,
                   },
                 },
@@ -347,12 +357,12 @@ describeLive("gateway live (cli backend)", () => {
           defaults: {
             ...cfg.agents?.defaults,
             ...(bootstrapWorkspace ? { workspace: bootstrapWorkspace.workspaceRootDir } : {}),
-            model: { primary: modelKey },
+            model: { primary: configModelKey },
             models: {
-              [modelKey]: {},
+              [configModelKey]: {},
               ...(modelSwitchTarget ? { [modelSwitchTarget]: {} } : {}),
             },
-            agentRuntime: { id: "pi", fallback: "pi" },
+            agentRuntime: modelSelection.agentRuntime,
             cliBackends: {
               ...existingBackends,
               [providerId]: {

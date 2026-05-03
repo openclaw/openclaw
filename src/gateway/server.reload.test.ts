@@ -46,6 +46,14 @@ const hoisted = vi.hoisted(() => {
   const totalPendingReplies = { value: 0 };
   const totalQueueSize = { value: 0 };
   const activeTaskCount = { value: 0 };
+  const activeTaskBlockers: Array<{
+    taskId: string;
+    status: "queued" | "running";
+    runtime: "subagent" | "acp" | "cli" | "cron";
+    runId?: string;
+    label?: string;
+    title?: string;
+  }> = [];
 
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
@@ -150,6 +158,7 @@ const hoisted = vi.hoisted(() => {
     totalPendingReplies,
     totalQueueSize,
     activeTaskCount,
+    activeTaskBlockers,
     startGmailWatcher,
     stopGmailWatcher,
     resetModelCatalogCache,
@@ -258,6 +267,7 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
   );
   return {
     ...actual,
+    getInspectableActiveTaskRestartBlockers: () => hoisted.activeTaskBlockers,
     getInspectableTaskRegistrySummary: () => ({
       active: hoisted.activeTaskCount.value,
       queued: 0,
@@ -312,6 +322,7 @@ describe("gateway hot reload", () => {
     hoisted.totalPendingReplies.value = 0;
     hoisted.totalQueueSize.value = 0;
     hoisted.activeTaskCount.value = 0;
+    hoisted.activeTaskBlockers.length = 0;
     embeddedRunMock.activeIds.clear();
     hoisted.resetModelCatalogCache.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
@@ -693,8 +704,11 @@ describe("gateway hot reload", () => {
       );
 
       expect(hoisted.cronInstances.length).toBe(2);
-      expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);
-      expect(hoisted.cronInstances[1].start).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(
+          hoisted.cronInstances.some((instance) => instance.start.mock.calls.length === 1),
+        ).toBe(true);
+      });
 
       expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(5);

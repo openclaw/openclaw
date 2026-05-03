@@ -21,7 +21,11 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { getInspectableTaskRegistrySummary } from "../tasks/task-registry.maintenance.js";
+import {
+  getInspectableActiveTaskRestartBlockers,
+  getInspectableTaskRegistrySummary,
+  type ActiveTaskRestartBlocker,
+} from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { enqueueConfigRecoveryNotice } from "./config-recovery-notice.js";
 import type { ChannelKind } from "./config-reload-plan.js";
@@ -182,6 +186,26 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       details.push(`${counts.activeTasks} task run(s)`);
     }
     return details;
+  };
+  const formatTaskBlocker = (task: ActiveTaskRestartBlocker) => {
+    const details = [
+      `taskId=${task.taskId}`,
+      task.runId ? `runId=${task.runId}` : null,
+      `status=${task.status}`,
+      `runtime=${task.runtime}`,
+      task.label ? `label=${task.label}` : null,
+      task.title ? `title=${task.title.slice(0, 80)}` : null,
+    ].filter((value): value is string => Boolean(value));
+    return details.join(" ");
+  };
+  const formatTaskBlockers = () => {
+    const blockers = getInspectableActiveTaskRestartBlockers();
+    if (blockers.length === 0) {
+      return null;
+    }
+    const shown = blockers.slice(0, 8).map(formatTaskBlocker);
+    const omitted = blockers.length - shown.length;
+    return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
   };
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
@@ -412,6 +436,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       params.logReload.warn(
         `config change requires gateway restart (${reasons}) — deferring until ${initialDetails.join(", ")} complete`,
       );
+      const taskBlockers = formatTaskBlockers();
+      if (taskBlockers) {
+        params.logReload.warn(`restart blocked by active task run(s): ${taskBlockers}`);
+      }
 
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
@@ -425,15 +453,21 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
           onStillPending: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
+            const taskBlockers = formatTaskBlockers();
             params.logReload.warn(
-              `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active`,
+              `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active${
+                taskBlockers ? ` (${taskBlockers})` : ""
+              }`,
             );
           },
           onTimeout: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
+            const taskBlockers = formatTaskBlockers();
             restartPending = false;
             params.logReload.warn(
-              `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active; restarting anyway`,
+              `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active${
+                taskBlockers ? ` (${taskBlockers})` : ""
+              }; forcing restart`,
             );
           },
           onCheckError: (err) => {

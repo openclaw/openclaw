@@ -1313,6 +1313,7 @@ function collectDryRunSchemaErrors(params: {
 }): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRaw(params.config, {
     touchedPaths: params.operations.map((operation) => operation.setPath),
+    validateBundledChannels: true,
   });
   if (validated.ok) {
     return [];

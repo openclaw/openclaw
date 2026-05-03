@@ -524,7 +524,7 @@ describe("CLI attempt execution", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli", fallback: "none" },
+            agentRuntime: { id: "claude-cli" },
           },
         },
       } as OpenClawConfig,
@@ -562,6 +562,61 @@ describe("CLI attempt execution", () => {
     );
   });
 
+  it("routes canonical OpenAI models through the configured Codex CLI runtime", async () => {
+    const sessionKey = "agent:main:direct:canonical-codex-cli";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-canonical-codex-cli",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical codex cli"));
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex-cli" },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "route this",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-canonical-codex-cli",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+      }),
+    );
+  });
+
   it("keeps one-shot model runs on the raw embedded provider path", async () => {
     const sessionKey = "agent:main:direct:model-run-raw";
     const sessionEntry: SessionEntry = {
@@ -581,7 +636,7 @@ describe("CLI attempt execution", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli", fallback: "none" },
+            agentRuntime: { id: "claude-cli" },
           },
         },
       } as OpenClawConfig,
@@ -766,7 +821,7 @@ describe("embedded attempt harness pinning", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         },
       } as OpenClawConfig,
@@ -831,7 +886,7 @@ describe("embedded attempt harness pinning", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         },
       } as OpenClawConfig,
@@ -927,7 +982,7 @@ describe("embedded attempt harness pinning", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli", fallback: "none" },
+            agentRuntime: { id: "claude-cli" },
           },
         },
       } as OpenClawConfig,

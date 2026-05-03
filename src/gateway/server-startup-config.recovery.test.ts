@@ -158,6 +158,46 @@ function buildSnapshot(params: {
   });
 }
 
+function buildDefaultSnapshot(): ConfigFileSnapshot {
+  return buildSnapshot({
+    valid: true,
+    raw: `${JSON.stringify(validConfig)}\n`,
+    config: validConfig,
+  });
+}
+
+function installConfigIoMockDefaults() {
+  const readSnapshot = vi.mocked(configIo.readConfigFileSnapshot);
+  const readSnapshotWithPluginMetadata = vi.mocked(
+    configIo.readConfigFileSnapshotWithPluginMetadata,
+  );
+  const recoverLastKnownGood = vi.mocked(configIo.recoverConfigFromLastKnownGood);
+  const recoverJsonRootSuffix = vi.mocked(configIo.recoverConfigFromJsonRootSuffix);
+  const writeConfig = vi.mocked(configIo.writeConfigFile);
+
+  readSnapshot.mockReset();
+  readSnapshotWithPluginMetadata.mockReset();
+  recoverLastKnownGood.mockReset();
+  recoverJsonRootSuffix.mockReset();
+  writeConfig.mockReset();
+
+  const defaultSnapshot = buildDefaultSnapshot();
+  readSnapshot.mockResolvedValue(defaultSnapshot);
+  readSnapshotWithPluginMetadata.mockImplementation(async () => {
+    const snapshot = (await readSnapshot()) as ConfigFileSnapshot | undefined;
+    if (!snapshot) {
+      throw new Error(
+        "configIo.readConfigFileSnapshot mock returned no snapshot; " +
+          "mock readConfigFileSnapshotWithPluginMetadata with { snapshot, pluginMetadataSnapshot }.",
+      );
+    }
+    return snapshot.valid ? { snapshot, pluginMetadataSnapshot } : { snapshot };
+  });
+  recoverLastKnownGood.mockResolvedValue(false);
+  recoverJsonRootSuffix.mockResolvedValue(false);
+  writeConfig.mockResolvedValue(undefined);
+}
+
 describe("gateway startup config recovery", () => {
   beforeAll(async () => {
     ({ loadGatewayStartupConfigSnapshot } = await import("./server-startup-config.js"));
@@ -169,9 +209,7 @@ describe("gateway startup config recovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     configMocks.isNixMode.value = false;
-    vi.mocked(configIo.readConfigFileSnapshotWithPluginMetadata).mockImplementation(async () => ({
-      snapshot: await vi.mocked(configIo.readConfigFileSnapshot)(),
-    }));
+    installConfigIoMockDefaults();
   });
 
   it("runs startup plugin auto-enable against source config without persisting runtime defaults", async () => {
@@ -418,6 +456,7 @@ describe("gateway startup config recovery", () => {
     ).resolves.toEqual({
       snapshot: recoveredSnapshot,
       wroteConfig: true,
+      pluginMetadataSnapshot,
     });
 
     expect(configIo.recoverConfigFromLastKnownGood).toHaveBeenCalledWith({
@@ -720,6 +759,7 @@ describe("gateway startup config recovery", () => {
     ).resolves.toEqual({
       snapshot: repairedSnapshot,
       wroteConfig: true,
+      pluginMetadataSnapshot,
     });
 
     expect(configIo.recoverConfigFromJsonRootSuffix).toHaveBeenCalledWith(invalidSnapshot);
