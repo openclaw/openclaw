@@ -47,7 +47,7 @@ cd apps/android
 `bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
 
 - Play build: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
-- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
+- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-thirdParty-release.aab`
 
 Flavor-specific direct Gradle tasks:
 
@@ -56,6 +56,16 @@ cd apps/android
 ./gradlew :app:bundlePlayRelease
 ./gradlew :app:bundleThirdPartyRelease
 ```
+
+Export the current Play upload certificate PEM from the configured keystore:
+
+```bash
+pnpm android:export-upload-cert
+```
+
+Default output:
+
+- `apps/android/build/release-bundles/openclaw-upload-cert.pem`
 
 ## Kotlin Lint + Format
 
@@ -238,6 +248,69 @@ Reference links:
 - [Background location policy](https://support.google.com/googleplay/android-developer/answer/9799150)
 - [AccessibilityService policy](https://support.google.com/googleplay/android-developer/answer/10964491?hl=en-GB)
 - [Photo and Video Permissions policy](https://support.google.com/googleplay/android-developer/answer/14594990)
+
+## Release Handoff
+
+Local release signing reads these properties from `~/.gradle/gradle.properties`:
+
+- `OPENCLAW_ANDROID_STORE_FILE`
+- `OPENCLAW_ANDROID_STORE_PASSWORD`
+- `OPENCLAW_ANDROID_KEY_ALIAS`
+- `OPENCLAW_ANDROID_KEY_PASSWORD`
+
+Local release flow:
+
+```bash
+pnpm android:test
+pnpm android:test:third-party
+pnpm android:lint
+cd apps/android
+./gradlew :app:lintVitalPlayRelease :app:lintVitalThirdPartyRelease
+cd ../..
+pnpm android:bundle:release
+pnpm android:export-upload-cert
+```
+
+Artifacts written locally:
+
+- Play bundle: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
+- Third-party bundle: `apps/android/build/release-bundles/openclaw-<version>-thirdParty-release.aab`
+- Upload certificate PEM: `apps/android/build/release-bundles/openclaw-upload-cert.pem`
+
+GitHub Actions release workflow:
+
+- Workflow file: `.github/workflows/android-release.yml`
+- Trigger: manual `workflow_dispatch`
+- Input: release tag such as `v2026.4.6`
+- CI checks before upload:
+  - `:app:testPlayDebugUnitTest`
+  - `:app:testThirdPartyDebugUnitTest`
+  - `:app:ktlintCheck`
+  - `:benchmark:ktlintCheck`
+  - `:app:lintVitalPlayRelease`
+  - `:app:lintVitalThirdPartyRelease`
+- Uploaded release assets:
+  - `openclaw-<version>-play-release.aab`
+  - `openclaw-<version>-thirdParty-release.aab`
+  - `SHA256SUMS.txt`
+
+GitHub repository secrets required for the workflow:
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | Base64 contents of the upload keystore |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDROID_KEY_ALIAS` | Upload key alias |
+| `ANDROID_KEY_PASSWORD` | Upload key password |
+
+Google Play Console handoff:
+
+1. Go to `Release > Production` or the track you are promoting from.
+2. Create a new release and upload `openclaw-<version>-play-release.aab`.
+3. If Google Play rejects the upload because the upload key changed, open `Setup > App signing`, request an upload key reset, and submit `apps/android/build/release-bundles/openclaw-upload-cert.pem`.
+4. After the upload key reset is approved, upload the Play AAB again and submit for review.
+
+`thirdParty` remains the sideload flavor and should not be uploaded to Google Play.
 
 ## Integration Capability Test (Preconditioned)
 

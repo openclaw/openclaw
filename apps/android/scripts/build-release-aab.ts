@@ -16,7 +16,7 @@ const releaseVariants = [
     bundlePath: join(androidDir, "app", "build", "outputs", "bundle", "playRelease", "app-play-release.aab"),
   },
   {
-    flavorName: "third-party",
+    flavorName: "thirdParty",
     gradleTask: ":app:bundleThirdPartyRelease",
     bundlePath: join(
       androidDir,
