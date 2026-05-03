@@ -5,6 +5,10 @@ import { handleWhatsAppAction, whatsAppActionRuntime } from "./action-runtime.js
 
 const originalWhatsAppActionRuntime = { ...whatsAppActionRuntime };
 const sendReactionWhatsApp = vi.fn(async () => undefined);
+const sendLocationWhatsApp = vi.fn(async () => ({
+  messageId: "loc-1",
+  toJid: "123@s.whatsapp.net",
+}));
 
 const enabledConfig = {
   channels: { whatsapp: { actions: { reactions: true } } },
@@ -21,6 +25,7 @@ describe("handleWhatsAppAction", () => {
     vi.clearAllMocks();
     Object.assign(whatsAppActionRuntime, originalWhatsAppActionRuntime, {
       sendReactionWhatsApp,
+      sendLocationWhatsApp,
     });
   });
 
@@ -190,6 +195,43 @@ describe("handleWhatsAppAction", () => {
     );
   });
 
+  it("sends native locations", async () => {
+    const result = await handleWhatsAppAction(
+      {
+        action: "location",
+        to: "+123",
+        latitude: 18.4861,
+        longitude: -69.9312,
+        locationName: "Santo Domingo",
+        locationAddress: "Distrito Nacional",
+      },
+      enabledConfig,
+    );
+
+    expect(sendLocationWhatsApp).toHaveBeenCalledWith(
+      "+123",
+      {
+        latitude: 18.4861,
+        longitude: -69.9312,
+        name: "Santo Domingo",
+        address: "Distrito Nacional",
+        accuracyInMeters: undefined,
+      },
+      expect.objectContaining({
+        verbose: false,
+        accountId: DEFAULT_ACCOUNT_ID,
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          ok: true,
+          messageId: "loc-1",
+          toJid: "123@s.whatsapp.net",
+        }),
+      }),
+    );
+  });
   it("respects reaction gating", async () => {
     const cfg = {
       channels: { whatsapp: { actions: { reactions: false } } },

@@ -3,6 +3,7 @@ import {
   resolveReactionMessageId,
   handleWhatsAppAction,
   normalizeWhatsAppTarget,
+  readNumberParam,
   readStringOrNumberParam,
   readStringParam,
   type OpenClawConfig,
@@ -22,8 +23,33 @@ export async function handleWhatsAppReactAction(params: {
     currentMessageId?: string | number | null;
   };
 }) {
-  if (params.action !== "react") {
+  if (params.action !== "react" && params.action !== "location") {
     throw new Error(`Action ${params.action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
+  }
+
+  if (params.action === "location") {
+    const to =
+      readStringParam(params.params, "chatJid") ??
+      readStringParam(params.params, "to", { required: true });
+    const latitude = readNumberParam(params.params, "latitude", { required: true });
+    const longitude = readNumberParam(params.params, "longitude", { required: true });
+    const locationName = readStringParam(params.params, "locationName");
+    const locationAddress = readStringParam(params.params, "locationAddress");
+    const accuracyInMeters = readNumberParam(params.params, "accuracyInMeters", { strict: true });
+
+    return await handleWhatsAppAction(
+      {
+        action: "location",
+        to,
+        latitude,
+        longitude,
+        locationName,
+        locationAddress,
+        accuracyInMeters,
+        accountId: params.accountId ?? undefined,
+      },
+      params.cfg,
+    );
   }
   const isWhatsAppSource = params.toolContext?.currentChannelProvider === WHATSAPP_CHANNEL;
   const explicitTarget =

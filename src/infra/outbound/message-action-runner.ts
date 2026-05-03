@@ -1209,6 +1209,21 @@ export async function runMessageAction(
   const gateway = resolveGateway(input);
 
   if (action === "send") {
+    if (
+      readNumberParam(params, "latitude") != null ||
+      readNumberParam(params, "longitude") != null
+    ) {
+      return handleLocationAction({
+        cfg,
+        params,
+        channel,
+        accountId,
+        dryRun,
+        gateway,
+        input,
+        abortSignal: input.abortSignal,
+      });
+    }
     return handleSendAction({
       cfg,
       params,
