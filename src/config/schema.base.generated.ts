@@ -6273,6 +6273,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 systemPromptOverride: {
                   type: "string",
                 },
+                sessionKey: {
+                  type: "string",
+                  enum: ["session", "run"],
+                },
                 agentRuntime: {
                   type: "object",
                   properties: {
@@ -20375,6 +20379,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       session: {
         type: "object",
         properties: {
+          keyStrategy: {
+            type: "string",
+            enum: ["session", "run"],
+          },
           scope: {
             anyOf: [
               {
