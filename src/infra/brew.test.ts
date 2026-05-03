@@ -139,6 +139,18 @@ describe("brew helpers", () => {
     });
   });
 
+  it("does not resolve brew from PATH entries", async () => {
+    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
+      const pathBin = path.join(tmp, "path-bin");
+      const pathBrew = path.join(pathBin, "brew");
+      await writeExecutable(pathBrew);
+
+      const env: NodeJS.ProcessEnv = { PATH: pathBin };
+
+      expect(resolveBrewExecutable({ homeDir: path.join(tmp, "home"), env })).not.toBe(pathBrew);
+    });
+  });
+
   it("always includes the standard macOS brew dirs after linuxbrew candidates", () => {
     const dirs = resolveBrewPathDirs({ homeDir: "/home/test" });
 
