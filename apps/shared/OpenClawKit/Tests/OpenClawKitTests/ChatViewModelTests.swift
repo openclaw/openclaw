@@ -11,6 +11,16 @@ private func chatTextMessage(role: String, text: String, timestamp: Double) -> A
     ])
 }
 
+private func chatErrorMessage(role: String, errorMessage: String, timestamp: Double) -> AnyCodable {
+    AnyCodable([
+        "role": role,
+        "content": [],
+        "timestamp": timestamp,
+        "stopReason": "error",
+        "errorMessage": errorMessage,
+    ])
+}
+
 private func historyPayload(
     sessionKey: String = "main",
     sessionId: String? = "sess-main",
@@ -658,6 +668,47 @@ extension TestChatTransportState {
         try await waitUntil("pending run clears") { await MainActor.run { vm.pendingRunCount == 0 } }
         try await waitUntil("history refresh") {
             await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) }
+        }
+    }
+
+    @Test func surfacesAssistantErrorMessageAfterOwnRunRefresh() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = historyPayload()
+        let history2 = historyPayload(
+            messages: [
+                chatErrorMessage(
+                    role: "assistant",
+                    errorMessage: "You have hit your ChatGPT usage limit (plus plan). Try again in ~28 min.",
+                    timestamp: now),
+            ])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await sendUserMessage(vm)
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        let runId = try #require(await transport.lastSentRunId())
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "error",
+                    message: nil,
+                    errorMessage: "You have hit your ChatGPT usage limit (plus plan). Try again in ~28 min.")))
+
+        try await waitUntil("pending run clears after error") {
+            await MainActor.run { vm.pendingRunCount == 0 }
+        }
+        try await waitUntil("history refresh shows assistant error message") {
+            await MainActor.run {
+                vm.messages.contains(where: { message in
+                    message.role == "assistant" &&
+                        message.content.compactMap(\.text).joined(separator: "\n")
+                            .contains("You have hit your ChatGPT usage limit")
+                })
+            }
         }
     }
 
