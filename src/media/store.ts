@@ -353,7 +353,9 @@ async function writeSavedMediaBuffer(params: {
       try {
         await handle.sync().catch((err: NodeJS.ErrnoException) => {
           // Windows raises EPERM for fsync on certain file descriptors; treat as best-effort.
-          if (err.code !== "EPERM") throw err;
+          if (err.code !== "EPERM") {
+            throw err;
+          }
         });
       } finally {
         await handle.close();

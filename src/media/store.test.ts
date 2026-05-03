@@ -345,9 +345,9 @@ describe("media store", () => {
       name: "saves buffer when fsync raises EPERM (Windows behavior) (#76844)",
       run: async () => {
         await withTempStore(async (store) => {
-          const originalOpen = fs.open.bind(fs);
+          const originalOpen = fs.open.bind(fs) as typeof fs.open;
           vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-            const handle = await originalOpen(...(args as Parameters<typeof fs.open>));
+            const handle = await originalOpen(...args);
             const eperm = new Error("operation not permitted") as NodeJS.ErrnoException;
             eperm.code = "EPERM";
             vi.spyOn(handle, "sync").mockRejectedValue(eperm);
