@@ -649,6 +649,7 @@ function resolvePluginToolRegistry(params: {
   const standaloneRegistry = ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "active",
     forceLoad: forceStandaloneLoad,
+    installRegistry: !forceStandaloneLoad,
     requiredPluginIds: params.onlyPluginIds,
     loadOptions: params.loadOptions,
   });

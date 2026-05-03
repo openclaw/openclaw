@@ -51,6 +51,7 @@ function installStandaloneRegistry(
 export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
   loadOptions: PluginLoadOptions;
   forceLoad?: boolean;
+  installRegistry?: boolean;
   requiredPluginIds?: readonly string[];
   surface?: ActiveRuntimePluginRegistrySurface;
 }): PluginRegistry | undefined {
@@ -84,6 +85,10 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
         pinActivePluginHttpRouteRegistry(registry);
         break;
     }
+    return registry;
+  }
+
+  if (params.installRegistry === false) {
     return registry;
   }
 

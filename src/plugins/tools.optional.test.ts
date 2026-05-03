@@ -32,6 +32,7 @@ let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
 let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
 let resetPluginToolFactoryCache: typeof import("./tools.js").resetPluginToolFactoryCache;
+let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let pinActivePluginChannelRegistry: typeof import("./runtime.js").pinActivePluginChannelRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
@@ -394,8 +395,12 @@ describe("resolvePluginTools optional tools", () => {
       resetPluginToolFactoryCache,
       resolvePluginTools,
     } = await import("./tools.js"));
-    ({ pinActivePluginChannelRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
-      await import("./runtime.js"));
+    ({
+      getActivePluginRegistry,
+      pinActivePluginChannelRegistry,
+      resetPluginRuntimeStateForTest,
+      setActivePluginRegistry,
+    } = await import("./runtime.js"));
     ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata-snapshot.js"));
   });
@@ -722,6 +727,7 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(getActivePluginRegistry?.()).toBe(staleRegistry);
     expectSingleDiagnosticMessage(
       freshRegistry.diagnostics,
       "plugin tool registry did not include selected plugin tools after cold load (multi)",
