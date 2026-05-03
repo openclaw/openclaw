@@ -184,6 +184,34 @@ describe("openHttpConnectTunnel", () => {
     expect(proxySocket.destroyed).toBe(true);
   });
 
+  it("redacts proxy URL query and fragment values when CONNECT fails", async () => {
+    const proxySocket = new FakeSocket("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n");
+    setNextNetSocket(proxySocket);
+    const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
+
+    let caught: unknown;
+    try {
+      await openHttpConnectTunnel({
+        proxyUrl: "http://user:secret@proxy.example:8080/?token=hidden#fragment",
+        targetHost: "api.push.apple.com",
+        targetPort: 443,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) {
+      throw new Error("expected CONNECT failure");
+    }
+    expect(caught.message).toBe(
+      "Proxy CONNECT failed via http://proxy.example:8080: HTTP/1.1 407 Proxy Authentication Required",
+    );
+    expect(caught.message).not.toContain("secret");
+    expect(caught.message).not.toContain("hidden");
+    expect(caught.message).not.toContain("fragment");
+  });
+
   it("rejects malformed proxy credentials through the normal cleanup path", async () => {
     const proxySocket = new FakeSocket();
     setNextNetSocket(proxySocket);

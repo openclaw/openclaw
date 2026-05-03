@@ -13,9 +13,7 @@ const MAX_CONNECT_RESPONSE_HEADER_BYTES = 16 * 1024;
 function redactProxyUrl(proxyUrl: string): string {
   try {
     const parsed = new URL(proxyUrl);
-    parsed.username = "";
-    parsed.password = "";
-    return parsed.toString().replace(/\/$/, "");
+    return parsed.origin;
   } catch {
     return "<invalid proxy URL>";
   }
