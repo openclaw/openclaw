@@ -34,6 +34,10 @@ function npmViewArgv(spec: string): string[] {
   return ["npm", "view", spec, "name", "version", "dist.integrity", "dist.shasum", "--json"];
 }
 
+function npmViewVersionsArgv(spec: string): string[] {
+  return ["npm", "view", spec, "versions", "--json"];
+}
+
 function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string }) {
   const installCalls = params.calls.filter(
     (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
@@ -134,6 +138,7 @@ type MockNpmPackage = {
   hoistedDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
   expectedDependencySpec?: string;
+  versions?: string[];
   installedVersion?: string;
   installedIntegrity?: string;
   skipLockfileEntry?: boolean;
@@ -178,6 +183,7 @@ function mockNpmViewAndInstall(params: {
   hoistedDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
   expectedDependencySpec?: string;
+  versions?: string[];
   installedVersion?: string;
   installedIntegrity?: string;
   skipLockfileEntry?: boolean;
@@ -202,6 +208,14 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
               shasum: viewPackage.shasum ?? "pluginshasum",
             },
           }),
+        );
+      }
+      const versionsPackage = packages.find(
+        (pkg) => JSON.stringify(argv) === JSON.stringify(npmViewVersionsArgv(pkg.packageName)),
+      );
+      if (versionsPackage) {
+        return successfulSpawn(
+          JSON.stringify(versionsPackage.versions ?? [versionsPackage.version]),
         );
       }
       if (argv[0] === "npm" && argv[1] === "install") {
@@ -881,6 +895,45 @@ describe("installPluginFromNpmSpec", () => {
       expect(rejected.error).toContain("prerelease version 0.0.2-beta.1");
       expect(rejected.error).toContain('"@openclaw/voice-call@beta"');
     }
+
+    runCommandWithTimeoutMock.mockReset();
+    const officialNpmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const warnings: string[] = [];
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/voice-call",
+        packageName: "@openclaw/voice-call",
+        version: "0.0.2-beta.1",
+        npmRoot: officialNpmRoot,
+        versions: ["0.0.1", "0.0.2-beta.1"],
+      },
+      {
+        spec: "@openclaw/voice-call@0.0.1",
+        packageName: "@openclaw/voice-call",
+        version: "0.0.1",
+        pluginId: "voice-call",
+        npmRoot: officialNpmRoot,
+        expectedDependencySpec: "0.0.1",
+      },
+    ]);
+
+    const officialFallback = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call",
+      npmDir: officialNpmRoot,
+      expectedPluginId: "voice-call",
+      trustedSourceLinkedOfficialInstall: true,
+      logger: {
+        info: () => {},
+        warn: (msg: string) => warnings.push(msg),
+      },
+    });
+    expect(officialFallback.ok).toBe(true);
+    if (!officialFallback.ok) {
+      return;
+    }
+    expect(officialFallback.npmResolution?.version).toBe("0.0.1");
+    expect(officialFallback.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.1");
+    expect(warnings.join("\n")).toContain("falling back to stable @openclaw/voice-call@0.0.1");
 
     runCommandWithTimeoutMock.mockReset();
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
