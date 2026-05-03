@@ -194,11 +194,11 @@ describe("computeSandboxBrowserConfigHash", () => {
     };
     const left = computeSandboxBrowserConfigHash({
       ...shared,
-      createArgsEpoch: "2026-04-pre-init",
+      createArgsEpoch: "epoch-v1",
     });
     const right = computeSandboxBrowserConfigHash({
       ...shared,
-      createArgsEpoch: "2026-05-init-tini",
+      createArgsEpoch: "epoch-v2",
     });
     expect(left).not.toBe(right);
   });

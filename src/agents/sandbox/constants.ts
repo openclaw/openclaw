@@ -45,9 +45,14 @@ export const SANDBOX_BROWSER_SECURITY_HASH_EPOCH = "2026-04-05-cdp-source-range"
 // flags in a way that requires existing sandboxes to be recreated. Date-tag the
 // change so readers can trace which release introduced the bump.
 //
+// IMPORTANT: only bump this in the same PR (or follow-up PR) that ships the
+// actual create-args change. Bumping speculatively before a flag lands will
+// recreate containers under a hash that claims the new behaviour without it,
+// and a later same-string bump will then NOT recreate them again.
+//
 // History:
-//   2026-05-init-tini  add --init so tini reaps zombie processes (#74083 / #68691)
-export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-05-init-tini";
+//   2026-05-bootstrap  first value; mechanism only, no flag change yet
+export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-05-bootstrap";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "openclaw-sbx-browser-";
 export const DEFAULT_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";
