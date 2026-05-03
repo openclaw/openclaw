@@ -417,6 +417,7 @@ function createChatContext(): Pick<
     logGateway: {
       warn: vi.fn(),
       debug: vi.fn(),
+      error: vi.fn(),
     } as unknown as GatewayRequestContext["logGateway"],
   };
 }
@@ -2772,9 +2773,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
     ];
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    mockState.stageSandboxMediaError = Object.assign(new Error("ENOSPC: no space left on device"), {
+    const stageError = Object.assign(new Error("ENOSPC: no space left on device"), {
       code: "ENOSPC",
     });
+    stageError.stack =
+      "Error: ENOSPC: no space left on device\n    at stageSandboxMedia (stage-sandbox-media.ts:1:1)";
+    mockState.stageSandboxMediaError = stageError;
     const respond = vi.fn();
     const context = createChatContext();
     const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
@@ -2808,6 +2812,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(payload).toBeUndefined();
     expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
     expect(error?.message ?? String(error)).toMatch(/ENOSPC|non-image attachments/i);
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      "chat.send attachment parse/stage failed",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "chat.send attachment parse/stage failed: MediaOffloadError",
+        ),
+        error: expect.stringContaining(
+          "Caused by: Error: ENOSPC: no space left on device\n    at stageSandboxMedia",
+        ),
+      }),
+    );
     // Orphaned media-store files are cleaned up before the 5xx surfaces.
     expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
   });
