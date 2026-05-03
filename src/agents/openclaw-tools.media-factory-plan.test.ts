@@ -276,6 +276,45 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("applies wildcard deny patterns to optional factory planning", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "image-owner",
+        contracts: { imageGenerationProviders: ["image-owner"] },
+        setupProviders: [{ id: "image-owner", envVars: ["IMAGE_OWNER_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "video-owner",
+        contracts: { videoGenerationProviders: ["video-owner"] },
+        setupProviders: [{ id: "video-owner", envVars: ["VIDEO_OWNER_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "music-owner",
+        contracts: { musicGenerationProviders: ["music-owner"] },
+        setupProviders: [{ id: "music-owner", envVars: ["MUSIC_OWNER_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["anthropic"] },
+        setupProviders: [{ id: "anthropic", envVars: ["ANTHROPIC_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["image-owner", "video-owner", "music-owner", "anthropic"]),
+        toolDenylist: ["*_generate", "p*"],
+      }),
+    ).toEqual({
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
+    });
+  });
+
   it("keeps auth-backed providers on the factory path", () => {
     const config: OpenClawConfig = {};
     installSnapshot(config, [
