@@ -438,8 +438,8 @@ describe("installPackageDir", () => {
         env: expect.objectContaining({
           npm_config_global: "false",
           npm_config_location: "project",
-          npm_config_package_lock: "false",
-          npm_config_save: "false",
+          npm_config_package_lock: "true",
+          npm_config_save: "true",
         }),
       }),
     );
