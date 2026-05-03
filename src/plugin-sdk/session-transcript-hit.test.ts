@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
+  extractTranscriptIdentityFromSessionsMemoryHit,
   extractTranscriptStemFromSessionsMemoryHit,
   resolveTranscriptStemToSessionKeys,
 } from "./session-transcript-hit.js";
@@ -50,6 +51,27 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
   });
 });
 
+describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
+  it("extracts owner metadata from agent-scoped session archive paths", () => {
+    expect(
+      extractTranscriptIdentityFromSessionsMemoryHit(
+        "sessions/main/deleted-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z",
+      ),
+    ).toEqual({
+      stem: "deleted-uuid",
+      ownerAgentId: "main",
+      archived: true,
+    });
+  });
+
+  it("does not invent owner metadata for legacy basename-only paths", () => {
+    expect(extractTranscriptIdentityFromSessionsMemoryHit("sessions/abc-uuid.jsonl")).toEqual({
+      stem: "abc-uuid",
+      archived: false,
+    });
+  });
+});
+
 describe("resolveTranscriptStemToSessionKeys", () => {
   const baseEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
     sessionId: "stem-a",
@@ -68,5 +90,15 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     };
     const keys = resolveTranscriptStemToSessionKeys({ store, stem: "stem-a" }).toSorted();
     expect(keys).toEqual(["agent:main:s1", "agent:peer:s2"]);
+  });
+
+  it("falls back to archived owner metadata when deleted archives are gone from the live store", () => {
+    const keys = resolveTranscriptStemToSessionKeys({
+      store: {},
+      stem: "deleted-stem",
+      archivedOwnerAgentId: "main",
+    });
+
+    expect(keys).toEqual(["agent:main:deleted-stem"]);
   });
 });

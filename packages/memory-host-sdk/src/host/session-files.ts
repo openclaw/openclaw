@@ -14,6 +14,7 @@ import {
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
+  parseUsageCountedSessionIdFromFileName,
   resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
   stripInternalRuntimeContext,
@@ -82,6 +83,15 @@ function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
   return false;
 }
 
+function isUsageCountedSessionArchiveTranscriptPath(absPath: string): boolean {
+  const fileName = path.basename(absPath);
+  return (
+    isUsageCountedSessionTranscriptFileName(fileName) &&
+    isSessionArchiveArtifactName(fileName) &&
+    parseUsageCountedSessionIdFromFileName(fileName) !== null
+  );
+}
+
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     return false;
@@ -148,6 +158,30 @@ function isDreamingNarrativeSessionStoreKey(sessionKey: string): boolean {
   const secondSeparator = trimmed.indexOf(":", firstSeparator + 1);
   const sessionSegment = secondSeparator < 0 ? trimmed : trimmed.slice(secondSeparator + 1);
   return sessionSegment.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
+}
+
+function hasCronRunSessionKey(value: unknown): boolean {
+  return typeof value === "string" && isCronRunSessionKey(value);
+}
+
+function isCronRunGeneratedRecord(record: unknown): boolean {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return false;
+  }
+  const candidate = record as {
+    sessionKey?: unknown;
+    data?: unknown;
+  };
+  if (hasCronRunSessionKey(candidate.sessionKey)) {
+    return true;
+  }
+  if (!candidate.data || typeof candidate.data !== "object" || Array.isArray(candidate.data)) {
+    return false;
+  }
+  const nested = candidate.data as {
+    sessionKey?: unknown;
+  };
+  return hasCronRunSessionKey(nested.sessionKey);
 }
 
 function normalizeComparablePath(pathname: string): string {
@@ -242,11 +276,20 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
 } {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
+  const primarySessionId = parseUsageCountedSessionIdFromFileName(path.basename(absPath));
+  const normalizedPrimaryPath =
+    primarySessionId && isSessionArchiveArtifactName(path.basename(absPath))
+      ? normalizeComparablePath(path.join(sessionsDir, `${primarySessionId}.jsonl`))
+      : null;
   const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+  const hasClassifiedPath = (paths: ReadonlySet<string>) =>
+    paths.has(normalizedAbsPath) ||
+    (normalizedPrimaryPath !== null && paths.has(normalizedPrimaryPath));
   return {
-    generatedByDreamingNarrative:
-      classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath),
-    generatedByCronRun: classification.cronRunTranscriptPaths.has(normalizedAbsPath),
+    generatedByDreamingNarrative: hasClassifiedPath(
+      classification.dreamingNarrativeTranscriptPaths,
+    ),
+    generatedByCronRun: hasClassifiedPath(classification.cronRunTranscriptPaths),
   };
 }
 
@@ -264,8 +307,20 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
   }
 }
 
+function extractAgentIdFromSessionPath(absPath: string): string | null {
+  const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
+  const sessionsIndex = parts.lastIndexOf("sessions");
+  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
+    return null;
+  }
+  return parts[sessionsIndex - 1] || null;
+}
+
 export function sessionPathForFile(absPath: string): string {
-  return path.join("sessions", path.basename(absPath)).replace(/\\/g, "/");
+  const agentId = extractAgentIdFromSessionPath(absPath);
+  return path
+    .join("sessions", ...(agentId ? [agentId] : []), path.basename(absPath))
+    .replace(/\\/g, "/");
 }
 
 async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
@@ -495,8 +550,10 @@ export async function buildSessionEntry(
       opts.generatedByDreamingNarrative ??
       sessionStoreClassification?.generatedByDreamingNarrative ??
       false;
-    const generatedByCronRun =
+    let generatedByCronRun =
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
+    const allowArchiveContentCronClassification =
+      isUsageCountedSessionArchiveTranscriptPath(absPath);
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -510,6 +567,16 @@ export async function buildSessionEntry(
       }
       if (!generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record)) {
         generatedByDreamingNarrative = true;
+      }
+      if (
+        !generatedByCronRun &&
+        allowArchiveContentCronClassification &&
+        isCronRunGeneratedRecord(record)
+      ) {
+        generatedByCronRun = true;
+        collected.length = 0;
+        lineMap.length = 0;
+        messageTimestampsMs.length = 0;
       }
       if (
         !record ||
@@ -533,6 +600,16 @@ export async function buildSessionEntry(
       const rawText = collectRawSessionText(message.content);
       if (rawText === null) {
         continue;
+      }
+      if (
+        !generatedByCronRun &&
+        allowArchiveContentCronClassification &&
+        isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
+      ) {
+        generatedByCronRun = true;
+        collected.length = 0;
+        lineMap.length = 0;
+        messageTimestampsMs.length = 0;
       }
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {

@@ -1,17 +1,30 @@
 import path from "node:path";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
-// Archived transcripts live alongside active ones on disk, named
-// `<stem>.jsonl.reset.<iso>` (when a session is reset / rotated) or
-// `<stem>.jsonl.deleted.<iso>` (when an archived copy is retained after
-// deletion). Memory search surfaces hits from these archives under the same
-// `source: "sessions"` tag, so stem extraction must recognise the archive
-// suffixes or the visibility guard drops every archived hit as unresolvable.
-const ARCHIVED_TRANSCRIPT_SUFFIX_RE = /\.jsonl\.(?:reset|deleted)\.[^/]+$/;
+export type SessionTranscriptHitIdentity = {
+  stem: string;
+  ownerAgentId?: string;
+  archived: boolean;
+};
+
+function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: string } {
+  const normalized = hitPath.replace(/\\/g, "/");
+  const fromSessionsRoot = normalized.startsWith("sessions/")
+    ? normalized.slice("sessions/".length)
+    : normalized;
+  const parts = fromSessionsRoot.split("/").filter(Boolean);
+  const base = path.posix.basename(fromSessionsRoot);
+  const ownerAgentId =
+    normalized.startsWith("sessions/") && parts.length === 2
+      ? normalizeAgentId(parts[0])
+      : undefined;
+  return { base, ownerAgentId };
+}
 
 /**
  * Derive transcript stem `S` from a memory search hit path for `source === "sessions"`.
@@ -20,23 +33,24 @@ const ARCHIVED_TRANSCRIPT_SUFFIX_RE = /\.jsonl\.(?:reset|deleted)\.[^/]+$/;
  * to the same stem as the live `.jsonl` they were rotated from.
  */
 export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): string | null {
-  const normalized = hitPath.replace(/\\/g, "/");
-  const trimmed = normalized.startsWith("sessions/")
-    ? normalized.slice("sessions/".length)
-    : normalized;
-  const base = path.basename(trimmed);
-  const archivedMatch = ARCHIVED_TRANSCRIPT_SUFFIX_RE.exec(base);
-  if (archivedMatch) {
-    const stem = base.slice(0, archivedMatch.index);
-    return stem || null;
+  return extractTranscriptIdentityFromSessionsMemoryHit(hitPath)?.stem ?? null;
+}
+
+export function extractTranscriptIdentityFromSessionsMemoryHit(
+  hitPath: string,
+): SessionTranscriptHitIdentity | null {
+  const { base, ownerAgentId } = parseSessionsPath(hitPath);
+  const archivedStem = parseUsageCountedSessionIdFromFileName(base);
+  if (archivedStem && base !== `${archivedStem}.jsonl`) {
+    return { stem: archivedStem, ownerAgentId, archived: true };
   }
   if (base.endsWith(".jsonl")) {
     const stem = base.slice(0, -".jsonl".length);
-    return stem || null;
+    return stem ? { stem, ownerAgentId, archived: false } : null;
   }
   if (base.endsWith(".md")) {
     const stem = base.slice(0, -".md".length);
-    return stem || null;
+    return stem ? { stem, archived: false } : null;
   }
   return null;
 }
@@ -49,6 +63,7 @@ export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): str
 export function resolveTranscriptStemToSessionKeys(params: {
   store: Record<string, SessionEntry>;
   stem: string;
+  archivedOwnerAgentId?: string;
 }): string[] {
   const { store } = params;
   const matches: string[] = [];
@@ -69,5 +84,12 @@ export function resolveTranscriptStemToSessionKeys(params: {
       matches.push(sessionKey);
     }
   }
-  return [...new Set(matches)];
+  const deduped = [...new Set(matches)];
+  if (deduped.length > 0) {
+    return deduped;
+  }
+  const archivedOwnerAgentId = normalizeOptionalString(params.archivedOwnerAgentId);
+  return archivedOwnerAgentId
+    ? [`agent:${normalizeAgentId(archivedOwnerAgentId)}:${params.stem}`]
+    : [];
 }
