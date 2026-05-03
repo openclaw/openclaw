@@ -79,7 +79,7 @@ describe("plugin runtime state proxy", () => {
     });
   });
 
-  it("rejects external plugins in this release", () => {
+  it("rejects community plugins without manifest declaration", () => {
     const registry = createTestPluginRegistry();
     const record = createPluginRecord("external-plugin", "workspace");
     registry.registry.plugins.push(record);
@@ -87,6 +87,59 @@ describe("plugin runtime state proxy", () => {
 
     expect(() =>
       api.runtime.state.openKeyedStore({ namespace: "runtime", maxEntries: 10 }),
-    ).toThrow("openKeyedStore is only available for bundled plugins");
+    ).toThrow('Plugin "external-plugin" cannot use openKeyedStore');
+  });
+
+  it("allows community plugins with manifest declaration", async () => {
+    await withOpenClawTestState({ label: "plugin-state-community" }, async () => {
+      const registry = createTestPluginRegistry();
+      const record = createPluginRecord("community-plugin", "workspace");
+
+      // Add contracts with usesKeyedStore capability
+      record.contracts = {
+        usesKeyedStore: true,
+      };
+
+      registry.registry.plugins.push(record);
+      const api = registry.createApi(record, { config: {} });
+      const store = api.runtime.state.openKeyedStore<{ data: string }>({
+        namespace: "test",
+        maxEntries: 10,
+      });
+
+      await store.register("key1", { data: "community" });
+      await expect(store.lookup("key1")).resolves.toEqual({ data: "community" });
+    });
+  });
+
+  it("enforces stricter limits for community plugins", async () => {
+    await withOpenClawTestState({ label: "plugin-state-limits" }, async () => {
+      const registry = createTestPluginRegistry();
+      const record = createPluginRecord("community-plugin", "workspace");
+
+      // Add contracts with usesKeyedStore capability
+      record.contracts = {
+        usesKeyedStore: true,
+      };
+
+      registry.registry.plugins.push(record);
+      const api = registry.createApi(record, { config: {} });
+
+      // Request 1000 entries but should be capped at 500 for community plugins
+      const store = api.runtime.state.openKeyedStore<{ index: number }>({
+        namespace: "limits",
+        maxEntries: 1000,
+      });
+
+      // Fill up to the enforced limit (500)
+      for (let i = 0; i < 500; i++) {
+        await store.register(`key${i}`, { index: i });
+      }
+
+      // The 501st entry should trigger eviction of the oldest
+      await store.register("key500", { index: 500 });
+      const entries = await store.entries();
+      expect(entries.length).toBeLessThanOrEqual(500);
+    });
   });
 });

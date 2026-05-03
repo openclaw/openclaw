@@ -2097,12 +2097,25 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               const record =
                 pluginRuntimeRecordById.get(pluginId) ??
                 registry.plugins.find((entry) => entry.id === pluginId);
-              if (record?.origin !== "bundled") {
-                throw new Error(
-                  "openKeyedStore is only available for bundled plugins in this release.",
-                );
+
+              // Bundled plugins have implicit access
+              if (record?.origin === "bundled") {
+                return createPluginStateKeyedStore<T>(pluginId, options);
               }
-              return createPluginStateKeyedStore<T>(pluginId, options);
+
+              // Community plugins must declare the capability in their manifest
+              if (record?.contracts?.usesKeyedStore === true) {
+                // Enforce stricter limits for community plugins
+                const enforcedOptions = {
+                  ...options,
+                  maxEntries: Math.min(options.maxEntries, 500), // Half of bundled plugin limit
+                };
+                return createPluginStateKeyedStore<T>(pluginId, enforcedOptions);
+              }
+
+              throw new Error(
+                `Plugin "${pluginId}" cannot use openKeyedStore. Community plugins must declare "contracts": { "usesKeyedStore": true } in openclaw.plugin.json. See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-state`,
+              );
             },
           } satisfies PluginRuntime["state"];
         }

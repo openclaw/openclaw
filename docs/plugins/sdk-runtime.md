@@ -425,8 +425,25 @@ Provider and channel execution paths must use the active runtime config snapshot
     Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Limits: `maxEntries` per namespace, 1,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry.
 
     <Warning>
-    Bundled plugins only in this release.
+    Community plugins must declare `"contracts": { "usesKeyedStore": true }` in their `openclaw.plugin.json` manifest to access this API. Bundled plugins have implicit access.
+
+    Community plugins are subject to stricter limits:
+    - Maximum 500 entries per namespace (vs 1,000 for bundled plugins)
+    - Same per-plugin total limit of 1,000 live rows
+    - Same 64KB JSON value size limit
     </Warning>
+
+    **Example manifest declaration for community plugins:**
+
+    ```json
+    {
+      "id": "my-plugin",
+      "name": "My Plugin",
+      "contracts": {
+        "usesKeyedStore": true
+      }
+    }
+    ```
 
   </Accordion>
   <Accordion title="api.runtime.tools">
