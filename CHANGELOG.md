@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/update: on the beta OpenClaw update channel, default-line npm and ClawHub plugin updates try `@beta` first and fall back to default/latest when no plugin beta release exists.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
 - Exec approvals: add a tree-sitter-backed shell command explainer for future approval and command-review surfaces. (#75004) Thanks @jesse-merhi.
+- Plugins/SDK: add shared media MIME helpers (`isVerifiedAudioSource`, `sanitizeMediaMime`) for plugin and adapter code.
 
 ### Fixes
 
