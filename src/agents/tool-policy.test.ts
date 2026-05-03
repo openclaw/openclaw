@@ -161,6 +161,13 @@ describe("tool-policy", () => {
     ).toEqual(["*", "lobster"]);
   });
 
+  it("preserves explicit alsoAllow wildcards for plugin discovery", () => {
+    expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: ["*"] })])).toEqual(["*"]);
+    expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: [" * "] })])).toEqual([
+      "*",
+    ]);
+  });
+
   it("strips nodes for non-owner senders via fallback policy", () => {
     const tools = [
       {
