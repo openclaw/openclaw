@@ -106,7 +106,6 @@ describe("anthropic provider policy public artifact", () => {
       expect(profile).toBeDefined();
       const ids = profile?.levels.map((l) => l.id);
       
-      // These verify that the Opus 4.7-specific levels are now exposed
       expect(ids).toContain("max");
       expect(ids).toContain("xhigh");
       expect(ids).toContain("adaptive");

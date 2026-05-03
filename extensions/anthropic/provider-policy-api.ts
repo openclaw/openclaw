@@ -1,6 +1,6 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
-// FIX: Use the SDK alias or the correct relative path for the extension SDK
-import { resolveClaudeThinkingProfile } from "../../plugin-sdk/provider-model-shared.js"; 
+// Use the SDK alias to ensure the CI bundler can resolve the import within the extension boundary
+import { resolveClaudeThinkingProfile } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
