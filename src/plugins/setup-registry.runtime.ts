@@ -1,7 +1,11 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
-import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 
 type SetupRegistryRuntimeModule = Pick<
   typeof import("./setup-registry.js"),
@@ -18,8 +22,13 @@ type SetupCliBackendRuntimeEntry = {
 const require = createRequire(import.meta.url);
 const SETUP_REGISTRY_RUNTIME_CANDIDATES = ["./setup-registry.js", "./setup-registry.ts"] as const;
 
+type BundledSetupCliBackendCache = {
+  configFingerprint: string;
+  entries: SetupCliBackendRuntimeEntry[];
+};
+
 let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | null | undefined;
-let cachedBundledSetupCliBackends: SetupCliBackendRuntimeEntry[] | undefined;
+let cachedBundledSetupCliBackends: BundledSetupCliBackendCache | undefined;
 
 export const __testing = {
   resetRuntimeState(): void {
@@ -31,12 +40,31 @@ export const __testing = {
   },
 };
 
-function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
-  if (cachedBundledSetupCliBackends) {
-    return cachedBundledSetupCliBackends;
+function resolveMetadataSnapshotForSetupCliBackends(): {
+  snapshot: PluginMetadataSnapshot;
+  cacheable: boolean;
+} {
+  const current = getCurrentPluginMetadataSnapshot({ env: process.env });
+  if (current) {
+    return { snapshot: current, cacheable: true };
   }
-  const snapshot = loadManifestMetadataSnapshot({ config: {}, env: process.env });
-  cachedBundledSetupCliBackends = snapshot.plugins.flatMap((plugin) => {
+  return {
+    snapshot: loadPluginMetadataSnapshot({ config: {}, env: process.env }),
+    cacheable: false,
+  };
+}
+
+function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
+  const { snapshot, cacheable } = resolveMetadataSnapshotForSetupCliBackends();
+  const configFingerprint = snapshot.configFingerprint;
+  if (
+    cacheable &&
+    configFingerprint &&
+    cachedBundledSetupCliBackends?.configFingerprint === configFingerprint
+  ) {
+    return cachedBundledSetupCliBackends.entries;
+  }
+  const entries = snapshot.plugins.flatMap((plugin) => {
     if (plugin.origin !== "bundled" || !isInstalledPluginEnabled(snapshot.index, plugin.id)) {
       return [];
     }
@@ -48,7 +76,10 @@ function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
         }) satisfies SetupCliBackendRuntimeEntry,
     );
   });
-  return cachedBundledSetupCliBackends;
+  if (cacheable && configFingerprint) {
+    cachedBundledSetupCliBackends = { configFingerprint, entries };
+  }
+  return entries;
 }
 
 function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {

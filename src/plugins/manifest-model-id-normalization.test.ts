@@ -3,9 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  normalizeProviderModelIdWithManifest,
-  invalidateManifestModelIdNormalizationPoliciesCache,
-} from "./manifest-model-id-normalization.js";
+  clearCurrentPluginMetadataSnapshot,
+  resolvePluginMetadataControlPlaneFingerprint,
+  setCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 const ORIGINAL_ENV = {
   OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
@@ -53,9 +58,16 @@ function writeInstallIndex(params: { stateDir: string; pluginDir: string }): voi
 function writeNormalizerManifest(params: { pluginDir: string; prefix: string }): void {
   fs.mkdirSync(params.pluginDir, { recursive: true });
   fs.writeFileSync(
+    path.join(params.pluginDir, "index.ts"),
+    "throw new Error('runtime entry should not load while reading manifests');\n",
+    "utf-8",
+  );
+  fs.writeFileSync(
     path.join(params.pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id: "normalizer",
+      configSchema: { type: "object" },
+      providers: ["demo"],
       modelIdNormalization: {
         providers: {
           demo: {
@@ -68,6 +80,65 @@ function writeNormalizerManifest(params: { pluginDir: string; prefix: string }):
   );
 }
 
+function createCurrentSnapshot(params: {
+  manifestHash: string;
+  prefix: string;
+}): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  const index: InstalledPluginIndex = {
+    version: 1,
+    hostContractVersion: "test-host",
+    compatRegistryVersion: "test-compat",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [
+      {
+        pluginId: "normalizer",
+        manifestPath: `/tmp/normalizer-${params.manifestHash}/openclaw.plugin.json`,
+        manifestHash: params.manifestHash,
+        source: `/tmp/normalizer-${params.manifestHash}/index.ts`,
+        rootDir: `/tmp/normalizer-${params.manifestHash}`,
+        origin: "global",
+        enabled: true,
+        startup: {
+          sidecar: false,
+          memory: false,
+          deferConfiguredChannelFullLoadUntilAfterListen: false,
+          agentHarnesses: [],
+        },
+        compat: [],
+      },
+    ],
+    diagnostics: [],
+  };
+  return {
+    policyHash,
+    configFingerprint: resolvePluginMetadataControlPlaneFingerprint(
+      {},
+      {
+        env: process.env,
+        index,
+        policyHash,
+      },
+    ),
+    index,
+    plugins: [
+      {
+        id: "normalizer",
+        modelIdNormalization: {
+          providers: {
+            demo: {
+              prefixWhenBare: params.prefix,
+            },
+          },
+        },
+      },
+    ],
+  } as unknown as PluginMetadataSnapshot;
+}
+
 function normalizeDemoModel(modelId = "demo-model"): string | undefined {
   return normalizeProviderModelIdWithManifest({
     provider: "demo",
@@ -77,10 +148,34 @@ function normalizeDemoModel(modelId = "demo-model"): string | undefined {
 
 describe("manifest model id normalization", () => {
   afterEach(() => {
+    clearCurrentPluginMetadataSnapshot();
     restoreEnv();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("refreshes cached policies when the current metadata snapshot changes", () => {
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "alpha",
+        prefix: "alpha",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
+    expect(normalizeDemoModel("second-model")).toBe("alpha/second-model");
+
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "bravo",
+        prefix: "bravo",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(normalizeDemoModel()).toBe("bravo/demo-model");
   });
 
   it("reflects manifest edits and state-dir changes on the next lookup", () => {
@@ -96,9 +191,8 @@ describe("manifest model id normalization", () => {
 
     expect(normalizeDemoModel()).toBe("alpha/demo-model");
 
-    writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "bravo" });
-    invalidateManifestModelIdNormalizationPoliciesCache();
-    expect(normalizeDemoModel()).toBe("bravo/demo-model");
+    writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "bravo-local" });
+    expect(normalizeDemoModel()).toBe("bravo-local/demo-model");
 
     const stateDirB = makeTempDir();
     const pluginDirB = path.join(stateDirB, "extensions", "normalizer");
@@ -106,7 +200,6 @@ describe("manifest model id normalization", () => {
     writeNormalizerManifest({ pluginDir: pluginDirB, prefix: "charlie" });
 
     process.env.OPENCLAW_STATE_DIR = stateDirB;
-    invalidateManifestModelIdNormalizationPoliciesCache();
     expect(normalizeDemoModel()).toBe("charlie/demo-model");
   });
 });
