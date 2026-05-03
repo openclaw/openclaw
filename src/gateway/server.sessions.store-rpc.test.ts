@@ -369,7 +369,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   );
   expect(mainAfterModelPatch?.modelProvider).toBe("openai");
   expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
-  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
+  expect(mainAfterModelPatch?.agentRuntime).toBeUndefined();
 
   const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
     key: "agent:main:main",
