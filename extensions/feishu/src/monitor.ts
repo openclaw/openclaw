@@ -30,7 +30,8 @@ async function loadMonitorAccountRuntime(): Promise<typeof import("./monitor.acc
     }
     if (i < 2) await new Promise((r) => setTimeout(r, 2000));
   }
-  return await (monitorAccountRuntimePromise ??= import("./monitor.account.js"));
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  return await (monitorAccountRuntimePromise ??= import("./monitor.account.js"))!;
 }
 
 export {
