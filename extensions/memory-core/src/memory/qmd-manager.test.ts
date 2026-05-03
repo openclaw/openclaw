@@ -1401,10 +1401,13 @@ describe("QmdMemoryManager", () => {
       .map((args) => args[args.indexOf("--name") + 1]);
 
     expect(updateCalls).toBe(2);
-    expect(removeCalls).toEqual(["memory-root-main", "memory-dir-main"]);
+    expect(removeCalls).toEqual([]);
     expect(addCalls).toEqual(["memory-root-main", "memory-dir-main"]);
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("suspected null-byte collection metadata"),
+    );
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("qmd managed collections rebuilt for update repair"),
     );
 
     await manager.close();
@@ -1458,10 +1461,13 @@ describe("QmdMemoryManager", () => {
       .map((args) => args[args.indexOf("--name") + 1]);
 
     expect(updateCalls).toBe(2);
-    expect(removeCalls).toEqual(["memory-root-main", "memory-dir-main"]);
+    expect(removeCalls).toEqual([]);
     expect(addCalls).toEqual(["memory-root-main", "memory-dir-main"]);
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("suspected null-byte collection metadata"),
+    );
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("qmd managed collections rebuilt for update repair"),
     );
 
     await manager.close();
@@ -1515,10 +1521,13 @@ describe("QmdMemoryManager", () => {
       .map((args) => args[args.indexOf("--name") + 1]);
 
     expect(updateCalls).toBe(2);
-    expect(removeCalls).toEqual(["memory-root-main", "memory-dir-main"]);
+    expect(removeCalls).toEqual([]);
     expect(addCalls).toEqual(["memory-root-main", "memory-dir-main"]);
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("duplicate document constraint"),
+    );
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("qmd managed collections rebuilt for update repair"),
     );
 
     await manager.close();
