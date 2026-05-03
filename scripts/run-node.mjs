@@ -15,6 +15,7 @@ import {
   writeBuildStamp as writeDistBuildStamp,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mjs";
+import { listStaticExtensionAssetSources } from "./lib/static-extension-assets.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const buildScript = "scripts/tsdown-build.mjs";
@@ -46,10 +47,7 @@ const ignoredRunNodeRepoPaths = new Set([
 const runtimePostBuildScriptPaths = new Set(
   runtimePostBuildWatchedPaths.filter((entry) => entry.startsWith("scripts/")),
 );
-const runtimePostBuildStaticAssetPaths = new Set([
-  "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
-  "extensions/diffs/assets/viewer-runtime.js",
-]);
+const runtimePostBuildStaticAssetPaths = new Set(listStaticExtensionAssetSources());
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
 

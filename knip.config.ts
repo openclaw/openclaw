@@ -10,6 +10,7 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/infra/warning-filter.ts!",
+  "src/infra/command-explainer/index.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
@@ -139,6 +140,7 @@ const config = {
         "@openclaw/*",
         "playwright-core",
         "sqlite-vec",
+        "tree-sitter-bash",
         ...rootBundledPluginRuntimeDependencies,
       ],
       project: [

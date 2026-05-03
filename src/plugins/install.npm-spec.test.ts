@@ -61,6 +61,7 @@ function writeInstalledNpmPlugin(params: {
   indexJs?: string;
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
+  peerDependencies?: Record<string, string>;
 }) {
   const pluginDir = path.join(params.npmRoot, "node_modules", params.packageName);
   fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
@@ -73,6 +74,7 @@ function writeInstalledNpmPlugin(params: {
       ...(params.dependency
         ? { dependencies: { [params.dependency.name]: params.dependency.version } }
         : {}),
+      ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
     }),
     "utf-8",
   );
@@ -128,26 +130,60 @@ function mockNpmViewAndInstall(params: {
   indexJs?: string;
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
+  peerDependencies?: Record<string, string>;
 }) {
+  mockNpmViewAndInstallMany([params]);
+}
+
+function mockNpmViewAndInstallMany(
+  packages: Array<{
+    spec: string;
+    packageName: string;
+    version: string;
+    npmRoot: string;
+    pluginId?: string;
+    integrity?: string;
+    shasum?: string;
+    indexJs?: string;
+    dependency?: { name: string; version: string };
+    hoistedDependency?: { name: string; version: string };
+    peerDependencies?: Record<string, string>;
+  }>,
+) {
+  const packagesBySpec = new Map(packages.map((pkg) => [pkg.spec, pkg]));
+  const packagesByName = new Map(packages.map((pkg) => [pkg.packageName, pkg]));
   runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-    if (JSON.stringify(argv) === JSON.stringify(npmViewArgv(params.spec))) {
+    const viewPackage = packages.find(
+      (pkg) => JSON.stringify(argv) === JSON.stringify(npmViewArgv(pkg.spec)),
+    );
+    if (viewPackage) {
       return successfulSpawn(
         JSON.stringify({
-          name: params.packageName,
-          version: params.version,
+          name: viewPackage.packageName,
+          version: viewPackage.version,
           dist: {
-            integrity: params.integrity ?? "sha512-plugin-test",
-            shasum: params.shasum ?? "pluginshasum",
+            integrity: viewPackage.integrity ?? "sha512-plugin-test",
+            shasum: viewPackage.shasum ?? "pluginshasum",
           },
         }),
       );
     }
     if (argv[0] === "npm" && argv[1] === "install") {
-      writeInstalledNpmPlugin(params);
+      const spec = argv.at(-1);
+      const pkg = spec ? packagesBySpec.get(spec) : undefined;
+      if (!pkg) {
+        throw new Error(`unexpected npm install spec: ${spec ?? ""}`);
+      }
+      writeInstalledNpmPlugin(pkg);
       return successfulSpawn();
     }
     if (argv[0] === "npm" && argv[1] === "uninstall") {
-      fs.rmSync(path.join(params.npmRoot, "node_modules", params.packageName), {
+      const packageName = argv.at(-1);
+      const pkg = packageName ? packagesByName.get(packageName) : undefined;
+      if (!pkg) {
+        throw new Error(`unexpected npm uninstall package: ${packageName ?? ""}`);
+      }
+      fs.rmSync(path.join(pkg.npmRoot, "node_modules", pkg.packageName), {
         recursive: true,
         force: true,
       });
@@ -229,6 +265,55 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.error).toContain("node_modules/plain-crypto-js");
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not let managed openclaw peer links poison later npm installs",
+    async () => {
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const npmRoot = path.join(stateDir, "npm");
+
+      mockNpmViewAndInstallMany([
+        {
+          spec: "peer-plugin@1.0.0",
+          packageName: "peer-plugin",
+          version: "1.0.0",
+          pluginId: "peer-plugin",
+          npmRoot,
+          peerDependencies: { openclaw: "^2026.0.0" },
+        },
+        {
+          spec: "next-plugin@1.0.0",
+          packageName: "next-plugin",
+          version: "1.0.0",
+          pluginId: "next-plugin",
+          npmRoot,
+        },
+      ]);
+
+      const first = await installPluginFromNpmSpec({
+        spec: "peer-plugin@1.0.0",
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+      });
+      expect(first.ok).toBe(true);
+      expect(
+        fs
+          .lstatSync(path.join(npmRoot, "node_modules", "peer-plugin", "node_modules", "openclaw"))
+          .isSymbolicLink(),
+      ).toBe(true);
+
+      const second = await installPluginFromNpmSpec({
+        spec: "next-plugin@1.0.0",
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+      });
+
+      expect(second.ok).toBe(true);
+      if (!second.ok) {
+        expect(second.error).not.toContain("peer-plugin/node_modules/openclaw");
+      }
+    },
+  );
 
   it("allows npm-spec installs with dangerous code patterns when forced unsafe install is set", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
@@ -342,7 +427,7 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
-  it.each([
+  const officialLaunchPluginCases = [
     {
       spec: "@openclaw/acpx",
       pluginId: "acpx",
@@ -363,8 +448,10 @@ describe("installPluginFromNpmSpec", () => {
       pluginId: "voice-call",
       indexJs: `import { spawn } from "node:child_process";\nspawn("ngrok", ["http", "3000"]);`,
     },
-  ])(
-    "allows official npm plugin $spec with reviewed launch code",
+  ];
+
+  it.each(officialLaunchPluginCases)(
+    "blocks direct official npm plugin $spec with launch code without source provenance",
     async ({ spec, pluginId, indexJs }) => {
       const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
       const warnings: string[] = [];
@@ -380,6 +467,45 @@ describe("installPluginFromNpmSpec", () => {
       const result = await installPluginFromNpmSpec({
         spec,
         npmDir: npmRoot,
+        logger: {
+          info: () => {},
+          warn: (msg: string) => warnings.push(msg),
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        return;
+      }
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(fs.existsSync(path.join(npmRoot, "node_modules", spec))).toBe(false);
+      expect(
+        warnings.some((warning) =>
+          warning.includes("allowed because it is an official OpenClaw package"),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each(officialLaunchPluginCases)(
+    "allows source-linked official npm plugin $spec with reviewed launch code",
+    async ({ spec, pluginId, indexJs }) => {
+      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+      const warnings: string[] = [];
+      mockNpmViewAndInstall({
+        spec,
+        packageName: spec,
+        version: "2026.5.2",
+        pluginId,
+        npmRoot,
+        indexJs,
+      });
+
+      const result = await installPluginFromNpmSpec({
+        spec,
+        npmDir: npmRoot,
+        expectedPluginId: pluginId,
+        trustedSourceLinkedOfficialInstall: true,
         logger: {
           info: () => {},
           warn: (msg: string) => warnings.push(msg),

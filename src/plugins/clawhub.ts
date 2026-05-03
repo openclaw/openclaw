@@ -375,6 +375,13 @@ function formatClawHubClawPackDownloadError(params: {
   return `ClawHub artifact download for "${params.packageName}@${params.version}" is not available yet (${message}). Use "npm:${params.packageName}@${params.version}" for launch installs while ClawHub artifact routing is being rolled out.`;
 }
 
+function formatClawHubMissingArtifactMetadataError(params: {
+  packageName: string;
+  version: string;
+}): string {
+  return `ClawHub package "${params.packageName}@${params.version}" does not expose a downloadable plugin artifact yet. Use "npm:${params.packageName}@${params.version}" for launch installs while ClawHub artifact routing is being rolled out.`;
+}
+
 function resolveRequestedVersion(params: {
   detail: ClawHubPackageDetail;
   requestedVersion?: string;
@@ -1079,13 +1086,16 @@ export async function installPluginFromClawHub(
     return validationFailure;
   }
   const expectedClawPackSha256 = resolveClawHubClawPackArtifactSha256(versionState.clawpack);
+  const canonicalPackageName = detail.package?.name ?? parsed.name;
   if (!versionState.verification && !expectedClawPackSha256) {
     return buildClawHubInstallFailure(
-      `ClawHub version metadata for "${parsed.name}@${versionState.version}" is missing sha256hash and usable files[] metadata for fallback archive verification.`,
+      formatClawHubMissingArtifactMetadataError({
+        packageName: canonicalPackageName,
+        version: versionState.version,
+      }),
       CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY,
     );
   }
-  const canonicalPackageName = detail.package?.name ?? parsed.name;
   logClawHubPackageSummary({
     detail,
     version: versionState.version,

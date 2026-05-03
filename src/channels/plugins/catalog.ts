@@ -39,6 +39,7 @@ export type ChannelPluginCatalogEntry = {
   id: string;
   pluginId?: string;
   origin?: PluginOrigin;
+  trustedSourceLinkedOfficialInstall?: boolean;
   meta: ChannelMeta;
   install: ChannelPluginCatalogInstall;
   installSource?: PluginInstallSourceInfo;
@@ -203,7 +204,7 @@ function loadOfficialCatalogEntries(options: CatalogOptions): ChannelPluginCatal
       ? loadCatalogEntriesFromPaths(officialPaths)
       : loadOfficialCatalogEntriesFromPaths(officialPaths);
   return [...builtInEntries, ...fileEntries]
-    .map((entry) => buildExternalCatalogEntry(entry))
+    .map((entry) => buildExternalCatalogEntry(entry, { trustedSourceLinkedOfficialInstall: true }))
     .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
 }
 
@@ -297,6 +298,7 @@ function buildCatalogEntryFromManifest(params: {
   packageName?: string;
   packageDir?: string;
   origin?: PluginOrigin;
+  trustedSourceLinkedOfficialInstall?: boolean;
   workspaceDir?: string;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
@@ -326,6 +328,9 @@ function buildCatalogEntryFromManifest(params: {
     id,
     ...(pluginId ? { pluginId } : {}),
     ...(params.origin ? { origin: params.origin } : {}),
+    ...(params.trustedSourceLinkedOfficialInstall
+      ? { trustedSourceLinkedOfficialInstall: true }
+      : {}),
     meta,
     install,
     installSource: describePluginInstallSource(install, {
@@ -334,10 +339,17 @@ function buildCatalogEntryFromManifest(params: {
   };
 }
 
-function buildExternalCatalogEntry(entry: ExternalCatalogEntry): ChannelPluginCatalogEntry | null {
+function buildExternalCatalogEntry(
+  entry: ExternalCatalogEntry,
+  options?: {
+    trustedSourceLinkedOfficialInstall?: boolean;
+  },
+): ChannelPluginCatalogEntry | null {
   const manifest = entry[MANIFEST_KEY];
   return buildCatalogEntryFromManifest({
+    pluginId: manifest?.plugin?.id,
     packageName: entry.name,
+    trustedSourceLinkedOfficialInstall: options?.trustedSourceLinkedOfficialInstall,
     channel: manifest?.channel,
     install: manifest?.install,
   });

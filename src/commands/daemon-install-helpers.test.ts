@@ -310,6 +310,74 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
+  it("includes passEnv values for configured exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OP_CONNECT_TOKEN: "op-connect-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/Discord/password"],
+              passEnv: ["OP_CONNECT_TOKEN"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+        channels: {
+          discord: {
+            token: { source: "exec", provider: "onepassword", id: "value" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OP_CONNECT_TOKEN).toBe("op-connect-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("does not include passEnv values for unused exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OP_CONNECT_TOKEN: "op-connect-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              passEnv: ["OP_CONNECT_TOKEN"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OP_CONNECT_TOKEN).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
   it("does not embed gateway auth SecretRef values into the service environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { HEARTBEAT_PROMPT } from "../../../src/auto-reply/heartbeat.js";
+import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
   buildDirectChatContext,
   buildGroupChatContext,
@@ -403,8 +403,8 @@ function createScenarios(): PromptScenario[] {
   const heartbeatCtx: TemplateContext = {
     ...telegramDirectCtx,
     MessageSid: "heartbeat-0001",
-    Body: HEARTBEAT_PROMPT,
-    BodyStripped: HEARTBEAT_PROMPT,
+    Body: resolveHeartbeatPromptForResponseTool(),
+    BodyStripped: resolveHeartbeatPromptForResponseTool(),
   };
   const telegramDirectTools = createDynamicTools({ ctx: telegramDirectCtx, trigger: "user" });
   const discordGroupTools = createDynamicTools({ ctx: discordGroupCtx, trigger: "user" });
@@ -480,7 +480,7 @@ function createScenarios(): PromptScenario[] {
       ],
       trigger: "heartbeat",
       ctx: heartbeatCtx,
-      prompt: createPrompt(heartbeatCtx, HEARTBEAT_PROMPT),
+      prompt: createPrompt(heartbeatCtx, heartbeatCtx.BodyStripped ?? heartbeatCtx.Body ?? ""),
       extraSystemPrompt: createExtraSystemPrompt({
         ctx: heartbeatCtx,
         chatContext: buildDirectChatContext({
