@@ -682,11 +682,19 @@ async function canReadJsonlFromOffset(filePath: string, startOffset: number): Pr
 async function* readJsonlRecords(
   filePath: string,
   startOffset = 0,
+  endOffset?: number,
 ): AsyncGenerator<Record<string, unknown>> {
-  const fileStream = fs.createReadStream(filePath, {
+  if (endOffset !== undefined && endOffset <= startOffset) {
+    return;
+  }
+  const streamOptions: Parameters<typeof fs.createReadStream>[1] = {
     encoding: "utf-8",
     start: Math.max(0, startOffset),
-  });
+  };
+  if (endOffset !== undefined) {
+    streamOptions.end = endOffset - 1;
+  }
+  const fileStream = fs.createReadStream(filePath, streamOptions);
   const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
   try {
     for await (const line of rl) {
@@ -714,9 +722,14 @@ async function scanTranscriptFile(params: {
   filePath: string;
   config?: OpenClawConfig;
   startOffset?: number;
+  endOffset?: number;
   onEntry: (entry: ParsedTranscriptEntry) => void;
 }): Promise<void> {
-  for await (const parsed of readJsonlRecords(params.filePath, params.startOffset)) {
+  for await (const parsed of readJsonlRecords(
+    params.filePath,
+    params.startOffset,
+    params.endOffset,
+  )) {
     const entry = parseTranscriptEntry(parsed);
     if (!entry) {
       continue;
@@ -749,12 +762,14 @@ async function scanUsageFile(params: {
   filePath: string;
   config?: OpenClawConfig;
   startOffset?: number;
+  endOffset?: number;
   onEntry: (entry: ParsedUsageEntry) => void;
 }): Promise<void> {
   await scanTranscriptFile({
     filePath: params.filePath,
     config: params.config,
     startOffset: params.startOffset,
+    endOffset: params.endOffset,
     onEntry: (entry) => {
       if (!entry.usage) {
         return;
@@ -956,6 +971,7 @@ async function scanUsageFileForCache(params: {
     filePath: params.file.filePath,
     config: params.config,
     startOffset,
+    endOffset: params.file.size,
     onEntry: (entry) => {
       parsedRecords += 1;
       const ts = entry.timestamp?.getTime();

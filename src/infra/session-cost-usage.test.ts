@@ -1,7 +1,8 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   __setGatewayModelPricingForTest,
@@ -296,6 +297,68 @@ describe("session cost usage", () => {
       expect(summary.cacheStatus?.status).toBe("fresh");
       expect(afterCache.files[sessionFile]?.parsedRecords).toBe(2);
       expect(afterCache.files[sessionFile]?.countedRecords).toBe(2);
+    });
+  });
+
+  it("bounds durable aggregate scans to the stat snapshot", async () => {
+    const root = await makeSessionCostRoot("cost-cache-active-write");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-active-write.jsonl");
+    const entry = {
+      type: "message",
+      timestamp: "2026-02-05T12:00:00.000Z",
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: 10,
+          output: 20,
+          totalTokens: 30,
+          cost: { total: 0.03 },
+        },
+      },
+    };
+    const initialText = transcriptText("sess-cache-active-write", entry);
+    await fs.writeFile(sessionFile, initialText, "utf-8");
+    const statSnapshot = await nodeFs.promises.stat(sessionFile);
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        ...entry,
+        timestamp: "2026-02-05T12:01:00.000Z",
+      })}\n`,
+      "utf-8",
+    );
+
+    const originalStat = nodeFs.promises.stat.bind(nodeFs.promises);
+    let returnedStaleStat = false;
+    const statSpy = vi.spyOn(nodeFs.promises, "stat").mockImplementation(async (target) => {
+      if (String(target) === sessionFile && !returnedStaleStat) {
+        returnedStaleStat = true;
+        return statSnapshot;
+      }
+      return await originalStat(target);
+    });
+
+    await withStateDir(root, async () => {
+      try {
+        await refreshCostUsageCache();
+      } finally {
+        statSpy.mockRestore();
+      }
+      await refreshCostUsageCache();
+
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+
+      expect(summary.totals.totalTokens).toBe(60);
+      expect(summary.totals.totalCost).toBeCloseTo(0.06, 5);
+      expect(summary.cacheStatus?.status).toBe("fresh");
     });
   });
 
