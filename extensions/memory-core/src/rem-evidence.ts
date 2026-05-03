@@ -72,7 +72,7 @@ type GroundedRemCandidate = GroundedRemPreviewItem & {
   lean: "likely_durable" | "unclear" | "likely_situational";
 };
 
-type GroundedRemFilePreview = {
+export type GroundedRemFilePreview = {
   path: string;
   facts: GroundedRemPreviewItem[];
   reflections: GroundedRemPreviewItem[];

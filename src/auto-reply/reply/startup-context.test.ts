@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readRememberedDailyMemoryFile } from "../../../packages/memory-host-sdk/src/host/daily-files.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { readRememberedDailyMemoryFile } from "../../memory-host-sdk/host/daily-files.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 
 const tmpDirs: string[] = [];
