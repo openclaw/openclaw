@@ -1504,15 +1504,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (!draftStream || !progressDraftStreaming) {
           return;
         }
-        draftStream.update(
-          formatChannelProgressDraftText({
-            entry: progressConfigEntry,
-            lines: previewToolProgressLines,
-            seed: progressSeed,
-            formatLine: formatMatrixToolProgressMarkdownCode,
-            bullet: "-",
-          }),
-        );
+        const previewText = formatChannelProgressDraftText({
+          entry: progressConfigEntry,
+          lines: previewToolProgressLines,
+          seed: progressSeed,
+          formatLine: formatMatrixToolProgressMarkdownCode,
+          bullet: "-",
+        });
+        if (!previewText) {
+          return;
+        }
+        draftStream.update(previewText);
       };
       const progressDraftGate = createChannelProgressDraftGate({
         onStart: renderProgressDraft,

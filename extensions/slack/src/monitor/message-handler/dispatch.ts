@@ -891,13 +891,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     if (!draftStream || streamMode !== "status_final") {
       return;
     }
-    draftStream.update(
-      formatChannelProgressDraftText({
-        entry: account.config,
-        lines: previewToolProgressLines,
-        seed: progressSeed,
-      }),
-    );
+    const previewText = formatChannelProgressDraftText({
+      entry: account.config,
+      lines: previewToolProgressLines,
+      seed: progressSeed,
+    });
+    if (!previewText) {
+      return;
+    }
+    draftStream.update(previewText);
     hasStreamedMessage = true;
   };
   const progressDraftGate = createChannelProgressDraftGate({
