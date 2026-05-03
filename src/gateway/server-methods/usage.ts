@@ -352,6 +352,7 @@ async function loadCostUsageSummaryCached(params: {
     endMs: params.endMs,
     config: params.config,
     requestRefresh: true,
+    refreshMode: "sync-when-empty",
   })
     .then((summary) => {
       setCostUsageCache(cacheKey, {

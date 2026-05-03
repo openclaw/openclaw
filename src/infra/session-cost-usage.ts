@@ -22,7 +22,11 @@ import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { asFiniteNumber } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import {
+  estimateUsageCost,
+  resolveModelCostConfig,
+  resolveModelCostConfigFingerprint,
+} from "../utils/usage-format.js";
 import { formatErrorMessage } from "./errors.js";
 import type {
   CostBreakdown,
@@ -152,50 +156,8 @@ const addTotals = (target: CostUsageTotals, source: CostUsageTotals): void => {
   target.missingCostEntries += source.missingCostEntries;
 };
 
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .filter((key) => record[key] !== undefined)
-    .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
-    .join(",")}}`;
-}
-
 function resolveUsageCostPricingFingerprint(config?: OpenClawConfig): string {
-  const providers = (config as { models?: { providers?: unknown } } | undefined)?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return "{}";
-  }
-
-  const pricing: Record<string, unknown> = {};
-  for (const [providerId, providerRaw] of Object.entries(
-    providers as Record<string, unknown>,
-  ).toSorted(([a], [b]) => a.localeCompare(b))) {
-    if (!providerRaw || typeof providerRaw !== "object") {
-      continue;
-    }
-    const models = (providerRaw as { models?: unknown }).models;
-    if (!Array.isArray(models)) {
-      continue;
-    }
-    pricing[providerId] = models
-      .filter((model): model is Record<string, unknown> =>
-        Boolean(model && typeof model === "object"),
-      )
-      .map((model) => ({
-        id: typeof model.id === "string" ? model.id : undefined,
-        cost: model.cost,
-      }))
-      .filter((model) => model.id !== undefined || model.cost !== undefined)
-      .toSorted((a, b) => (a.id ?? "").localeCompare(b.id ?? ""));
-  }
-  return stableStringify(pricing);
+  return resolveModelCostConfigFingerprint(config);
 }
 
 function resolveUsageCostCachePath(agentId?: string): string {
@@ -385,6 +347,29 @@ function getUsageCostStaleFiles(params: {
   );
 }
 
+function countUsableUsageCostCacheFiles(params: {
+  cache: UsageCostCacheFile;
+  files: UsageCostTranscriptFile[];
+  pricingFingerprint: string;
+}): number {
+  const filesByPath = new Map(params.files.map((file) => [file.filePath, file]));
+  let cachedFiles = 0;
+  for (const [filePath, entry] of Object.entries(params.cache.files)) {
+    const file = filesByPath.get(filePath);
+    if (
+      file &&
+      canUseUsageCostCacheEntryForPartial({
+        entry,
+        file,
+        pricingFingerprint: params.pricingFingerprint,
+      })
+    ) {
+      cachedFiles += 1;
+    }
+  }
+  return cachedFiles;
+}
+
 function buildCostUsageSummaryFromCache(params: {
   cache: UsageCostCacheFile;
   files: UsageCostTranscriptFile[];
@@ -402,7 +387,11 @@ function buildCostUsageSummaryFromCache(params: {
     files: params.files,
     pricingFingerprint: params.pricingFingerprint,
   });
-  let cachedFiles = 0;
+  const cachedFiles = countUsableUsageCostCacheFiles({
+    cache: params.cache,
+    files: params.files,
+    pricingFingerprint: params.pricingFingerprint,
+  });
 
   for (const [filePath, entry] of Object.entries(params.cache.files)) {
     const file = filesByPath.get(filePath);
@@ -416,7 +405,6 @@ function buildCostUsageSummaryFromCache(params: {
     ) {
       continue;
     }
-    cachedFiles += 1;
     for (const usageEntry of entry.usageEntries) {
       if (usageEntry.timestamp < params.startMs || usageEntry.timestamp > params.endMs) {
         continue;
@@ -1080,10 +1068,11 @@ export async function loadCostUsageSummaryFromCache(params: {
   config?: OpenClawConfig;
   agentId?: string;
   requestRefresh?: boolean;
+  refreshMode?: "background" | "sync-when-empty";
 }): Promise<CostUsageSummary> {
   const cachePath = resolveUsageCostCachePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
-  const [cache, files] = await Promise.all([
+  let [cache, files] = await Promise.all([
     readUsageCostCache(cachePath),
     listUsageCountedTranscriptFiles(params.agentId),
   ]);
@@ -1093,7 +1082,20 @@ export async function loadCostUsageSummaryFromCache(params: {
     pricingFingerprint,
   });
   if (params.requestRefresh !== false && staleFiles.length > 0) {
-    requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
+    const cachedFiles = countUsableUsageCostCacheFiles({
+      cache,
+      files,
+      pricingFingerprint,
+    });
+    if (params.refreshMode === "sync-when-empty" && cachedFiles === 0) {
+      await refreshCostUsageCache({ config: params.config, agentId: params.agentId });
+      [cache, files] = await Promise.all([
+        readUsageCostCache(cachePath),
+        listUsageCountedTranscriptFiles(params.agentId),
+      ]);
+    } else {
+      requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
+    }
   }
   const refreshRunning = await isUsageCostCacheRefreshRunning(cachePath);
   return buildCostUsageSummaryFromCache({

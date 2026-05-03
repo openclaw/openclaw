@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  __setGatewayModelPricingForTest,
+  clearGatewayModelPricingCacheState,
+} from "../gateway/model-pricing-cache-state.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -350,6 +354,105 @@ describe("session cost usage", () => {
       });
       expect(refreshed.totals.totalCost).toBeCloseTo(0.004, 5);
       expect(refreshed.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
+  it("rebuilds cold durable aggregate cache synchronously when requested", async () => {
+    const root = await makeSessionCostRoot("cost-cache-cold-sync");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-cold-sync.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      transcriptText("sess-cache-cold-sync", {
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 10,
+            output: 20,
+            totalTokens: 30,
+            cost: { total: 0.03 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        refreshMode: "sync-when-empty",
+      });
+
+      expect(summary.totals.totalTokens).toBe(30);
+      expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
+      expect(summary.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
+  it("invalidates durable aggregate cache when gateway pricing cache changes", async () => {
+    const root = await makeSessionCostRoot("cost-cache-gateway-pricing");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-gateway-pricing.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      transcriptText("sess-cache-gateway-pricing", {
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 1000,
+            output: 1000,
+            totalTokens: 2000,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const setGatewayPricing = (input: number, output: number) =>
+      __setGatewayModelPricingForTest([
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          pricing: { input, output, cacheRead: 0, cacheWrite: 0 },
+        },
+      ]);
+
+    await withStateDir(root, async () => {
+      try {
+        setGatewayPricing(1, 1);
+        await refreshCostUsageCache();
+
+        setGatewayPricing(2, 2);
+        const stale = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+        expect(stale.totals.totalCost).toBe(0);
+        expect(stale.cacheStatus?.status).toBe("stale");
+
+        await refreshCostUsageCache();
+        const refreshed = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+        expect(refreshed.totals.totalCost).toBeCloseTo(0.004, 5);
+        expect(refreshed.cacheStatus?.status).toBe("fresh");
+      } finally {
+        clearGatewayModelPricingCacheState();
+      }
     });
   });
 
