@@ -3,6 +3,7 @@ import type { AgentEventSinkConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { fetchWithSsrFGuard } from "../plugin-sdk/ssrf-runtime.js";
+import { redactSensitiveUrl } from "../shared/net/redact-sensitive-url.js";
 import type { AgentEventPayload } from "./agent-events.js";
 import { onAgentEvent } from "./agent-events.js";
 
@@ -92,7 +93,7 @@ export function startAgentEventSink(params: {
       release = result.release;
       if (!result.response.ok) {
         warn?.(
-          `agent event sink: unexpected status ${result.response.status} from ${config.url}`,
+          `agent event sink: unexpected status ${result.response.status} from ${redactSensitiveUrl(config.url)}`,
         );
       }
     } catch (err: unknown) {
@@ -213,7 +214,7 @@ export function startAgentEventSink(params: {
     }
   });
 
-  warn?.(`agent event sink: listening for thinking + assistant events → ${config.url}`);
+  warn?.(`agent event sink: listening for thinking + assistant events → ${redactSensitiveUrl(config.url)}`);
 
   return unsubscribe;
 }
