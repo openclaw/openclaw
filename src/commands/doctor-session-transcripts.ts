@@ -24,7 +24,14 @@ type TranscriptRepairResult = {
   originalEntries: number;
   activeEntries: number;
   backupPath?: string;
+  issue?: "prompt-rewrite-branch" | "stale-user-parent";
   reason?: string;
+};
+
+type TranscriptSessionMetadata = {
+  sessionKey?: string;
+  channel?: string;
+  chatType?: string;
 };
 
 function parseTranscriptEntries(raw: string): TranscriptEntry[] {
@@ -148,6 +155,42 @@ function hasBrokenPromptRewriteBranch(entries: TranscriptEntry[], activePath: Tr
   return false;
 }
 
+function hasStaleUserParentBranch(entries: TranscriptEntry[]): boolean {
+  const sessionEntries = entries.filter((entry) => entry.type !== "session");
+  const byId = new Map<string, TranscriptEntry>();
+  for (const entry of sessionEntries) {
+    const id = getEntryId(entry);
+    if (id) {
+      byId.set(id, entry);
+    }
+  }
+
+  for (let index = 1; index < sessionEntries.length; index += 1) {
+    const entry = sessionEntries[index];
+    const message = getMessage(entry);
+    if (message?.role !== "user") {
+      continue;
+    }
+    const parentId = getParentId(entry);
+    const previousId = getEntryId(sessionEntries[index - 1] ?? {});
+    if (parentId && previousId && parentId !== previousId && byId.has(parentId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSafeStaleParentRepairTarget(metadata?: TranscriptSessionMetadata): boolean {
+  const sessionKey = metadata?.sessionKey?.toLowerCase() ?? "";
+  const channel = metadata?.channel?.toLowerCase() ?? "";
+  const chatType = metadata?.chatType?.toLowerCase() ?? "";
+  return (
+    sessionKey.includes(":telegram:direct:") ||
+    sessionKey.includes(":telegram:dm:") ||
+    (channel === "telegram" && (chatType === "direct" || chatType === "dm"))
+  );
+}
+
 async function writeActiveTranscript(params: {
   filePath: string;
   entries: TranscriptEntry[];
@@ -166,9 +209,37 @@ async function writeActiveTranscript(params: {
   return backupPath;
 }
 
+async function writeLinearizedTranscript(params: {
+  filePath: string;
+  entries: TranscriptEntry[];
+}): Promise<string> {
+  const header = params.entries.find((entry) => entry.type === "session");
+  if (!header) {
+    throw new Error("missing session header");
+  }
+  const backupPath = `${params.filePath}.pre-doctor-stale-parent-repair-${new Date()
+    .toISOString()
+    .replace(/[:.]/g, "-")}.bak`;
+  await fs.copyFile(params.filePath, backupPath);
+  let previousId: string | null = null;
+  const linearEntries: TranscriptEntry[] = [];
+  for (const entry of params.entries) {
+    if (entry.type === "session") {
+      continue;
+    }
+    const next = Object.assign({}, entry, { parentId: previousId });
+    previousId = getEntryId(next);
+    linearEntries.push(next);
+  }
+  const next = [header, ...linearEntries].map((entry) => JSON.stringify(entry)).join("\n");
+  await fs.writeFile(params.filePath, `${next}\n`, "utf-8");
+  return backupPath;
+}
+
 export async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
   shouldRepair: boolean;
+  sessionMetadata?: TranscriptSessionMetadata;
 }): Promise<TranscriptRepairResult> {
   try {
     const raw = await fs.readFile(params.filePath, "utf-8");
@@ -185,7 +256,35 @@ export async function repairBrokenSessionTranscriptFile(params: {
       };
     }
     const broken = hasBrokenPromptRewriteBranch(entries, activePath);
-    if (!broken) {
+    if (broken) {
+      if (!params.shouldRepair) {
+        return {
+          filePath: params.filePath,
+          broken: true,
+          repaired: false,
+          originalEntries: entries.length,
+          activeEntries: activePath.length,
+          issue: "prompt-rewrite-branch",
+        };
+      }
+      const backupPath = await writeActiveTranscript({
+        filePath: params.filePath,
+        entries,
+        activePath,
+      });
+      return {
+        filePath: params.filePath,
+        broken: true,
+        repaired: true,
+        originalEntries: entries.length,
+        activeEntries: activePath.length,
+        backupPath,
+        issue: "prompt-rewrite-branch",
+      };
+    }
+
+    const staleParentBranch = hasStaleUserParentBranch(entries);
+    if (!staleParentBranch) {
       return {
         filePath: params.filePath,
         broken: false,
@@ -194,27 +293,32 @@ export async function repairBrokenSessionTranscriptFile(params: {
         activeEntries: activePath.length,
       };
     }
-    if (!params.shouldRepair) {
+
+    const safeRepair = isSafeStaleParentRepairTarget(params.sessionMetadata);
+    if (!params.shouldRepair || !safeRepair) {
       return {
         filePath: params.filePath,
         broken: true,
         repaired: false,
         originalEntries: entries.length,
-        activeEntries: activePath.length,
+        activeEntries: entries.filter((entry) => entry.type !== "session").length,
+        issue: "stale-user-parent",
+        reason: safeRepair ? undefined : "repair limited to Telegram direct transcripts",
       };
     }
-    const backupPath = await writeActiveTranscript({
+
+    const backupPath = await writeLinearizedTranscript({
       filePath: params.filePath,
       entries,
-      activePath,
     });
     return {
       filePath: params.filePath,
       broken: true,
       repaired: true,
       originalEntries: entries.length,
-      activeEntries: activePath.length,
+      activeEntries: entries.filter((entry) => entry.type !== "session").length,
       backupPath,
+      issue: "stale-user-parent",
     };
   } catch (err) {
     return {
@@ -246,6 +350,65 @@ async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string
   return files.toSorted((a, b) => a.localeCompare(b));
 }
 
+function normalizeMetadataString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+async function loadSessionMetadata(
+  sessionDirs: string[],
+): Promise<Map<string, TranscriptSessionMetadata>> {
+  const metadata = new Map<string, TranscriptSessionMetadata>();
+  for (const sessionsDir of sessionDirs) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await fs.readFile(path.join(sessionsDir, "sessions.json"), "utf-8"));
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      continue;
+    }
+    for (const [sessionKey, rawEntry] of Object.entries(parsed)) {
+      if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+        continue;
+      }
+      const entry = rawEntry as Record<string, unknown>;
+      const sessionId = normalizeMetadataString(entry.sessionId);
+      if (!sessionId) {
+        continue;
+      }
+      const origin =
+        entry.origin && typeof entry.origin === "object" && !Array.isArray(entry.origin)
+          ? (entry.origin as Record<string, unknown>)
+          : undefined;
+      const deliveryContext =
+        entry.deliveryContext &&
+        typeof entry.deliveryContext === "object" &&
+        !Array.isArray(entry.deliveryContext)
+          ? (entry.deliveryContext as Record<string, unknown>)
+          : undefined;
+      metadata.set(sessionId, {
+        sessionKey,
+        channel:
+          normalizeMetadataString(entry.channel) ??
+          normalizeMetadataString(entry.lastChannel) ??
+          normalizeMetadataString(deliveryContext?.channel) ??
+          normalizeMetadataString(origin?.provider),
+        chatType:
+          normalizeMetadataString(entry.chatType) ?? normalizeMetadataString(origin?.chatType),
+      });
+    }
+  }
+  return metadata;
+}
+
+function resolveTranscriptSessionMetadata(
+  filePath: string,
+  metadataBySessionId: Map<string, TranscriptSessionMetadata>,
+): TranscriptSessionMetadata | undefined {
+  return metadataBySessionId.get(path.basename(filePath, ".jsonl"));
+}
+
 export async function noteSessionTranscriptHealth(params?: {
   shouldRepair?: boolean;
   sessionDirs?: string[];
@@ -264,9 +427,16 @@ export async function noteSessionTranscriptHealth(params?: {
     return;
   }
 
+  const metadataBySessionId = await loadSessionMetadata(sessionDirs);
   const results: TranscriptRepairResult[] = [];
   for (const filePath of files) {
-    results.push(await repairBrokenSessionTranscriptFile({ filePath, shouldRepair }));
+    results.push(
+      await repairBrokenSessionTranscriptFile({
+        filePath,
+        shouldRepair,
+        sessionMetadata: resolveTranscriptSessionMetadata(filePath, metadataBySessionId),
+      }),
+    );
   }
   const broken = results.filter((result) => result.broken);
   if (broken.length === 0) {
@@ -275,18 +445,22 @@ export async function noteSessionTranscriptHealth(params?: {
 
   const repairedCount = broken.filter((result) => result.repaired).length;
   const lines = [
-    `- Found ${broken.length} transcript file${broken.length === 1 ? "" : "s"} with duplicated prompt-rewrite branches.`,
+    `- Found ${broken.length} transcript file${broken.length === 1 ? "" : "s"} with branch continuity issues.`,
     ...broken.slice(0, 20).map((result) => {
       const backup = result.backupPath ? ` backup=${shortenHomePath(result.backupPath)}` : "";
       const status = result.repaired ? "repaired" : "needs repair";
-      return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${backup}`;
+      const issue = result.issue ? ` issue=${result.issue}` : "";
+      const reason = result.reason ? ` (${result.reason})` : "";
+      return `- ${shortenHomePath(result.filePath)} ${status}${issue} entries=${result.originalEntries}->${result.activeEntries + 1}${backup}${reason}`;
     }),
   ];
   if (broken.length > 20) {
     lines.push(`- ...and ${broken.length - 20} more.`);
   }
   if (!shouldRepair) {
-    lines.push('- Run "openclaw doctor --fix" to rewrite affected files to their active branch.');
+    lines.push(
+      '- Run "openclaw doctor --fix" to rewrite prompt-rewrite branches and safe Telegram DM stale-parent branches.',
+    );
   } else if (repairedCount > 0) {
     lines.push(`- Repaired ${repairedCount} transcript file${repairedCount === 1 ? "" : "s"}.`);
   }
