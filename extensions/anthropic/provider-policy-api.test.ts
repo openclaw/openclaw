@@ -1,6 +1,10 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
-import { applyConfigDefaults, normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
+import { 
+  applyConfigDefaults, 
+  normalizeConfig, 
+  resolveThinkingProfile 
+} from "./provider-policy-api.js";
 
 function createModel(id: string, name: string): ModelDefinitionConfig {
   return {
@@ -102,7 +106,7 @@ describe("anthropic provider policy public artifact", () => {
       expect(profile).toBeDefined();
       const ids = profile?.levels.map((l) => l.id);
       
-      // These are the levels that were previously missing in the bundled artifact
+      // These verify that the Opus 4.7-specific levels are now exposed
       expect(ids).toContain("max");
       expect(ids).toContain("xhigh");
       expect(ids).toContain("adaptive");

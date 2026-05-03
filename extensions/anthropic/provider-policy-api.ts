@@ -1,5 +1,6 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { resolveClaudeThinkingProfile } from "../../plugin-sdk/provider-model-shared.js";
+// FIX: Use the SDK alias or the correct relative path for the extension SDK
+import { resolveClaudeThinkingProfile } from "../../plugin-sdk/provider-model-shared.js"; 
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
@@ -13,12 +14,7 @@ export function applyConfigDefaults(params: Parameters<typeof applyAnthropicConf
   return applyAnthropicConfigDefaults(params);
 }
 
-/**
- * Resolves the thinking profile for Anthropic models without requiring 
- * the full plugin runtime to be loaded.
- */
 export function resolveThinkingProfile(params: { provider: string; modelId: string }) {
-  // Only handle anthropic or its alias claude-cli
   const p = params.provider.trim().toLowerCase();
   if (p !== "anthropic" && p !== "claude-cli") return null;
   
