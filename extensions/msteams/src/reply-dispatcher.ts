@@ -345,6 +345,66 @@ export function createMSTeamsReplyDispatcher(params: {
               streamController.onPartialReply(payload),
           }
         : {}),
+      ...(streamController.shouldSuppressDefaultToolProgressMessages()
+        ? { suppressDefaultToolProgressMessages: true }
+        : {}),
+      ...(streamController.shouldStreamPreviewToolProgress()
+        ? {
+            onToolStart: async (payload: { name?: string; phase?: string }) => {
+              await streamController.pushProgressLine(
+                payload.name ? `tool: ${payload.name}` : (payload.phase ?? "tool running"),
+              );
+            },
+            onItemEvent: async (payload: {
+              progressText?: string;
+              summary?: string;
+              title?: string;
+              name?: string;
+            }) => {
+              await streamController.pushProgressLine(
+                payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+              );
+            },
+            onPlanUpdate: async (payload: {
+              phase?: string;
+              explanation?: string;
+              steps?: string[];
+            }) => {
+              if (payload.phase !== "update") {
+                return;
+              }
+              await streamController.pushProgressLine(
+                payload.explanation ?? payload.steps?.[0] ?? "planning",
+              );
+            },
+            onApprovalEvent: async (payload: { phase?: string; command?: string }) => {
+              if (payload.phase !== "requested") {
+                return;
+              }
+              await streamController.pushProgressLine(
+                payload.command ? `approval: ${payload.command}` : "approval requested",
+              );
+            },
+            onCommandOutput: async (payload: { phase?: string; summary?: string }) => {
+              if (payload.phase !== "end") {
+                return;
+              }
+              await streamController.pushProgressLine(payload.summary ?? "command output ready");
+            },
+            onPatchSummary: async (payload: {
+              phase?: string;
+              summary?: string;
+              title?: string;
+            }) => {
+              if (payload.phase !== "end") {
+                return;
+              }
+              await streamController.pushProgressLine(
+                payload.summary ?? payload.title ?? "patch applied",
+              );
+            },
+          }
+        : {}),
       disableBlockStreaming:
         typeof resolvedBlockStreamingEnabled === "boolean"
           ? !resolvedBlockStreamingEnabled

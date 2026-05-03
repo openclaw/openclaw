@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Mattermost: accept the documented `channels.mattermost.streaming` config and honor `streaming: "off"` by disabling draft preview posts. Thanks @vincentkoc.
 - Mattermost: expose streaming progress config labels and help text in generated channel config metadata so Control UI/docs can explain the new `channels.mattermost.streaming.progress.*` fields. Thanks @vincentkoc.
 - Mattermost: honor `channels.mattermost.streaming.progress.toolProgress=false` in progress draft mode so compact tool status lines stay hidden until final delivery. Thanks @vincentkoc.
+- Microsoft Teams: honor progress draft tool lines in native Teams progress streams and suppress standalone tool messages when `channels.msteams.streaming.progress.toolProgress=false`. Thanks @vincentkoc.
 - Discord: keep progress draft boundary callbacks bound during streaming replies, so extension lint stays green while progress previews transition between assistant and reasoning blocks. Thanks @vincentkoc.
 - Discord: resolve SecretRef-backed bot tokens from the active runtime snapshot for named accounts and keep unresolved configured tokens from crashing status or health checks. (#76987) Thanks @joshavant.
 - Channels/streaming: expose `streaming.progress.label`, `labels`, `maxLines`, and `toolProgress` in bundled channel config metadata so progress draft settings appear in config, docs, and control surfaces. Thanks @vincentkoc.

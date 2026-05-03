@@ -1,6 +1,9 @@
 import {
+  formatChannelProgressDraftText,
   resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftLabel,
+  resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
@@ -40,6 +43,11 @@ export function createTeamsReplyStreamController(params: {
   const streamMode = resolveChannelPreviewStreamMode(params.msteamsConfig, "partial");
   const shouldUseNativeStream =
     isPersonal && (streamMode === "partial" || streamMode === "progress");
+  const shouldSuppressDefaultToolProgressMessages =
+    shouldUseNativeStream && streamMode === "progress";
+  const shouldStreamPreviewToolProgress =
+    shouldSuppressDefaultToolProgressMessages &&
+    resolveChannelStreamingPreviewToolProgress(params.msteamsConfig);
   const stream = shouldUseNativeStream
     ? new TeamsHttpStream({
         sendActivity: (activity) => params.context.sendActivity(activity),
@@ -52,7 +60,34 @@ export function createTeamsReplyStreamController(params: {
 
   let streamReceivedTokens = false;
   let informativeUpdateSent = false;
+  let progressLines: string[] = [];
   let pendingFinalize: Promise<void> | undefined;
+
+  const pushProgressLine = async (line?: string): Promise<void> => {
+    if (!stream || !shouldStreamPreviewToolProgress) {
+      return;
+    }
+    const normalized = line?.replace(/\s+/g, " ").trim();
+    if (!normalized) {
+      return;
+    }
+    const previous = progressLines.at(-1);
+    if (previous === normalized) {
+      return;
+    }
+    progressLines = [...progressLines, normalized].slice(
+      -resolveChannelProgressDraftMaxLines(params.msteamsConfig),
+    );
+    informativeUpdateSent = true;
+    await stream.sendInformativeUpdate(
+      formatChannelProgressDraftText({
+        entry: params.msteamsConfig,
+        lines: progressLines,
+        seed: params.progressSeed,
+        bullet: "-",
+      }),
+    );
+  };
 
   const fallbackAfterStreamFailure = (
     payload: ReplyPayload,
@@ -98,6 +133,18 @@ export function createTeamsReplyStreamController(params: {
       }
       streamReceivedTokens = true;
       stream.update(payload.text);
+    },
+
+    async pushProgressLine(line?: string): Promise<void> {
+      await pushProgressLine(line);
+    },
+
+    shouldSuppressDefaultToolProgressMessages(): boolean {
+      return shouldSuppressDefaultToolProgressMessages;
+    },
+
+    shouldStreamPreviewToolProgress(): boolean {
+      return shouldStreamPreviewToolProgress;
     },
 
     async preparePayload(payload: ReplyPayload): Promise<Maybe<ReplyPayload>> {

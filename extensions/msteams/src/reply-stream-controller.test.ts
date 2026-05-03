@@ -268,6 +268,58 @@ describe("createTeamsReplyStreamController", () => {
     expect(streamInstances[0]?.sendInformativeUpdate).not.toHaveBeenCalled();
   });
 
+  it("streams compact Teams progress lines when tool progress is enabled", async () => {
+    streamInstances.length = 0;
+    const ctrl = createTeamsReplyStreamController({
+      conversationType: "personal",
+      context: { sendActivity: vi.fn(async () => ({ id: "a" })) } as never,
+      feedbackLoopEnabled: false,
+      log: { debug: vi.fn() } as never,
+      msteamsConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Working",
+            maxLines: 1,
+          },
+        },
+      } as never,
+    });
+
+    await ctrl.pushProgressLine("tool: search");
+    await ctrl.pushProgressLine("tool: exec");
+
+    expect(ctrl.shouldSuppressDefaultToolProgressMessages()).toBe(true);
+    expect(ctrl.shouldStreamPreviewToolProgress()).toBe(true);
+    expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenLastCalledWith(
+      "Working\n- tool: exec",
+    );
+  });
+
+  it("suppresses Teams default progress messages without stream lines when tool progress is disabled", async () => {
+    streamInstances.length = 0;
+    const ctrl = createTeamsReplyStreamController({
+      conversationType: "personal",
+      context: { sendActivity: vi.fn(async () => ({ id: "a" })) } as never,
+      feedbackLoopEnabled: false,
+      log: { debug: vi.fn() } as never,
+      msteamsConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            toolProgress: false,
+          },
+        },
+      } as never,
+    });
+
+    await ctrl.pushProgressLine("tool: search");
+
+    expect(ctrl.shouldSuppressDefaultToolProgressMessages()).toBe(true);
+    expect(ctrl.shouldStreamPreviewToolProgress()).toBe(false);
+    expect(streamInstances[0]?.sendInformativeUpdate).not.toHaveBeenCalled();
+  });
+
   it("does not start native streaming for Teams block mode", async () => {
     streamInstances.length = 0;
     const ctrl = createTeamsReplyStreamController({

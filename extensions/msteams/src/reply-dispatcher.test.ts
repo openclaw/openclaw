@@ -332,6 +332,39 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(streamInstances[0]?.update).toHaveBeenCalledWith("partial response");
   });
 
+  it("surfaces Teams progress tool lines through native stream updates", async () => {
+    const dispatcher = createDispatcher("personal", {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Working",
+        },
+      },
+    });
+
+    expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBe(true);
+    await dispatcher.replyOptions.onToolStart?.({ name: "web_search" });
+
+    expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledWith(
+      "Working\n- tool: web_search",
+    );
+  });
+
+  it("suppresses standalone Teams progress messages when progress tool lines are disabled", async () => {
+    const dispatcher = createDispatcher("personal", {
+      streaming: {
+        mode: "progress",
+        progress: {
+          toolProgress: false,
+        },
+      },
+    });
+
+    expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBe(true);
+    expect(dispatcher.replyOptions.onToolStart).toBeUndefined();
+    expect(streamInstances[0]?.sendInformativeUpdate).not.toHaveBeenCalled();
+  });
+
   it("does not create a stream for channel conversations", async () => {
     createDispatcher("channel");
 
@@ -446,8 +479,8 @@ describe("createMSTeamsReplyDispatcher", () => {
 
 describe("pickInformativeStatusText", () => {
   it("selects a deterministic status line for a fixed random source", () => {
-    expect(pickInformativeStatusText(() => 0)).toBe("Thinking");
-    expect(pickInformativeStatusText(() => 0.99)).toBe("Surfacing");
+    expect(pickInformativeStatusText(() => 0)).toBe("Thinking...");
+    expect(pickInformativeStatusText(() => 0.99)).toBe("Surfacing...");
   });
 
   it("honors disabled progress labels", () => {
