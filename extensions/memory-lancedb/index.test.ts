@@ -2374,7 +2374,7 @@ describe("memory plugin e2e", () => {
       // Check audit log was written
       auditLogPath = `${getTmpDir()}/.openclaw/memory/refresh-audit.jsonl`;
       const fsPromises = await import("node:fs/promises");
-      const auditContent = await fsPromises.readFile(auditLogPath!, "utf8").catch(() => null);
+      const auditContent = await fsPromises.readFile(auditLogPath, "utf8").catch(() => null);
       expect(auditContent).not.toBeNull();
       const auditLine = JSON.parse(auditContent!.trim());
       expect(auditLine.operation).toBe("replaced");
@@ -2391,7 +2391,7 @@ describe("memory plugin e2e", () => {
       // On non-POSIX platforms (Windows) mode bits are not meaningfully
       // enforced, so skip the assertion there.
       if (process.platform !== "win32") {
-        const fileStat = await fsPromises.stat(auditLogPath!);
+        const fileStat = await fsPromises.stat(auditLogPath);
         expect(fileStat.mode & 0o777).toBe(0o600);
         const dirStat = await fsPromises.stat(`${getTmpDir()}/.openclaw/memory`);
         expect(dirStat.mode & 0o777).toBe(0o700);
