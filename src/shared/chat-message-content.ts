@@ -203,5 +203,11 @@ export function extractAssistantVisibleText(message: unknown): string | undefine
   if (finalAnswerText) {
     return finalAnswerText;
   }
+  // Fall back to commentary-phase text when no final_answer blocks exist yet
+  // (streaming in progress, or model omits <final> tags entirely).
+  const commentaryText = extractAssistantTextForPhase(message, { phase: "commentary" });
+  if (commentaryText) {
+    return commentaryText;
+  }
   return extractAssistantTextForPhase(message);
 }
