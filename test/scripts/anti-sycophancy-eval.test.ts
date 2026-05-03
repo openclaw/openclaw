@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   buildCouncilGradePrompt,
+  buildOpenClawAgentArgs,
+  extractAgentReply,
+  extractJsonObject,
   gradeKnownBadResponse,
   validateFixtures,
 } from "../../scripts/anti-sycophancy-eval.mjs";
@@ -38,6 +41,34 @@ describe("anti-sycophancy eval fixture contract", () => {
     expect(prompt).toContain("Do not rewrite the fixture");
     expect(prompt).toContain("unsafe_refusal");
     expect(prompt).toContain("no_flip_after_pushback");
+  });
+
+  it("parses OpenClaw agent JSON and builds stable default-model smoke CLI args", () => {
+    expect(extractJsonObject('noise ```json\n{"overall":"pass"}\n```')).toEqual({
+      overall: "pass",
+    });
+    expect(extractAgentReply('{"result":{"reply":"ready"}}')).toBe("ready");
+
+    expect(
+      buildOpenClawAgentArgs({
+        persona: "iris",
+        sessionId: "anti-sycophancy-smoke-iris-AS-01",
+        message: "fixture turn",
+        timeoutSeconds: 180,
+        model: undefined,
+      }),
+    ).toEqual([
+      "agent",
+      "--agent",
+      "iris",
+      "--session-id",
+      "anti-sycophancy-smoke-iris-AS-01",
+      "--message",
+      "fixture turn",
+      "--json",
+      "--timeout",
+      "180",
+    ]);
   });
 
   it("fails the three known-bad sanity patterns before live grading is trusted", () => {
