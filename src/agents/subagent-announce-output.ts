@@ -199,6 +199,17 @@ function countAssistantToolCalls(content: unknown): number {
   return count;
 }
 
+function isCompactionSystemMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if ((message as { role?: unknown }).role !== "system") {
+    return false;
+  }
+  const meta = (message as { __openclaw?: { kind?: unknown } }).__openclaw;
+  return Boolean(meta) && meta?.kind === "compaction";
+}
+
 function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutputSnapshot {
   const snapshot: SubagentOutputSnapshot = {
     assistantFragments: [],
@@ -250,6 +261,15 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       previousAssistantCalledYield = false;
       continue;
     }
+    if (isCompactionSystemMessage(message)) {
+      snapshot.latestAssistantText = undefined;
+      snapshot.latestRawText = undefined;
+      snapshot.latestSilentText = undefined;
+      snapshot.assistantFragments = [];
+      snapshot.waitingForContinuation = true;
+      previousAssistantCalledYield = false;
+      continue;
+    }
     const text = extractSubagentOutputText(message).trim();
     if (text) {
       snapshot.latestRawText = text;
@@ -287,18 +307,20 @@ function selectSubagentOutputText(
   snapshot: SubagentOutputSnapshot,
   outcome?: SubagentRunOutcome,
 ): string | undefined {
-  if (snapshot.waitingForContinuation) {
-    return undefined;
-  }
-  if (snapshot.latestSilentText) {
-    return snapshot.latestSilentText;
-  }
-  if (snapshot.latestAssistantText) {
-    return snapshot.latestAssistantText;
+  if (!snapshot.waitingForContinuation) {
+    if (snapshot.latestSilentText) {
+      return snapshot.latestSilentText;
+    }
+    if (snapshot.latestAssistantText) {
+      return snapshot.latestAssistantText;
+    }
   }
   const partialProgress = formatSubagentPartialProgress(snapshot, outcome);
   if (partialProgress) {
     return partialProgress;
+  }
+  if (snapshot.waitingForContinuation) {
+    return undefined;
   }
   return snapshot.latestRawText;
 }
