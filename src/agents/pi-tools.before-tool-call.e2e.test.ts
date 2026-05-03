@@ -331,6 +331,32 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("keeps blocking after the consecutive cross-tool error threshold is reached", async () => {
+    const { readTool, listTool, writeTool } = createAlwaysFailingTools({
+      runId: "run-errors-sticky",
+      loopDetection: {
+        enabled: true,
+        consecutiveErrorThreshold: 3,
+      },
+    });
+
+    await expect(
+      readTool.execute("read-0", { path: "/a.txt" }, undefined, undefined),
+    ).rejects.toThrow("Permission denied");
+    await expect(listTool.execute("list-1", { dir: "/tmp" }, undefined, undefined)).rejects.toThrow(
+      "Permission denied",
+    );
+    await expect(
+      writeTool.execute("write-2", { path: "/tmp/out.txt", content: "x" }, undefined, undefined),
+    ).rejects.toThrow("Permission denied");
+
+    const firstBlocked = await readTool.execute("read-3", { path: "/b.txt" }, undefined, undefined);
+    expectToolLoopBlockedResult(firstBlocked, "CRITICAL");
+
+    const secondBlocked = await listTool.execute("list-4", { dir: "/tmp-2" }, undefined, undefined);
+    expectToolLoopBlockedResult(secondBlocked, "CRITICAL");
+  });
+
   it("does not carry consecutive cross-tool errors across run ids in the hook path", async () => {
     const firstRunTools = createAlwaysFailingTools({
       runId: "run-errors-old",

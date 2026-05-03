@@ -537,6 +537,18 @@ const ToolLoopDetectionSchema = z
           "tools.loopDetection.criticalThreshold must be lower than globalCircuitBreakerThreshold.",
       });
     }
+    if (
+      value.historySize !== undefined &&
+      value.consecutiveErrorThreshold !== undefined &&
+      value.historySize < value.consecutiveErrorThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["historySize"],
+        message:
+          "tools.loopDetection.historySize must be greater than or equal to consecutiveErrorThreshold.",
+      });
+    }
   })
   .optional();
 

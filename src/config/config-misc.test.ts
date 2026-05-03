@@ -243,6 +243,31 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("tools.loopDetection.consecutiveErrorThreshold", () => {
+  it("rejects historySize values smaller than consecutiveErrorThreshold", () => {
+    const res = validateConfigObject({
+      tools: {
+        loopDetection: {
+          enabled: true,
+          historySize: 2,
+          consecutiveErrorThreshold: 3,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path === "tools.loopDetection.historySize" &&
+            issue.message.includes("consecutiveErrorThreshold"),
+        ),
+      ).toBe(true);
+    }
+  });
+});
+
 describe("gateway.controlUi.embedSandbox", () => {
   it("accepts strict, scripts, and trusted modes", () => {
     for (const mode of ["strict", "scripts", "trusted"] as const) {
