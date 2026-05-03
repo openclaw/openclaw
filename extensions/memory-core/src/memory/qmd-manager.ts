@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import chokidar, { type FSWatcher } from "chokidar";
+import { minimatch } from "minimatch";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
@@ -191,12 +192,32 @@ function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
   };
 }
 
-function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
+function shouldIgnoreMemoryWatchPath(
+  watchPath: string,
+  _stats: { isFile(): boolean; isDirectory(): boolean } | undefined,
+): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized
     .split(path.sep)
     .map((segment) => normalizeLowercaseStringOrEmpty(segment));
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
+}
+
+function shouldHandleMemoryWatchEvent(
+  watchPath: string,
+  collections: ManagedCollection[],
+): boolean {
+  const normalized = path.normalize(watchPath);
+  return collections.some((collection) => {
+    if (collection.kind === "sessions") {
+      return false;
+    }
+    const relativePath = path.relative(path.normalize(collection.path), normalized);
+    if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+      return false;
+    }
+    return minimatch(relativePath.replaceAll("\\", "/"), collection.pattern, { dot: true });
+  });
 }
 
 type CollectionRoot = {
@@ -1522,10 +1543,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     const watchPaths = new Set<string>();
-    for (const collection of this.qmd.collections) {
-      if (collection.kind === "sessions") {
-        continue;
-      }
+    const watchedCollections = this.qmd.collections.filter(
+      (collection) => collection.kind !== "sessions",
+    );
+    for (const collection of watchedCollections) {
       watchPaths.add(this.resolveCollectionWatchPath(collection));
     }
     if (watchPaths.size === 0) {
@@ -1536,13 +1557,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     log.info(`qmd watcher starting for agent "${this.agentId}" paths=${watchPathList.length}`);
     this.watcher = chokidar.watch(watchPathList, {
       ignoreInitial: true,
-      ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
+      ignored: (watchPath, stats) => shouldIgnoreMemoryWatchPath(watchPath, stats),
       awaitWriteFinish: {
         stabilityThreshold: QMD_WATCH_STABILITY_MS,
         pollInterval: 100,
       },
     });
-    const markDirty = () => {
+    const markDirty = (watchPath: string) => {
+      if (!shouldHandleMemoryWatchEvent(watchPath, watchedCollections)) {
+        return;
+      }
       this.dirty = true;
       this.scheduleWatchSync();
     };
@@ -1557,7 +1581,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private resolveCollectionWatchPath(collection: ManagedCollection): string {
-    return path.join(path.normalize(collection.path), collection.pattern);
+    return path.normalize(collection.path);
   }
 
   private scheduleWatchSync(): void {

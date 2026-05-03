@@ -90,6 +90,64 @@ describe("temporal decay", () => {
     expect(decayed[1]?.score).toBeCloseTo(0.75);
   });
 
+  it("uses dated path decay for nested memory files", async () => {
+    const merged = await mergeVectorResultsWithTemporalDecay([
+      createVectorMemoryEntry({
+        id: "nested-old",
+        path: "memory/2025-01/2025-01-01.md",
+        snippet: "old nested",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "nested-new",
+        path: "memory/2026-02/2026-02-10.md",
+        snippet: "new nested",
+        vectorScore: 0.8,
+      }),
+    ]);
+
+    expect(merged[0]?.path).toBe("memory/2026-02/2026-02-10.md");
+    expect(merged[0]?.score ?? 0).toBeGreaterThan(merged[1]?.score ?? 0);
+  });
+
+  it("does not misclassify nested dated memory files as evergreen", async () => {
+    const dir = await createTempWorkspace("openclaw-temporal-decay-");
+    const nestedPath = path.join(dir, "memory", "2026-02", "2026-02-10.md");
+    await fs.mkdir(path.dirname(nestedPath), { recursive: true });
+    await fs.writeFile(nestedPath, "dated nested memory");
+
+    const veryOld = new Date(Date.UTC(2010, 0, 1));
+    await fs.utimes(nestedPath, veryOld, veryOld);
+
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/2026-02/2026-02-10.md", score: 1, source: "memory" }],
+      workspaceDir: dir,
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    expect(decayed[0]?.score).toBeCloseTo(1);
+  });
+
+  it("supports nested dated memory files under non-ascii or dotted directories", async () => {
+    const merged = await mergeVectorResultsWithTemporalDecay([
+      createVectorMemoryEntry({
+        id: "old-nonascii",
+        path: "memory/프로젝트.v1/2025-01-01.md",
+        snippet: "old nonascii",
+        vectorScore: 0.95,
+      }),
+      createVectorMemoryEntry({
+        id: "new-nonascii",
+        path: "memory/프로젝트.v1/2026-02-10.md",
+        snippet: "new nonascii",
+        vectorScore: 0.8,
+      }),
+    ]);
+
+    expect(merged[0]?.path).toBe("memory/프로젝트.v1/2026-02-10.md");
+  });
+
   it("applies decay in hybrid merging before ranking", async () => {
     const merged = await mergeVectorResultsWithTemporalDecay([
       createVectorMemoryEntry({

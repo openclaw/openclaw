@@ -1005,7 +1005,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
-    "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
+    "Vector search over MEMORY.md and memory/**/*.md (per-agent overrides supported).",
   "agents.defaults.memorySearch.enabled":
     "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",
   "agents.defaults.memorySearch.sources":
