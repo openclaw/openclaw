@@ -17,7 +17,7 @@ type MattermostDraftStream = {
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
   stop: () => Promise<void>;
-  forceNewMessage: () => void;
+  forceNewMessage: () => Promise<void>;
 };
 
 function normalizeMattermostDraftText(text: string, maxChars: number): string {
@@ -177,9 +177,12 @@ export type MattermostDraftPreviewBoundaryController = {
   /**
    * Signal a turn boundary. In "block" mode and only when there is unsplit
    * streamed content, calls `forceNewMessage()` on the underlying stream.
-   * Returns true if the boundary triggered an actual split.
+   * Returns true if the boundary triggered an actual split. Returns a Promise
+   * because the underlying split is lifecycle-aware: it flushes any pending
+   * draft text and waits for an in-flight create/update to settle before
+   * resetting the post id, so the next phase always lands in a fresh post.
    */
-  signalBoundary: () => boolean;
+  signalBoundary: () => Promise<boolean>;
   /** Whether the controller is currently splitting at boundaries. */
   isSplittingAtBoundaries: () => boolean;
 };
@@ -199,15 +202,20 @@ export function createMattermostDraftPreviewBoundaryController(params: {
     markStreamedContent: () => {
       hasStreamedContentSinceBoundary = true;
     },
-    signalBoundary: () => {
+    signalBoundary: async () => {
       if (!params.splitAtBoundaries) {
         return false;
       }
       if (!hasStreamedContentSinceBoundary) {
         return false;
       }
-      params.draftStream.forceNewMessage();
+      // Eagerly flip the gate so a re-entrant boundary call (e.g. two
+      // back-to-back lifecycle events firing while the underlying flush is
+      // still in flight) cannot trigger a redundant split for the same
+      // phase. The gate is re-armed by markStreamedContent() once the next
+      // phase actually pushes content into the draft.
       hasStreamedContentSinceBoundary = false;
+      await params.draftStream.forceNewMessage();
       params.onSplit?.();
       return true;
     },
@@ -292,7 +300,31 @@ export function createMattermostDraftStream(params: {
     warnPrefix: "mattermost stream preview cleanup failed",
   });
 
-  const forceNewMessage = () => {
+  const forceNewMessage = async () => {
+    // Lifecycle-aware split: before we forget the current post id we must
+    // (a) deliver any text that was queued for the current post, and
+    // (b) wait for any in-flight create/update to settle. Otherwise pending
+    // text would either be lost (resetPending wipes it) or routed to the
+    // wrong post (a still-pending create resolves after we cleared the id
+    // and the next update creates a second post on top of the first).
+    if (!streamState.stopped) {
+      try {
+        await loop.flush();
+      } catch (err) {
+        params.warn?.(
+          `mattermost stream preview boundary flush failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    // Even if the loop is stopped, an in-flight create/update may still be
+    // settling; wait for it so resetting the post id is safe.
+    try {
+      await loop.waitForInFlight();
+    } catch {
+      // waitForInFlight never rejects on its own, but stay defensive.
+    }
     streamPostId = undefined;
     lastSentText = "";
     loop.resetPending();

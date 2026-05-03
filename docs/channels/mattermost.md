@@ -265,13 +265,16 @@ Notes:
 
 Mattermost streams thinking, tool activity, and partial reply text into a single **draft preview post** that finalizes in place when the final answer is safe to send. The preview updates on the same post id instead of spamming the channel with per-chunk messages. Media/error finals cancel pending preview edits and use normal delivery instead of flushing a throwaway preview post.
 
-Enable via `channels.mattermost.streaming`:
+Configure via the object form `channels.mattermost.streaming`:
 
 ```json5
 {
   channels: {
     mattermost: {
-      streaming: "partial", // off | partial | block | progress
+      streaming: {
+        mode: "partial", // partial | block (default: partial)
+        toolPreview: "name", // name | args (default: name)
+      },
     },
   },
 }
@@ -279,10 +282,13 @@ Enable via `channels.mattermost.streaming`:
 
 <AccordionGroup>
   <Accordion title="Streaming modes">
-    - `partial` is the usual choice: one preview post that is edited as the reply grows, then finalized with the complete answer.
-    - `block` uses append-style draft chunks inside the preview post.
-    - `progress` shows a status preview while generating and only posts the final answer at completion.
-    - `off` disables preview streaming.
+    - `partial` (default) is the usual choice: one preview post that is edited as the reply grows, then finalized with the complete answer.
+    - `block` splits the preview at turn boundaries (assistant-message start, reasoning end, tool start) so prior thinking, tool activity, and partial reply phases are preserved as separate posts instead of being overwritten in place.
+    - To disable preview streaming entirely on Mattermost today, set the channel to use only block streaming (see [Streaming](/concepts/streaming)) or omit the streaming object and avoid pushing preview phases.
+
+    `streaming.toolPreview` controls how tool activity is rendered into the preview post:
+    - `name` (default): a bare "Running `tool`…" status line.
+    - `args`: includes a sanitized one-line summary of the tool arguments.
 
   </Accordion>
   <Accordion title="Streaming behavior notes">

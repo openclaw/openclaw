@@ -1839,21 +1839,25 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           onPartialReply: (payload) => {
                             updateDraftFromPartial(payload.text);
                           },
-                          onAssistantMessageStart: () => {
+                          onAssistantMessageStart: async () => {
                             // Boundary: a brand-new assistant message is
                             // about to start. In block mode, split the
                             // preview now so this message lands in its own
                             // post and any prior thinking/tool/partial
-                            // content is preserved.
-                            previewBoundary.signalBoundary();
+                            // content is preserved. Awaited so the prior
+                            // post is finalized before the next phase
+                            // pushes content.
+                            await previewBoundary.signalBoundary();
                             lastPartialText = "";
                           },
-                          onReasoningEnd: () => {
+                          onReasoningEnd: async () => {
                             // Boundary: leaving the thinking phase. In
                             // block mode, freeze the "Thinking…" preview
                             // post and start a new post for whatever comes
                             // next (partial reply, tool status, etc.).
-                            previewBoundary.signalBoundary();
+                            // Awaited so the prior post is finalized
+                            // before the next phase pushes content.
+                            await previewBoundary.signalBoundary();
                             lastPartialText = "";
                           },
                           onReasoningStream: async () => {
@@ -1881,8 +1885,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             // Boundary: a tool is about to run. In block
                             // mode, split before the tool status replaces
                             // any partial reply / thinking content the
-                            // user may already have read.
-                            previewBoundary.signalBoundary();
+                            // user may already have read. Awaited so the
+                            // prior post is finalized before the tool
+                            // status update is queued.
+                            await previewBoundary.signalBoundary();
                             // Suppress args from the rendered status when
                             // the account is configured for the bare
                             // "Running \`tool\`…" preview. We still receive

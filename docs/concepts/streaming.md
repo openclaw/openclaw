@@ -174,7 +174,9 @@ Slack:
 
 Mattermost:
 
-- Streams thinking, tool activity, and partial reply text into a single draft preview post that finalizes in place when the final answer is safe to send.
+- Configured as the object form `channels.mattermost.streaming = { mode, toolPreview }`. `mode` accepts `partial` (default) or `block`; `toolPreview` accepts `name` (default) or `args`. See [Mattermost → Preview streaming](/channels/mattermost#preview-streaming).
+- `mode: "partial"` streams thinking, tool activity, and partial reply text into a single draft preview post that finalizes in place when the final answer is safe to send.
+- `mode: "block"` splits the preview post at turn boundaries (assistant-message start, reasoning end, tool start) so prior phases stay visible instead of being overwritten.
 - Falls back to sending a fresh final post if the preview post was deleted or is otherwise unavailable at finalize time.
 - Final media/error payloads cancel pending preview updates before normal delivery instead of flushing a temporary preview post.
 

@@ -356,7 +356,7 @@ describe("createMattermostDraftPreviewBoundaryController", () => {
     };
   }
 
-  it("is a no-op when splitAtBoundaries is false", () => {
+  it("is a no-op when splitAtBoundaries is false", async () => {
     const draftStream = createDraftStreamStub();
     const controller = createMattermostDraftPreviewBoundaryController({
       draftStream,
@@ -364,22 +364,22 @@ describe("createMattermostDraftPreviewBoundaryController", () => {
     });
 
     controller.markStreamedContent();
-    expect(controller.signalBoundary()).toBe(false);
+    await expect(controller.signalBoundary()).resolves.toBe(false);
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
-  it("does not split when no streamed content has been marked", () => {
+  it("does not split when no streamed content has been marked", async () => {
     const draftStream = createDraftStreamStub();
     const controller = createMattermostDraftPreviewBoundaryController({
       draftStream,
       splitAtBoundaries: true,
     });
 
-    expect(controller.signalBoundary()).toBe(false);
+    await expect(controller.signalBoundary()).resolves.toBe(false);
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
-  it("splits at boundary when streamed content has been marked", () => {
+  it("splits at boundary when streamed content has been marked", async () => {
     const draftStream = createDraftStreamStub();
     const onSplit = vi.fn();
     const controller = createMattermostDraftPreviewBoundaryController({
@@ -389,12 +389,12 @@ describe("createMattermostDraftPreviewBoundaryController", () => {
     });
 
     controller.markStreamedContent();
-    expect(controller.signalBoundary()).toBe(true);
+    await expect(controller.signalBoundary()).resolves.toBe(true);
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(onSplit).toHaveBeenCalledTimes(1);
   });
 
-  it("does not split twice in a row without new content", () => {
+  it("does not split twice in a row without new content", async () => {
     const draftStream = createDraftStreamStub();
     const controller = createMattermostDraftPreviewBoundaryController({
       draftStream,
@@ -402,12 +402,12 @@ describe("createMattermostDraftPreviewBoundaryController", () => {
     });
 
     controller.markStreamedContent();
-    expect(controller.signalBoundary()).toBe(true);
-    expect(controller.signalBoundary()).toBe(false);
+    await expect(controller.signalBoundary()).resolves.toBe(true);
+    await expect(controller.signalBoundary()).resolves.toBe(false);
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("splits again after fresh content is marked", () => {
+  it("splits again after fresh content is marked", async () => {
     const draftStream = createDraftStreamStub();
     const controller = createMattermostDraftPreviewBoundaryController({
       draftStream,
@@ -415,12 +415,76 @@ describe("createMattermostDraftPreviewBoundaryController", () => {
     });
 
     controller.markStreamedContent();
-    expect(controller.signalBoundary()).toBe(true);
+    await expect(controller.signalBoundary()).resolves.toBe(true);
 
     controller.markStreamedContent();
-    expect(controller.signalBoundary()).toBe(true);
+    await expect(controller.signalBoundary()).resolves.toBe(true);
 
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("awaits forceNewMessage before resolving the boundary (lifecycle-aware)", async () => {
+    const order: string[] = [];
+    let releaseForce: (() => void) | undefined;
+    const draftStream = {
+      forceNewMessage: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseForce = () => {
+              order.push("force-resolved");
+              resolve();
+            };
+          }),
+      ),
+    };
+    const onSplit = vi.fn(() => {
+      order.push("on-split");
+    });
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+      onSplit,
+    });
+
+    controller.markStreamedContent();
+    const boundaryPromise = controller.signalBoundary().then((result) => {
+      order.push(`boundary-${result}`);
+      return result;
+    });
+
+    // Release the in-flight forceNewMessage; only then should onSplit run
+    // and the boundary promise resolve.
+    expect(releaseForce).toBeDefined();
+    releaseForce!();
+    await expect(boundaryPromise).resolves.toBe(true);
+    expect(order).toEqual(["force-resolved", "on-split", "boundary-true"]);
+  });
+
+  it("prevents redundant splits while a previous split is still resolving", async () => {
+    let releaseForce: (() => void) | undefined;
+    const draftStream = {
+      forceNewMessage: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseForce = () => resolve();
+          }),
+      ),
+    };
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+
+    controller.markStreamedContent();
+    const first = controller.signalBoundary();
+    // A second boundary signal arrives before the first has finished and
+    // before any new content has been marked. It must not trigger another
+    // forceNewMessage().
+    const second = controller.signalBoundary();
+    releaseForce!();
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(false);
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
   it("reports whether it is splitting at boundaries", () => {
@@ -438,7 +502,7 @@ describe("createMattermostDraftPreviewBoundaryController", () => {
     expect(nonSplitting.isSplittingAtBoundaries()).toBe(false);
   });
 
-  it("models a thinking → tool → partial reply → final turn without overwrites", () => {
+  it("models a thinking → tool → partial reply → final turn without overwrites", async () => {
     const draftStream = createDraftStreamStub();
     const controller = createMattermostDraftPreviewBoundaryController({
       draftStream,
@@ -449,12 +513,12 @@ describe("createMattermostDraftPreviewBoundaryController", () => {
     controller.markStreamedContent();
 
     // Phase 2: tool starts → boundary BEFORE the new tool status update.
-    expect(controller.signalBoundary()).toBe(true);
+    await expect(controller.signalBoundary()).resolves.toBe(true);
     // Tool status is now in a fresh post.
     controller.markStreamedContent();
 
     // Phase 3: assistant message starts → boundary BEFORE partial reply.
-    expect(controller.signalBoundary()).toBe(true);
+    await expect(controller.signalBoundary()).resolves.toBe(true);
     controller.markStreamedContent();
 
     // Three distinct posts created (one initial, two splits) for the

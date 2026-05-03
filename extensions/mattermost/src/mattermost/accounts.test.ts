@@ -250,4 +250,35 @@ describe("resolveMattermostToolPreviewMode", () => {
     expect(def.toolPreviewMode).toBe("name");
     expect(verbose.toolPreviewMode).toBe("args");
   });
+
+  it("deep-merges streaming so a partial account override preserves channel-wide siblings", () => {
+    // Regression: account-level streaming overrides used to replace the
+    // whole channel-level streaming object. A `streaming: { toolPreview }`
+    // override now keeps the channel-wide `streaming.mode` instead of
+    // silently falling back to the default.
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          streaming: { mode: "block", toolPreview: "name" },
+          accounts: {
+            verbose: {
+              streaming: { toolPreview: "args" },
+            },
+            quiet: {
+              streaming: { mode: "partial" },
+            },
+          },
+        },
+      },
+    };
+
+    const verbose = resolveMattermostAccount({ cfg, accountId: "verbose" });
+    const quiet = resolveMattermostAccount({ cfg, accountId: "quiet" });
+    // verbose: mode comes from the channel, toolPreview from the account.
+    expect(verbose.previewStreamMode).toBe("block");
+    expect(verbose.toolPreviewMode).toBe("args");
+    // quiet: toolPreview comes from the channel, mode from the account.
+    expect(quiet.previewStreamMode).toBe("partial");
+    expect(quiet.toolPreviewMode).toBe("name");
+  });
 });

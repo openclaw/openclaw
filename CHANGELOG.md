@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Mattermost/streaming: split the draft preview at turn boundaries (assistant-message start, reasoning end, tool start) when `channels.mattermost.streaming.mode = "block"`, with a lifecycle-aware split that flushes pending text and waits for in-flight create/update before resetting the post id, deep-merge `streaming` across account overrides, and add `channels.mattermost.streaming.toolPreview` (`name` default, `args` opt-in) to control how tool activity is rendered into the preview post. Fixes #75252. (#75256) Thanks @katyaclawd.
 - Plugins/commands: normalize empty plugin command handler results and let Telegram native plugin commands send the empty-response fallback instead of throwing when a handler returns `undefined`. Fixes #74800. Thanks @vincentkoc.
 - Plugins/OpenRouter: advertise DeepSeek V4 thinking levels, including `xhigh` and `max`, through the runtime and lightweight provider policy surfaces so `/think` validation no longer rejects OpenRouter-routed DeepSeek V4 models. Fixes #74788. Thanks @vincentkoc.
 - Status/sessions: ignore malformed non-string persisted session provider/model metadata instead of throwing while rendering status summaries. Thanks @vincentkoc.

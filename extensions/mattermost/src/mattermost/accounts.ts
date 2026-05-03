@@ -115,7 +115,7 @@ function mergeMattermostAccountConfig(
       | undefined,
     accountId,
     omitKeys: ["defaultAccount"],
-    nestedObjectKeys: ["commands"],
+    nestedObjectKeys: ["commands", "streaming"],
   });
 }
 
