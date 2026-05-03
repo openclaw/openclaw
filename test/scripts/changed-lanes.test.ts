@@ -781,6 +781,21 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
+  it("routes legacy root asset deletions as tooling during root cleanup", () => {
+    const result = detectChangedLanes([
+      "assets/avatar-placeholder.svg",
+      "assets/chrome-extension/icons/icon128.png",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
   it("keeps shared Vitest wiring changes out of check test execution", () => {
     const result = detectChangedLanes(["test/vitest/vitest.shared.config.ts"]);
     const plan = createChangedCheckPlan(result);

@@ -169,7 +169,7 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
     });
 
-    expect(detectChangedScope(["assets/icon.png"])).toEqual({
+    expect(detectChangedScope([".crabbox.yaml"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,

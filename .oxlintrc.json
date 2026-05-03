@@ -113,7 +113,6 @@
     "vitest/prefer-expect-type-of": "error"
   },
   "ignorePatterns": [
-    "assets/",
     "dist/",
     "dist-runtime/",
     "docs/_layouts/",
@@ -123,7 +122,6 @@
     "skills/",
     "src/auto-reply/reply/export-html/template.js",
     "src/canvas-host/a2ui/a2ui.bundle.js",
-    "apps/swabble/",
     "vendor/",
     "**/.cache/**",
     "**/build/**",
