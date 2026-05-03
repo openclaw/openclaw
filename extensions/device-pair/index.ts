@@ -496,20 +496,6 @@ function resolveQrReplyTarget(ctx: QrCommandContext): string {
   );
 }
 
-const PAIR_SETUP_NON_ISSUING_ACTIONS = new Set([
-  "approve",
-  "cleanup",
-  "clear",
-  "notify",
-  "pending",
-  "revoke",
-  "status",
-]);
-
-function issuesPairSetupCode(action: string): boolean {
-  return !action || action === "qr" || !PAIR_SETUP_NON_ISSUING_ACTIONS.has(action);
-}
-
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
   const issuedBootstrap = await issueDeviceBootstrapToken({
     profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -564,6 +550,7 @@ export default definePluginEntry({
       name: "pair",
       description: "Generate setup codes and approve device pairing requests.",
       acceptsArgs: true,
+      requiredScopes: ["operator.pairing"],
       handler: async (ctx) => {
         const args = normalizeOptionalString(ctx.args) ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
@@ -581,6 +568,10 @@ export default definePluginEntry({
           }`,
         );
 
+        if (authState.isMissingPairingPrivilege) {
+          return buildMissingPairingScopeReply();
+        }
+
         if (action === "status" || action === "pending") {
           const list = await listDevicePairing();
           return { text: formatPendingRequests(list.pending) };
@@ -596,9 +587,6 @@ export default definePluginEntry({
         }
 
         if (action === "approve") {
-          if (authState.isMissingInternalPairingPrivilege) {
-            return buildMissingPairingScopeReply();
-          }
           const list = await listDevicePairing();
           const selected = selectPendingApprovalRequest({
             pending: list.pending,
@@ -618,9 +606,6 @@ export default definePluginEntry({
         }
 
         if (action === "cleanup" || action === "clear" || action === "revoke") {
-          if (authState.isMissingInternalPairingPrivilege) {
-            return buildMissingPairingScopeReply();
-          }
           const cleared = await clearDeviceBootstrapTokens();
           return {
             text:
@@ -634,10 +619,6 @@ export default definePluginEntry({
         if (authLabelResult.error) {
           return { text: `Error: ${authLabelResult.error}` };
         }
-        if (issuesPairSetupCode(action) && authState.isMissingInternalPairingPrivilege) {
-          return buildMissingPairingScopeReply();
-        }
-
         const urlResult = await resolveGatewayUrl(api);
         if (!urlResult.url) {
           return { text: `Error: ${urlResult.error ?? "Gateway URL unavailable."}` };

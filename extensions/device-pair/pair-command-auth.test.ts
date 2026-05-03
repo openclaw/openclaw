@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolvePairingCommandAuthState } from "./pair-command-auth.js";
 
 describe("device-pair pairing command auth", () => {
-  it("treats non-gateway channels as external approvals", () => {
+  it("fails closed for non-gateway channels without pairing scopes", () => {
     expect(
       resolvePairingCommandAuthState({
         channel: "telegram",
@@ -10,7 +10,7 @@ describe("device-pair pairing command auth", () => {
       }),
     ).toEqual({
       isInternalGatewayCaller: false,
-      isMissingInternalPairingPrivilege: false,
+      isMissingPairingPrivilege: true,
       approvalCallerScopes: undefined,
     });
   });
@@ -23,7 +23,7 @@ describe("device-pair pairing command auth", () => {
       }),
     ).toEqual({
       isInternalGatewayCaller: true,
-      isMissingInternalPairingPrivilege: true,
+      isMissingPairingPrivilege: true,
       approvalCallerScopes: [],
     });
   });
@@ -36,7 +36,7 @@ describe("device-pair pairing command auth", () => {
       }),
     ).toEqual({
       isInternalGatewayCaller: true,
-      isMissingInternalPairingPrivilege: false,
+      isMissingPairingPrivilege: false,
       approvalCallerScopes: ["operator.write", "operator.pairing"],
     });
     expect(
@@ -46,7 +46,7 @@ describe("device-pair pairing command auth", () => {
       }),
     ).toEqual({
       isInternalGatewayCaller: true,
-      isMissingInternalPairingPrivilege: false,
+      isMissingPairingPrivilege: false,
       approvalCallerScopes: ["operator.admin"],
     });
   });

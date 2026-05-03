@@ -5,7 +5,7 @@ type PairingCommandAuthParams = {
 
 type PairingCommandAuthState = {
   isInternalGatewayCaller: boolean;
-  isMissingInternalPairingPrivilege: boolean;
+  isMissingPairingPrivilege: boolean;
   approvalCallerScopes?: readonly string[];
 };
 
@@ -20,7 +20,7 @@ export function resolvePairingCommandAuthState(
   if (!isInternalGatewayCaller) {
     return {
       isInternalGatewayCaller,
-      isMissingInternalPairingPrivilege: false,
+      isMissingPairingPrivilege: true,
       approvalCallerScopes: undefined,
     };
   }
@@ -28,19 +28,19 @@ export function resolvePairingCommandAuthState(
   const approvalCallerScopes = Array.isArray(params.gatewayClientScopes)
     ? params.gatewayClientScopes
     : [];
-  const isMissingInternalPairingPrivilege =
+  const isMissingPairingPrivilege =
     !approvalCallerScopes.includes("operator.pairing") &&
     !approvalCallerScopes.includes("operator.admin");
 
   return {
     isInternalGatewayCaller,
-    isMissingInternalPairingPrivilege,
+    isMissingPairingPrivilege,
     approvalCallerScopes,
   };
 }
 
 export function buildMissingPairingScopeReply(): { text: string } {
   return {
-    text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    text: "⚠️ This command requires operator.pairing.",
   };
 }
