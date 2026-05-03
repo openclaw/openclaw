@@ -84,22 +84,32 @@ export async function setupSkills(
   const installable = missing.filter(
     (skill) => skill.install.length > 0 && skill.missing.bins.length > 0,
   );
+  const envOnlyConfigurable = missing.filter(
+    (skill) =>
+      Boolean(skill.primaryEnv) && skill.missing.env.length > 0 && skill.missing.bins.length === 0,
+  );
+  const configurable = [...installable, ...envOnlyConfigurable];
   let next: OpenClawConfig = cfg;
   const installSelected = new Set<string>();
-  if (installable.length > 0) {
+  if (configurable.length > 0) {
     const toInstall = await prompter.multiselect({
-      message: "Install missing skill dependencies",
+      message: "Set up missing skill dependencies",
       options: [
         {
           value: "__skip__",
           label: "Skip for now",
-          hint: "Continue without installing dependencies",
+          hint: "Continue without configuring dependencies",
         },
-        ...installable.map((skill) => ({
-          value: skill.name,
-          label: `${skill.emoji ?? "🧩"} ${skill.name}`,
-          hint: formatSkillHint(skill),
-        })),
+        ...configurable.map((skill) => {
+          const isEnvOnly = skill.missing.bins.length === 0;
+          return {
+            value: skill.name,
+            label: `${skill.emoji ?? "🧩"} ${skill.name}`,
+            hint: isEnvOnly
+              ? `Configure ${skill.primaryEnv ?? "credentials"}`
+              : formatSkillHint(skill),
+          };
+        }),
       ],
     });
 
@@ -206,7 +216,7 @@ export async function setupSkills(
     if (!skill.primaryEnv || skill.missing.env.length === 0) {
       continue;
     }
-    if (skill.missing.bins.length > 0 && !installSelected.has(skill.name)) {
+    if (!installSelected.has(skill.name)) {
       continue;
     }
     const wantsKey = await prompter.confirm({

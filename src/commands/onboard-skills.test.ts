@@ -249,4 +249,65 @@ describe("setupSkills", () => {
     const askedForApiKey = confirmCalls.some(([arg]) => arg.message.includes("Set OPENAI_API_KEY"));
     expect(askedForApiKey).toBe(true);
   });
+
+  it("does not prompt for an API key for an env-only-missing skill the user did not select", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "openai-whisper",
+        description: "Local whisper CLI (no API key)",
+        bins: ["whisper"],
+        installLabel: "Install OpenAI Whisper (brew)",
+      }),
+      createBundledSkill({
+        name: "openai-whisper-api",
+        description: "OpenAI Whisper API (curl already present)",
+        bins: [],
+        installLabel: "Install curl (brew)",
+        primaryEnv: "OPENAI_API_KEY",
+        envMissing: ["OPENAI_API_KEY"],
+      }),
+    ]);
+
+    const { prompter } = createPrompter({ multiselect: ["openai-whisper"] });
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    const confirmCalls = (
+      prompter.confirm as unknown as { mock: { calls: Array<[{ message: string }]> } }
+    ).mock.calls;
+    const askedForApiKey = confirmCalls.some(([arg]) => arg.message.includes("Set OPENAI_API_KEY"));
+    expect(askedForApiKey).toBe(false);
+  });
+
+  it("prompts for an API key for an env-only-missing skill the user explicitly selected", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "openai-whisper-api",
+        description: "OpenAI Whisper API (curl already present)",
+        bins: [],
+        installLabel: "Install curl (brew)",
+        primaryEnv: "OPENAI_API_KEY",
+        envMissing: ["OPENAI_API_KEY"],
+      }),
+    ]);
+
+    const { prompter } = createPrompter({ multiselect: ["openai-whisper-api"] });
+    mocks.installSkill.mockClear();
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    const confirmCalls = (
+      prompter.confirm as unknown as { mock: { calls: Array<[{ message: string }]> } }
+    ).mock.calls;
+    const askedForApiKey = confirmCalls.some(([arg]) => arg.message.includes("Set OPENAI_API_KEY"));
+    expect(askedForApiKey).toBe(true);
+    // Install loop must not run installSkill for env-only entries.
+    expect(mocks.installSkill).not.toHaveBeenCalled();
+  });
 });
