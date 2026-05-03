@@ -556,6 +556,107 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     );
   });
 
+  // Regression coverage for the sibling_ref CLI-apply bug: when the user has a
+  // SecretRef-only config (e.g. channels.googlechat.serviceAccountRef without
+  // the resolved-value sibling channels.googlechat.serviceAccount), the gateway
+  // returns the resolved value with createIfMissing so the CLI apply creates
+  // the missing leaf instead of throwing setPathExistingStrict.
+  it("creates the missing leaf when assignment marks createIfMissing (sibling_ref shape)", async () => {
+    const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
+      analyzeCommandSecretAssignmentsFromSnapshot: () =>
+        ({
+          assignments: [
+            {
+              path: "channels.googlechat.serviceAccount",
+              pathSegments: ["channels", "googlechat", "serviceAccount"],
+              value: { type: "service_account", project_id: "demo" },
+              createIfMissing: true,
+            },
+          ],
+          diagnostics: [],
+          inactive: [],
+          unresolved: [],
+        }) as never,
+      collectConfigAssignments: ({ context }) => {
+        context.assignments.push({ path: "channels.googlechat.serviceAccount" } as never);
+      },
+      discoverConfigSecretTargetsByIds: () =>
+        [
+          {
+            entry: { expectedResolvedValue: "string-or-object", secretShape: "sibling_ref" },
+            path: "channels.googlechat.serviceAccount",
+            pathSegments: ["channels", "googlechat", "serviceAccount"],
+            refValue: { source: "file", provider: "googlechat-sa", id: "value" },
+          },
+        ] as never,
+    });
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: "channels.googlechat.serviceAccount",
+          pathSegments: ["channels", "googlechat", "serviceAccount"],
+          value: { type: "service_account", project_id: "demo" },
+          createIfMissing: true,
+        },
+      ],
+      diagnostics: [],
+    });
+
+    try {
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          channels: {
+            googlechat: {
+              serviceAccountRef: { source: "file", provider: "googlechat-sa", id: "value" },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        commandName: "channels list",
+        targetIds: new Set(["channels.googlechat.serviceAccount"]),
+      });
+
+      expect((result.resolvedConfig.channels as Record<string, unknown>).googlechat).toMatchObject({
+        serviceAccount: { type: "service_account", project_id: "demo" },
+        serviceAccountRef: { source: "file", provider: "googlechat-sa", id: "value" },
+      });
+      expect(result.targetStatesByPath["channels.googlechat.serviceAccount"]).toBe(
+        "resolved_gateway",
+      );
+    } finally {
+      restoreDeps();
+    }
+  });
+
+  // Backward compatibility: an older gateway omits createIfMissing entirely. The
+  // CLI must continue to use setPathExistingStrict so any genuinely-misaddressed
+  // assignment (e.g. typo'd path) still surfaces as an error rather than being
+  // silently created.
+  it("still throws when assignment lacks createIfMissing and the path does not exist", async () => {
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: "talk.providers.missing.apiKey",
+          pathSegments: ["talk", "providers", "missing", "apiKey"],
+          value: "sk-live",
+        },
+      ],
+      diagnostics: [],
+    });
+    await expect(
+      resolveCommandSecretRefsViaGateway({
+        config: buildTalkTestProviderConfig({
+          source: "env",
+          provider: "default",
+          id: "TALK_API_KEY",
+        }),
+        commandName: "memory status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+      }),
+    ).rejects.toThrow(
+      "memory status: failed to apply resolved secret assignment at talk.providers.missing.apiKey",
+    );
+  });
+
   it("fails when configured refs remain unresolved after gateway assignments are applied", async () => {
     const envKey = "TALK_API_KEY_STRICT_UNRESOLVED";
     callGateway.mockResolvedValueOnce({
