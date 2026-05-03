@@ -142,6 +142,13 @@ openclaw devices approve <requestId>
 openclaw devices reject <requestId>
 ```
 
+When an explicit approval is denied because the approving paired-device session
+was opened with pairing-only scope, the CLI retries the same request with
+`operator.admin`. This lets an existing admin-capable paired device recover a new
+Control UI/browser pairing without editing `devices/paired.json` by hand. The
+Gateway still validates the retried connection; tokens that cannot authenticate
+with `operator.admin` remain blocked.
+
 If the same device retries with different auth details (for example different
 role/scopes/public key), the previous pending request is superseded and a new
 `requestId` is created.
