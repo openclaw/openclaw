@@ -4172,6 +4172,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
           enum: ["length", "newline"],
         },
+        blockStreaming: {
+          type: "boolean",
+        },
         blockStreamingCoalesce: {
           type: "object",
           properties: {
@@ -4799,6 +4802,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               chunkMode: {
                 type: "string",
                 enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
               },
               blockStreamingCoalesce: {
                 type: "object",
@@ -14128,6 +14134,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           exclusiveMinimum: 0,
           maximum: 9007199254740991,
         },
+        mediaGroupFlushMs: {
+          description:
+            "Buffer window in milliseconds for Telegram media groups/albums before dispatching them as one inbound message. Default: 500.",
+          type: "integer",
+          minimum: 10,
+          maximum: 60000,
+        },
         pollingStallThresholdMs: {
           type: "integer",
           minimum: 30000,
@@ -15190,6 +15203,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              mediaGroupFlushMs: {
+                description:
+                  "Buffer window in milliseconds for Telegram media groups/albums before dispatching them as one inbound message. Default: 500.",
+                type: "integer",
+                minimum: 10,
+                maximum: 60000,
+              },
               pollingStallThresholdMs: {
                 type: "integer",
                 minimum: 30000,
@@ -15593,6 +15613,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       timeoutSeconds: {
         label: "Telegram API Timeout (seconds)",
         help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+      },
+      mediaGroupFlushMs: {
+        label: "Telegram Media Group Flush (ms)",
+        help: "Milliseconds to buffer Telegram albums/media groups before dispatching them as one inbound message. Default: 500.",
       },
       pollingStallThresholdMs: {
         label: "Telegram Polling Stall Threshold (ms)",
