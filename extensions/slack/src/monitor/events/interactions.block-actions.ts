@@ -15,6 +15,7 @@ import {
   SLACK_REPLY_SELECT_ACTION_ID,
 } from "../../reply-action-ids.js";
 import { getOptionalSlackRuntime } from "../../runtime.js";
+import type { SlackMessageEvent } from "../../types.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import {
@@ -22,6 +23,7 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "../conversation.runtime.js";
+import type { SlackMessageHandler } from "../message-handler.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 type InteractionMessageBlock = {
@@ -110,6 +112,12 @@ type ParsedSlackBlockAction = {
   actionSummary: SlackActionSummary;
 };
 
+type SlackBlockActionDebugContext = {
+  actionId: string;
+  channelId: string;
+  userId: string;
+};
+
 function readOptionValues(options: unknown): string[] | undefined {
   if (!Array.isArray(options)) {
     return undefined;
@@ -183,6 +191,19 @@ function readInteractionAction(raw: unknown) {
     return undefined;
   }
   return raw as Record<string, unknown>;
+}
+
+function readSlackBlockActionDebugContext(
+  body: unknown,
+  action: unknown,
+): SlackBlockActionDebugContext {
+  const typedBody = body as SlackBlockActionBody;
+  const typedAction = readInteractionAction(action);
+  return {
+    actionId: typeof typedAction?.action_id === "string" ? typedAction.action_id : "unknown",
+    channelId: typedBody.channel?.id ?? typedBody.container?.channel_id ?? "unknown",
+    userId: typedBody.user?.id ?? "unknown",
+  };
 }
 
 export function summarizeAction(action: Record<string, unknown>): SlackActionSummary {
@@ -730,6 +751,44 @@ function enqueueSlackBlockActionEvent(params: {
   }
 }
 
+async function dispatchSlackBlockActionAsMessage(params: {
+  handleSlackMessage?: SlackMessageHandler;
+  parsed: ParsedSlackBlockAction;
+  auth: { channelType?: "im" | "mpim" | "channel" | "group" };
+  formatSystemEvent: (payload: Record<string, unknown>) => string;
+}): Promise<boolean> {
+  if (!params.handleSlackMessage || !params.parsed.channelId) {
+    return false;
+  }
+  const eventPayload: InteractionSummary = {
+    interactionType: "block_action",
+    actionId: params.parsed.actionId,
+    blockId: params.parsed.blockId,
+    ...params.parsed.actionSummary,
+    userId: params.parsed.userId,
+    teamId: params.parsed.typedBody.team?.id,
+    triggerId: params.parsed.typedBody.trigger_id,
+    responseUrl: params.parsed.typedBody.response_url,
+    channelId: params.parsed.channelId,
+    messageTs: params.parsed.messageTs,
+    threadTs: params.parsed.threadTs,
+  };
+  const syntheticMessage: SlackMessageEvent = {
+    type: "message",
+    channel: params.parsed.channelId,
+    channel_type: params.auth.channelType,
+    user: params.parsed.userId,
+    text: params.formatSystemEvent(eventPayload),
+    ts: String(Date.now() / 1000),
+    thread_ts: params.parsed.threadTs,
+  };
+  await params.handleSlackMessage(syntheticMessage, {
+    source: "message",
+    wasMentioned: true,
+  });
+  return true;
+}
+
 function buildSlackConfirmationBlocks(params: {
   parsed: ParsedSlackBlockAction;
   originalBlocks: unknown[];
@@ -809,12 +868,24 @@ async function updateSlackLegacyBlockAction(params: {
 
 async function handleSlackBlockAction(params: {
   ctx: SlackMonitorContext;
+  handleSlackMessage?: SlackMessageHandler;
   trackEvent?: () => void;
   args: SlackActionMiddlewareArgs;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): Promise<void> {
   const { ack, body, action, respond } = params.args;
-  await ack();
+  const debugContext = readSlackBlockActionDebugContext(body, action);
+  params.ctx.runtime.log?.(
+    `slack:interaction received action=${debugContext.actionId} user=${debugContext.userId} channel=${debugContext.channelId}`,
+  );
+  try {
+    await ack();
+  } catch (error) {
+    params.ctx.runtime.log?.(
+      `slack:interaction ack failed action=${debugContext.actionId} user=${debugContext.userId} channel=${debugContext.channelId} error=${String(error)}`,
+    );
+    throw error;
+  }
   if (params.ctx.shouldDropMismatchedSlackEvent?.(body)) {
     params.ctx.runtime.log?.("slack:interaction drop block action payload (mismatched app/team)");
     return;
@@ -875,6 +946,25 @@ async function handleSlackBlockAction(params: {
       return;
     }
   }
+  const shouldDispatchAsMessage = Boolean(params.handleSlackMessage && parsed.channelId);
+  if (shouldDispatchAsMessage) {
+    await updateSlackLegacyBlockAction({
+      ctx: params.ctx,
+      parsed,
+      respond,
+    });
+  }
+  if (
+    shouldDispatchAsMessage &&
+    (await dispatchSlackBlockActionAsMessage({
+      handleSlackMessage: params.handleSlackMessage,
+      parsed,
+      auth,
+      formatSystemEvent: params.formatSystemEvent,
+    }))
+  ) {
+    return;
+  }
   enqueueSlackBlockActionEvent({
     ctx: params.ctx,
     parsed,
@@ -890,6 +980,7 @@ async function handleSlackBlockAction(params: {
 
 export function registerSlackBlockActionHandler(params: {
   ctx: SlackMonitorContext;
+  handleSlackMessage?: SlackMessageHandler;
   trackEvent?: () => void;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): void {
@@ -897,11 +988,20 @@ export function registerSlackBlockActionHandler(params: {
     return;
   }
   params.ctx.app.action(/.+/, async (args: SlackActionMiddlewareArgs) => {
-    await handleSlackBlockAction({
-      ctx: params.ctx,
-      trackEvent: params.trackEvent,
-      args,
-      formatSystemEvent: params.formatSystemEvent,
-    });
+    const debugContext = readSlackBlockActionDebugContext(args.body, args.action);
+    try {
+      await handleSlackBlockAction({
+        ctx: params.ctx,
+        handleSlackMessage: params.handleSlackMessage,
+        trackEvent: params.trackEvent,
+        args,
+        formatSystemEvent: params.formatSystemEvent,
+      });
+    } catch (error) {
+      params.ctx.runtime.log?.(
+        `slack:interaction handler failed action=${debugContext.actionId} user=${debugContext.userId} channel=${debugContext.channelId} error=${String(error)}`,
+      );
+      throw error;
+    }
   });
 }

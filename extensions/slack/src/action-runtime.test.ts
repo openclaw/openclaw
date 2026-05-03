@@ -575,6 +575,60 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("Threaded reply", "1111111111.111111");
   });
 
+  it("auto-injects threadTs for matching DM user targets", async () => {
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "user:U123",
+        content: "Threaded DM reply",
+      },
+      slackConfig(),
+      {
+        currentChannelId: "D123",
+        currentRecipientId: "U123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode: "all",
+      },
+    );
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "user:U123",
+      "Threaded DM reply",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        mediaUrl: undefined,
+        threadTs: "1111111111.111111",
+        blocks: undefined,
+      }),
+    );
+  });
+
+  it("does not auto-inject threadTs for different DM user targets", async () => {
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "user:U999",
+        content: "Other DM",
+      },
+      slackConfig(),
+      {
+        currentChannelId: "D123",
+        currentRecipientId: "U123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode: "all",
+      },
+    );
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "user:U999",
+      "Other DM",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        mediaUrl: undefined,
+        threadTs: undefined,
+        blocks: undefined,
+      }),
+    );
+  });
+
   it("replyToMode=first threads first message then stops", async () => {
     const { cfg, context } = createReplyToFirstScenario();
 

@@ -315,7 +315,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("enqueues structured events and updates button rows", async () => {
-    const { ctx, app, getHandler, resolveSessionKey } = createContext();
+    const { ctx, app, getHandler, resolveSessionKey, runtimeLog } = createContext();
     const trackEvent = vi.fn();
     registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
 
@@ -356,6 +356,9 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "slack:interaction received action=openclaw:verify user=U123 channel=C1",
+    );
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
     expect(eventText.startsWith("Slack interaction: ")).toBe(true);
@@ -391,6 +394,47 @@ describe("registerSlackInteractionEvents", () => {
     });
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs ack failures before rethrowing block actions", async () => {
+    const { ctx, getHandler, runtimeLog } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ackError = new Error("ack transport closed");
+    const ack = vi.fn().mockRejectedValue(ackError);
+
+    await expect(
+      handler!({
+        ack,
+        body: {
+          user: { id: "U123" },
+          channel: { id: "D1" },
+          container: { channel_id: "D1", message_ts: "100.200", thread_ts: "100.100" },
+        },
+        action: {
+          type: "button",
+          action_id: "openclaw:reply_button:1:1",
+          value: "approved",
+        },
+      }),
+    ).rejects.toThrow("ack transport closed");
+
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "slack:interaction received action=openclaw:reply_button:1:1 user=U123 channel=D1",
+    );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "slack:interaction ack failed action=openclaw:reply_button:1:1 user=U123 channel=D1",
+      ),
+    );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "slack:interaction handler failed action=openclaw:reply_button:1:1 user=U123 channel=D1",
+      ),
+    );
   });
 
   it("registers a matcher that accepts plugin action ids beyond the OpenClaw prefix", () => {
@@ -2258,6 +2302,80 @@ describe("registerSlackInteractionEvents", () => {
       reason: "slack-interaction",
       sessionKey: "agent:main:slack:direct:U123",
     });
+  });
+
+  it("dispatches Slack reply button clicks through the inbound message path when available", async () => {
+    const { ctx, app, getHandler } = createContext();
+    const handleSlackMessage = vi.fn(async () => {});
+    registerSlackInteractionEvents({
+      ctx: ctx as never,
+      handleSlackMessage: handleSlackMessage as never,
+    });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        channel: { id: "D123" },
+        container: { channel_id: "D123", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_row",
+              elements: [{ type: "button", action_id: "openclaw:reply_button:1:2" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button:1:2",
+        block_id: "reply_row",
+        text: { text: "Bravo" },
+        value: "bravo",
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        channel: "D123",
+        channel_type: "im",
+        user: "U123",
+        thread_ts: "100.100",
+        text: expect.stringContaining('"value":"bravo"'),
+      }),
+      { source: "message", wasMentioned: true },
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "D123",
+        ts: "100.200",
+        text: "fallback",
+        blocks: expect.arrayContaining([
+          expect.objectContaining({
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: ":white_check_mark: *Bravo* selected by <@U123>",
+              },
+            ],
+          }),
+        ]),
+      }),
+    );
   });
 
   it("defaults modal close isCleared to false when Slack omits the flag", async () => {

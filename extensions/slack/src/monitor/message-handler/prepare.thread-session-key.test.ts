@@ -326,7 +326,7 @@ describe("thread-level session keys", () => {
     expect(sessionKey).not.toContain(":thread:");
   });
 
-  it("keeps top-level DMs on the direct session when replyToMode=all", () => {
+  it("uses a thread-scoped session for top-level DMs when replyToMode=all", () => {
     const ctx = buildCtx({ replyToMode: "all", dmScope: "per-channel-peer" });
     const account = buildAccount("all");
 
@@ -346,7 +346,47 @@ describe("thread-level session keys", () => {
       isRoomish: false,
     });
 
-    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3:thread:1770408530.000000");
     expect(routing.threadContext.messageThreadId).toBe("1770408530.000000");
+  });
+
+  it("keeps successive top-level DMs isolated by their Slack root ts when replyToMode=all", () => {
+    const ctx = buildCtx({ replyToMode: "all", dmScope: "per-channel-peer" });
+    const account = buildAccount("all");
+
+    const first = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "first dm",
+        ts: "1770408530.000000",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+    });
+    const second = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "second dm",
+        ts: "1770408531.000000",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+    });
+
+    expect(first.sessionKey).toBe("agent:main:slack:direct:u3:thread:1770408530.000000");
+    expect(second.sessionKey).toBe("agent:main:slack:direct:u3:thread:1770408531.000000");
+    expect(first.sessionKey).not.toBe(second.sessionKey);
   });
 });

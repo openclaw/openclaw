@@ -176,13 +176,13 @@ export function resolveSlackRoutingContext(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
-  // Keep true thread replies thread-scoped, while top-level DMs keep their
-  // stable direct-message session even when reply delivery targets a Slack UI
-  // thread.
-  const autoThreadId =
-    !isThreadReply && replyToMode === "all" && threadContext.messageTs
-      ? threadContext.messageTs
-      : undefined;
+  // `resolveSlackThreadContext()` already captures the canonical DM thread
+  // target:
+  // - real Slack thread replies use the parent thread_ts
+  // - top-level DMs only fork when replyToMode="all"
+  //
+  // Reusing that single source of truth keeps top-level DM turns aligned with
+  // later block-action callbacks, which also key off the Slack thread id.
   // Keep ordinary top-level room messages on the per-channel session for
   // continuity, but preserve Slack thread identity when the event already has
   // one or when an actionable app mention will seed a reply thread.
@@ -200,14 +200,12 @@ export function resolveSlackRoutingContext(params: {
       : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
   const canonicalThreadId = isDirectMessage
-    ? isThreadReply
-      ? threadTs
-      : undefined
+    ? threadContext.messageThreadId
     : isRoomish
       ? roomThreadId
       : isThreadReply
         ? threadTs
-        : autoThreadId;
+        : undefined;
   const routedThreadId = canonicalThreadId ?? (isRoomish ? seededRoomThreadId : undefined);
   const baseConversationId = resolveSlackBaseConversationId({ message, isDirectMessage });
   const boundThreadRoute = routedThreadId

@@ -525,6 +525,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         textLimit: ctx.textLimit,
         replyThreadTs: session.threadTs,
         replyToMode: prepared.replyToMode,
+        preferReplyThreadTs: isThreadReply,
         ...(slackIdentity ? { identity: slackIdentity } : {}),
       });
       markSlackStreamFallbackDelivered(session);
@@ -570,6 +571,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       textLimit: ctx.textLimit,
       replyThreadTs,
       replyToMode: prepared.replyToMode,
+      preferReplyThreadTs: isThreadReply,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
     observedReplyDelivery = true;
@@ -577,6 +579,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyToMode: prepared.replyToMode,
       payloadReplyToId: params.payload.replyToId,
       replyThreadTs,
+      preferReplyThreadTs: isThreadReply,
     });
     // Record the thread ts only after confirmed delivery success.
     rememberDeliveredThreadTs(params.kind, deliveredThreadTs);

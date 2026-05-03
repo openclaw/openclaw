@@ -25,10 +25,14 @@ export function resolveDeliveredSlackReplyThreadTs(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   payloadReplyToId?: string;
   replyThreadTs?: string;
+  preferReplyThreadTs?: boolean;
 }): string | undefined {
   // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
   // must not force threading.
   const inlineReplyToId = params.replyToMode === "off" ? undefined : params.payloadReplyToId;
+  if (params.preferReplyThreadTs && params.replyThreadTs) {
+    return params.replyThreadTs;
+  }
   return inlineReplyToId ?? params.replyThreadTs;
 }
 
@@ -42,6 +46,7 @@ export async function deliverReplies(params: {
   textLimit: number;
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all" | "batched";
+  preferReplyThreadTs?: boolean;
   identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
@@ -49,6 +54,7 @@ export async function deliverReplies(params: {
       replyToMode: params.replyToMode,
       payloadReplyToId: payload.replyToId,
       replyThreadTs: params.replyThreadTs,
+      preferReplyThreadTs: params.preferReplyThreadTs,
     });
     const reply = resolveSendableOutboundReplyParts(payload);
     const slackBlocks = readSlackReplyBlocks(payload);

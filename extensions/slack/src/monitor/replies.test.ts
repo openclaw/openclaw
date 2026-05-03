@@ -191,6 +191,17 @@ describe("resolveDeliveredSlackReplyThreadTs", () => {
     ).toBe("explicit-thread");
   });
 
+  it("keeps threaded Slack replies on the planned thread when current-message tags point at a child event", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "all",
+        payloadReplyToId: "synthetic-click-message",
+        replyThreadTs: "thread-root",
+        preferReplyThreadTs: true,
+      }),
+    ).toBe("thread-root");
+  });
+
   it("ignores explicit reply tags when replyToMode is off", () => {
     expect(
       resolveDeliveredSlackReplyThreadTs({

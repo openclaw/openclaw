@@ -801,11 +801,13 @@ describe("buildAgentSystemPrompt", () => {
       messageToolHints: [
         "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
         "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+        "- Slack buttons render at most 5 choices; for more choices, use `[[slack_select: Placeholder | Label:value, Other:other]]` so options are not dropped.",
       ],
     });
 
     expect(prompt).toContain("Slack interactive replies");
     expect(prompt).toContain("[[slack_buttons: Label:value, Other:other]]");
+    expect(prompt).toContain("Slack buttons render at most 5 choices");
     expect(prompt).not.toContain("Inline buttons not enabled for slack");
     expect(prompt).not.toContain("slack.capabilities.inlineButtons");
     expect(prompt).not.toContain("buttons=[[{text,callback_data,style?}]]");
