@@ -191,13 +191,27 @@ OpenClaw exposes a VoiceClaw-compatible real-time WebSocket endpoint at
 directly to a real-time OpenClaw brain instead of going through a separate relay
 process.
 
-The endpoint uses Gemini Live for real-time audio and calls OpenClaw as the
-brain by exposing OpenClaw tools directly to Gemini Live. Tool calls return an
-immediate `working` result to keep the voice turn responsive, then OpenClaw
-executes the actual tool asynchronously and injects the result back into the
-live session. Set `GEMINI_API_KEY` in the gateway process environment. If
-gateway auth is enabled, the desktop client sends the gateway token or password
-in its first `session.config` message.
+The endpoint supports multiple realtime brain providers. Clients select a
+provider in their first `session.config` message via the `provider` field:
+
+- `provider: "gemini"` (default) — uses Gemini Live; requires `GEMINI_API_KEY`
+  in the gateway process environment. Voices: `Puck`, `Charon`, `Kore`,
+  `Fenrir`, `Aoede`, `Leda`, `Orus`, `Zephyr` (default).
+- `provider: "xai"` — uses xAI's Voice Agent API
+  (`grok-voice-think-fast-1.0`); requires `XAI_API_KEY` in the gateway
+  process environment. Voices: `eve`, `ara` (default), `rex`, `sal`, `leo`.
+  See [xAI Voice Agent docs](https://docs.x.ai/developers/model-capabilities/audio/voice-agent)
+  for model and pricing details.
+
+Each provider calls OpenClaw as the brain by exposing OpenClaw tools directly
+to the upstream realtime model. Tool calls return an immediate `working` result
+to keep the voice turn responsive, then OpenClaw executes the actual tool
+asynchronously and injects the result back into the live session.
+
+If gateway auth is enabled, the desktop client sends the gateway token or
+password in its first `session.config` message — this is unrelated to the
+upstream provider key, which is read from the gateway process environment and
+never leaves the gateway.
 
 Real-time brain access runs owner-authorized OpenClaw agent commands. Keep
 `gateway.auth.mode: "none"` limited to loopback-only test instances. Non-local
@@ -210,9 +224,13 @@ and state:
 OPENCLAW_CONFIG_PATH=/path/to/openclaw-realtime/openclaw.json \
 OPENCLAW_STATE_DIR=/path/to/openclaw-realtime/state \
 OPENCLAW_SKIP_CHANNELS=1 \
-GEMINI_API_KEY=... \
+GEMINI_API_KEY=...    # required for provider="gemini" \
+XAI_API_KEY=...       # required for provider="xai" \
 openclaw gateway --port 19789
 ```
+
+Set whichever provider key(s) match the providers your clients will request.
+Either may be omitted if you only intend to use the other.
 
 Then configure VoiceClaw to use:
 

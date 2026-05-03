@@ -9,7 +9,7 @@ export type VoiceClawClientEvent =
 
 export type VoiceClawSessionConfigEvent = {
   type: "session.config";
-  provider?: "openai" | "gemini";
+  provider?: "openai" | "gemini" | "xai";
   voice?: string;
   model?: string;
   brainAgent?: "enabled" | "none";
