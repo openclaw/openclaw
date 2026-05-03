@@ -12,6 +12,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import {
@@ -459,9 +460,32 @@ function buildExternalRunFailureReply(
   };
 }
 
-const CONTEXT_OVERFLOW_RESET_HINT =
-  "\n\nTo prevent this, increase your compaction buffer by setting " +
-  "`agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.";
+const DEFAULT_RESERVE_TOKENS_FLOOR = 20_000;
+
+export function computeContextAwareReserveTokensFloor(contextWindow: number | undefined): number {
+  if (!contextWindow || contextWindow <= 0) {
+    return DEFAULT_RESERVE_TOKENS_FLOOR;
+  }
+  if (contextWindow >= 1_000_000) {
+    return 100_000;
+  }
+  if (contextWindow >= 200_000) {
+    return 50_000;
+  }
+  if (contextWindow >= 100_000) {
+    return 35_000;
+  }
+  return DEFAULT_RESERVE_TOKENS_FLOOR;
+}
+
+function buildContextOverflowResetHint(contextWindow: number | undefined): string {
+  const effectiveContextWindow = contextWindow ?? DEFAULT_CONTEXT_TOKENS;
+  const reserveFloor = computeContextAwareReserveTokensFloor(effectiveContextWindow);
+  return (
+    "\n\nTo prevent this, increase your compaction buffer by setting " +
+    `\`agents.defaults.compaction.reserveTokensFloor\` to ${reserveFloor} or higher in your config.`
+  );
+}
 
 type ModelRefLike = {
   provider: string;
@@ -617,16 +641,22 @@ export function buildContextOverflowRecoveryText(params: {
   const prefix = params.duringCompaction
     ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
     : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
-  return (
-    prefix +
-    (resolveHeartbeatBleedHint({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      primaryProvider: params.primaryProvider,
-      primaryModel: params.primaryModel,
-      activeSessionEntry: params.activeSessionEntry,
-    }) ?? CONTEXT_OVERFLOW_RESET_HINT)
-  );
+  const heartbeatHint = resolveHeartbeatBleedHint({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    primaryProvider: params.primaryProvider,
+    primaryModel: params.primaryModel,
+    activeSessionEntry: params.activeSessionEntry,
+  });
+  if (heartbeatHint) {
+    return prefix + heartbeatHint;
+  }
+  const primaryContextWindow = resolveContextWindowForHint({
+    cfg: params.cfg,
+    ref: { provider: params.primaryProvider ?? "", model: params.primaryModel ?? "" },
+    activeSessionEntry: params.activeSessionEntry,
+  });
+  return prefix + buildContextOverflowResetHint(primaryContextWindow);
 }
 
 function shouldApplyOpenAIGptChatGuard(params: { provider?: string; model?: string }): boolean {

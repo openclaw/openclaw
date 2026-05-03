@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
@@ -8,6 +9,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildContextOverflowRecoveryText,
+  computeContextAwareReserveTokensFloor,
   MAX_LIVE_SWITCH_RETRIES,
 } from "./agent-runner-execution.js";
 import type { FollowupRun } from "./queue.js";
@@ -311,8 +313,21 @@ function createMinimalRunAgentTurnParams(overrides?: {
   };
 }
 
+describe("computeContextAwareReserveTokensFloor", () => {
+  it("returns context-window-aware reserve floor tiers", () => {
+    expect(computeContextAwareReserveTokensFloor(1_000_000)).toBe(100_000);
+    expect(computeContextAwareReserveTokensFloor(999_999)).toBe(50_000);
+    expect(computeContextAwareReserveTokensFloor(200_000)).toBe(50_000);
+    expect(computeContextAwareReserveTokensFloor(199_999)).toBe(35_000);
+    expect(computeContextAwareReserveTokensFloor(100_000)).toBe(35_000);
+    expect(computeContextAwareReserveTokensFloor(99_999)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(undefined)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(0)).toBe(20_000);
+  });
+});
+
 describe("buildContextOverflowRecoveryText", () => {
-  it("keeps the generic compaction-buffer hint without heartbeat model evidence", () => {
+  it("uses the shared default context window without heartbeat model evidence", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {},
       primaryProvider: "openrouter",
@@ -320,7 +335,55 @@ describe("buildContextOverflowRecoveryText", () => {
     });
 
     expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain(
+      `to ${computeContextAwareReserveTokensFloor(DEFAULT_CONTEXT_TOKENS)} or higher`,
+    );
     expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("uses primary model metadata before stale session context tokens", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "qwen3.6-plus",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("to 100000 or higher");
+  });
+
+  it("falls back to session context tokens when model metadata is unavailable", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {},
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "qwen3.6-plus",
+        contextTokens: 100_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("to 35000 or higher");
   });
 
   it("points to heartbeat model bleed when the last runtime model matches configured heartbeat.model", () => {
