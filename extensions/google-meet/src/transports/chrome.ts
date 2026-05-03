@@ -96,12 +96,10 @@ export async function launchChromeMeet(params: {
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle);
   browser?: GoogleMeetChromeHealth;
 }> {
-  let audioBridge:
-    | { type: "external-command" }
-    | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle)
-    | undefined;
-
-  if (params.mode === "realtime") {
+  const checkRealtimeAudioPrerequisites = async () => {
+    if (params.mode !== "realtime") {
+      return;
+    }
     await assertBlackHole2chAvailable({
       runtime: params.runtime,
       timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
@@ -118,7 +116,16 @@ export async function launchChromeMeet(params: {
         );
       }
     }
+  };
 
+  const startRealtimeAudioBridge = async (): Promise<
+    | { type: "external-command" }
+    | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle)
+    | undefined
+  > => {
+    if (params.mode !== "realtime") {
+      return undefined;
+    }
     if (params.config.chrome.audioBridgeCommand) {
       const bridge = await params.runtime.system.runCommandWithTimeout(
         params.config.chrome.audioBridgeCommand,
@@ -129,55 +136,46 @@ export async function launchChromeMeet(params: {
           `failed to start Chrome audio bridge: ${bridge.stderr || bridge.stdout || bridge.code}`,
         );
       }
-      audioBridge = { type: "external-command" };
-    } else {
-      if (!params.config.chrome.audioInputCommand || !params.config.chrome.audioOutputCommand) {
-        throw new Error(
-          "Chrome realtime mode requires chrome.audioInputCommand and chrome.audioOutputCommand, or chrome.audioBridgeCommand for an external bridge.",
-        );
-      }
-      audioBridge = {
-        type: "command-pair",
-        ...(await startCommandRealtimeAudioBridge({
-          config: params.config,
-          fullConfig: params.fullConfig,
-          runtime: params.runtime,
-          meetingSessionId: params.meetingSessionId,
-          inputCommand: params.config.chrome.audioInputCommand,
-          outputCommand: params.config.chrome.audioOutputCommand,
-          logger: params.logger,
-        })),
-      };
+      return { type: "external-command" };
     }
-  }
-
-  if (!params.config.chrome.launch) {
-    return { launched: false, audioBridge };
-  }
-
-  let commandPairBridgeStopped = false;
-  const stopCommandPairBridge = async () => {
-    if (commandPairBridgeStopped) {
-      return;
+    if (!params.config.chrome.audioInputCommand || !params.config.chrome.audioOutputCommand) {
+      throw new Error(
+        "Chrome realtime mode requires chrome.audioInputCommand and chrome.audioOutputCommand, or chrome.audioBridgeCommand for an external bridge.",
+      );
     }
-    commandPairBridgeStopped = true;
-    if (audioBridge?.type === "command-pair") {
-      await audioBridge.stop();
-    }
+    return {
+      type: "command-pair",
+      ...(await startCommandRealtimeAudioBridge({
+        config: params.config,
+        fullConfig: params.fullConfig,
+        runtime: params.runtime,
+        meetingSessionId: params.meetingSessionId,
+        inputCommand: params.config.chrome.audioInputCommand,
+        outputCommand: params.config.chrome.audioOutputCommand,
+        logger: params.logger,
+      })),
+    };
   };
 
-  try {
-    const result = await openMeetWithBrowserRequest({
-      callBrowser: callLocalBrowserRequest,
-      config: params.config,
-      mode: params.mode,
-      url: params.url,
-    });
-    return { ...result, audioBridge };
-  } catch (error) {
-    await stopCommandPairBridge();
-    throw error;
+  await checkRealtimeAudioPrerequisites();
+
+  if (!params.config.chrome.launch) {
+    return { launched: false, audioBridge: await startRealtimeAudioBridge() };
   }
+
+  const result = await openMeetWithBrowserRequest({
+    callBrowser: callLocalBrowserRequest,
+    config: params.config,
+    mode: params.mode,
+    url: params.url,
+  });
+  const shouldStartRealtimeBridge =
+    params.mode === "realtime" &&
+    result.browser?.inCall === true &&
+    result.browser.micMuted !== true &&
+    result.browser.manualActionRequired !== true;
+  const audioBridge = shouldStartRealtimeBridge ? await startRealtimeAudioBridge() : undefined;
+  return { ...result, audioBridge };
 }
 
 function parseNodeStartResult(raw: unknown): {
@@ -296,6 +294,7 @@ async function grantMeetMediaPermissions(params: {
   callBrowser: BrowserRequestCaller;
   timeoutMs: number;
   allowMicrophone: boolean;
+  targetId: string;
 }): Promise<string[]> {
   if (!params.allowMicrophone) {
     return ["Observe-only mode skips Meet microphone/camera permission grants."];
@@ -308,6 +307,7 @@ async function grantMeetMediaPermissions(params: {
         origin: "https://meet.google.com",
         permissions: ["audioCapture", "videoCapture"],
         optionalPermissions: ["speakerSelection"],
+        targetId: params.targetId,
         timeoutMs: Math.min(params.timeoutMs, 5_000),
       },
       timeoutMs: Math.min(params.timeoutMs, 5_000),
@@ -611,6 +611,7 @@ async function openMeetWithBrowserRequest(params: {
   const permissionNotes = await grantMeetMediaPermissions({
     allowMicrophone: params.mode === "realtime",
     callBrowser: params.callBrowser,
+    targetId,
     timeoutMs,
   });
   const deadline = Date.now() + Math.max(0, params.config.chrome.waitForInCallMs);
@@ -703,6 +704,7 @@ async function inspectRecoverableMeetTab(params: {
     : await grantMeetMediaPermissions({
         allowMicrophone,
         callBrowser: params.callBrowser,
+        targetId: params.targetId,
         timeoutMs: params.timeoutMs,
       });
   const evaluated = await params.callBrowser({

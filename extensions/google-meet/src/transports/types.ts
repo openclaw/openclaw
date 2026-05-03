@@ -43,6 +43,24 @@ export type GoogleMeetChromeHealth = {
     speaker?: string;
     text: string;
   }>;
+  realtimeTranscriptLines?: number;
+  lastRealtimeTranscriptAt?: string;
+  lastRealtimeTranscriptRole?: "user" | "assistant";
+  lastRealtimeTranscriptText?: string;
+  recentRealtimeTranscript?: Array<{
+    at: string;
+    role: "user" | "assistant";
+    text: string;
+  }>;
+  lastRealtimeEventAt?: string;
+  lastRealtimeEventType?: string;
+  lastRealtimeEventDetail?: string;
+  recentRealtimeEvents?: Array<{
+    at: string;
+    direction: "client" | "server";
+    type: string;
+    detail?: string;
+  }>;
   manualActionRequired?: boolean;
   manualActionReason?: GoogleMeetManualActionReason;
   manualActionMessage?: string;

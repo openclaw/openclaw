@@ -388,6 +388,17 @@ function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"
       const speaker = health.lastCaptionSpeaker ? `${health.lastCaptionSpeaker}: ` : "";
       writeStdoutLine("last caption text: %s%s", speaker, health.lastCaptionText);
     }
+    writeStdoutLine("realtime transcript lines: %s", health?.realtimeTranscriptLines ?? 0);
+    if (health?.lastRealtimeTranscriptText) {
+      const role = health.lastRealtimeTranscriptRole
+        ? `${health.lastRealtimeTranscriptRole}: `
+        : "";
+      writeStdoutLine("last realtime transcript: %s%s", role, health.lastRealtimeTranscriptText);
+    }
+    if (health?.lastRealtimeEventType) {
+      const detail = health.lastRealtimeEventDetail ? ` ${health.lastRealtimeEventDetail}` : "";
+      writeStdoutLine("last realtime event: %s%s", health.lastRealtimeEventType, detail);
+    }
   }
 }
 

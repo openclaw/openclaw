@@ -457,4 +457,101 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       audio_end_ms: 240,
     });
   });
+
+  it("forwards current realtime output audio events", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio,
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    await connecting;
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+
+    const audio = Buffer.from("assistant audio");
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.output_audio.delta",
+          item_id: "item_1",
+          delta: audio.toString("base64"),
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.output_audio_transcript.done",
+          transcript: "hello from current realtime events",
+        }),
+      ),
+    );
+
+    expect(onAudio).toHaveBeenCalledWith(audio);
+    expect(onTranscript).toHaveBeenCalledWith(
+      "assistant",
+      "hello from current realtime events",
+      true,
+    );
+  });
+
+  it("creates an explicit user item and audio response for manual speech", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onEvent,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    await connecting;
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+
+    bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
+
+    expect(parseSent(socket).slice(-2)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Say exactly: hello from explicit speech.",
+            },
+          ],
+        },
+      },
+      {
+        type: "response.create",
+        response: {
+          output_modalities: ["audio", "text"],
+        },
+      },
+    ]);
+    expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "conversation.item.create" });
+    expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "response.create" });
+  });
 });

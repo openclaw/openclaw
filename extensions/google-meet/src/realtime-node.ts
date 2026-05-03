@@ -14,8 +14,14 @@ import {
 } from "./agent-consult.js";
 import type { GoogleMeetConfig } from "./config.js";
 import {
+  getGoogleMeetRealtimeTranscriptHealth,
+  getGoogleMeetRealtimeEventHealth,
+  recordGoogleMeetRealtimeTranscript,
+  recordGoogleMeetRealtimeEvent,
   resolveGoogleMeetRealtimeAudioFormat,
   resolveGoogleMeetRealtimeProvider,
+  type GoogleMeetRealtimeEventEntry,
+  type GoogleMeetRealtimeTranscriptEntry,
 } from "./realtime.js";
 import type { GoogleMeetChromeHealth } from "./transports/types.js";
 
@@ -65,7 +71,8 @@ export async function startNodeRealtimeAudioBridge(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
-  const transcript: Array<{ role: "user" | "assistant"; text: string }> = [];
+  const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
+  const realtimeEvents: GoogleMeetRealtimeEventEntry[] = [];
 
   const stop = async () => {
     if (stopped) {
@@ -148,11 +155,15 @@ export async function startNodeRealtimeAudioBridge(params: {
     },
     onTranscript: (role, text, isFinal) => {
       if (isFinal) {
-        transcript.push({ role, text });
-        if (transcript.length > 40) {
-          transcript.splice(0, transcript.length - 40);
-        }
-        params.logger.debug?.(`[google-meet] ${role}: ${text}`);
+        recordGoogleMeetRealtimeTranscript(transcript, role, text);
+        params.logger.info(`[google-meet] node realtime ${role}: ${text}`);
+      }
+    },
+    onEvent: (event) => {
+      recordGoogleMeetRealtimeEvent(realtimeEvents, event);
+      if (event.type === "error" || event.type === "response.done") {
+        const detail = event.detail ? ` ${event.detail}` : "";
+        params.logger.info(`[google-meet] node realtime ${event.direction}:${event.type}${detail}`);
       }
     },
     onToolCall: (event, session) => {
@@ -261,6 +272,8 @@ export async function startNodeRealtimeAudioBridge(params: {
       lastClearAt,
       lastInputBytes,
       lastOutputBytes,
+      ...getGoogleMeetRealtimeTranscriptHealth(transcript),
+      ...getGoogleMeetRealtimeEventHealth(realtimeEvents),
       consecutiveInputErrors,
       lastInputError,
       clearCount,

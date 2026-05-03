@@ -208,7 +208,7 @@ async function resolveTrustedOfficialPrereleaseResolution(params: {
   );
   const stableVersion = semverVersions
     .filter((value) => !isPrereleaseSemverVersion(value))
-    .sort(compareStableSemver)
+    .toSorted(compareStableSemver)
     .at(-1);
   if (!stableVersion) {
     if (semverVersions.length > 0 && semverVersions.every(isPrereleaseSemverVersion)) {

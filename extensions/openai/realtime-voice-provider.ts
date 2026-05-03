@@ -85,6 +85,7 @@ type RealtimeEvent = {
   response?: {
     id?: string;
     status?: string;
+    status_details?: unknown;
   };
   error?: unknown;
 };
@@ -265,19 +266,19 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         content: [{ type: "input_text", text }],
       },
     });
-    this.sendEvent({ type: "response.create" });
+    this.sendEvent({
+      type: "response.create",
+      response: {
+        output_modalities: ["audio", "text"],
+      },
+    });
   }
 
   triggerGreeting(instructions?: string): void {
     if (!this.isConnected() || !this.ws) {
       return;
     }
-    this.sendEvent({
-      type: "response.create",
-      response: {
-        instructions: instructions ?? this.config.instructions,
-      },
-    });
+    this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the meeting.");
   }
 
   submitToolResult(callId: string, result: unknown): void {
@@ -545,6 +546,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleEvent(event: RealtimeEvent): void {
+    this.config.onEvent?.({
+      direction: "server",
+      type: event.type,
+      detail: this.describeServerEvent(event),
+    });
     switch (event.type) {
       case "session.created":
         return;
@@ -564,7 +570,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.responseActive = true;
         return;
 
-      case "response.audio.delta": {
+      case "response.audio.delta":
+      case "response.output_audio.delta": {
         if (!event.delta) {
           return;
         }
@@ -586,12 +593,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         return;
 
       case "response.audio_transcript.delta":
+      case "response.output_audio_transcript.delta":
         if (event.delta) {
           this.config.onTranscript?.("assistant", event.delta, false);
         }
         return;
 
       case "response.audio_transcript.done":
+      case "response.output_audio_transcript.done":
         if (event.transcript) {
           this.config.onTranscript?.("assistant", event.transcript, true);
         }
@@ -698,6 +707,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private sendEvent(event: unknown): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
+      const type =
+        event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
+          ? (event as { type: string }).type
+          : "unknown";
+      this.config.onEvent?.({ direction: "client", type });
       const payload = JSON.stringify(event);
       captureWsEvent({
         url: this.resolveConnectionParams().url,
@@ -712,6 +726,23 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
       this.ws.send(payload);
     }
+  }
+
+  private describeServerEvent(event: RealtimeEvent): string | undefined {
+    if (event.type === "error") {
+      return readRealtimeErrorDetail(event.error);
+    }
+    if (event.type === "response.done") {
+      const status = event.response?.status;
+      const details =
+        event.response?.status_details === undefined
+          ? undefined
+          : JSON.stringify(event.response.status_details);
+      return (
+        [status ? `status=${status}` : undefined, details].filter(Boolean).join(" ") || undefined
+      );
+    }
+    return undefined;
   }
 }
 

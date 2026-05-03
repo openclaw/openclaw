@@ -27,6 +27,11 @@ import {
   speakMeetViaVoiceCallGateway,
 } from "./voice-call-gateway.js";
 
+type ChromeAudioBridgeResult = NonNullable<
+  | Awaited<ReturnType<typeof launchChromeMeet>>["audioBridge"]
+  | Awaited<ReturnType<typeof launchChromeMeetOnNode>>["audioBridge"]
+>;
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -421,26 +426,9 @@ export class GoogleMeetRuntime {
           launched: result.launched,
           nodeId: "nodeId" in result ? result.nodeId : undefined,
           browserProfile: this.params.config.chrome.browserProfile,
-          audioBridge: result.audioBridge
-            ? {
-                type: result.audioBridge.type,
-                provider:
-                  result.audioBridge.type === "command-pair" ||
-                  result.audioBridge.type === "node-command-pair"
-                    ? result.audioBridge.providerId
-                    : undefined,
-              }
-            : undefined,
           health: "browser" in result ? result.browser : undefined,
         };
-        if (
-          result.audioBridge?.type === "command-pair" ||
-          result.audioBridge?.type === "node-command-pair"
-        ) {
-          this.#sessionStops.set(session.id, result.audioBridge.stop);
-          this.#sessionSpeakers.set(session.id, result.audioBridge.speak);
-          this.#sessionHealth.set(session.id, result.audioBridge.getHealth);
-        }
+        this.#attachChromeAudioBridge(session, result.audioBridge);
         session.notes.push(
           result.audioBridge
             ? transport === "chrome-node"
@@ -558,6 +546,7 @@ export class GoogleMeetRuntime {
       return { found: true, spoken: true, session };
     }
     await this.#refreshBrowserHealthForChromeSession(session);
+    await this.#ensureChromeRealtimeBridge(session);
     const speak = this.#sessionSpeakers.get(sessionId);
     if (!speak || session.state !== "active") {
       return { found: true, spoken: false, session };
@@ -579,7 +568,7 @@ export class GoogleMeetRuntime {
 
   async #speakWhenReady(session: GoogleMeetSession, instructions: string): Promise<boolean> {
     let result = await this.speak(session.id, instructions);
-    if (result.spoken || !session.chrome?.audioBridge || session.transport === "twilio") {
+    if (result.spoken || session.transport === "twilio") {
       return result.spoken;
     }
     const waitMs = Math.min(
@@ -823,6 +812,64 @@ export class GoogleMeetRuntime {
       );
     }
     this.#refreshSpeechReadiness(session);
+  }
+
+  #attachChromeAudioBridge(
+    session: GoogleMeetSession,
+    audioBridge: ChromeAudioBridgeResult | undefined,
+  ) {
+    if (!session.chrome || !audioBridge) {
+      return;
+    }
+    session.chrome.audioBridge = {
+      type: audioBridge.type,
+      provider:
+        audioBridge.type === "command-pair" || audioBridge.type === "node-command-pair"
+          ? audioBridge.providerId
+          : undefined,
+    };
+    if (audioBridge.type === "command-pair" || audioBridge.type === "node-command-pair") {
+      this.#sessionStops.set(session.id, audioBridge.stop);
+      this.#sessionSpeakers.set(session.id, audioBridge.speak);
+      this.#sessionHealth.set(session.id, audioBridge.getHealth);
+    }
+  }
+
+  async #ensureChromeRealtimeBridge(session: GoogleMeetSession) {
+    if (
+      session.mode !== "realtime" ||
+      session.transport !== "chrome" ||
+      session.state !== "active" ||
+      !session.chrome ||
+      session.chrome.audioBridge
+    ) {
+      return;
+    }
+    const health = session.chrome.health;
+    if (
+      health?.inCall !== true ||
+      health.micMuted === true ||
+      health.manualActionRequired === true
+    ) {
+      return;
+    }
+    const result = await launchChromeMeet({
+      runtime: this.params.runtime,
+      config: {
+        ...this.params.config,
+        chrome: {
+          ...this.params.config.chrome,
+          launch: false,
+        },
+      },
+      fullConfig: this.params.fullConfig,
+      meetingSessionId: session.id,
+      mode: session.mode,
+      url: session.url,
+      logger: this.params.logger,
+    });
+    this.#attachChromeAudioBridge(session, result.audioBridge);
+    session.updatedAt = nowIso();
   }
 
   #refreshSpeechReadiness(session: GoogleMeetSession) {

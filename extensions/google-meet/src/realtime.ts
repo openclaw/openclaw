@@ -9,6 +9,7 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   resolveConfiguredRealtimeVoiceProvider,
   type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceBridgeEvent,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -54,6 +55,77 @@ type ResolvedRealtimeProvider = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
 };
+
+export type GoogleMeetRealtimeTranscriptEntry = {
+  at: string;
+  role: "user" | "assistant";
+  text: string;
+};
+
+export function recordGoogleMeetRealtimeTranscript(
+  transcript: GoogleMeetRealtimeTranscriptEntry[],
+  role: "user" | "assistant",
+  text: string,
+): GoogleMeetRealtimeTranscriptEntry {
+  const entry = { at: new Date().toISOString(), role, text };
+  transcript.push(entry);
+  if (transcript.length > 40) {
+    transcript.splice(0, transcript.length - 40);
+  }
+  return entry;
+}
+
+export function getGoogleMeetRealtimeTranscriptHealth(
+  transcript: GoogleMeetRealtimeTranscriptEntry[],
+): Pick<
+  GoogleMeetChromeHealth,
+  | "realtimeTranscriptLines"
+  | "lastRealtimeTranscriptAt"
+  | "lastRealtimeTranscriptRole"
+  | "lastRealtimeTranscriptText"
+  | "recentRealtimeTranscript"
+> {
+  const last = transcript.at(-1);
+  return {
+    realtimeTranscriptLines: transcript.length,
+    lastRealtimeTranscriptAt: last?.at,
+    lastRealtimeTranscriptRole: last?.role,
+    lastRealtimeTranscriptText: last?.text,
+    recentRealtimeTranscript: transcript.slice(-5),
+  };
+}
+
+export type GoogleMeetRealtimeEventEntry = RealtimeVoiceBridgeEvent & {
+  at: string;
+};
+
+export function recordGoogleMeetRealtimeEvent(
+  events: GoogleMeetRealtimeEventEntry[],
+  event: RealtimeVoiceBridgeEvent,
+) {
+  events.push({ at: new Date().toISOString(), ...event });
+  if (events.length > 40) {
+    events.splice(0, events.length - 40);
+  }
+}
+
+export function getGoogleMeetRealtimeEventHealth(
+  events: GoogleMeetRealtimeEventEntry[],
+): Pick<
+  GoogleMeetChromeHealth,
+  | "lastRealtimeEventAt"
+  | "lastRealtimeEventType"
+  | "lastRealtimeEventDetail"
+  | "recentRealtimeEvents"
+> {
+  const last = events.at(-1);
+  return {
+    lastRealtimeEventAt: last?.at,
+    lastRealtimeEventType: last ? `${last.direction}:${last.type}` : undefined,
+    lastRealtimeEventDetail: last?.detail,
+    recentRealtimeEvents: events.slice(-10),
+  };
+}
 
 function splitCommand(argv: string[]): { command: string; args: string[] } {
   const [command, ...args] = argv;
@@ -312,7 +384,8 @@ export async function startCommandRealtimeAudioBridge(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
-  const transcript: Array<{ role: "user" | "assistant"; text: string }> = [];
+  const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
+  const realtimeEvents: GoogleMeetRealtimeEventEntry[] = [];
   bridge = createRealtimeVoiceBridgeSession({
     provider: resolved.provider,
     providerConfig: resolved.providerConfig,
@@ -335,11 +408,15 @@ export async function startCommandRealtimeAudioBridge(params: {
     },
     onTranscript: (role, text, isFinal) => {
       if (isFinal) {
-        transcript.push({ role, text });
-        if (transcript.length > 40) {
-          transcript.splice(0, transcript.length - 40);
-        }
-        params.logger.debug?.(`[google-meet] ${role}: ${text}`);
+        recordGoogleMeetRealtimeTranscript(transcript, role, text);
+        params.logger.info(`[google-meet] realtime ${role}: ${text}`);
+      }
+    },
+    onEvent: (event) => {
+      recordGoogleMeetRealtimeEvent(realtimeEvents, event);
+      if (event.type === "error" || event.type === "response.done") {
+        const detail = event.detail ? ` ${event.detail}` : "";
+        params.logger.info(`[google-meet] realtime ${event.direction}:${event.type}${detail}`);
       }
     },
     onToolCall: (event, session) => {
@@ -414,6 +491,8 @@ export async function startCommandRealtimeAudioBridge(params: {
       lastInputBytes,
       lastOutputBytes,
       suppressedInputBytes,
+      ...getGoogleMeetRealtimeTranscriptHealth(transcript),
+      ...getGoogleMeetRealtimeEventHealth(realtimeEvents),
       lastClearAt,
       clearCount,
       bridgeClosed: stopped,
