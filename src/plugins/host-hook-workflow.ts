@@ -28,6 +28,7 @@ import type {
   PluginSessionTurnUnscheduleByTagResult,
 } from "./host-hooks.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 const log = createSubsystemLogger("plugins/host-workflow");
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
@@ -562,6 +563,7 @@ export async function schedulePluginSessionTurn(params: {
   origin?: PluginOrigin;
   schedule: PluginSessionTurnScheduleParams;
   shouldCommit?: () => boolean;
+  ownerRegistry?: PluginRegistry;
 }): Promise<PluginSessionSchedulerJobHandle | undefined> {
   if (params.origin !== "bundled") {
     return undefined;
@@ -659,6 +661,7 @@ export async function schedulePluginSessionTurn(params: {
   const handle = registerPluginSessionSchedulerJob({
     pluginId: params.pluginId,
     pluginName: params.pluginName,
+    ownerRegistry: params.ownerRegistry,
     job: {
       id: jobId,
       sessionKey,
