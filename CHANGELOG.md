@@ -144,6 +144,7 @@ Docs: https://docs.openclaw.ai
 - Slack: allow draft preview streaming in top-level DMs when `replyToMode` is `off` while keeping Slack native streaming and assistant thread status gated on reply threads. Fixes #56480. (#56544) Thanks @HangGlidersRule.
 - Control UI/chat: remove the delete-confirm popover outside-click listener on every dismiss path, so Cancel, Delete, outside clicks, and same-button toggles no longer leave stale document listeners behind. Refs #75590 and #69982. Thanks @Ricardo-M-L.
 - Memory-core: treat exhausted file watcher limits as non-fatal for builtin memory auto-sync while preserving fatal handling for unrelated disk-full errors. (#73357) Thanks @solodmd.
+- Providers/Ollama: restore catalog context-window forwarding as `num_ctx` for native `/api/chat` requests; fixes tool selection and context truncation regressions on models with catalog entries (qwen3, llama3, gemma3, …) when no explicit `params.num_ctx` was configured. Fixes #76117. (#76181) Thanks @openperf.
 
 ## 2026.5.2
 
