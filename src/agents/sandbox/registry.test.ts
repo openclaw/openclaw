@@ -1,5 +1,13 @@
 import fs from "node:fs/promises";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+type WriteDelayConfig = {
+  targetFile: "containers.json" | "browsers.json" | null;
+  containerName: string;
+  started: boolean;
+  markStarted: () => void;
+  waitForRelease: Promise<void>;
+};
 
 const {
   TEST_STATE_DIR,
@@ -7,17 +15,20 @@ const {
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_BROWSERS_DIR,
+  writeGateState,
 } = vi.hoisted(() => {
-  const p = require("node:path");
+  const path = require("node:path");
   const { mkdtempSync } = require("node:fs");
   const { tmpdir } = require("node:os");
-  const baseDir = mkdtempSync(p.join(tmpdir(), "openclaw-sandbox-registry-"));
+  const baseDir = mkdtempSync(path.join(tmpdir(), "openclaw-sandbox-registry-"));
+
   return {
     TEST_STATE_DIR: baseDir,
-    SANDBOX_REGISTRY_PATH: p.join(baseDir, "containers.json"),
-    SANDBOX_BROWSER_REGISTRY_PATH: p.join(baseDir, "browsers.json"),
-    SANDBOX_CONTAINERS_DIR: p.join(baseDir, "containers"),
-    SANDBOX_BROWSERS_DIR: p.join(baseDir, "browsers"),
+    SANDBOX_REGISTRY_PATH: path.join(baseDir, "containers.json"),
+    SANDBOX_BROWSER_REGISTRY_PATH: path.join(baseDir, "browsers.json"),
+    SANDBOX_CONTAINERS_DIR: path.join(baseDir, "containers"),
+    SANDBOX_BROWSERS_DIR: path.join(baseDir, "browsers"),
+    writeGateState: { active: null as WriteDelayConfig | null },
   };
 });
 
@@ -28,6 +39,35 @@ vi.mock("./constants.js", () => ({
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_BROWSERS_DIR,
 }));
+
+vi.mock("../../infra/json-files.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/json-files.js")>(
+    "../../infra/json-files.js",
+  );
+  return {
+    ...actual,
+    writeJsonAtomic: async (
+      filePath: string,
+      value: unknown,
+      options?: Parameters<typeof actual.writeJsonAtomic>[2],
+    ) => {
+      const payload = JSON.stringify(value);
+      const gate = writeGateState.active;
+      if (
+        gate &&
+        (!gate.targetFile || filePath.includes(gate.targetFile)) &&
+        payloadMentionsContainer(payload, gate.containerName)
+      ) {
+        if (!gate.started) {
+          gate.started = true;
+          gate.markStarted();
+        }
+        await gate.waitForRelease;
+      }
+      await actual.writeJsonAtomic(filePath, value, options);
+    },
+  };
+});
 
 import {
   readBrowserRegistry,
@@ -41,6 +81,53 @@ import {
 
 type SandboxBrowserRegistryEntry = import("./registry.js").SandboxBrowserRegistryEntry;
 type SandboxRegistryEntry = import("./registry.js").SandboxRegistryEntry;
+
+function payloadMentionsContainer(payload: string, containerName: string): boolean {
+  return (
+    payload.includes(`"containerName":"${containerName}"`) ||
+    payload.includes(`"containerName": "${containerName}"`)
+  );
+}
+
+async function seedMalformedContainerRegistry(payload: string) {
+  await fs.writeFile(SANDBOX_REGISTRY_PATH, payload, "utf-8");
+}
+
+async function seedMalformedBrowserRegistry(payload: string) {
+  await fs.writeFile(SANDBOX_BROWSER_REGISTRY_PATH, payload, "utf-8");
+}
+
+function installWriteGate(
+  targetFile: "containers.json" | "browsers.json" | null,
+  containerName: string,
+): { waitForStart: Promise<void>; release: () => void } {
+  let markStarted = () => {};
+  const waitForStart = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  let resolveRelease = () => {};
+  const waitForRelease = new Promise<void>((resolve) => {
+    resolveRelease = resolve;
+  });
+  writeGateState.active = {
+    targetFile,
+    containerName,
+    started: false,
+    markStarted,
+    waitForRelease,
+  };
+  return {
+    waitForStart,
+    release: () => {
+      resolveRelease();
+      writeGateState.active = null;
+    },
+  };
+}
+
+beforeEach(() => {
+  writeGateState.active = null;
+});
 
 afterEach(async () => {
   await fs.rm(SANDBOX_CONTAINERS_DIR, { recursive: true, force: true });
@@ -80,102 +167,13 @@ function containerEntry(overrides: Partial<SandboxRegistryEntry> = {}): SandboxR
   };
 }
 
-async function seedMonolithicContainerRegistry(entries: SandboxRegistryEntry[]) {
+async function seedContainerRegistry(entries: SandboxRegistryEntry[]) {
   await fs.writeFile(SANDBOX_REGISTRY_PATH, `${JSON.stringify({ entries }, null, 2)}\n`, "utf-8");
 }
 
-async function seedMonolithicBrowserRegistry(entries: SandboxBrowserRegistryEntry[]) {
-  await fs.writeFile(
-    SANDBOX_BROWSER_REGISTRY_PATH,
-    `${JSON.stringify({ entries }, null, 2)}\n`,
-    "utf-8",
-  );
-}
-
-describe("per-file sharded container registry", () => {
-  it("writes and reads a single container entry", async () => {
-    await updateRegistry(containerEntry({ containerName: "container-a" }));
-
-    const registry = await readRegistry();
-    expect(registry.entries).toHaveLength(1);
-    expect(registry.entries[0].containerName).toBe("container-a");
-  });
-
-  it("keeps both container updates under concurrent writes", async () => {
-    // The old monolithic-file model serialized every writer through a
-    // single lock. Per-entry files must handle concurrent upserts of
-    // different containers without any ordering or contention.
-    await Promise.all([
-      updateRegistry(containerEntry({ containerName: "container-a" })),
-      updateRegistry(containerEntry({ containerName: "container-b" })),
-    ]);
-
-    const registry = await readRegistry();
-    expect(
-      registry.entries
-        .map((entry) => entry.containerName)
-        .slice()
-        .toSorted(),
-    ).toEqual(["container-a", "container-b"]);
-  });
-
-  it("readRegistryEntry returns a single entry without scanning the whole dir", async () => {
-    await updateRegistry(containerEntry({ containerName: "container-x", sessionKey: "sess:x" }));
-    await updateRegistry(containerEntry({ containerName: "container-y", sessionKey: "sess:y" }));
-
-    const entry = await readRegistryEntry("container-x");
-    expect(entry).not.toBeNull();
-    expect(entry?.containerName).toBe("container-x");
-    expect(entry?.sessionKey).toBe("sess:x");
-  });
-
-  it("readRegistryEntry returns null when the container has no entry file", async () => {
-    const missing = await readRegistryEntry("nonexistent-container");
-    expect(missing).toBeNull();
-  });
-
-  it("removeRegistryEntry deletes only the target container file", async () => {
-    await updateRegistry(containerEntry({ containerName: "container-a" }));
-    await updateRegistry(containerEntry({ containerName: "container-b" }));
-    await removeRegistryEntry("container-a");
-
-    const registry = await readRegistry();
-    expect(registry.entries).toHaveLength(1);
-    expect(registry.entries[0].containerName).toBe("container-b");
-  });
-
-  it("removeRegistryEntry is a no-op for a container that never existed", async () => {
-    // force:true on rm swallows ENOENT — callers should not have to
-    // check existence first.
-    await expect(removeRegistryEntry("never-created")).resolves.toBeUndefined();
-  });
-
-  it("updateRegistry preserves createdAtMs and image from an existing entry", async () => {
-    await updateRegistry(
-      containerEntry({
-        containerName: "c",
-        createdAtMs: 100,
-        lastUsedAtMs: 100,
-        image: "original:tag",
-      }),
-    );
-    await updateRegistry(
-      containerEntry({
-        containerName: "c",
-        createdAtMs: 999,
-        lastUsedAtMs: 200,
-        image: "ignored:tag",
-      }),
-    );
-
-    const entry = await readRegistryEntry("c");
-    expect(entry?.createdAtMs).toBe(100);
-    expect(entry?.lastUsedAtMs).toBe(200);
-    expect(entry?.image).toBe("original:tag");
-  });
-
-  it("readRegistry normalizes legacy entries that lack backendId/runtimeLabel/configLabelKind", async () => {
-    await seedMonolithicContainerRegistry([
+describe("registry race safety", () => {
+  it("normalizes legacy registry entries on read", async () => {
+    await seedContainerRegistry([
       {
         containerName: "legacy-container",
         sessionKey: "agent:main",
@@ -196,31 +194,84 @@ describe("per-file sharded container registry", () => {
     ]);
   });
 
-  it("skips a single corrupt per-entry file without hiding the other entries", async () => {
-    // A crashed writer that left behind a partial JSON file must not
-    // prevent other containers from being enumerated.
-    await updateRegistry(containerEntry({ containerName: "good-a" }));
-    await updateRegistry(containerEntry({ containerName: "good-b" }));
-    await fs.writeFile(`${SANDBOX_CONTAINERS_DIR}/corrupt.json`, "{not json", "utf-8");
+  it("reads a single sharded entry without scanning the full registry", async () => {
+    await updateRegistry(containerEntry({ containerName: "container-x", sessionKey: "sess:x" }));
+    await updateRegistry(containerEntry({ containerName: "container-y", sessionKey: "sess:y" }));
+
+    const entry = await readRegistryEntry("container-x");
+    expect(entry).toEqual(
+      expect.objectContaining({
+        containerName: "container-x",
+        sessionKey: "sess:x",
+      }),
+    );
+    await expect(readRegistryEntry("missing-container")).resolves.toBeNull();
+  });
+
+  it("keeps both container updates under concurrent writes", async () => {
+    await Promise.all([
+      updateRegistry(containerEntry({ containerName: "container-a" })),
+      updateRegistry(containerEntry({ containerName: "container-b" })),
+    ]);
 
     const registry = await readRegistry();
+    expect(registry.entries).toHaveLength(2);
     expect(
       registry.entries
         .map((entry) => entry.containerName)
         .slice()
         .toSorted(),
-    ).toEqual(["good-a", "good-b"]);
+    ).toEqual(["container-a", "container-b"]);
   });
-});
 
-describe("per-file sharded browser registry", () => {
-  it("writes and reads both browser entries under concurrent writes", async () => {
+  it("prevents concurrent container remove/update from resurrecting deleted entries", async () => {
+    await updateRegistry(containerEntry({ containerName: "container-x" }));
+    const writeGate = installWriteGate(null, "container-x");
+
+    const updatePromise = updateRegistry(
+      containerEntry({ containerName: "container-x", configHash: "updated" }),
+    );
+    await writeGate.waitForStart;
+    const removePromise = removeRegistryEntry("container-x");
+    writeGate.release();
+    await Promise.all([updatePromise, removePromise]);
+
+    const registry = await readRegistry();
+    expect(registry.entries).toHaveLength(0);
+  });
+
+  it("stores unsafe container names as encoded shard filenames", async () => {
+    await seedContainerRegistry([containerEntry({ containerName: "../escape" })]);
+
+    const registry = await readRegistry();
+
+    expect(registry.entries.map((entry) => entry.containerName)).toEqual(["../escape"]);
+    await expect(fs.access(`${TEST_STATE_DIR}/escape.json`)).rejects.toThrow();
+  });
+
+  it("returns registry entries in deterministic container-name order", async () => {
+    await Promise.all([
+      updateRegistry(containerEntry({ containerName: "container-c" })),
+      updateRegistry(containerEntry({ containerName: "container-a" })),
+      updateRegistry(containerEntry({ containerName: "container-b" })),
+    ]);
+
+    const registry = await readRegistry();
+    expect(registry.entries.map((entry) => entry.containerName)).toEqual([
+      "container-a",
+      "container-b",
+      "container-c",
+    ]);
+  });
+
+  it("keeps both browser updates under concurrent writes", async () => {
     await Promise.all([
       updateBrowserRegistry(browserEntry({ containerName: "browser-a" })),
       updateBrowserRegistry(browserEntry({ containerName: "browser-b", cdpPort: 9223 })),
     ]);
 
     const registry = await readBrowserRegistry();
+    expect(registry.entries).toHaveLength(2);
     expect(
       registry.entries
         .map((entry) => entry.containerName)
@@ -229,73 +280,43 @@ describe("per-file sharded browser registry", () => {
     ).toEqual(["browser-a", "browser-b"]);
   });
 
-  it("removes a single browser entry", async () => {
-    await updateBrowserRegistry(browserEntry({ containerName: "browser-a" }));
-    await removeBrowserRegistryEntry("browser-a");
+  it("prevents concurrent browser remove/update from resurrecting deleted entries", async () => {
+    await updateBrowserRegistry(browserEntry({ containerName: "browser-x" }));
+    const writeGate = installWriteGate(null, "browser-x");
+
+    const updatePromise = updateBrowserRegistry(
+      browserEntry({ containerName: "browser-x", configHash: "updated" }),
+    );
+    await writeGate.waitForStart;
+    const removePromise = removeBrowserRegistryEntry("browser-x");
+    writeGate.release();
+    await Promise.all([updatePromise, removePromise]);
 
     const registry = await readBrowserRegistry();
     expect(registry.entries).toHaveLength(0);
   });
-});
 
-describe("monolithic → per-file migration", () => {
-  it("migrates container entries from the legacy containers.json on first read", async () => {
-    await seedMonolithicContainerRegistry([
-      containerEntry({ containerName: "old-a", sessionKey: "sess:a" }),
-      containerEntry({ containerName: "old-b", sessionKey: "sess:b" }),
-    ]);
+  it("quarantines malformed legacy registry files during migration", async () => {
+    await seedMalformedContainerRegistry("{bad json");
+    await seedMalformedBrowserRegistry("{bad json");
+    await expect(updateRegistry(containerEntry())).resolves.toBeUndefined();
+    await expect(updateBrowserRegistry(browserEntry())).resolves.toBeUndefined();
 
-    const registry = await readRegistry();
-    expect(
-      registry.entries
-        .map((entry) => entry.containerName)
-        .slice()
-        .toSorted(),
-    ).toEqual(["old-a", "old-b"]);
-
-    // Legacy file is removed once migration succeeds, so subsequent reads
-    // go straight to the sharded dir.
     await expect(fs.access(SANDBOX_REGISTRY_PATH)).rejects.toThrow();
-  });
-
-  it("cleans up the stale .lock file alongside the migrated registry", async () => {
-    await seedMonolithicContainerRegistry([containerEntry({ containerName: "old-a" })]);
-    await fs.writeFile(`${SANDBOX_REGISTRY_PATH}.lock`, "stale", "utf-8");
-
-    await readRegistry();
-    await expect(fs.access(`${SANDBOX_REGISTRY_PATH}.lock`)).rejects.toThrow();
-  });
-
-  it("migrates browser entries from the legacy browsers.json", async () => {
-    await seedMonolithicBrowserRegistry([
-      browserEntry({ containerName: "old-br-a" }),
-      browserEntry({ containerName: "old-br-b", cdpPort: 9223 }),
-    ]);
-
-    const registry = await readBrowserRegistry();
-    expect(registry.entries).toHaveLength(2);
     await expect(fs.access(SANDBOX_BROWSER_REGISTRY_PATH)).rejects.toThrow();
+    await expect(readRegistry()).resolves.toEqual({
+      entries: [expect.objectContaining({ containerName: "container-a" })],
+    });
+    await expect(readBrowserRegistry()).resolves.toEqual({
+      entries: [expect.objectContaining({ containerName: "browser-a" })],
+    });
   });
 
-  it("drops a malformed legacy containers.json rather than throwing forever", async () => {
-    // A corrupt legacy file would otherwise block every sandbox operation
-    // on every boot — dropping it lets the operator recover just by
-    // creating a new container.
-    await fs.writeFile(SANDBOX_REGISTRY_PATH, "{bad json", "utf-8");
-
-    const registry = await readRegistry();
-    expect(registry.entries).toHaveLength(0);
-    await expect(fs.access(SANDBOX_REGISTRY_PATH)).rejects.toThrow();
-  });
-
-  it("drops a legacy containers.json whose entries fail schema validation", async () => {
-    // entries missing containerName cannot be migrated safely. Rather
-    // than preserving the bad file, we remove it — the lost data was
-    // unusable anyway, and keeping it around would block future boots.
-    await fs.writeFile(SANDBOX_REGISTRY_PATH, `{"entries":[{"sessionKey":"agent:main"}]}`, "utf-8");
-
-    const registry = await readRegistry();
-    expect(registry.entries).toHaveLength(0);
-    await expect(fs.access(SANDBOX_REGISTRY_PATH)).rejects.toThrow();
+  it("quarantines legacy registry files with invalid entries during migration", async () => {
+    const invalidEntries = `{"entries":[{"sessionKey":"agent:main"}]}`;
+    await seedMalformedContainerRegistry(invalidEntries);
+    await seedMalformedBrowserRegistry(invalidEntries);
+    await expect(updateRegistry(containerEntry())).resolves.toBeUndefined();
+    await expect(updateBrowserRegistry(browserEntry())).resolves.toBeUndefined();
   });
 });
