@@ -1190,6 +1190,7 @@
                   "plugins/dependency-resolution",
                   "plugins/codex-harness",
                   "plugins/codex-computer-use",
+                  "plugins/codex-claw",
                   "plugins/google-meet",
                   "plugins/webhooks",
                   "plugins/voice-call",

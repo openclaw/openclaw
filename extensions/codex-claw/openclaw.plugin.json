@@ -1,0 +1,20 @@
+{
+  "id": "codex-claw",
+  "name": "Codex Claw",
+  "description": "Installs a Codex Desktop bridge that loads OpenClaw AGENTS.md and SOUL.md context.",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": false,
+    "onCommands": ["codex-claw"]
+  },
+  "commandAliases": [
+    {
+      "name": "codex-claw"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
