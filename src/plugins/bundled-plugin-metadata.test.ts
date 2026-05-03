@@ -49,7 +49,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
-  "bonjour",
   "browser",
   "device-pair",
   "file-transfer",
@@ -130,6 +129,34 @@ function listRepoBundledPluginManifests() {
       const result = loadPluginManifest(path.join(bundledPluginsDir, entry.name), false);
       return result.ok ? [{ dirName: entry.name, manifest: result.manifest }] : [];
     });
+}
+
+function createRepoBundledManifestRegistry(): PluginManifestRegistry {
+  return {
+    plugins: listRepoBundledPluginManifests().map(({ manifest, dirName }) => ({
+      id: manifest.id,
+      name: manifest.name,
+      description: manifest.description,
+      version: manifest.version,
+      enabledByDefault: manifest.enabledByDefault === true ? true : undefined,
+      kind: manifest.kind,
+      channels: manifest.channels ?? [],
+      providers: manifest.providers ?? [],
+      cliBackends: manifest.cliBackends ?? [],
+      syntheticAuthRefs: manifest.syntheticAuthRefs ?? [],
+      nonSecretAuthMarkers: manifest.nonSecretAuthMarkers ?? [],
+      skills: manifest.skills ?? [],
+      origin: "bundled",
+      rootDir: path.join(repoRoot, "extensions", dirName),
+      source: path.join(repoRoot, "extensions", dirName, "index.ts"),
+      manifestPath: path.join(repoRoot, "extensions", dirName, "openclaw.plugin.json"),
+      activation: manifest.activation,
+      setup: manifest.setup,
+      hooks: [],
+      contracts: manifest.contracts,
+    })),
+    diagnostics: [],
+  };
 }
 
 function readPackageManifest(pluginDir: string): PackageManifest | undefined {
@@ -432,31 +459,7 @@ describe("bundled plugin metadata", () => {
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
-    const manifestRegistry = {
-      plugins: listRepoBundledPluginManifests().map(({ manifest, dirName }) => ({
-        id: manifest.id,
-        name: manifest.name,
-        description: manifest.description,
-        version: manifest.version,
-        enabledByDefault: manifest.enabledByDefault === true ? true : undefined,
-        kind: manifest.kind,
-        channels: manifest.channels ?? [],
-        providers: manifest.providers ?? [],
-        cliBackends: manifest.cliBackends ?? [],
-        syntheticAuthRefs: manifest.syntheticAuthRefs ?? [],
-        nonSecretAuthMarkers: manifest.nonSecretAuthMarkers ?? [],
-        skills: manifest.skills ?? [],
-        origin: "bundled",
-        rootDir: path.join(repoRoot, "extensions", dirName),
-        source: path.join(repoRoot, "extensions", dirName, "index.ts"),
-        manifestPath: path.join(repoRoot, "extensions", dirName, "openclaw.plugin.json"),
-        activation: manifest.activation,
-        setup: manifest.setup,
-        hooks: [],
-        contracts: manifest.contracts,
-      })),
-      diagnostics: [],
-    } satisfies PluginManifestRegistry;
+    const manifestRegistry = createRepoBundledManifestRegistry();
     const index = createInstalledPluginIndexForManifests(manifestRegistry);
 
     expect(
@@ -467,6 +470,20 @@ describe("bundled plugin metadata", () => {
         manifestRegistry,
       }),
     ).toEqual(EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS);
+  });
+
+  it("starts Bonjour when explicitly enabled", () => {
+    const manifestRegistry = createRepoBundledManifestRegistry();
+    const index = createInstalledPluginIndexForManifests(manifestRegistry);
+
+    expect(
+      resolveGatewayStartupPluginIdsFromRegistry({
+        config: { plugins: { entries: { bonjour: { enabled: true } } } },
+        env: process.env,
+        index,
+        manifestRegistry,
+      }),
+    ).toContain("bonjour");
   });
 
   it("prefers built generated paths when present and falls back to source paths", () => {
