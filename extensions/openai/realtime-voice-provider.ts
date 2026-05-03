@@ -731,8 +731,12 @@ function resolveOpenAIRealtimeBrowserOfferHeaders(): Record<string, string> | un
     transport: "http",
     defaultHeaders: {},
   });
+  // Strip server-side-only attribution headers: browser direct fetches to
+  // api.openai.com fail CORS preflight when these are present (only
+  // authorization,content-type are allowed by the endpoint's CORS policy).
+  const SERVER_ONLY_HEADERS = new Set(["user-agent", "originator", "version"]);
   const browserHeaders = Object.fromEntries(
-    Object.entries(headers ?? {}).filter(([key]) => key.toLowerCase() !== "user-agent"),
+    Object.entries(headers ?? {}).filter(([key]) => !SERVER_ONLY_HEADERS.has(key.toLowerCase())),
   );
   return Object.keys(browserHeaders).length > 0 ? browserHeaders : undefined;
 }

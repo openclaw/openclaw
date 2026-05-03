@@ -46,6 +46,50 @@ function assertPluginRemoved(params) {
   }
 }
 
+function rememberPluginInstallPath(params) {
+  const record = getInstallRecords()[params.pluginId];
+  if (!record) {
+    throw new Error(`missing install record for ${params.pluginId}`);
+  }
+  if (params.source && record.source !== params.source) {
+    throw new Error(`unexpected source for ${params.pluginId}: ${record.source}`);
+  }
+  if (params.sourcePath && record.sourcePath !== params.sourcePath) {
+    throw new Error(
+      `unexpected source path for ${params.pluginId}: ${record.sourcePath}, expected ${params.sourcePath}`,
+    );
+  }
+  const installPath = record.installPath?.replace(/^~(?=$|\/)/u, process.env.HOME);
+  if (!installPath || !fs.existsSync(installPath)) {
+    throw new Error(`${params.pluginId} install path missing on disk: ${installPath}`);
+  }
+  fs.writeFileSync(params.installPathFile, installPath, "utf8");
+  if (params.sourcePathFile && params.sourcePath) {
+    fs.writeFileSync(params.sourcePathFile, params.sourcePath, "utf8");
+  }
+  return { installPath, record };
+}
+
+function assertManagedInstallRemoved(params) {
+  const installPath = fs.readFileSync(params.installPathFile, "utf8").trim();
+  const sourcePath =
+    params.sourcePathFile && fs.existsSync(params.sourcePathFile)
+      ? fs.readFileSync(params.sourcePathFile, "utf8").trim()
+      : "";
+  assertPluginRemoved({
+    pluginId: params.pluginId,
+    listFile: params.listFile,
+  });
+  if (sourcePath && !fs.existsSync(sourcePath)) {
+    throw new Error(`${params.pluginId} source path was deleted during uninstall: ${sourcePath}`);
+  }
+  if (installPath !== sourcePath && fs.existsSync(installPath)) {
+    throw new Error(
+      `${params.pluginId} managed install path still exists after uninstall: ${installPath}`,
+    );
+  }
+}
+
 function recordFixturePluginTrust() {
   const pluginId = process.argv[3];
   const pluginRoot = process.argv[4];
@@ -246,6 +290,54 @@ function assertMarketplaceRecords() {
   }
 }
 
+function assertPluginTgz() {
+  assertSimplePlugin(
+    "/tmp/plugins2.json",
+    "/tmp/plugins2-inspect.json",
+    "demo-plugin-tgz",
+    "demo.tgz",
+  );
+  rememberPluginInstallPath({
+    pluginId: "demo-plugin-tgz",
+    installPathFile: "/tmp/plugins2-install-path.txt",
+    source: "archive",
+  });
+}
+
+function assertPluginTgzRemoved() {
+  assertManagedInstallRemoved({
+    pluginId: "demo-plugin-tgz",
+    listFile: "/tmp/plugins2-uninstalled.json",
+    installPathFile: "/tmp/plugins2-install-path.txt",
+  });
+}
+
+function assertPluginDir() {
+  const sourceDir = process.argv[3];
+  assertSimplePlugin(
+    "/tmp/plugins3.json",
+    "/tmp/plugins3-inspect.json",
+    "demo-plugin-dir",
+    "demo.dir",
+  );
+  rememberPluginInstallPath({
+    pluginId: "demo-plugin-dir",
+    installPathFile: "/tmp/plugins3-install-path.txt",
+    sourcePathFile: "/tmp/plugins3-source-path.txt",
+    source: "path",
+    sourcePath: sourceDir,
+  });
+}
+
+function assertPluginDirRemoved() {
+  assertManagedInstallRemoved({
+    pluginId: "demo-plugin-dir",
+    listFile: "/tmp/plugins3-uninstalled.json",
+    installPathFile: "/tmp/plugins3-install-path.txt",
+    sourcePathFile: "/tmp/plugins3-source-path.txt",
+  });
+}
+
 function assertGitPlugin() {
   const repoUrl = process.argv[3];
   const gitRef = process.argv[4];
@@ -403,6 +495,22 @@ function assertPluginDirDeps() {
     throw new Error(`missing copied local plugin dependency: ${dependencyPackagePath}`);
   }
   assertRealPathInside(installPath, dependencyPackagePath, "local plugin copied dependency");
+  rememberPluginInstallPath({
+    pluginId: "demo-plugin-dir-deps",
+    installPathFile: "/tmp/plugins-dir-deps-install-path.txt",
+    sourcePathFile: "/tmp/plugins-dir-deps-source-path.txt",
+    source: "path",
+    sourcePath: sourceDir,
+  });
+}
+
+function assertPluginDirDepsRemoved() {
+  assertManagedInstallRemoved({
+    pluginId: "demo-plugin-dir-deps",
+    listFile: "/tmp/plugins-dir-deps-uninstalled.json",
+    installPathFile: "/tmp/plugins-dir-deps-install-path.txt",
+    sourcePathFile: "/tmp/plugins-dir-deps-source-path.txt",
+  });
 }
 
 function assertLocalPathUpdateSkipped() {
@@ -461,6 +569,32 @@ function assertNpmPlugin() {
 function assertNpmPluginUpdateUnchanged() {
   assertUpdateOutput("/tmp/plugins-npm-update.log", "demo-plugin-npm is up to date (0.0.1).");
   assertNpmPlugin();
+}
+
+function assertPluginFile() {
+  const sourceDir = process.argv[3];
+  assertSimplePlugin(
+    "/tmp/plugins4.json",
+    "/tmp/plugins4-inspect.json",
+    "demo-plugin-file",
+    "demo.file",
+  );
+  rememberPluginInstallPath({
+    pluginId: "demo-plugin-file",
+    installPathFile: "/tmp/plugins4-install-path.txt",
+    sourcePathFile: "/tmp/plugins4-source-path.txt",
+    source: "path",
+    sourcePath: sourceDir,
+  });
+}
+
+function assertPluginFileRemoved() {
+  assertManagedInstallRemoved({
+    pluginId: "demo-plugin-file",
+    listFile: "/tmp/plugins4-uninstalled.json",
+    installPathFile: "/tmp/plugins4-install-path.txt",
+    sourcePathFile: "/tmp/plugins4-source-path.txt",
+  });
 }
 
 function assertNpmPluginRemoved() {
@@ -689,29 +823,15 @@ function assertClawHubUpdated() {
 const commands = {
   "record-fixture-plugin-trust": recordFixturePluginTrust,
   "demo-plugin": assertDemoPlugin,
-  "plugin-tgz": () =>
-    assertSimplePlugin(
-      "/tmp/plugins2.json",
-      "/tmp/plugins2-inspect.json",
-      "demo-plugin-tgz",
-      "demo.tgz",
-    ),
-  "plugin-dir": () =>
-    assertSimplePlugin(
-      "/tmp/plugins3.json",
-      "/tmp/plugins3-inspect.json",
-      "demo-plugin-dir",
-      "demo.dir",
-    ),
+  "plugin-tgz": assertPluginTgz,
+  "plugin-tgz-removed": assertPluginTgzRemoved,
+  "plugin-dir": assertPluginDir,
+  "plugin-dir-removed": assertPluginDirRemoved,
   "plugin-dir-update-skipped": assertLocalPathUpdateSkipped,
   "plugin-dir-deps": assertPluginDirDeps,
-  "plugin-file": () =>
-    assertSimplePlugin(
-      "/tmp/plugins4.json",
-      "/tmp/plugins4-inspect.json",
-      "demo-plugin-file",
-      "demo.file",
-    ),
+  "plugin-dir-deps-removed": assertPluginDirDepsRemoved,
+  "plugin-file": assertPluginFile,
+  "plugin-file-removed": assertPluginFileRemoved,
   "plugin-npm": assertNpmPlugin,
   "plugin-npm-update": assertNpmPluginUpdateUnchanged,
   "plugin-npm-removed": assertNpmPluginRemoved,

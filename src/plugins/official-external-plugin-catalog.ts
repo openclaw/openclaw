@@ -112,6 +112,17 @@ export function resolveOfficialExternalPluginId(
   );
 }
 
+function resolveOfficialExternalPluginLookupIds(
+  entry: OfficialExternalPluginCatalogEntry,
+): string[] {
+  const manifest = getOfficialExternalPluginCatalogManifest(entry);
+  return [
+    normalizeOptionalString(manifest?.plugin?.id),
+    normalizeOptionalString(manifest?.channel?.id),
+    normalizeOptionalString(manifest?.providers?.[0]?.id),
+  ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+}
+
 export function resolveOfficialExternalPluginLabel(
   entry: OfficialExternalPluginCatalogEntry,
 ): string {
@@ -183,7 +194,7 @@ export function getOfficialExternalPluginCatalogEntry(
   if (!normalized) {
     return undefined;
   }
-  return listOfficialExternalPluginCatalogEntries().find(
-    (entry) => resolveOfficialExternalPluginId(entry) === normalized,
+  return listOfficialExternalPluginCatalogEntries().find((entry) =>
+    resolveOfficialExternalPluginLookupIds(entry).includes(normalized),
   );
 }

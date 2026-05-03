@@ -275,7 +275,9 @@ function collectDownloadableInstallCandidates(params: {
     if (params.blockedPluginIds?.has(entry.pluginId)) {
       continue;
     }
-    candidates.set(entry.pluginId, entry);
+    if (!candidates.has(entry.pluginId)) {
+      candidates.set(entry.pluginId, entry);
+    }
   }
 
   return [...candidates.values()].toSorted((left, right) =>
