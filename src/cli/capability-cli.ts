@@ -90,6 +90,7 @@ import { collectOption } from "./program/helpers.js";
 type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 
 type CapabilityMetadata = {
   id: string;
@@ -664,6 +665,7 @@ async function runModelRun(params: {
       auth: prepared.auth,
       cfg,
       context: {
+        systemPrompt: LOCAL_MODEL_RUN_SYSTEM_PROMPT,
         messages: [
           {
             role: "user",
@@ -681,8 +683,13 @@ async function runModelRun(params: {
     });
     const text = collectModelRunText(result.content);
     if (!text) {
+      const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
+      const detail =
+        typeof providerErrorMessage === "string" && providerErrorMessage.trim()
+          ? `: ${providerErrorMessage.trim()}`
+          : "";
       throw new Error(
-        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}".`,
+        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
       );
     }
     return {

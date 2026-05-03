@@ -406,14 +406,15 @@ describe("capability cli", () => {
     );
     expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        context: {
+        context: expect.objectContaining({
+          systemPrompt: "You are a personal assistant running inside OpenClaw.",
           messages: [
             expect.objectContaining({
               role: "user",
               content: "hello",
             }),
           ],
-        },
+        }),
       }),
     );
   });
@@ -438,7 +439,8 @@ describe("capability cli", () => {
 
     expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        context: {
+        context: expect.objectContaining({
+          systemPrompt: "You are a personal assistant running inside OpenClaw.",
           messages: [
             expect.objectContaining({
               role: "user",
@@ -448,7 +450,7 @@ describe("capability cli", () => {
               ],
             }),
           ],
-        },
+        }),
       }),
     );
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
@@ -543,6 +545,26 @@ describe("capability cli", () => {
 
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining('No text output returned for provider "openai" model "gpt-5.4"'),
+    );
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("surfaces provider errors when local model probes return no text output", async () => {
+    mocks.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [],
+      stopReason: "error",
+      errorMessage: '{"detail":"Instructions are required"}',
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining('{"detail":"Instructions are required"}'),
     );
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
