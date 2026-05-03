@@ -101,6 +101,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Kimi Code: strip Anthropic `cache_control` prompt-cache markers before sending requests to Kimi's Anthropic-compatible endpoint, preventing successful runs from ending with empty content. Fixes #76612. Thanks @vliuyt.
 - Slack: preserve Socket Mode SDK error context and structured Slack API fields in reconnect logs, so startup failures no longer collapse to a bare `unknown error`.
 - iOS pairing: allow setup-code and manual `ws://` connects for private LAN and `.local` gateways while keeping Tailscale/public routes on `wss://`, and prefer explicit gateway passwords over stale bootstrap tokens in mixed-auth reconnects. Fixes #47887; carries forward #65185. Thanks @draix and @BunsDev.
 - Plugins/diagnostics: make source-only TypeScript package warnings actionable by explaining that missing compiled runtime output is a publisher packaging issue and pointing users to update/reinstall or disable/uninstall the plugin. Fixes #77835. Thanks @googlerest.
