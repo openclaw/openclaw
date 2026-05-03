@@ -16,6 +16,7 @@ import {
   browserArmFileChooser,
   browserCloseTab,
   browserDoctor,
+  browserDownload,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -25,6 +26,7 @@ import {
   browserStart,
   browserStatus,
   browserStop,
+  browserWaitForDownload,
   callGatewayTool,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
@@ -44,7 +46,10 @@ import {
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
-import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+import {
+  DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
+  DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+} from "./browser/constants.js";
 
 const browserToolDeps = {
   browserAct,
@@ -52,6 +57,7 @@ const browserToolDeps = {
   browserArmFileChooser,
   browserCloseTab,
   browserDoctor,
+  browserDownload,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -61,6 +67,7 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
+  browserWaitForDownload,
   getRuntimeConfig,
   imageResultFromFile,
   listNodes,
@@ -78,6 +85,7 @@ export const __testing = {
       browserArmFileChooser: typeof browserArmFileChooser;
       browserCloseTab: typeof browserCloseTab;
       browserDoctor: typeof browserDoctor;
+      browserDownload: typeof browserDownload;
       browserFocusTab: typeof browserFocusTab;
       browserNavigate: typeof browserNavigate;
       browserOpenTab: typeof browserOpenTab;
@@ -87,6 +95,7 @@ export const __testing = {
       browserStart: typeof browserStart;
       browserStatus: typeof browserStatus;
       browserStop: typeof browserStop;
+      browserWaitForDownload: typeof browserWaitForDownload;
       imageResultFromFile: typeof imageResultFromFile;
       getRuntimeConfig: typeof getRuntimeConfig;
       listNodes: typeof listNodes;
@@ -102,6 +111,7 @@ export const __testing = {
       overrides?.browserArmFileChooser ?? browserArmFileChooser;
     browserToolDeps.browserCloseTab = overrides?.browserCloseTab ?? browserCloseTab;
     browserToolDeps.browserDoctor = overrides?.browserDoctor ?? browserDoctor;
+    browserToolDeps.browserDownload = overrides?.browserDownload ?? browserDownload;
     browserToolDeps.browserFocusTab = overrides?.browserFocusTab ?? browserFocusTab;
     browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
     browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
@@ -112,6 +122,8 @@ export const __testing = {
     browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
     browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
     browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
+    browserToolDeps.browserWaitForDownload =
+      overrides?.browserWaitForDownload ?? browserWaitForDownload;
     browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
     browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
     browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
@@ -203,6 +215,7 @@ type BrowserProxyResult = {
 
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
+const BROWSER_DOWNLOAD_PROXY_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserNodeTarget = {
   nodeId: string;
@@ -327,6 +340,14 @@ async function callBrowserProxy(params: {
   return parsed;
 }
 
+function resolveDownloadProxyTimeoutMs(timeoutMs: number | undefined): number {
+  const waitTimeoutMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.floor(timeoutMs)
+      : DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
+  return waitTimeoutMs + BROWSER_DOWNLOAD_PROXY_TIMEOUT_SLACK_MS;
+}
+
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
   return await persistBrowserProxyFiles(files);
 }
@@ -428,7 +449,7 @@ export function createBrowserTool(opts?: {
     label: "Browser",
     name: "browser",
     description: [
-      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
+      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/download/actions).",
       "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
       'For the logged-in user browser, use profile="user". A supported Chromium-based browser (v144+) must be running on the selected host or browser node. Use only when existing logins/cookies matter and the user is present.',
       'For profile="user" or other existing-session profiles, omit timeoutMs on act:type, evaluate, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.',
@@ -807,6 +828,57 @@ export function createBrowserTool(opts?: {
             content: [{ type: "text" as const, text: `FILE:${result.path}` }],
             details: result,
           };
+        }
+        case "download": {
+          const ref = readStringParam(params, "ref", { required: true });
+          const path = readStringParam(params, "path", { required: true });
+          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
+          const result = proxyRequest
+            ? await proxyRequest({
+                method: "POST",
+                path: "/download",
+                profile,
+                timeoutMs: resolveDownloadProxyTimeoutMs(timeoutMs),
+                body: {
+                  ref,
+                  path,
+                  targetId,
+                  timeoutMs,
+                },
+              })
+            : await browserToolDeps.browserDownload(baseUrl, {
+                ref,
+                path,
+                targetId,
+                timeoutMs,
+                profile,
+              });
+          touchTrackedTab(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+          return jsonResult(result);
+        }
+        case "waitfordownload": {
+          const path = readStringParam(params, "path");
+          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
+          const result = proxyRequest
+            ? await proxyRequest({
+                method: "POST",
+                path: "/wait/download",
+                profile,
+                timeoutMs: resolveDownloadProxyTimeoutMs(timeoutMs),
+                body: {
+                  path,
+                  targetId,
+                  timeoutMs,
+                },
+              })
+            : await browserToolDeps.browserWaitForDownload(baseUrl, {
+                path,
+                targetId,
+                timeoutMs,
+                profile,
+              });
+          touchTrackedTab(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+          return jsonResult(result);
         }
         case "upload": {
           const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : [];

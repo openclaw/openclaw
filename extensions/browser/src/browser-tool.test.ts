@@ -57,9 +57,27 @@ const browserActionsMocks = vi.hoisted(() => ({
       },
     ],
   })),
+  browserDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "t1",
+    download: {
+      path: "/tmp/openclaw/downloads/report.pdf",
+      suggestedFilename: "report.pdf",
+      url: "https://example.com/report.pdf",
+    },
+  })),
   browserNavigate: vi.fn(async () => ({ ok: true })),
   browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
   browserScreenshotAction: vi.fn(async () => ({ ok: true, path: "/tmp/test.png" })),
+  browserWaitForDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "t1",
+    download: {
+      path: "/tmp/openclaw/downloads/report.pdf",
+      suggestedFilename: "report.pdf",
+      url: "https://example.com/report.pdf",
+    },
+  })),
 }));
 vi.mock("./browser/client-actions.js", () => browserActionsMocks);
 
@@ -251,6 +269,7 @@ function resetBrowserToolMocks() {
     browserArmFileChooser: browserActionsMocks.browserArmFileChooser as never,
     browserCloseTab: browserClientMocks.browserCloseTab as never,
     browserDoctor: browserClientMocks.browserDoctor as never,
+    browserDownload: browserActionsMocks.browserDownload as never,
     browserFocusTab: browserClientMocks.browserFocusTab as never,
     browserNavigate: browserActionsMocks.browserNavigate as never,
     browserOpenTab: browserClientMocks.browserOpenTab as never,
@@ -260,6 +279,7 @@ function resetBrowserToolMocks() {
     browserStart: browserClientMocks.browserStart as never,
     browserStatus: browserClientMocks.browserStatus as never,
     browserStop: browserClientMocks.browserStop as never,
+    browserWaitForDownload: browserActionsMocks.browserWaitForDownload as never,
     imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
     getRuntimeConfig: configMocks.loadConfig as never,
     listNodes: nodesUtilsMocks.listNodes as never,
@@ -784,6 +804,202 @@ describe("browser tool snapshot maxChars", () => {
         }),
       }),
     );
+  });
+
+  it("downloads a ref through the host browser client", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "download",
+      ref: "e12",
+      path: "report.pdf",
+      targetId: "tab-1",
+      timeoutMs: 30_000,
+    });
+
+    expect(browserActionsMocks.browserDownload).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        ref: "e12",
+        path: "report.pdf",
+        targetId: "tab-1",
+        timeoutMs: 30_000,
+        profile: undefined,
+      }),
+    );
+  });
+
+  it("waits for a download through the host browser client", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "waitfordownload",
+      path: "export.csv",
+      targetId: "tab-1",
+      timeoutMs: 30_000,
+      profile: "openclaw",
+    });
+
+    expect(browserActionsMocks.browserWaitForDownload).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        path: "export.csv",
+        targetId: "tab-1",
+        timeoutMs: 30_000,
+        profile: "openclaw",
+      }),
+    );
+  });
+
+  it("routes download actions through the node browser proxy", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          targetId: "tab-1",
+          download: {
+            path: "/tmp/openclaw/downloads/report.pdf",
+            suggestedFilename: "report.pdf",
+            url: "https://example.com/report.pdf",
+          },
+        },
+      },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "download",
+      target: "node",
+      ref: "e12",
+      path: "report.pdf",
+      targetId: "tab-1",
+      timeoutMs: 30_000,
+      profile: "openclaw",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 40_000 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          method: "POST",
+          path: "/download",
+          profile: "openclaw",
+          timeoutMs: 35_000,
+          body: expect.objectContaining({
+            ref: "e12",
+            path: "report.pdf",
+            targetId: "tab-1",
+            timeoutMs: 30_000,
+          }),
+        }),
+      }),
+    );
+    expect(browserActionsMocks.browserDownload).not.toHaveBeenCalled();
+  });
+
+  it("routes waitfordownload actions through the node browser proxy", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          targetId: "tab-1",
+          download: {
+            path: "/tmp/openclaw/downloads/export.csv",
+            suggestedFilename: "export.csv",
+            url: "https://example.com/export.csv",
+          },
+        },
+      },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "waitfordownload",
+      target: "node",
+      path: "export.csv",
+      targetId: "tab-1",
+      timeoutMs: 30_000,
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 40_000 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          method: "POST",
+          path: "/wait/download",
+          timeoutMs: 35_000,
+          body: expect.objectContaining({
+            path: "export.csv",
+            targetId: "tab-1",
+            timeoutMs: 30_000,
+          }),
+        }),
+      }),
+    );
+    expect(browserActionsMocks.browserWaitForDownload).not.toHaveBeenCalled();
+  });
+
+  it("uses the default download wait timeout for node proxy transport", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          targetId: "tab-1",
+          download: {
+            path: "/tmp/openclaw/downloads/export.csv",
+            suggestedFilename: "export.csv",
+            url: "https://example.com/export.csv",
+          },
+        },
+      },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "waitfordownload",
+      target: "node",
+      path: "export.csv",
+      targetId: "tab-1",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 130_000 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          method: "POST",
+          path: "/wait/download",
+          timeoutMs: 125_000,
+          body: expect.objectContaining({
+            path: "export.csv",
+            targetId: "tab-1",
+            timeoutMs: undefined,
+          }),
+        }),
+      }),
+    );
+    expect(browserActionsMocks.browserWaitForDownload).not.toHaveBeenCalled();
+  });
+
+  it("requires a ref and path for explicit download actions", async () => {
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "download",
+        path: "report.pdf",
+      }),
+    ).rejects.toThrow(/ref required/i);
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "download",
+        ref: "e12",
+      }),
+    ).rejects.toThrow(/path required/i);
   });
 
   it("keeps sandbox bridge url when node proxy is available", async () => {

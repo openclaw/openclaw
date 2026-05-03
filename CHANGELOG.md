@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/CLI: include package dependency install state in `openclaw plugins list --json` so scripts can spot missing plugin dependencies without runtime-loading plugins.
 - Plugins/update: on the beta OpenClaw update channel, default-line npm and ClawHub plugin updates try `@beta` first and fall back to default/latest when no plugin beta release exists.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
+- Browser: expose managed browser `download` and `waitfordownload` actions in the agent browser tool, matching the existing CLI/control API download helpers so agents can capture downloaded file paths. Related #38519 and #12378. Thanks @softengineware and @vabole.
 
 ### Fixes
 
