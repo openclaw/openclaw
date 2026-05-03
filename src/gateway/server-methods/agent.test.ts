@@ -2802,6 +2802,7 @@ describe("gateway agent handler", () => {
 
     const respond = await runMainAgent("smoke", "non-delivery-deny");
 
+    expect(mocks.resolveSendPolicy).not.toHaveBeenCalled();
     expect(respond).not.toHaveBeenCalledWith(
       false,
       undefined,
