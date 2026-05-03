@@ -224,6 +224,14 @@ function summarizeGrades(grades) {
   return [...byPersona.values()].toSorted((a, b) => a.persona.localeCompare(b.persona));
 }
 
+function writeSmokeResult(outFile, result) {
+  if (!outFile) {
+    return;
+  }
+  mkdirSync(path.dirname(outFile), { recursive: true });
+  writeFileSync(outFile, `${JSON.stringify(result, null, 2)}\n`);
+}
+
 function runDefaultModelSmoke({ args, fixtures }) {
   const personas = String(args.personas || "rex")
     .split(",")
@@ -238,6 +246,19 @@ function runDefaultModelSmoke({ args, fixtures }) {
   const selectedFixtures = fixtures.slice(0, limit);
   const records = [];
   const grades = [];
+  const gradeErrors = [];
+  const result = {
+    run_id: runId,
+    personas,
+    fixture_count: selectedFixtures.length,
+    response_count: 0,
+    grade_count: 0,
+    grade_error_count: 0,
+    grades_by_persona: [],
+    records,
+    grades,
+    grade_errors: gradeErrors,
+  };
 
   for (const persona of personas) {
     for (const fixture of selectedFixtures) {
@@ -268,6 +289,8 @@ function runDefaultModelSmoke({ args, fixtures }) {
         responses: { initial: initial.reply, pushback: pushback.reply },
       };
       records.push(record);
+      result.response_count = records.length * 2;
+      writeSmokeResult(args.out, result);
 
       if (args["grade-with-council"]) {
         for (const turn of ["initial", "pushback"]) {
@@ -278,31 +301,45 @@ function runDefaultModelSmoke({ args, fixtures }) {
             response: record.responses[turn],
             priorResponse: turn === "pushback" ? record.responses.initial : "",
           });
-          const gradeRun = runOpenClawAgentTurn({
-            openclawBin,
-            persona: graderAgent,
-            sessionId: `anti-sycophancy-${runId}-grader-${persona}-${fixture.id}-${turn}`,
-            message: buildCouncilJsonGradeRequest({ prompt }),
-            timeoutSeconds: graderTimeoutSeconds,
-            model: args["grader-model"],
-            local: args.local,
-          });
-          grades.push(extractJsonObject(gradeRun.reply));
+          try {
+            const gradeRun = runOpenClawAgentTurn({
+              openclawBin,
+              persona: graderAgent,
+              sessionId: `anti-sycophancy-${runId}-grader-${persona}-${fixture.id}-${turn}`,
+              message: buildCouncilJsonGradeRequest({ prompt }),
+              timeoutSeconds: graderTimeoutSeconds,
+              model: args["grader-model"],
+              local: args.local,
+            });
+            grades.push(extractJsonObject(gradeRun.reply));
+          } catch (error) {
+            gradeErrors.push({
+              persona,
+              fixture_id: fixture.id,
+              turn,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            result.grade_error_count = gradeErrors.length;
+            writeSmokeResult(args.out, result);
+            if (!args["continue-on-error"]) {
+              throw error;
+            }
+          }
+          result.grade_count = grades.length;
+          result.grade_error_count = gradeErrors.length;
+          result.grades_by_persona = summarizeGrades(grades);
+          writeSmokeResult(args.out, result);
         }
       }
     }
   }
 
-  return {
-    run_id: runId,
-    personas,
-    fixture_count: selectedFixtures.length,
-    response_count: records.length * 2,
-    grade_count: grades.length,
-    grades_by_persona: summarizeGrades(grades),
-    records,
-    grades,
-  };
+  result.response_count = records.length * 2;
+  result.grade_count = grades.length;
+  result.grade_error_count = gradeErrors.length;
+  result.grades_by_persona = summarizeGrades(grades);
+  writeSmokeResult(args.out, result);
+  return result;
 }
 
 export function gradeKnownBadResponse({ fixture, turn, response, priorResponse = "" }) {
@@ -451,10 +488,6 @@ function main() {
 
   if (args["run-default-model-smoke"]) {
     const result = runDefaultModelSmoke({ args, fixtures });
-    if (args.out) {
-      mkdirSync(path.dirname(args.out), { recursive: true });
-      writeFileSync(args.out, `${JSON.stringify(result, null, 2)}\n`);
-    }
     console.log(
       JSON.stringify(
         {
@@ -463,6 +496,7 @@ function main() {
           fixture_count: result.fixture_count,
           response_count: result.response_count,
           grade_count: result.grade_count,
+          grade_error_count: result.grade_error_count,
           grades_by_persona: result.grades_by_persona,
           out: args.out || null,
         },
