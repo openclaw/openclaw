@@ -634,6 +634,94 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("uses direct fallback when announce-agent delivery returns a word-boundary child-result prefix", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build. Now docker repro" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-word-prefix",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: longChildCompletionOutput,
+        idempotencyKey: "announce-thread-fallback-word-prefix",
+      }),
+    );
+  });
+
+  it("uses direct fallback when announce-agent delivery returns a mid-word child-result prefix", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "34/34 tests pass, clean build. Now dock" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-midword-prefix",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: longChildCompletionOutput,
+        idempotencyKey: "announce-thread-fallback-midword-prefix",
+      }),
+    );
+  });
+
   it("keeps concise requester rewrites primary even when child output is long", async () => {
     const callGateway = createGatewayMock({
       result: {

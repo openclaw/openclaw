@@ -600,15 +600,12 @@ function normalizeCompletionIntegrityText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function hasIncompleteCompletionPrefixBoundary(value: string): boolean {
+function hasCompleteCompletionSummaryBoundary(value: string): boolean {
   const trimmed = value.replace(/[\s"')\]]+$/g, "");
   if (!trimmed) {
     return false;
   }
-  if (/[.!?]$/.test(trimmed)) {
-    return false;
-  }
-  return /[:;,]$/.test(trimmed);
+  return /[.!?]$/.test(trimmed);
 }
 
 function hasIncompleteCompletionPrefix(response: unknown, completionFallbackText: string): boolean {
@@ -627,7 +624,7 @@ function hasIncompleteCompletionPrefix(response: unknown, completionFallbackText
   ) {
     return false;
   }
-  return expected.startsWith(visible) && hasIncompleteCompletionPrefixBoundary(visible);
+  return expected.startsWith(visible) && !hasCompleteCompletionSummaryBoundary(visible);
 }
 
 function shouldSendCompletionFallback(response: unknown, completionFallbackText: string): boolean {
