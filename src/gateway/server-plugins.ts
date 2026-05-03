@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -530,9 +531,13 @@ export function loadGatewayPlugins(params: {
   pluginLookUpTable?: PluginLookUpTable;
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
+  startupTrace?: {
+    detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+  };
 }) {
+  const started = performance.now();
   const activationAutoEnabled =
-    params.activationSourceConfig !== undefined
+    params.activationSourceConfig !== undefined && params.autoEnabledReasons === undefined
       ? applyPluginAutoEnable({
           config: params.activationSourceConfig,
           env: process.env,
@@ -541,6 +546,7 @@ export function loadGatewayPlugins(params: {
             : {}),
         })
       : undefined;
+  const autoEnableMs = performance.now() - started;
   const autoEnabled =
     params.activationSourceConfig !== undefined
       ? {
@@ -562,6 +568,7 @@ export function loadGatewayPlugins(params: {
               ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
               : {}),
           });
+  const resolvedConfigMs = performance.now() - started;
   const resolvedConfig = autoEnabled.config;
   const pluginIds = params.pluginIds ?? [
     ...(
@@ -574,15 +581,24 @@ export function loadGatewayPlugins(params: {
       })
     ).startup.pluginIds,
   ];
+  const pluginIdsMs = performance.now() - started;
   if (pluginIds.length === 0) {
     clearActivatedPluginRuntimeState();
     const pluginRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
+    params.startupTrace?.detail("plugins.gateway-load", [
+      ["autoEnableMs", autoEnableMs],
+      ["resolvedConfigMs", resolvedConfigMs],
+      ["pluginIdsMs", pluginIdsMs],
+      ["loadMs", 0],
+      ["pluginIds", "0"],
+    ]);
     return {
       pluginRegistry,
       gatewayMethods: [...params.baseMethods],
     };
   }
+  const beforeLoad = performance.now();
   const pluginRegistry = loadOpenClawPlugins({
     config: resolvedConfig,
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,
@@ -607,7 +623,16 @@ export function loadGatewayPlugins(params: {
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),
   });
+  const loadMs = performance.now() - beforeLoad;
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
+  params.startupTrace?.detail("plugins.gateway-load", [
+    ["autoEnableMs", autoEnableMs],
+    ["resolvedConfigMs", resolvedConfigMs],
+    ["pluginIdsMs", pluginIdsMs],
+    ["loadMs", loadMs],
+    ["pluginIds", String(pluginIds.length)],
+    ["gatewayHandlers", String(pluginMethods.length)],
+  ]);
   return { pluginRegistry, gatewayMethods };
 }
