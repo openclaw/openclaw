@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -43,6 +44,7 @@ import type {
   SessionToolUsage,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
+  UsageCacheStatus,
 } from "./session-cost-usage.types.js";
 
 export type {
@@ -56,6 +58,7 @@ export type {
   SessionMessageCounts,
   SessionModelUsage,
   SessionToolUsage,
+  UsageCacheStatus,
 } from "./session-cost-usage.types.js";
 
 const emptyTotals = (): CostUsageTotals => ({
@@ -71,6 +74,283 @@ const emptyTotals = (): CostUsageTotals => ({
   cacheWriteCost: 0,
   missingCostEntries: 0,
 });
+
+const USAGE_COST_CACHE_VERSION = 1;
+const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
+const usageCostRefreshes = new Set<string>();
+
+type UsageCostCachedDailyEntry = CostUsageTotals & { date: string };
+
+type UsageCostCacheFileEntry = {
+  filePath: string;
+  size: number;
+  mtimeMs: number;
+  scannedAt: number;
+  parsedRecords: number;
+  countedRecords: number;
+  daily: UsageCostCachedDailyEntry[];
+  totals: CostUsageTotals;
+  sessionId?: string;
+  sessionSummary?: SessionCostSummary;
+};
+
+type UsageCostCacheFile = {
+  version: number;
+  updatedAt: number;
+  files: Record<string, UsageCostCacheFileEntry>;
+};
+
+type UsageCostTranscriptFile = {
+  filePath: string;
+  size: number;
+  mtimeMs: number;
+};
+
+type UsageCostCacheLock = {
+  pid: number;
+  startedAt: number;
+};
+
+const cloneTotals = (totals: CostUsageTotals): CostUsageTotals => ({
+  input: totals.input,
+  output: totals.output,
+  cacheRead: totals.cacheRead,
+  cacheWrite: totals.cacheWrite,
+  totalTokens: totals.totalTokens,
+  totalCost: totals.totalCost,
+  inputCost: totals.inputCost,
+  outputCost: totals.outputCost,
+  cacheReadCost: totals.cacheReadCost,
+  cacheWriteCost: totals.cacheWriteCost,
+  missingCostEntries: totals.missingCostEntries,
+});
+
+const addTotals = (target: CostUsageTotals, source: CostUsageTotals): void => {
+  target.input += source.input;
+  target.output += source.output;
+  target.cacheRead += source.cacheRead;
+  target.cacheWrite += source.cacheWrite;
+  target.totalTokens += source.totalTokens;
+  target.totalCost += source.totalCost;
+  target.inputCost += source.inputCost;
+  target.outputCost += source.outputCost;
+  target.cacheReadCost += source.cacheReadCost;
+  target.cacheWriteCost += source.cacheWriteCost;
+  target.missingCostEntries += source.missingCostEntries;
+};
+
+function resolveUsageCostCachePath(agentId?: string): string {
+  return path.join(resolveSessionTranscriptsDirForAgent(agentId), USAGE_COST_CACHE_FILE);
+}
+
+function resolveUsageCostCacheLockPath(cachePath: string): string {
+  return `${cachePath}.lock`;
+}
+
+async function readUsageCostCacheLock(lockPath: string): Promise<UsageCostCacheLock | null> {
+  try {
+    const parsed = JSON.parse(await fs.promises.readFile(lockPath, "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    const lock = parsed as Partial<UsageCostCacheLock>;
+    if (
+      typeof lock.pid !== "number" ||
+      !Number.isInteger(lock.pid) ||
+      lock.pid <= 0 ||
+      typeof lock.startedAt !== "number" ||
+      !Number.isFinite(lock.startedAt)
+    ) {
+      return null;
+    }
+    return { pid: lock.pid, startedAt: lock.startedAt };
+  } catch {
+    return null;
+  }
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === "EPERM";
+  }
+}
+
+async function isUsageCostCacheRefreshRunning(cachePath: string): Promise<boolean> {
+  const lockPath = resolveUsageCostCacheLockPath(cachePath);
+  const lock = await readUsageCostCacheLock(lockPath);
+  if (!lock) {
+    return false;
+  }
+  if (isProcessRunning(lock.pid)) {
+    return true;
+  }
+  await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
+  return false;
+}
+
+async function acquireUsageCostCacheRefreshLock(cachePath: string): Promise<{
+  acquired: boolean;
+  release: () => Promise<void>;
+}> {
+  const lockPath = resolveUsageCostCacheLockPath(cachePath);
+  await fs.promises.mkdir(path.dirname(lockPath), { recursive: true });
+  try {
+    const handle = await fs.promises.open(lockPath, "wx");
+    await handle.writeFile(`${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`);
+    await handle.close();
+    return {
+      acquired: true,
+      release: async () => {
+        await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
+      },
+    };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST") {
+      throw err;
+    }
+    if (await isUsageCostCacheRefreshRunning(cachePath)) {
+      return { acquired: false, release: async () => undefined };
+    }
+    await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
+    return acquireUsageCostCacheRefreshLock(cachePath);
+  }
+}
+
+function normalizeUsageCostCache(raw: unknown): UsageCostCacheFile {
+  if (!raw || typeof raw !== "object") {
+    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+  }
+  const record = raw as Record<string, unknown>;
+  if (
+    record.version !== USAGE_COST_CACHE_VERSION ||
+    !record.files ||
+    typeof record.files !== "object"
+  ) {
+    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+  }
+  return {
+    version: USAGE_COST_CACHE_VERSION,
+    updatedAt: asFiniteNumber(record.updatedAt) ?? 0,
+    files: record.files as Record<string, UsageCostCacheFileEntry>,
+  };
+}
+
+async function readUsageCostCache(cachePath: string): Promise<UsageCostCacheFile> {
+  try {
+    const raw = await fs.promises.readFile(cachePath, "utf-8");
+    return normalizeUsageCostCache(JSON.parse(raw));
+  } catch {
+    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+  }
+}
+
+async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile): Promise<void> {
+  const tmpPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+  await fs.promises.writeFile(tmpPath, `${JSON.stringify(cache)}\n`, "utf-8");
+  await fs.promises.rename(tmpPath, cachePath);
+}
+
+async function listUsageCountedTranscriptFiles(
+  agentId?: string,
+): Promise<UsageCostTranscriptFile[]> {
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const files = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
+      .map(async (entry) => {
+        const filePath = path.join(sessionsDir, entry.name);
+        const stats = await fs.promises.stat(filePath).catch(() => null);
+        if (!stats) {
+          return undefined;
+        }
+        return { filePath, size: stats.size, mtimeMs: stats.mtimeMs };
+      }),
+  );
+  return files.filter((file): file is UsageCostTranscriptFile => Boolean(file));
+}
+
+function getUsageCostStaleFiles(
+  cache: UsageCostCacheFile,
+  files: UsageCostTranscriptFile[],
+): UsageCostTranscriptFile[] {
+  return files.filter((file) => {
+    const cached = cache.files[file.filePath];
+    return (
+      !cached ||
+      cached.size !== file.size ||
+      cached.mtimeMs !== file.mtimeMs ||
+      !cached.sessionSummary
+    );
+  });
+}
+
+function buildCostUsageSummaryFromCache(params: {
+  cache: UsageCostCacheFile;
+  files: UsageCostTranscriptFile[];
+  startMs: number;
+  endMs: number;
+  cachePath: string;
+  refreshing: boolean;
+}): CostUsageSummary {
+  const dailyMap = new Map<string, CostUsageTotals>();
+  const totals = emptyTotals();
+  const filesByPath = new Set(params.files.map((file) => file.filePath));
+  const staleFiles = getUsageCostStaleFiles(params.cache, params.files);
+
+  for (const [filePath, entry] of Object.entries(params.cache.files)) {
+    if (!filesByPath.has(filePath)) {
+      continue;
+    }
+    for (const daily of entry.daily) {
+      const dayStart = new Date(`${daily.date}T00:00:00.000Z`).getTime();
+      const dayEnd = dayStart + 24 * 60 * 60 * 1000 - 1;
+      if (dayEnd < params.startMs || dayStart > params.endMs) {
+        continue;
+      }
+      const bucket = dailyMap.get(daily.date) ?? emptyTotals();
+      addTotals(bucket, daily);
+      dailyMap.set(daily.date, bucket);
+      addTotals(totals, daily);
+    }
+  }
+
+  const daily = Array.from(dailyMap.entries())
+    .map(([date, bucket]) => Object.assign({ date }, bucket))
+    .toSorted((a, b) => a.date.localeCompare(b.date));
+  const days = Math.ceil((params.endMs - params.startMs) / (24 * 60 * 60 * 1000)) + 1;
+  const cachedFiles = params.files.filter((file) =>
+    Boolean(params.cache.files[file.filePath]),
+  ).length;
+  const status = params.refreshing
+    ? "refreshing"
+    : staleFiles.length > 0
+      ? cachedFiles > 0
+        ? "partial"
+        : "stale"
+      : "fresh";
+
+  return {
+    updatedAt: Date.now(),
+    days,
+    daily,
+    totals,
+    cacheStatus: {
+      status,
+      cachedFiles,
+      pendingFiles: staleFiles.length,
+      staleFiles: staleFiles.length,
+      cachePath: params.cachePath,
+      refreshedAt: params.cache.updatedAt || undefined,
+    },
+  };
+}
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
@@ -502,6 +782,211 @@ export async function loadCostUsageSummary(params?: {
   };
 }
 
+async function scanUsageFileForCache(params: {
+  file: UsageCostTranscriptFile;
+  config?: OpenClawConfig;
+}): Promise<UsageCostCacheFileEntry> {
+  const dailyMap = new Map<string, CostUsageTotals>();
+  const totals = emptyTotals();
+  let parsedRecords = 0;
+  let countedRecords = 0;
+
+  await scanUsageFile({
+    filePath: params.file.filePath,
+    config: params.config,
+    onEntry: (entry) => {
+      parsedRecords += 1;
+      const ts = entry.timestamp?.getTime();
+      if (!ts) {
+        return;
+      }
+      countedRecords += 1;
+      const dayKey = formatDayKey(entry.timestamp ?? new Date(ts));
+      const bucket = dailyMap.get(dayKey) ?? emptyTotals();
+      applyUsageTotals(bucket, entry.usage);
+      if (entry.costBreakdown?.total !== undefined) {
+        applyCostBreakdown(bucket, entry.costBreakdown);
+      } else {
+        applyCostTotal(bucket, entry.costTotal);
+      }
+      dailyMap.set(dayKey, bucket);
+
+      applyUsageTotals(totals, entry.usage);
+      if (entry.costBreakdown?.total !== undefined) {
+        applyCostBreakdown(totals, entry.costBreakdown);
+      } else {
+        applyCostTotal(totals, entry.costTotal);
+      }
+    },
+  });
+
+  const sessionId =
+    parseUsageCountedSessionIdFromFileName(path.basename(params.file.filePath)) ?? undefined;
+  const sessionSummary = await loadSessionCostSummary({
+    sessionId,
+    sessionFile: params.file.filePath,
+    config: params.config,
+  });
+
+  return {
+    filePath: params.file.filePath,
+    size: params.file.size,
+    mtimeMs: params.file.mtimeMs,
+    scannedAt: Date.now(),
+    parsedRecords,
+    countedRecords,
+    daily: Array.from(dailyMap.entries())
+      .map(([date, bucket]) => Object.assign({ date }, cloneTotals(bucket)))
+      .toSorted((a, b) => a.date.localeCompare(b.date)),
+    totals,
+    sessionId,
+    sessionSummary: sessionSummary ?? undefined,
+  };
+}
+
+export async function refreshCostUsageCache(params?: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  maxFiles?: number;
+}): Promise<void> {
+  const cachePath = resolveUsageCostCachePath(params?.agentId);
+  const lock = await acquireUsageCostCacheRefreshLock(cachePath);
+  if (!lock.acquired) {
+    return;
+  }
+  try {
+    const cache = await readUsageCostCache(cachePath);
+    const files = await listUsageCountedTranscriptFiles(params?.agentId);
+    const livePaths = new Set(files.map((file) => file.filePath));
+    for (const filePath of Object.keys(cache.files)) {
+      if (!livePaths.has(filePath)) {
+        delete cache.files[filePath];
+      }
+    }
+
+    const maxFiles =
+      params?.maxFiles !== undefined && Number.isFinite(params.maxFiles) && params.maxFiles > 0
+        ? Math.floor(params.maxFiles)
+        : undefined;
+    const staleFiles = getUsageCostStaleFiles(cache, files)
+      .toSorted((a, b) => a.size - b.size || a.filePath.localeCompare(b.filePath))
+      .slice(0, maxFiles);
+
+    for (const file of staleFiles) {
+      cache.files[file.filePath] = await scanUsageFileForCache({
+        file,
+        config: params?.config,
+      });
+      cache.updatedAt = Date.now();
+      await writeUsageCostCache(cachePath, cache);
+    }
+
+    cache.updatedAt = Date.now();
+    await writeUsageCostCache(cachePath, cache);
+  } finally {
+    await lock.release();
+  }
+}
+
+export async function loadCostUsageSummaryFromCache(params: {
+  startMs: number;
+  endMs: number;
+  config?: OpenClawConfig;
+  agentId?: string;
+  requestRefresh?: boolean;
+}): Promise<CostUsageSummary> {
+  const cachePath = resolveUsageCostCachePath(params.agentId);
+  const [cache, files] = await Promise.all([
+    readUsageCostCache(cachePath),
+    listUsageCountedTranscriptFiles(params.agentId),
+  ]);
+  const staleFiles = getUsageCostStaleFiles(cache, files);
+  if (params.requestRefresh !== false && staleFiles.length > 0) {
+    requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
+  }
+  const refreshRunning = await isUsageCostCacheRefreshRunning(cachePath);
+  return buildCostUsageSummaryFromCache({
+    cache,
+    files,
+    startMs: params.startMs,
+    endMs: params.endMs,
+    cachePath,
+    refreshing: usageCostRefreshes.has(params.agentId ?? "main") || refreshRunning,
+  });
+}
+
+export async function loadSessionCostSummaryFromCache(params: {
+  sessionId?: string;
+  sessionFile: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+  requestRefresh?: boolean;
+}): Promise<{ summary: SessionCostSummary | null; cacheStatus: UsageCacheStatus }> {
+  const cachePath = resolveUsageCostCachePath(params.agentId);
+  const [cache, stats] = await Promise.all([
+    readUsageCostCache(cachePath),
+    fs.promises.stat(params.sessionFile).catch(() => null),
+  ]);
+  const file = stats
+    ? { filePath: params.sessionFile, size: stats.size, mtimeMs: stats.mtimeMs }
+    : undefined;
+  const stale =
+    !file ||
+    !cache.files[params.sessionFile] ||
+    cache.files[params.sessionFile]?.size !== file.size ||
+    cache.files[params.sessionFile]?.mtimeMs !== file.mtimeMs ||
+    !cache.files[params.sessionFile]?.sessionSummary;
+  if (params.requestRefresh !== false && stale) {
+    requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
+  }
+  const summary = cache.files[params.sessionFile]?.sessionSummary ?? null;
+  return {
+    summary,
+    cacheStatus: {
+      status: stale ? (summary ? "partial" : "stale") : "fresh",
+      cachedFiles: summary ? 1 : 0,
+      pendingFiles: stale ? 1 : 0,
+      staleFiles: stale ? 1 : 0,
+      cachePath,
+      refreshedAt: cache.updatedAt || undefined,
+    },
+  };
+}
+
+export function requestCostUsageCacheRefresh(params?: {
+  config?: OpenClawConfig;
+  agentId?: string;
+}): void {
+  const agentId = params?.agentId ?? "main";
+  if (usageCostRefreshes.has(agentId)) {
+    return;
+  }
+  usageCostRefreshes.add(agentId);
+  const workerUrl = new URL("./infra/session-cost-usage-cache-worker.js", import.meta.url);
+  const command = process.platform === "win32" ? process.execPath : "nice";
+  const args =
+    process.platform === "win32"
+      ? [workerUrl.pathname]
+      : ["-n", "15", process.execPath, workerUrl.pathname];
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      OPENCLAW_USAGE_COST_CACHE_AGENT_ID: agentId,
+      OPENCLAW_USAGE_COST_CACHE_CONFIG: JSON.stringify(params?.config ?? {}),
+    },
+  });
+  const clearRefresh = () => {
+    usageCostRefreshes.delete(agentId);
+  };
+  child.once("error", clearRefresh);
+  child.once("exit", clearRefresh);
+  child.once("spawn", () => {
+    child.unref();
+  });
+}
+
 /**
  * Scan all transcript files to discover sessions not in the session store.
  * Returns basic metadata for each discovered session.
@@ -510,6 +995,7 @@ export async function discoverAllSessions(params?: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  includeFirstUserMessage?: boolean;
 }): Promise<DiscoveredSession[]> {
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
@@ -541,37 +1027,39 @@ export async function discoverAllSessions(params?: {
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
-    try {
-      for await (const parsed of readJsonlRecords(filePath)) {
-        try {
-          const message = parsed.message as Record<string, unknown> | undefined;
-          if (message?.role === "user") {
-            const content = message.content;
-            if (typeof content === "string") {
-              firstUserMessage = content.slice(0, 100);
-            } else if (Array.isArray(content)) {
-              for (const block of content) {
-                if (
-                  typeof block === "object" &&
-                  block &&
-                  (block as Record<string, unknown>).type === "text"
-                ) {
-                  const text = (block as Record<string, unknown>).text;
-                  if (typeof text === "string") {
-                    firstUserMessage = text.slice(0, 100);
+    if (params?.includeFirstUserMessage !== false) {
+      try {
+        for await (const parsed of readJsonlRecords(filePath)) {
+          try {
+            const message = parsed.message as Record<string, unknown> | undefined;
+            if (message?.role === "user") {
+              const content = message.content;
+              if (typeof content === "string") {
+                firstUserMessage = content.slice(0, 100);
+              } else if (Array.isArray(content)) {
+                for (const block of content) {
+                  if (
+                    typeof block === "object" &&
+                    block &&
+                    (block as Record<string, unknown>).type === "text"
+                  ) {
+                    const text = (block as Record<string, unknown>).text;
+                    if (typeof text === "string") {
+                      firstUserMessage = text.slice(0, 100);
+                    }
+                    break;
                   }
-                  break;
                 }
               }
+              break; // Found first user message
             }
-            break; // Found first user message
+          } catch {
+            // Skip malformed lines
           }
-        } catch {
-          // Skip malformed lines
         }
+      } catch {
+        // Ignore read errors
       }
-    } catch {
-      // Ignore read errors
     }
 
     const existing = discovered.get(sessionId);

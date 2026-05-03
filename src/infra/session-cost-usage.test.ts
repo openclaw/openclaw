@@ -8,9 +8,11 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
+  loadCostUsageSummaryFromCache,
   loadSessionCostSummary,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
+  refreshCostUsageCache,
 } from "./session-cost-usage.js";
 
 describe("session cost usage", () => {
@@ -173,6 +175,53 @@ describe("session cost usage", () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.sessionId).toBe("sess-1");
       expect(sessions[0]?.sessionFile.endsWith("sess-1.jsonl")).toBe(true);
+    });
+  });
+
+  it("serves usage cost from durable aggregate cache without rescanning stale files", async () => {
+    const root = await makeSessionCostRoot("cost-cache");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache.jsonl");
+    const now = new Date("2026-02-05T12:00:00.000Z");
+    const entry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: 10,
+          output: 20,
+          totalTokens: 30,
+          cost: { total: 0.03 },
+        },
+      },
+    };
+
+    await fs.writeFile(sessionFile, transcriptText("sess-cache", entry), "utf-8");
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      await fs.appendFile(
+        sessionFile,
+        `${JSON.stringify({
+          ...entry,
+          timestamp: "2026-02-05T12:01:00.000Z",
+        })}\n`,
+        "utf-8",
+      );
+
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+
+      expect(summary.totals.totalTokens).toBe(30);
+      expect(summary.cacheStatus?.status).toBe("partial");
+      expect(summary.cacheStatus?.pendingFiles).toBe(1);
     });
   });
 

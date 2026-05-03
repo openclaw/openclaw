@@ -776,8 +776,9 @@ function renderSessionsCard(
       case "errors":
         return (b.usage?.messageCounts?.errors ?? 0) - (a.usage?.messageCounts?.errors ?? 0);
       case "cost":
-        return getSessionValue(b) - getSessionValue(a);
+        return (b.usage?.totalCost ?? 0) - (a.usage?.totalCost ?? 0);
       case "tokens":
+        return (b.usage?.totalTokens ?? 0) - (a.usage?.totalTokens ?? 0);
       default:
         return getSessionValue(b) - getSessionValue(a);
     }
