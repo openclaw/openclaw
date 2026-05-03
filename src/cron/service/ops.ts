@@ -13,6 +13,7 @@ import {
   assertSupportedJobSpec,
   computeJobNextRunAtMs,
   createJob,
+  findJobByName,
   findJobOrThrow,
   hasScheduledNextRunAtMs,
   isJobEnabled,
@@ -316,6 +317,16 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
+
+    // Check for duplicate job name
+    const existingJob = findJobByName(state, input.name);
+    if (existingJob) {
+      throw new Error(
+        `a cron job named '${input.name}' already exists (id=${existingJob.id}). ` +
+          `Use 'cron rm ${existingJob.id}' to remove it first, or choose a different name.`,
+      );
+    }
+
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 
@@ -352,6 +363,18 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     warnIfDisabled(state, "update");
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
+
+    // Check for duplicate job name if renaming
+    if (patch.name !== undefined && patch.name !== job.name) {
+      const existingJob = findJobByName(state, patch.name);
+      if (existingJob && existingJob.id !== id) {
+        throw new Error(
+          `a cron job named '${patch.name}' already exists (id=${existingJob.id}). ` +
+            `Use 'cron rm ${existingJob.id}' to remove it first, or choose a different name.`,
+        );
+      }
+    }
+
     const now = state.deps.nowMs();
     const nextJob = structuredClone(job);
     applyJobPatch(nextJob, patch, { defaultAgentId: state.deps.defaultAgentId });
