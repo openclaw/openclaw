@@ -29,13 +29,13 @@ let currentMockSocket:
     }
   | undefined;
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    loadConfig: vi.fn().mockReturnValue({
+    getRuntimeConfig: vi.fn().mockReturnValue({
       channels: {
         whatsapp: {
           allowFrom: ["*"], // Allow all in tests
@@ -49,8 +49,12 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   };
 });
 
-vi.mock("../../../src/pairing/pairing-store.js", () => {
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
   return {
+    ...actual,
     readChannelAllowFromStore(...args: unknown[]) {
       return readAllowFromStoreMock(...args);
     },
@@ -60,9 +64,21 @@ vi.mock("../../../src/pairing/pairing-store.js", () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
+vi.mock("openclaw/plugin-sdk/channel-pairing", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-pairing")>(
+    "openclaw/plugin-sdk/channel-pairing",
+  );
+  return {
+    ...actual,
+    readChannelAllowFromStore(...args: unknown[]) {
+      return readAllowFromStoreMock(...args);
+    },
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/media-store", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-store")>(
+    "openclaw/plugin-sdk/media-store",
   );
   return {
     ...actual,
@@ -167,6 +183,10 @@ describe("web inbound media saves with extension", () => {
   it("stores image extension and keeps document filename", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
       verbose: false,
       onMessage,
       accountId: "default",
@@ -214,9 +234,61 @@ describe("web inbound media saves with extension", () => {
     await listener.close();
   });
 
+  it("stores quoted image media from reply context", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "quote-img-reply", fromMe: false, remoteJid: "111@g.us" },
+          message: {
+            extendedTextMessage: {
+              text: "@bot what is this?",
+              contextInfo: {
+                stanzaId: "quoted-image",
+                participant: "222@s.whatsapp.net",
+                mentionedJid: ["me@s.whatsapp.net"],
+                quotedMessage: {
+                  imageMessage: { mimetype: "image/jpeg" },
+                },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_005,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(inbound.replyToBody).toBe("<media:image>");
+    expect(inbound.mediaPath).toBeDefined();
+    expect(path.extname(inbound.mediaPath as string)).toBe(".jpg");
+    expect(saveMediaBufferSpy).toHaveBeenCalled();
+    const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
+    expect(lastCall?.[1]).toBe("image/jpeg");
+
+    await listener.close();
+  });
+
   it("passes mediaMaxMb to saveMediaBuffer", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
       verbose: false,
       onMessage,
       mediaMaxMb: 1,

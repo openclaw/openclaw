@@ -7,8 +7,11 @@ import {
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { MAX_DOCUMENT_BYTES } from "./constants.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
+
+export const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
 
 type FetchMediaResult = {
   buffer: Buffer;
@@ -46,6 +49,7 @@ type FetchMediaOptions = {
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   dispatcherAttempts?: FetchDispatcherAttempt[];
   shouldRetryFetchError?: (error: unknown) => boolean;
   /**
@@ -113,6 +117,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     readIdleTimeoutMs,
     ssrfPolicy,
     lookupFn,
+    dispatcherPolicy,
     dispatcherAttempts,
     shouldRetryFetchError,
     trustExplicitProxyDns,
@@ -125,7 +130,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
   const attempts =
     dispatcherAttempts && dispatcherAttempts.length > 0
       ? dispatcherAttempts
-      : [{ dispatcherPolicy: undefined, lookupFn }];
+      : [{ dispatcherPolicy, lookupFn }];
   const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
     await fetchWithSsrFGuard(
       (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
@@ -207,29 +212,28 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       );
     }
 
+    const effectiveMaxBytes = maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES;
     const contentLength = res.headers.get("content-length");
-    if (maxBytes && contentLength) {
+    if (contentLength) {
       const length = Number(contentLength);
-      if (Number.isFinite(length) && length > maxBytes) {
+      if (Number.isFinite(length) && length > effectiveMaxBytes) {
         throw new MediaFetchError(
           "max_bytes",
-          `Failed to fetch media from ${sourceUrl}: content length ${length} exceeds maxBytes ${maxBytes}`,
+          `Failed to fetch media from ${sourceUrl}: content length ${length} exceeds maxBytes ${effectiveMaxBytes}`,
         );
       }
     }
 
     let buffer: Buffer;
     try {
-      buffer = maxBytes
-        ? await readResponseWithLimit(res, maxBytes, {
-            onOverflow: ({ maxBytes, res }) =>
-              new MediaFetchError(
-                "max_bytes",
-                `Failed to fetch media from ${redactMediaUrl(res.url || url)}: payload exceeds maxBytes ${maxBytes}`,
-              ),
-            chunkTimeoutMs: readIdleTimeoutMs,
-          })
-        : Buffer.from(await res.arrayBuffer());
+      buffer = await readResponseWithLimit(res, effectiveMaxBytes, {
+        onOverflow: ({ maxBytes, res }) =>
+          new MediaFetchError(
+            "max_bytes",
+            `Failed to fetch media from ${redactMediaUrl(res.url || url)}: payload exceeds maxBytes ${maxBytes}`,
+          ),
+        chunkTimeoutMs: readIdleTimeoutMs,
+      });
     } catch (err) {
       if (err instanceof MediaFetchError) {
         throw err;

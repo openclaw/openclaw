@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
@@ -143,6 +143,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       SessionKey?: string;
       ForceSenderIsOwnerFalse?: boolean;
     } | null;
+    sessionKey: string;
     replyCallCount: number;
   }> => {
     return withTempHeartbeatSandbox(
@@ -174,6 +175,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           result,
           sendTelegram,
           calledCtx,
+          sessionKey,
           replyCallCount: getReplySpy.mock.calls.length,
         };
       },
@@ -347,7 +349,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       reason: "exec-event",
       target: "none",
       enqueue: (sessionKey) => {
-        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
       },
     });
 
@@ -356,6 +358,43 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("includes untrusted exec completion details in user-relay prompts", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-untrusted-relay-",
+      replyText: "Deploy succeeded",
+      reason: "exec-event",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
+    expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
+    expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("consumes exec completion entries without dropping later generic events", async () => {
+    const { result, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-preserve-generic-",
+      replyText: "Deploy succeeded",
+      reason: "exec-event",
+      enqueue: (key) => {
+        enqueueSystemEvent("Exec finished (gateway id=abc12345, code 0)\ndeploy succeeded", {
+          sessionKey: key,
+        });
+        enqueueSystemEvent("Node connected", { sessionKey: key });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.Body).toContain("deploy succeeded");
+    expect(calledCtx?.Body).not.toContain("Node connected");
+    expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
   });
 
   it("classifies hook:wake exec completions as exec-event prompts", async () => {
@@ -472,6 +511,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const result = await runHeartbeatOnce({
         cfg,
         agentId: "main",
+        source: "hook",
+        intent: "immediate",
         reason: "wake",
         deps: {
           getReplyFromConfig: replySpy,
@@ -512,6 +553,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const result = await runHeartbeatOnce({
         cfg,
         agentId: "main",
+        source: "hook",
+        intent: "immediate",
         reason: "wake",
         deps: {
           getReplyFromConfig: replySpy,
@@ -533,7 +576,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(options?.messageThreadId).toBeUndefined();
     });
   });
-  it("keeps exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
+  it("keeps output-bearing exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -569,7 +612,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const getReplySpy = vi.fn().mockResolvedValue({
         text: "The review-worker spawn finished successfully.",
       });
-      enqueueSystemEvent("Exec completed (review-run, code 0)", {
+      enqueueSystemEvent("Exec completed (review-run, code 0) :: review-worker spawn finished", {
         sessionKey,
         trusted: false,
         deliveryContext: {
@@ -597,6 +640,72 @@ describe("Ghost reminder bug (issue #13317)", () => {
         "The review-worker spawn finished successfully.",
         expect.objectContaining({ messageThreadId: 47 }),
       );
+    });
+  });
+
+  it("suppresses metadata-only successful exec completions", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:-1003774691294:topic:2175",
+            lastThreadId: 2175,
+          },
+        }),
+      );
+
+      const sendTelegram = vi.fn();
+      const getReplySpy = vi.fn().mockResolvedValue({
+        text: "HEARTBEAT_OK",
+      });
+      enqueueSystemEvent("Exec completed (review-run, code 0)", {
+        sessionKey,
+        trusted: false,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-1003774691294:topic:47",
+          threadId: 47,
+        },
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "exec-event",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getReplySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          Body: expect.stringContaining("no command output was found"),
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(sendTelegram).not.toHaveBeenCalled();
     });
   });
 

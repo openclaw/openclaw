@@ -1,4 +1,4 @@
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramTransport } from "./fetch.js";
@@ -16,6 +16,8 @@ export type TelegramBotOptions = {
   config?: OpenClawConfig;
   /** Signal to abort in-flight Telegram API fetch requests (e.g. getUpdates) on shutdown. */
   fetchAbortSignal?: AbortSignal;
+  /** Minimum grammY client timeout when timeoutSeconds is configured on long-polling bots. */
+  minimumClientTimeoutSeconds?: number;
   updateOffset?: {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;

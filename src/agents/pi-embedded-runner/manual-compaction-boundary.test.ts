@@ -4,7 +4,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 
 let tmpDir = "";
@@ -95,7 +95,11 @@ describe("hardenManualCompactionBoundary", () => {
       .messages.map((message) => messageText(message));
     expect(beforeTexts.join("\n")).toContain("detailed new answer");
 
+    const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
+      throw new Error("SessionManager.open should not be used for boundary hardening");
+    });
     const hardened = await hardenManualCompactionBoundary({ sessionFile: sessionFile! });
+    openSpy.mockRestore();
     expect(hardened.applied).toBe(true);
     expect(hardened.firstKeptEntryId).toBe(latestCompactionId);
     expect(hardened.messages.map((message) => message.role)).toEqual(["compactionSummary"]);
@@ -116,6 +120,39 @@ describe("hardenManualCompactionBoundary", () => {
       "user",
     ]);
     expect(afterTexts.join("\n")).not.toContain("detailed new answer");
+  });
+
+  it("keeps the upstream recent tail when requested", async () => {
+    const dir = await makeTmpDir();
+    const session = SessionManager.create(dir, dir);
+
+    session.appendMessage({ role: "user", content: "old question", timestamp: 1 });
+    session.appendMessage(createAssistantTextMessage("old answer", 2));
+    const keepId = session.getBranch().at(-1)?.id;
+    expect(keepId).toBeTruthy();
+    const latestCompactionId = session.appendCompaction("fresh summary", keepId!, 200);
+    const sessionFile = session.getSessionFile();
+    expect(sessionFile).toBeTruthy();
+
+    const hardened = await hardenManualCompactionBoundary({
+      sessionFile: sessionFile!,
+      preserveRecentTail: true,
+    });
+    expect(hardened.applied).toBe(false);
+    expect(hardened.firstKeptEntryId).toBe(keepId);
+
+    const reopened = SessionManager.open(sessionFile!);
+    const latest = reopened.getLeafEntry();
+    expect(latest?.type).toBe("compaction");
+    if (!latest || latest.type !== "compaction") {
+      throw new Error("expected latest leaf to be a compaction entry");
+    }
+    expect(latest.id).toBe(latestCompactionId);
+    expect(latest.firstKeptEntryId).toBe(keepId);
+    expect(reopened.buildSessionContext().messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "assistant",
+    ]);
   });
 
   it("is a no-op when the latest leaf is not a compaction entry", async () => {

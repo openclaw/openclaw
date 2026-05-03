@@ -8,6 +8,7 @@ export type SessionResetPolicy = {
   mode: SessionResetMode;
   atHour: number;
   idleMinutes?: number;
+  configured?: boolean;
 };
 
 export type SessionFreshness = {
@@ -45,6 +46,7 @@ export function resolveSessionResetPolicy(params: {
         : undefined));
   const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
   const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
+  const configured = Boolean(baseReset || typeReset || legacyIdleMinutes != null);
   const mode =
     typeReset?.mode ??
     baseReset?.mode ??
@@ -64,29 +66,45 @@ export function resolveSessionResetPolicy(params: {
     idleMinutes = DEFAULT_IDLE_MINUTES;
   }
 
-  return { mode, atHour, idleMinutes };
+  return { mode, atHour, idleMinutes, configured };
 }
 
 export function evaluateSessionFreshness(params: {
   updatedAt: number;
+  sessionStartedAt?: number;
+  lastInteractionAt?: number;
   now: number;
   policy: SessionResetPolicy;
 }): SessionFreshness {
+  const updatedAt = resolveTimestamp(params.updatedAt, params.now) ?? 0;
+  const sessionStartedAt = resolveTimestamp(params.sessionStartedAt, params.now) ?? updatedAt;
+  const lastInteractionAt =
+    resolveTimestamp(params.lastInteractionAt, params.now) ?? sessionStartedAt;
   const dailyResetAt =
     params.policy.mode === "daily"
       ? resolveDailyResetAtMs(params.now, params.policy.atHour)
       : undefined;
   const idleExpiresAt =
     params.policy.idleMinutes != null && params.policy.idleMinutes > 0
-      ? params.updatedAt + params.policy.idleMinutes * 60_000
+      ? lastInteractionAt + params.policy.idleMinutes * 60_000
       : undefined;
-  const staleDaily = dailyResetAt != null && params.updatedAt < dailyResetAt;
+  const staleDaily = dailyResetAt != null && sessionStartedAt < dailyResetAt;
   const staleIdle = idleExpiresAt != null && params.now > idleExpiresAt;
   return {
     fresh: !(staleDaily || staleIdle),
     dailyResetAt,
     idleExpiresAt,
   };
+}
+
+function resolveTimestamp(value: number | undefined, now?: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  if (typeof now === "number" && Number.isFinite(now) && value > now) {
+    return undefined;
+  }
+  return value;
 }
 
 function normalizeResetAtHour(value: number | undefined): number {

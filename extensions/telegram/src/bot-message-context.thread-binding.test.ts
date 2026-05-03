@@ -44,6 +44,27 @@ function createBoundRoute(params: { accountId: string; sessionKey: string; agent
   } as const;
 }
 
+function createForumTopicMessage() {
+  return {
+    message_id: 1,
+    chat: { id: -100200300, type: "supergroup", is_forum: true },
+    message_thread_id: 77,
+    date: 1_700_000_000,
+    text: "hello",
+    from: { id: 42, first_name: "Alice" },
+  } as const;
+}
+
+async function buildForumTopicMessageContext(accountId?: string) {
+  return await buildTelegramMessageContextForTest({
+    ...(accountId ? { accountId } : {}),
+    sessionRuntime: threadBindingSessionRuntime,
+    message: createForumTopicMessage(),
+    options: { forceWasMentioned: true },
+    resolveGroupActivation: () => true,
+  });
+}
+
 describe("buildTelegramMessageContext thread binding override", () => {
   beforeEach(() => {
     recordInboundSessionMock.mockClear();
@@ -59,19 +80,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
       }),
     );
 
-    const ctx = await buildTelegramMessageContextForTest({
-      sessionRuntime: threadBindingSessionRuntime,
-      message: {
-        message_id: 1,
-        chat: { id: -100200300, type: "supergroup", is_forum: true },
-        message_thread_id: 77,
-        date: 1_700_000_000,
-        text: "hello",
-        from: { id: 42, first_name: "Alice" },
-      },
-      options: { forceWasMentioned: true },
-      resolveGroupActivation: () => true,
-    });
+    const ctx = await buildForumTopicMessageContext();
 
     expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -84,7 +93,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
       }),
     );
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-1");
-    expect(recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
+    expect(ctx?.turn.record).toMatchObject({
       updateLastRoute: undefined,
     });
   });
@@ -98,20 +107,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
       }),
     );
 
-    const ctx = await buildTelegramMessageContextForTest({
-      accountId: "work",
-      sessionRuntime: threadBindingSessionRuntime,
-      message: {
-        message_id: 1,
-        chat: { id: -100200300, type: "supergroup", is_forum: true },
-        message_thread_id: 77,
-        date: 1_700_000_000,
-        text: "hello",
-        from: { id: 42, first_name: "Alice" },
-      },
-      options: { forceWasMentioned: true },
-      resolveGroupActivation: () => true,
-    });
+    const ctx = await buildForumTopicMessageContext("work");
 
     expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -160,5 +156,37 @@ describe("buildTelegramMessageContext thread binding override", () => {
       }),
     );
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm");
+  });
+
+  it("preserves Telegram DM topic thread IDs in the inbound context", async () => {
+    resolveTelegramConversationRouteMock.mockReturnValue(
+      createBoundRoute({
+        accountId: "default",
+        sessionKey: "agent:codex-acp:session-dm-topic",
+        agentId: "codex-acp",
+      }),
+    );
+
+    const ctx = await buildTelegramMessageContextForTest({
+      sessionRuntime: threadBindingSessionRuntime,
+      message: {
+        message_id: 1,
+        message_thread_id: 77,
+        chat: { id: 1234, type: "private" },
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+    });
+
+    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: 1234,
+        isGroup: false,
+        resolvedThreadId: undefined,
+        replyThreadId: 77,
+      }),
+    );
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(77);
   });
 });

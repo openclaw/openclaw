@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   buildAgentMediaPayload,
@@ -8,6 +8,15 @@ import {
 import { buildQaTarget, sendQaBusMessage, type QaBusMessage } from "./bus-client.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
+
+export function isHttpMediaUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachments"]) {
   if (!Array.isArray(attachments) || attachments.length === 0) {
@@ -33,6 +42,12 @@ async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachmen
       continue;
     }
     if (typeof attachment.url === "string" && attachment.url.trim()) {
+      if (!isHttpMediaUrl(attachment.url)) {
+        console.warn(
+          `[qa-channel] inbound attachment URL rejected (non-http scheme): ${attachment.url}`,
+        );
+        continue;
+      }
       const saved = await saveMediaSource(attachment.url, undefined, "inbound");
       mediaList.push({
         path: saved.path,
@@ -62,10 +77,25 @@ export async function handleQaInbound(params: {
     channel: params.channelId,
     accountId: params.account.accountId,
     peer: {
-      kind: inbound.conversation.kind === "direct" ? "direct" : "channel",
+      kind:
+        inbound.conversation.kind === "direct"
+          ? "direct"
+          : inbound.conversation.kind === "group"
+            ? "group"
+            : "channel",
       id: target,
     },
   });
+  const isGroup = inbound.conversation.kind !== "direct";
+  const wasMentioned = isGroup
+    ? runtime.channel.mentions.matchesMentionPatterns(
+        inbound.text,
+        runtime.channel.mentions.buildMentionRegexes(
+          params.config as OpenClawConfig,
+          route.agentId,
+        ),
+      )
+    : undefined;
   const storePath = runtime.channel.session.resolveStorePath(params.config.session?.store, {
     agentId: route.agentId,
   });
@@ -88,23 +118,20 @@ export async function handleQaInbound(params: {
     BodyForAgent: inbound.text,
     RawBody: inbound.text,
     CommandBody: inbound.text,
-    From: buildQaTarget({
-      chatType: inbound.conversation.kind,
-      conversationId: inbound.senderId,
-    }),
+    From: target,
     To: target,
     SessionKey: route.sessionKey,
     AccountId: route.accountId ?? params.account.accountId,
     ChatType: inbound.conversation.kind === "direct" ? "direct" : "group",
+    WasMentioned: wasMentioned,
     ConversationLabel:
       inbound.threadTitle ||
       inbound.conversation.title ||
       inbound.senderName ||
       inbound.conversation.id,
-    GroupSubject:
-      inbound.conversation.kind === "channel"
-        ? inbound.threadTitle || inbound.conversation.title || inbound.conversation.id
-        : undefined,
+    GroupSubject: isGroup
+      ? inbound.threadTitle || inbound.conversation.title || inbound.conversation.id
+      : undefined,
     GroupChannel: inbound.conversation.kind === "channel" ? inbound.conversation.id : undefined,
     NativeChannelId: inbound.conversation.id,
     MessageThreadId: inbound.threadId,

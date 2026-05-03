@@ -2,11 +2,25 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
+  CommandArgChoiceContext,
   CommandCategory,
   CommandScope,
   CommandTier,
 } from "./commands-registry.types.js";
-import { listThinkingLevels } from "./thinking.js";
+import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";
+
+type ListThinkingLevels = (
+  provider?: string | null,
+  model?: string | null,
+  catalog?: CommandArgChoiceContext["catalog"],
+) => ThinkLevel[];
+
+const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
+  ...BASE_THINKING_LEVELS,
+  "xhigh",
+  "adaptive",
+  "max",
+];
 
 type DefineChatCommandInput = {
   key: string;
@@ -49,11 +63,7 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   };
 }
 
-export function registerAlias(
-  commands: ChatCommandDefinition[],
-  key: string,
-  ...aliases: string[]
-): void {
+function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliases: string[]): void {
   const command = commands.find((entry) => entry.key === key);
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
@@ -125,7 +135,11 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   }
 }
 
-export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
+export function buildBuiltinChatCommands(
+  params: { listThinkingLevels?: ListThinkingLevels } = {},
+): ChatCommandDefinition[] {
+  const listThinkingLevelChoices =
+    params.listThinkingLevels ?? (() => BROWSER_SAFE_THINKING_LEVELS);
   const commands: ChatCommandDefinition[] = [
     defineChatCommand({
       key: "help",
@@ -191,6 +205,32 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       tier: "essential",
     }),
     defineChatCommand({
+      key: "diagnostics",
+      nativeName: "diagnostics",
+      description: "Explain Gateway diagnostics and Codex feedback upload options.",
+      textAlias: "/diagnostics",
+      acceptsArgs: true,
+      category: "status",
+      tier: "standard",
+      args: [
+        {
+          name: "note",
+          description: "Optional note for Codex feedback upload",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "crestodian",
+      description: "Run the Crestodian setup and repair helper.",
+      textAlias: "/crestodian",
+      acceptsArgs: true,
+      scope: "text",
+      category: "management",
+      tier: "essential",
+    }),
+    defineChatCommand({
       key: "tasks",
       nativeName: "tasks",
       description: "List background tasks for this session.",
@@ -246,6 +286,23 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
         {
           name: "path",
           description: "Output path (default: workspace)",
+          type: "string",
+          required: false,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "export-trajectory",
+      nativeName: "export-trajectory",
+      description: "Export a JSONL trajectory bundle for the active session.",
+      textAliases: ["/export-trajectory", "/trajectory"],
+      acceptsArgs: true,
+      category: "status",
+      tier: "essential",
+      args: [
+        {
+          name: "path",
+          description: "Output directory (default: workspace)",
           type: "string",
           required: false,
         },
@@ -686,9 +743,10 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "level",
-          description: "off, minimal, low, medium, high, xhigh",
+          description: "Thinking level",
           type: "string",
-          choices: ({ provider, model }) => listThinkingLevels(provider, model),
+          choices: ({ provider, model, catalog }) =>
+            listThinkingLevelChoices(provider, model, catalog),
         },
       ],
       argsMenu: "auto",
@@ -703,12 +761,11 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "mode",
-          description: "on or off",
+          description: "on, off, or full",
           type: "string",
-          choices: ["on", "off"],
+          choices: ["on", "off", "full"],
         },
       ],
-      argsMenu: "auto",
     }),
     defineChatCommand({
       key: "trace",
@@ -831,7 +888,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "models",
       nativeName: "models",
-      description: "List model providers or provider models.",
+      description: "List model providers/models.",
       textAlias: "/models",
       tier: "standard",
       argsParsing: "none",
@@ -850,7 +907,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           name: "mode",
           description: "queue mode",
           type: "string",
-          choices: ["steer", "interrupt", "followup", "collect", "steer-backlog"],
+          choices: ["steer", "queue", "interrupt", "followup", "collect", "steer-backlog"],
         },
         {
           name: "debounce",

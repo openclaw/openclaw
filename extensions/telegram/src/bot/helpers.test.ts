@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTelegramRoutingTarget,
   buildTelegramThreadParams,
@@ -12,6 +12,8 @@ import {
   resolveTelegramDirectPeerId,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
+  resetTelegramForumFlagCacheForTest,
+  shouldUseTelegramDmThreadSession,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -34,6 +36,10 @@ describe("resolveTelegramForumThreadId", () => {
 });
 
 describe("resolveTelegramForumFlag", () => {
+  beforeEach(() => {
+    resetTelegramForumFlagCacheForTest();
+  });
+
   it("keeps explicit forum metadata when Telegram already provides it", async () => {
     const getChat = vi.fn(async () => ({ is_forum: false }));
     await expect(
@@ -52,13 +58,40 @@ describe("resolveTelegramForumFlag", () => {
     const getChat = vi.fn(async () => ({ is_forum: true }));
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100123,
+        chatId: -100789,
         chatType: "supergroup",
         isGroup: true,
         getChat,
       }),
     ).resolves.toBe(true);
-    expect(getChat).toHaveBeenCalledWith(-100123);
+    expect(getChat).toHaveBeenCalledWith(-100789);
+  });
+
+  it("reuses resolved forum metadata for later supergroup updates", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100456,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes cached forum metadata from explicit Telegram updates", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100654,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag({ ...params, isForum: false })).resolves.toBe(false);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(false);
+    expect(getChat).toHaveBeenCalledTimes(1);
   });
 
   it("returns false when forum lookup is unavailable", async () => {
@@ -67,7 +100,7 @@ describe("resolveTelegramForumFlag", () => {
     });
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100123,
+        chatId: -100999,
         chatType: "supergroup",
         isGroup: true,
         getChat,
@@ -90,6 +123,33 @@ describe("buildTelegramThreadParams", () => {
     { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
+  });
+});
+
+describe("shouldUseTelegramDmThreadSession", () => {
+  it("keeps incidental DM thread ids flat by default", () => {
+    expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42 })).toBe(false);
+  });
+
+  it("uses DM thread sessions for explicit or topic-required configs", () => {
+    expect(
+      shouldUseTelegramDmThreadSession({
+        dmThreadId: 42,
+        directConfig: { threadReplies: "inbound" },
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseTelegramDmThreadSession({
+        dmThreadId: 42,
+        directConfig: { requireTopic: true },
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseTelegramDmThreadSession({
+        dmThreadId: 42,
+        topicConfig: { agentId: "support" },
+      }),
+    ).toBe(true);
   });
 });
 
@@ -309,6 +369,7 @@ describe("describeReplyTarget", () => {
     expect(result?.sender).toBe("Alice");
     expect(result?.id).toBe("1");
     expect(result?.kind).toBe("reply");
+    expect(result?.source).toBe("reply_to_message");
   });
 
   it("handles non-string reply text gracefully (issue #27201)", () => {
@@ -468,6 +529,34 @@ describe("describeReplyTarget", () => {
     expect(result?.forwardedFrom?.from).toBe("Tech News (Editor)");
     expect(result?.forwardedFrom?.fromType).toBe("channel");
     expect(result?.forwardedFrom?.fromMessageId).toBe(456);
+  });
+
+  it("marks top-level quote metadata on external replies as external targets", () => {
+    const result = describeReplyTarget({
+      message_id: 5,
+      date: 1300,
+      chat: { id: 1, type: "private" },
+      text: "Comment on forwarded message",
+      quote: {
+        text: "quoted slice",
+        position: 4,
+        entities: [{ type: "italic", offset: 0, length: 6 }],
+      },
+      external_reply: {
+        message_id: 4,
+        date: 1200,
+        chat: { id: 1, type: "private" },
+        text: "Forwarded from elsewhere",
+        from: { id: 123, first_name: "Eve", is_bot: false },
+      },
+    } as any);
+
+    expect(result?.id).toBe("4");
+    expect(result?.kind).toBe("quote");
+    expect(result?.source).toBe("external_reply");
+    expect(result?.quoteText).toBe("quoted slice");
+    expect(result?.quotePosition).toBe(4);
+    expect(result?.quoteEntities).toEqual([{ type: "italic", offset: 0, length: 6 }]);
   });
 
   it("extracts forwarded context from external_reply", () => {

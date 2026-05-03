@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 
 export const TalkModeParamsSchema = Type.Object(
@@ -36,6 +36,129 @@ export const TalkSpeakParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TalkRealtimeSessionParamsSchema = Type.Object(
+  {
+    sessionKey: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeRelayAudioParamsSchema = Type.Object(
+  {
+    relaySessionId: NonEmptyString,
+    audioBase64: NonEmptyString,
+    timestamp: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeRelayMarkParamsSchema = Type.Object(
+  {
+    relaySessionId: NonEmptyString,
+    markName: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeRelayStopParamsSchema = Type.Object(
+  {
+    relaySessionId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeRelayToolResultParamsSchema = Type.Object(
+  {
+    relaySessionId: NonEmptyString,
+    callId: NonEmptyString,
+    result: Type.Unknown(),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeRelayOkResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+
+const BrowserRealtimeAudioContractSchema = Type.Object(
+  {
+    inputEncoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
+    inputSampleRateHz: Type.Integer({ minimum: 1 }),
+    outputEncoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
+    outputSampleRateHz: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false },
+);
+
+const BrowserRealtimeWebRtcSdpSessionSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    transport: Type.Optional(Type.Literal("webrtc-sdp")),
+    clientSecret: NonEmptyString,
+    offerUrl: Type.Optional(Type.String()),
+    offerHeaders: Type.Optional(Type.Record(Type.String(), Type.String())),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+const BrowserRealtimeJsonPcmWebSocketSessionSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    transport: Type.Literal("json-pcm-websocket"),
+    protocol: NonEmptyString,
+    clientSecret: NonEmptyString,
+    websocketUrl: NonEmptyString,
+    audio: BrowserRealtimeAudioContractSchema,
+    initialMessage: Type.Optional(Type.Unknown()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+const BrowserRealtimeGatewayRelaySessionSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    transport: Type.Literal("gateway-relay"),
+    relaySessionId: NonEmptyString,
+    audio: BrowserRealtimeAudioContractSchema,
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+const BrowserRealtimeManagedRoomSessionSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    transport: Type.Literal("managed-room"),
+    roomUrl: NonEmptyString,
+    token: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeSessionResultSchema = Type.Union([
+  BrowserRealtimeWebRtcSdpSessionSchema,
+  BrowserRealtimeJsonPcmWebSocketSessionSchema,
+  BrowserRealtimeGatewayRelaySessionSchema,
+  BrowserRealtimeManagedRoomSessionSchema,
+]);
+
 const talkProviderFieldSchemas = {
   apiKey: Type.Optional(SecretInputSchema),
 };
@@ -57,6 +180,7 @@ const TalkConfigSchema = Type.Object(
     provider: Type.Optional(Type.String()),
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
     resolved: ResolvedTalkConfigSchema,
+    speechLocale: Type.Optional(Type.String()),
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },
@@ -130,6 +254,7 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     lastStopAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastInboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastOutboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastTransportActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
     busy: Type.Optional(Type.Boolean()),
     activeRuns: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -162,6 +287,25 @@ export const ChannelUiMetaSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChannelEventLoopHealthSchema = Type.Object(
+  {
+    degraded: Type.Boolean(),
+    reasons: Type.Array(
+      Type.Union([
+        Type.Literal("event_loop_delay"),
+        Type.Literal("event_loop_utilization"),
+        Type.Literal("cpu"),
+      ]),
+    ),
+    intervalMs: Type.Integer({ minimum: 0 }),
+    delayP99Ms: Type.Number({ minimum: 0 }),
+    delayMaxMs: Type.Number({ minimum: 0 }),
+    utilization: Type.Number({ minimum: 0 }),
+    cpuCoreRatio: Type.Number({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 export const ChannelsStatusResultSchema = Type.Object(
   {
     ts: Type.Integer({ minimum: 0 }),
@@ -173,11 +317,20 @@ export const ChannelsStatusResultSchema = Type.Object(
     channels: Type.Record(NonEmptyString, Type.Unknown()),
     channelAccounts: Type.Record(NonEmptyString, Type.Array(ChannelAccountSnapshotSchema)),
     channelDefaultAccountId: Type.Record(NonEmptyString, NonEmptyString),
+    eventLoop: Type.Optional(ChannelEventLoopHealthSchema),
   },
   { additionalProperties: false },
 );
 
 export const ChannelsLogoutParamsSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    accountId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const ChannelsStopParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
     accountId: Type.Optional(Type.String()),
@@ -203,10 +356,16 @@ export const WebLoginStartParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const QrDataUrlSchema = Type.String({
+  maxLength: 16_384,
+  pattern: "^data:image/png;base64,",
+});
+
 export const WebLoginWaitParamsSchema = Type.Object(
   {
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     accountId: Type.Optional(Type.String()),
+    currentQrDataUrl: Type.Optional(QrDataUrlSchema),
   },
   { additionalProperties: false },
 );

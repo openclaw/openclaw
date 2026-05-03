@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
@@ -12,6 +13,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   const fixture = useTempSessionsFixture("transcript-test-");
   const sessionId = "test-session-id";
   const sessionKey = "test-session";
+  type ExactAssistantMessage = Parameters<
+    typeof appendExactAssistantMessageToSessionTranscript
+  >[0]["message"];
 
   function writeTranscriptStore() {
     fs.writeFileSync(
@@ -25,6 +29,31 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       }),
       "utf-8",
     );
+  }
+
+  function createExactAssistantMessage(params: {
+    text?: string;
+    content?: ExactAssistantMessage["content"];
+    provider?: string;
+    model?: string;
+  }): ExactAssistantMessage {
+    return {
+      role: "assistant",
+      content: params.content ?? [{ type: "text", text: params.text ?? "" }],
+      api: "openai-responses",
+      provider: params.provider ?? "codex",
+      model: params.model ?? "gpt-5.4",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
   }
 
   it("creates transcript file and appends message for valid session", async () => {
@@ -124,23 +153,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const exactResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Hello from Codex!" }],
-        api: "openai-responses",
-        provider: "codex",
-        model: "gpt-5.4",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      message: createExactAssistantMessage({ text: "Hello from Codex!" }),
     });
 
     expect(exactResult.ok).toBe(true);
@@ -170,45 +183,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const olderResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Repeated answer" }],
-        api: "openai-responses",
-        provider: "codex",
-        model: "gpt-5.4",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      message: createExactAssistantMessage({ text: "Repeated answer" }),
     });
 
     const latestResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Different latest answer" }],
-        api: "openai-responses",
-        provider: "codex",
-        model: "gpt-5.4",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      message: createExactAssistantMessage({ text: "Different latest answer" }),
     });
 
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
@@ -319,8 +300,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: {
-        role: "assistant",
+      message: createExactAssistantMessage({
         content: [
           {
             type: "text",
@@ -333,20 +313,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
             textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
           },
         ],
-        api: "openai-responses",
         provider: "openclaw",
         model: "delivery-mirror",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      }),
     });
 
     expect(result.ok).toBe(true);
@@ -376,29 +345,140 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       sessionKey,
       storePath: fixture.storePath(),
       updateMode: "file-only",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Done." }],
-        api: "openai-responses",
+      message: createExactAssistantMessage({
+        text: "Done.",
         provider: "openclaw",
         model: "delivery-mirror",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      }),
     });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(emitSpy).toHaveBeenCalledWith(result.sessionFile);
+      expect(emitSpy).toHaveBeenCalledWith({
+        sessionFile: result.sessionFile,
+        sessionKey,
+      });
     }
     emitSpy.mockRestore();
+  });
+
+  it("serializes concurrent parent-linked transcript appends", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "concurrent-tree-session",
+      fixture.sessionsDir(),
+    );
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 1,
+          id: "concurrent-tree-session",
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "root-message",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "root" },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: { role: "assistant", content: `reply ${index}` },
+        }),
+      ),
+    );
+
+    const records = fs
+      .readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            message?: { content?: string };
+          },
+      )
+      .filter((record) => record.type === "message");
+
+    expect(records).toHaveLength(9);
+    for (let index = 1; index < records.length; index += 1) {
+      expect(records[index]?.parentId).toBe(records[index - 1]?.id);
+    }
+  });
+
+  it("migrates small linear transcripts before appending", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "small-linear-session",
+      fixture.sessionsDir(),
+    );
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "small-linear-session",
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "legacy-first",
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "legacy first" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "legacy-second",
+          timestamp: new Date().toISOString(),
+          message: { role: "assistant", content: "legacy second" },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "assistant", content: "new reply" },
+    });
+
+    const records = fs
+      .readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            message?: { content?: string };
+          },
+      );
+    const messages = records.filter((record) => record.type === "message");
+
+    expect(messages.map((record) => record.message?.content)).toEqual([
+      "legacy first",
+      "legacy second",
+      "new reply",
+    ]);
+    expect(messages[0]).toMatchObject({ id: "legacy-first", parentId: null });
+    expect(messages[1]).toMatchObject({ id: "legacy-second", parentId: "legacy-first" });
+    expect(messages[2]).toMatchObject({
+      id: appended.messageId,
+      parentId: "legacy-second",
+    });
   });
 });

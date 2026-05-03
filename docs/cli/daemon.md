@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw daemon` (legacy alias for gateway service 
 read_when:
   - You still use `openclaw daemon ...` in scripts
   - You need service lifecycle commands (install/start/stop/restart/status)
-title: "daemon"
+title: "Daemon"
 ---
 
 # `openclaw daemon`
@@ -36,7 +36,8 @@ openclaw daemon uninstall
 
 - `status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
 - `install`: `--port`, `--runtime <node|bun>`, `--token`, `--force`, `--json`
-- lifecycle (`uninstall|start|stop|restart`): `--json`
+- `restart`: `--force`, `--wait <duration>`, `--json`
+- lifecycle (`uninstall|start|stop`): `--json`
 
 Notes:
 
@@ -50,8 +51,14 @@ Notes:
 - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
 - If token auth requires a token and the configured token SecretRef is unresolved, install fails closed.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.
+- On macOS, `install` keeps LaunchAgent plists owner-only and loads managed service environment values through an owner-only file and wrapper instead of serializing API keys or auth-profile env refs into `EnvironmentVariables`.
 - If you intentionally run multiple gateways on one host, isolate ports, config/state, and workspaces; see [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host).
 
 ## Prefer
 
 Use [`openclaw gateway`](/cli/gateway) for current docs and examples.
+
+## Related
+
+- [CLI reference](/cli)
+- [Gateway runbook](/gateway)

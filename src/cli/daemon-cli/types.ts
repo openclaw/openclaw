@@ -19,10 +19,13 @@ export type DaemonInstallOptions = {
   port?: string | number;
   runtime?: string;
   token?: string;
+  wrapper?: string;
   force?: boolean;
   json?: boolean;
 };
 
 export type DaemonLifecycleOptions = {
   json?: boolean;
+  force?: boolean;
+  wait?: string;
 };

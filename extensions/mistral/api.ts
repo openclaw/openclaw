@@ -20,7 +20,7 @@ export const MISTRAL_MODEL_TRANSPORT_PATCH = {
   maxTokensField: "max_tokens";
 };
 
-export const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> = {
+const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> = {
   off: "none",
   minimal: "none",
   low: "high",
@@ -28,6 +28,7 @@ export const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> =
   high: "high",
   xhigh: "high",
   adaptive: "high",
+  max: "high",
 };
 
 export const MISTRAL_SMALL_LATEST_ID = "mistral-small-latest";

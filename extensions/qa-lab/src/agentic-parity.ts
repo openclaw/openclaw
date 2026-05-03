@@ -1,6 +1,6 @@
-export const QA_AGENTIC_PARITY_PACK = "agentic";
+const QA_AGENTIC_PARITY_PACK = "agentic";
 
-export const QA_AGENTIC_PARITY_SCENARIOS = [
+const QA_AGENTIC_PARITY_SCENARIOS = [
   {
     id: "approval-turn-tool-followthrough",
     title: "Approval turn tool followthrough",
@@ -35,6 +35,11 @@ export const QA_AGENTIC_PARITY_SCENARIOS = [
     id: "subagent-fanout-synthesis",
     title: "Subagent fanout synthesis",
     countsTowardValidToolCallRate: true,
+  },
+  {
+    id: "subagent-stale-child-links",
+    title: "Subagent stale child links",
+    countsTowardValidToolCallRate: false,
   },
   {
     id: "memory-recall",

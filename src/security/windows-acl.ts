@@ -1,6 +1,10 @@
 import os from "node:os";
+import path from "node:path";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
+const log = createSubsystemLogger("security/windows-acl");
 
 export type ExecFn = typeof runExec;
 
@@ -19,6 +23,14 @@ export type WindowsAclSummary = {
   untrustedGroup: WindowsAclEntry[];
   trusted: WindowsAclEntry[];
   error?: string;
+};
+
+export type WindowsUserInfoProvider = () => { username?: string | null };
+
+export type IcaclsResetCommandOptions = {
+  isDir: boolean;
+  env?: NodeJS.ProcessEnv;
+  userInfo?: WindowsUserInfoProvider;
 };
 
 const INHERIT_FLAGS = new Set(["I", "OI", "CI", "IO", "NP"]);
@@ -65,14 +77,18 @@ const STATUS_PREFIXES = [
 ];
 
 const normalize = (value: string) => normalizeLowercaseStringOrEmpty(value);
+const defaultWindowsUserInfo: WindowsUserInfoProvider = () => os.userInfo();
 
 function normalizeSid(value: string): string {
   const normalized = normalize(value);
   return normalized.startsWith("*") ? normalized.slice(1) : normalized;
 }
 
-export function resolveWindowsUserPrincipal(env?: NodeJS.ProcessEnv): string | null {
-  const username = env?.USERNAME?.trim() || os.userInfo().username?.trim();
+export function resolveWindowsUserPrincipal(
+  env?: NodeJS.ProcessEnv,
+  userInfo: WindowsUserInfoProvider = defaultWindowsUserInfo,
+): string | null {
+  const username = env?.USERNAME?.trim() || userInfo().username?.trim();
   if (!username) {
     return null;
   }
@@ -98,6 +114,15 @@ function buildTrustedPrincipals(env?: NodeJS.ProcessEnv): Set<string> {
     trusted.add(userSid);
   }
   return trusted;
+}
+
+function resolveWindowsSystemCommand(command: string, env?: NodeJS.ProcessEnv): string {
+  const root =
+    env?.SystemRoot?.trim() ||
+    env?.SYSTEMROOT?.trim() ||
+    env?.windir?.trim() ||
+    env?.WINDIR?.trim();
+  return root ? path.win32.join(root, "System32", command) : command;
 }
 
 function classifyPrincipal(
@@ -270,18 +295,23 @@ export function summarizeWindowsAcl(
   return { trusted, untrustedWorld, untrustedGroup };
 }
 
-async function resolveCurrentUserSid(exec: ExecFn): Promise<string | null> {
+async function resolveCurrentUserSid(
+  exec: ExecFn,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | null> {
   try {
-    const { stdout, stderr } = await exec("whoami", ["/user", "/fo", "csv", "/nh"]);
+    const { stdout, stderr } = await exec(resolveWindowsSystemCommand("whoami.exe", env), [
+      "/user",
+      "/fo",
+      "csv",
+      "/nh",
+    ]);
     const match = `${stdout}\n${stderr}`.match(/\*?S-\d+-\d+(?:-\d+)+/i);
     return match ? normalizeSid(match[0]) : null;
   } catch (err) {
     // Log but do not propagate — SID resolution is best-effort.
     // Callers fall back to env-based resolution when this returns null.
-    console.warn("[windows-acl] resolveCurrentUserSid failed:", String(err));
-    // TODO: replace with a structured logger call once a lightweight per-module
-    // logger is available; console.warn can be noisy on constrained Windows hosts
-    // (e.g. strict output-capture environments or CI runners with limited stdio).
+    log.warn("resolveCurrentUserSid failed", { error: String(err) });
     return null;
   }
 }
@@ -297,7 +327,10 @@ export async function inspectWindowsAcl(
     // Windows (Russian, Chinese, etc.) where icacls prints Cyrillic / CJK
     // characters that may be garbled when Node reads them in the wrong code
     // page.  Fixes #35834.
-    const { stdout, stderr } = await exec("icacls", [targetPath, "/sid"]);
+    const { stdout, stderr } = await exec(resolveWindowsSystemCommand("icacls.exe", opts?.env), [
+      targetPath,
+      "/sid",
+    ]);
     const output = `${stdout}\n${stderr}`.trim();
     const entries = parseIcaclsOutput(output, targetPath);
     let effectiveEnv = opts?.env;
@@ -307,7 +340,7 @@ export async function inspectWindowsAcl(
       !effectiveEnv?.USERSID &&
       untrustedGroup.some((entry) => SID_RE.test(normalize(entry.principal)));
     if (needsUserSidResolution) {
-      const currentUserSid = await resolveCurrentUserSid(exec);
+      const currentUserSid = await resolveCurrentUserSid(exec, effectiveEnv);
       if (currentUserSid) {
         effectiveEnv = { ...effectiveEnv, USERSID: currentUserSid };
         ({ trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, effectiveEnv));
@@ -340,18 +373,18 @@ export function formatWindowsAclSummary(summary: WindowsAclSummary): string {
 
 export function formatIcaclsResetCommand(
   targetPath: string,
-  opts: { isDir: boolean; env?: NodeJS.ProcessEnv },
+  opts: IcaclsResetCommandOptions,
 ): string {
-  const user = resolveWindowsUserPrincipal(opts.env) ?? "%USERNAME%";
+  const user = resolveWindowsUserPrincipal(opts.env, opts.userInfo) ?? "%USERNAME%";
   const grant = opts.isDir ? "(OI)(CI)F" : "F";
   return `icacls "${targetPath}" /inheritance:r /grant:r "${user}:${grant}" /grant:r "*S-1-5-18:${grant}"`;
 }
 
 export function createIcaclsResetCommand(
   targetPath: string,
-  opts: { isDir: boolean; env?: NodeJS.ProcessEnv },
+  opts: IcaclsResetCommandOptions,
 ): { command: string; args: string[]; display: string } | null {
-  const user = resolveWindowsUserPrincipal(opts.env);
+  const user = resolveWindowsUserPrincipal(opts.env, opts.userInfo);
   if (!user) {
     return null;
   }

@@ -3,7 +3,6 @@ import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
-  listBundledPluginRuntimeDependencies,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
@@ -24,6 +23,11 @@ type InputOptionsReturn = InputOptionsFactory extends (
   ? Return
   : never;
 type OnLogFunction = InputOptionsArg extends { onLog?: infer OnLog } ? NonNullable<OnLog> : never;
+type ExternalOptionFunction = (
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+) => boolean | null | undefined;
 
 const env = {
   NODE_ENV: "production",
@@ -39,12 +43,37 @@ function normalizedLogHaystack(log: { message?: string; id?: string; importer?: 
   return [log.message, log.id, log.importer].filter(Boolean).join("\n").replaceAll("\\", "/");
 }
 
+function matchesExternalOption(
+  option: unknown,
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+): boolean {
+  if (!option) {
+    return false;
+  }
+  if (typeof option === "function") {
+    return (option as ExternalOptionFunction)(id, parentId, isResolved) === true;
+  }
+  if (typeof option === "string") {
+    return option === id;
+  }
+  if (option instanceof RegExp) {
+    return option.test(id);
+  }
+  if (Array.isArray(option)) {
+    return option.some((entry) => matchesExternalOption(entry, id, parentId, isResolved));
+  }
+  return false;
+}
+
 function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
 
   const previousOnLog = typeof options.onLog === "function" ? options.onLog : undefined;
+  const previousExternal = (options as { external?: unknown }).external;
 
   function isSuppressedLog(log: {
     code?: string;
@@ -67,6 +96,12 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
 
   return {
     ...options,
+    external(id: string, parentId: string | undefined, isResolved: boolean) {
+      return (
+        shouldNeverBundleDependency(id) ||
+        matchesExternalOption(previousExternal, id, parentId, isResolved)
+      );
+    },
     onLog(...args: Parameters<OnLogFunction>) {
       const [level, log, defaultHandler] = args;
       if (isSuppressedLog(log)) {
@@ -92,7 +127,6 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
 }
 
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
-const bundledPluginRuntimeDependencies = listBundledPluginRuntimeDependencies();
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 
 function buildBundledHookEntries(): Record<string, string> {
@@ -126,9 +160,10 @@ const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
 const explicitNeverBundleDependencies = [
   "@lancedb/lancedb",
+  "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "matrix-js-sdk",
-  ...bundledPluginRuntimeDependencies,
+  "qrcode-terminal",
 ].toSorted((left, right) => left.localeCompare(right));
 
 function shouldNeverBundleDependency(id: string): boolean {
@@ -137,19 +172,9 @@ function shouldNeverBundleDependency(id: string): boolean {
   });
 }
 
-function shouldStageBundledPluginRuntimeDependencies(packageJson: unknown): boolean {
-  return (
-    typeof packageJson === "object" &&
-    packageJson !== null &&
-    (packageJson as { openclaw?: { bundle?: { stageRuntimeDependencies?: boolean } } }).openclaw
-      ?.bundle?.stageRuntimeDependencies === true
-  );
-}
-
 function listBundledPluginEntrySources(
   entries: Array<{
     id: string;
-    packageJson: unknown;
     sourceEntries: string[];
   }>,
 ): Record<string, string> {
@@ -167,40 +192,6 @@ function listBundledPluginEntrySources(
   );
 }
 
-function normalizeBundledPluginOutEntry(entry: string): string {
-  return entry.replace(/^\.\//u, "").replace(/\.[^.]+$/u, "");
-}
-
-function isPluginSdkSelfReference(id: string): boolean {
-  return (
-    id === "openclaw/plugin-sdk" ||
-    id.startsWith("openclaw/plugin-sdk/") ||
-    id === "@openclaw/plugin-sdk" ||
-    id.startsWith("@openclaw/plugin-sdk/")
-  );
-}
-
-function buildBundledPluginNeverBundlePredicate(packageJson: {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-}) {
-  const runtimeDependencies = shouldStageBundledPluginRuntimeDependencies(packageJson)
-    ? [
-        ...Object.keys(packageJson.dependencies ?? {}),
-        ...Object.keys(packageJson.optionalDependencies ?? {}),
-      ].toSorted((left, right) => left.localeCompare(right))
-    : [];
-
-  return (id: string): boolean => {
-    if (isPluginSdkSelfReference(id)) {
-      return true;
-    }
-    return runtimeDependencies.some((dependency) => {
-      return id === dependency || id.startsWith(`${dependency}/`);
-    });
-  };
-}
-
 function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
@@ -212,13 +203,21 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
+    "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
+    "plugins/memory-state": "src/plugins/memory-state.ts",
     "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
+    "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
+    "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
+    "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
+    "commands/doctor/shared/plugin-registry-migration":
+      "src/commands/doctor/shared/plugin-registry-migration.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
     "plugins/public-surface-runtime": "src/plugins/public-surface-runtime.ts",
+    "plugins/loader": "src/plugins/loader.ts",
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     extensionAPI: "src/extensionAPI.ts",
@@ -232,19 +231,42 @@ function buildCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildDockerE2eHarnessEntries(): Record<string, string> {
+  return {
+    // Mounted Docker harnesses run against the npm tarball image, so any
+    // internal module they assert must have a stable package dist entry.
+    "agents/pi-bundle-mcp-materialize": "src/agents/pi-bundle-mcp-materialize.ts",
+    "agents/pi-bundle-mcp-runtime": "src/agents/pi-bundle-mcp-runtime.ts",
+    "agents/pi-embedded-runner/effective-tool-policy":
+      "src/agents/pi-embedded-runner/effective-tool-policy.ts",
+    "agents/pi-embedded-runner/run/runtime-context-prompt":
+      "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
+    "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
+    "cli/run-main": "src/cli/run-main.ts",
+    "commitments/runtime": "src/commitments/runtime.ts",
+    "commitments/store": "src/commitments/store.ts",
+    "config/config": "src/config/config.ts",
+    "crestodian/crestodian": "src/crestodian/crestodian.ts",
+    "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
+    "gateway/protocol/index": "src/gateway/protocol/index.ts",
+    "infra/errors": "src/infra/errors.ts",
+    "infra/ws": "src/infra/ws.ts",
+    "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
+    "plugins/tools": "src/plugins/tools.ts",
+    "shared/string-coerce": "src/shared/string-coerce.ts",
+  };
+}
+
 const coreDistEntries = buildCoreDistEntries();
-const stagedBundledPluginBuildEntries = bundledPluginBuildEntries.filter(({ packageJson }) =>
-  shouldStageBundledPluginRuntimeDependencies(packageJson),
-);
+const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
 const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
-  ({ id, packageJson }) =>
-    !shouldStageBundledPluginRuntimeDependencies(packageJson) &&
-    (shouldBuildPrivateQaEntries || !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)),
+  ({ id }) => shouldBuildPrivateQaEntries || !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id),
 );
 
 function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
+    ...dockerE2eHarnessEntries,
     // Internal compat artifact for the root-alias.cjs lazy loader.
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     ...Object.fromEntries(
@@ -264,29 +286,6 @@ function buildUnifiedDistEntries(): Record<string, string> {
   };
 }
 
-function buildBundledPluginConfigs(): UserConfig[] {
-  return stagedBundledPluginBuildEntries.map(({ id, packageJson, sourceEntries }) =>
-    nodeBuildConfig({
-      clean: false,
-      entry: Object.fromEntries(
-        sourceEntries.map((entry) => [
-          normalizeBundledPluginOutEntry(entry),
-          `extensions/${id}/${entry.replace(/^\.\//u, "")}`,
-        ]),
-      ),
-      outDir: `dist/extensions/${id}`,
-      deps: {
-        neverBundle: buildBundledPluginNeverBundlePredicate(
-          (packageJson ?? {}) as {
-            dependencies?: Record<string, string>;
-            optionalDependencies?: Record<string, string>;
-          },
-        ),
-      },
-    }),
-  );
-}
-
 export default defineConfig([
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
@@ -297,5 +296,4 @@ export default defineConfig([
       neverBundle: shouldNeverBundleDependency,
     },
   }),
-  ...buildBundledPluginConfigs(),
 ]);

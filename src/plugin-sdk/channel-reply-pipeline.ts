@@ -1,4 +1,8 @@
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import {
+  resolveSourceReplyDeliveryMode,
+  type SourceReplyDeliveryModeContext,
+} from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import {
   createReplyPrefixContext,
@@ -11,11 +15,23 @@ import {
   type CreateTypingCallbacksParams,
   type TypingCallbacks,
 } from "../channels/typing.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ReplyPayload } from "./reply-payload.js";
 
 export type ReplyPrefixContext = ReplyPrefixContextBundle["prefixContext"];
 export type { ReplyPrefixContextBundle, ReplyPrefixOptions };
 export type { CreateTypingCallbacksParams, TypingCallbacks };
 export { createReplyPrefixContext, createReplyPrefixOptions, createTypingCallbacks };
+export type { SourceReplyDeliveryMode };
+
+export function resolveChannelSourceReplyDeliveryMode(params: {
+  cfg: OpenClawConfig;
+  ctx: SourceReplyDeliveryModeContext;
+  requested?: SourceReplyDeliveryMode;
+  messageToolAvailable?: boolean;
+}): SourceReplyDeliveryMode {
+  return resolveSourceReplyDeliveryMode(params);
+}
 
 export type ChannelReplyPipeline = ReplyPrefixOptions & {
   typingCallbacks?: TypingCallbacks;

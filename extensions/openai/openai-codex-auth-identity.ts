@@ -8,7 +8,9 @@ type CodexJwtPayload = {
     email?: unknown;
   };
   "https://api.openai.com/auth"?: {
+    chatgpt_account_id?: unknown;
     chatgpt_account_user_id?: unknown;
+    chatgpt_plan_type?: unknown;
     chatgpt_user_id?: unknown;
     user_id?: unknown;
   };
@@ -24,7 +26,7 @@ function normalizeFutureEpochSeconds(value: unknown): number | undefined {
   return undefined;
 }
 
-export function decodeCodexJwtPayload(accessToken: string): CodexJwtPayload | null {
+function decodeCodexJwtPayload(accessToken: string): CodexJwtPayload | null {
   const parts = accessToken.split(".");
   if (parts.length !== 3) {
     return null;
@@ -39,7 +41,7 @@ export function decodeCodexJwtPayload(accessToken: string): CodexJwtPayload | nu
   }
 }
 
-export function resolveCodexStableSubject(payload: CodexJwtPayload | null): string | undefined {
+function resolveCodexStableSubject(payload: CodexJwtPayload | null): string | undefined {
   const auth = payload?.["https://api.openai.com/auth"];
   const accountUserId = trimNonEmptyString(auth?.chatgpt_account_user_id);
   if (accountUserId) {
@@ -66,23 +68,33 @@ export function resolveCodexAccessTokenExpiry(accessToken: string): number | und
 }
 
 export function resolveCodexAuthIdentity(params: { accessToken: string; email?: string | null }): {
+  accountId?: string;
+  chatgptPlanType?: string;
   email?: string;
   profileName?: string;
 } {
   const payload = decodeCodexJwtPayload(params.accessToken);
+  const auth = payload?.["https://api.openai.com/auth"];
+  const accountId = trimNonEmptyString(auth?.chatgpt_account_id);
+  const chatgptPlanType = trimNonEmptyString(auth?.chatgpt_plan_type);
   const email =
     trimNonEmptyString(payload?.["https://api.openai.com/profile"]?.email) ??
     trimNonEmptyString(params.email);
+  const metadata = {
+    ...(accountId ? { accountId } : {}),
+    ...(chatgptPlanType ? { chatgptPlanType } : {}),
+  };
   if (email) {
-    return { email, profileName: email };
+    return { ...metadata, email, profileName: email };
   }
 
   const stableSubject = resolveCodexStableSubject(payload);
   if (!stableSubject) {
-    return {};
+    return metadata;
   }
 
   return {
+    ...metadata,
     profileName: `id-${Buffer.from(stableSubject).toString("base64url")}`,
   };
 }

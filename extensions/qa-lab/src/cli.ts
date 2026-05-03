@@ -35,7 +35,9 @@ async function runQaSuite(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinking?: string;
   allowFailures?: boolean;
+  enabledPluginIds?: string[];
   cliAuthMode?: string;
   parityPack?: string;
   scenarioIds?: string[];
@@ -45,6 +47,7 @@ async function runQaSuite(opts: {
   cpus?: number;
   memory?: string;
   disk?: string;
+  preflight?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
@@ -136,6 +139,16 @@ async function runQaCredentialsList(opts: {
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaCredentialsListCommand(opts);
+}
+
+async function runQaCredentialsDoctor(opts: {
+  actorId?: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  siteUrl?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCredentialsDoctorCommand(opts);
 }
 
 async function runQaUi(opts: {
@@ -236,15 +249,26 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
+    .option(
+      "--enable-plugin <id>",
+      "Enable an extra bundled plugin in the QA gateway config (repeatable)",
+      collectString,
+      [],
+    )
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
       Number(value),
     )
+    .option("--preflight", "Run a single-scenario bootstrap preflight and stop", false)
     .option(
       "--allow-failures",
       "Write artifacts without setting a failing exit code when scenarios fail",
       false,
     )
     .option("--fast", "Enable provider fast mode where supported", false)
+    .option(
+      "--thinking <level>",
+      "Suite thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
+    )
     .option("--image <alias>", "Multipass image alias")
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
     .option("--memory <size>", "Multipass memory size")
@@ -261,13 +285,16 @@ export function registerQaLabCli(program: Command) {
         cliAuthMode?: string;
         parityPack?: string;
         scenario?: string[];
+        enablePlugin?: string[];
         concurrency?: number;
         allowFailures?: boolean;
         fast?: boolean;
+        thinking?: string;
         image?: string;
         cpus?: number;
         memory?: string;
         disk?: string;
+        preflight?: boolean;
       }) => {
         await runQaSuite({
           repoRoot: opts.repoRoot,
@@ -278,15 +305,18 @@ export function registerQaLabCli(program: Command) {
           primaryModel: opts.model,
           alternateModel: opts.altModel,
           fastMode: opts.fast,
+          thinking: opts.thinking,
           cliAuthMode: opts.cliAuthMode,
           parityPack: opts.parityPack,
           scenarioIds: opts.scenario,
+          enabledPluginIds: opts.enablePlugin,
           concurrency: opts.concurrency,
           allowFailures: opts.allowFailures,
           image: opts.image,
           cpus: opts.cpus,
           memory: opts.memory,
           disk: opts.disk,
+          preflight: opts.preflight,
         });
       },
     );
@@ -339,7 +369,7 @@ export function registerQaLabCli(program: Command) {
     .option("--fast", "Enable provider fast mode for all candidate runs")
     .option(
       "--thinking <level>",
-      "Candidate thinking default: off|minimal|low|medium|high|xhigh|adaptive",
+      "Candidate thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
     )
     .option(
       "--model-thinking <ref=level>",
@@ -422,6 +452,24 @@ export function registerQaLabCli(program: Command) {
   const credentials = qa
     .command("credentials")
     .description("Manage pooled Convex live credentials used by QA lanes");
+
+  credentials
+    .command("doctor")
+    .description("Check Convex credential broker env and admin reachability")
+    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
+    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
+    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
+    .option("--json", "Emit machine-readable JSON output", false)
+    .action(
+      async (opts: {
+        siteUrl?: string;
+        endpointPrefix?: string;
+        actorId?: string;
+        json?: boolean;
+      }) => {
+        await runQaCredentialsDoctor(opts);
+      },
+    );
 
   credentials
     .command("add")

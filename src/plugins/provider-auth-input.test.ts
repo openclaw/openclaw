@@ -7,6 +7,20 @@ import {
   normalizeTokenProviderInput,
 } from "./provider-auth-input.js";
 
+const resolveEnvApiKey = vi.hoisted(() =>
+  vi.fn((provider: string, env?: NodeJS.ProcessEnv) => {
+    if (provider !== "minimax") {
+      return null;
+    }
+    const apiKey = env?.MINIMAX_API_KEY?.trim();
+    return apiKey ? { apiKey, source: "env: MINIMAX_API_KEY" } : null;
+  }),
+);
+
+vi.mock("../agents/model-auth-env.js", () => ({
+  resolveEnvApiKey,
+}));
+
 const ORIGINAL_MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 const ORIGINAL_MINIMAX_OAUTH_TOKEN = process.env.MINIMAX_OAUTH_TOKEN;
 
@@ -64,6 +78,13 @@ function setMinimaxEnv(params: { apiKey?: string; oauthToken?: string } = {}) {
   }
 }
 
+function currentMinimaxTestEnv(): NodeJS.ProcessEnv {
+  return {
+    MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
+    MINIMAX_OAUTH_TOKEN: process.env.MINIMAX_OAUTH_TOKEN,
+  };
+}
+
 async function ensureMinimaxApiKey(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
   env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
@@ -76,7 +97,7 @@ async function ensureMinimaxApiKey(params: {
 }) {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
-    env: params.env,
+    env: params.env ?? currentMinimaxTestEnv(),
     prompter: createPrompter({
       confirm: params.confirm,
       note: params.note,
@@ -119,7 +140,7 @@ async function ensureMinimaxApiKeyWithEnvRefPrompter(params: {
 }) {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
-    env: params.env,
+    env: params.env ?? currentMinimaxTestEnv(),
     prompter: createPrompter({ select: params.select, text: params.text, note: params.note }),
     secretInputMode: "ref", // pragma: allowlist secret
     setCredential: params.setCredential,
@@ -179,6 +200,7 @@ async function ensureWithOptionEnvOrPrompt(params: {
     token: params.token,
     tokenProvider: params.tokenProvider,
     config: {},
+    env: currentMinimaxTestEnv(),
     expectedProviders: params.expectedProviders,
     provider: params.provider,
     envLabel: params.envLabel,

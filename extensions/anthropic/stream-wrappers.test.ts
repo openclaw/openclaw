@@ -5,6 +5,7 @@ import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicServiceTierWrapper,
+  createAnthropicThinkingPrefillWrapper,
   wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";
 
@@ -24,6 +25,59 @@ function runWrapper(apiKey: string | undefined): Record<string, string> | undefi
     { apiKey } as never,
   );
   return captured.headers;
+}
+
+function createPayloadCapturingBaseStream(captured: {
+  headers?: Record<string, string>;
+  payload?: Record<string, unknown>;
+}): StreamFn {
+  return (model, _context, options) => {
+    captured.headers = options?.headers;
+    const payload = {} as Record<string, unknown>;
+    options?.onPayload?.(payload as never, model as never);
+    captured.payload = payload;
+    return {} as never;
+  };
+}
+
+function runComposedAnthropicProviderStream(apiKey: string) {
+  const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
+  const wrapped = wrapAnthropicProviderStream({
+    streamFn: createPayloadCapturingBaseStream(captured),
+    modelId: "claude-sonnet-4-6",
+    extraParams: { context1m: true, serviceTier: "auto" },
+  } as never);
+
+  void wrapped?.(
+    { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+    {} as never,
+    { apiKey } as never,
+  );
+  return captured;
+}
+
+function runPayloadWrapper(
+  params: {
+    apiKey?: string;
+    provider?: string;
+    api?: string;
+    baseUrl?: string;
+  },
+  createWrapper: (base: StreamFn) => StreamFn,
+): Record<string, unknown> | undefined {
+  const captured: { payload?: Record<string, unknown> } = {};
+  const wrapper = createWrapper(createPayloadCapturingBaseStream(captured));
+  void wrapper(
+    {
+      provider: params.provider ?? "anthropic",
+      api: params.api ?? "anthropic-messages",
+      baseUrl: params.baseUrl,
+      id: "claude-sonnet-4-6",
+    } as never,
+    {} as never,
+    { apiKey: params.apiKey } as never,
+  );
+  return captured.payload;
 }
 
 describe("anthropic stream wrappers", () => {
@@ -49,56 +103,65 @@ describe("anthropic stream wrappers", () => {
   });
 
   it("skips service_tier for OAuth token in composed stream chain", () => {
-    const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
-    const base: StreamFn = (model, _context, options) => {
-      captured.headers = options?.headers;
-      const payload = {} as Record<string, unknown>;
-      options?.onPayload?.(payload as never, model as never);
-      captured.payload = payload;
-      return {} as never;
-    };
-
-    const wrapped = wrapAnthropicProviderStream({
-      streamFn: base,
-      modelId: "claude-sonnet-4-6",
-      extraParams: { context1m: true, serviceTier: "auto" },
-    } as never);
-
-    void wrapped?.(
-      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
-      {} as never,
-      { apiKey: "sk-ant-oat01-oauth-token" } as never,
-    );
-
+    const captured = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token");
     expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
     expect(captured.payload?.service_tier).toBeUndefined();
   });
 
   it("composes the anthropic provider stream chain from extra params", () => {
-    const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
-    const base: StreamFn = (model, _context, options) => {
-      captured.headers = options?.headers;
-      const payload = {} as Record<string, unknown>;
-      options?.onPayload?.(payload as never, model as never);
-      captured.payload = payload;
-      return {} as never;
-    };
-
-    const wrapped = wrapAnthropicProviderStream({
-      streamFn: base,
-      modelId: "claude-sonnet-4-6",
-      extraParams: { context1m: true, serviceTier: "auto" },
-    } as never);
-
-    void wrapped?.(
-      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
-      {} as never,
-      { apiKey: "sk-ant-api-123" } as never,
-    );
-
+    const captured = runComposedAnthropicProviderStream("sk-ant-api-123");
     expect(captured.headers?.["anthropic-beta"]).toContain(CONTEXT_1M_BETA);
     expect(captured.payload).toMatchObject({ service_tier: "auto" });
+  });
+});
+
+describe("createAnthropicThinkingPrefillWrapper", () => {
+  function runThinkingPrefillWrapper(payload: Record<string, unknown>): Record<string, unknown> {
+    const wrapper = createAnthropicThinkingPrefillWrapper(((_model, _context, options) => {
+      options?.onPayload?.(payload as never, {} as never);
+      return {} as never;
+    }) as StreamFn);
+    void wrapper({ provider: "anthropic", api: "anthropic-messages" } as never, {} as never, {});
+    return payload;
+  }
+
+  it("removes trailing assistant prefill when extended thinking is enabled", () => {
+    const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
+    const payload = runThinkingPrefillWrapper({
+      thinking: { type: "enabled", budget_tokens: 1024 },
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+      ],
+    });
+
+    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps assistant prefill when thinking is disabled", () => {
+    const payload = runThinkingPrefillWrapper({
+      thinking: { type: "disabled" },
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+      ],
+    });
+
+    expect(payload.messages).toHaveLength(2);
+  });
+
+  it("keeps trailing assistant tool use turns", () => {
+    const payload = runThinkingPrefillWrapper({
+      thinking: { type: "adaptive" },
+      messages: [
+        { role: "user", content: "Read a file." },
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Read" }] },
+      ],
+    });
+
+    expect(payload.messages).toHaveLength(2);
   });
 });
 
@@ -110,28 +173,9 @@ describe("createAnthropicFastModeWrapper", () => {
     baseUrl?: string;
     enabled?: boolean;
   }): Record<string, unknown> | undefined {
-    const captured: { payload?: Record<string, unknown> } = {};
-    const base: StreamFn = (_model, _context, options) => {
-      if (options?.onPayload) {
-        const payload: Record<string, unknown> = {};
-        options.onPayload(payload, _model);
-        captured.payload = payload;
-      }
-      return {} as never;
-    };
-
-    const wrapper = createAnthropicFastModeWrapper(base, params.enabled ?? true);
-    void wrapper(
-      {
-        provider: params.provider ?? "anthropic",
-        api: params.api ?? "anthropic-messages",
-        baseUrl: params.baseUrl,
-        id: "claude-sonnet-4-6",
-      } as never,
-      {} as never,
-      { apiKey: params.apiKey } as never,
+    return runPayloadWrapper(params, (base) =>
+      createAnthropicFastModeWrapper(base, params.enabled ?? true),
     );
-    return captured.payload;
   }
 
   it("does not inject service_tier for OAuth token", () => {
@@ -166,27 +210,9 @@ describe("createAnthropicServiceTierWrapper", () => {
     api?: string;
     serviceTier?: "auto" | "standard_only";
   }): Record<string, unknown> | undefined {
-    const captured: { payload?: Record<string, unknown> } = {};
-    const base: StreamFn = (_model, _context, options) => {
-      if (options?.onPayload) {
-        const payload: Record<string, unknown> = {};
-        options.onPayload(payload, _model);
-        captured.payload = payload;
-      }
-      return {} as never;
-    };
-
-    const wrapper = createAnthropicServiceTierWrapper(base, params.serviceTier ?? "auto");
-    void wrapper(
-      {
-        provider: params.provider ?? "anthropic",
-        api: params.api ?? "anthropic-messages",
-        id: "claude-sonnet-4-6",
-      } as never,
-      {} as never,
-      { apiKey: params.apiKey } as never,
+    return runPayloadWrapper(params, (base) =>
+      createAnthropicServiceTierWrapper(base, params.serviceTier ?? "auto"),
     );
-    return captured.payload;
   }
 
   it("does not inject service_tier for OAuth token", () => {

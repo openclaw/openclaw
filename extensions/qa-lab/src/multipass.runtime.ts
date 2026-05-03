@@ -32,7 +32,7 @@ const MULTIPASS_REPO_SYNC_EXCLUDES = [
 const MULTIPASS_EXEC_MAX_BUFFER = 64 * 1024 * 1024;
 const MULTIPASS_GUEST_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 
-export const qaMultipassDefaultResources = {
+const qaMultipassDefaultResources = {
   image: "lts",
   cpus: 2,
   memory: "4G",
@@ -52,7 +52,7 @@ type ExecFileOptions = {
   timeoutMs?: number;
 };
 
-export type QaMultipassPlan = {
+type QaMultipassPlan = {
   repoRoot: string;
   outputDir: string;
   reportPath: string;
@@ -71,6 +71,7 @@ export type QaMultipassPlan = {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinkingDefault?: string;
   scenarioIds: string[];
   forwardedEnv: Record<string, string>;
   hostCodexHomePath?: string;
@@ -85,7 +86,7 @@ export type QaMultipassPlan = {
   qaCommand: string[];
 };
 
-export type QaMultipassRunResult = {
+type QaMultipassRunResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -237,6 +238,7 @@ export function createQaMultipassPlan(params: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinkingDefault?: string;
   allowFailures?: boolean;
   scenarioIds?: string[];
   concurrency?: number;
@@ -276,6 +278,7 @@ export function createQaMultipassPlan(params: {
       ...(params.primaryModel ? ["--model", params.primaryModel] : []),
       ...(params.alternateModel ? ["--alt-model", params.alternateModel] : []),
       ...(params.fastMode ? ["--fast"] : []),
+      ...(params.thinkingDefault ? ["--thinking", params.thinkingDefault] : []),
       ...(params.allowFailures ? ["--allow-failures"] : []),
       ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
     ],
@@ -301,6 +304,7 @@ export function createQaMultipassPlan(params: {
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
     fastMode: params.fastMode,
+    thinkingDefault: params.thinkingDefault,
     scenarioIds,
     forwardedEnv,
     hostCodexHomePath,

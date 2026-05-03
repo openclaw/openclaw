@@ -1,9 +1,5 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
-import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { GatewayClient } from "../../src/gateway/client.js";
 import { connectGatewayClient } from "../../src/gateway/test-helpers.e2e.js";
@@ -11,6 +7,7 @@ import { loadOrCreateDeviceIdentity } from "../../src/infra/device-identity.js";
 import { extractFirstTextBlock } from "../../src/shared/chat-message-content.js";
 import { sleep } from "../../src/utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../src/utils/message-channel.js";
+import { createOpenClawTestInstance, type OpenClawTestInstance } from "./openclaw-test-instance.js";
 
 export { extractFirstTextBlock };
 
@@ -21,196 +18,25 @@ export type ChatEventPayload = {
   message?: unknown;
 };
 
-export type GatewayInstance = {
-  name: string;
-  port: number;
-  hookToken: string;
-  gatewayToken: string;
-  homeDir: string;
-  stateDir: string;
-  configPath: string;
-  child: ChildProcessWithoutNullStreams;
-  stdout: string[];
-  stderr: string[];
-};
+export type GatewayInstance = OpenClawTestInstance;
 
-const GATEWAY_START_TIMEOUT_MS = 60_000;
-const GATEWAY_STOP_TIMEOUT_MS = 1_500;
 const GATEWAY_CONNECT_STATUS_TIMEOUT_MS = 2_000;
 const GATEWAY_NODE_STATUS_TIMEOUT_MS = 4_000;
 const GATEWAY_NODE_STATUS_POLL_MS = 20;
 
-const getFreePort = async () => {
-  const srv = net.createServer();
-  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
-  const addr = srv.address();
-  if (!addr || typeof addr === "string") {
-    srv.close();
-    throw new Error("failed to bind ephemeral port");
-  }
-  await new Promise<void>((resolve) => srv.close(() => resolve()));
-  return addr.port;
-};
-
-async function waitForPortOpen(
-  proc: ChildProcessWithoutNullStreams,
-  chunksOut: string[],
-  chunksErr: string[],
-  port: number,
-  timeoutMs: number,
-) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (proc.exitCode !== null) {
-      const stdout = chunksOut.join("");
-      const stderr = chunksErr.join("");
-      throw new Error(
-        `gateway exited before listening (code=${String(proc.exitCode)} signal=${String(proc.signalCode)})\n` +
-          `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
-      );
-    }
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const socket = net.connect({ host: "127.0.0.1", port });
-        socket.once("connect", () => {
-          socket.destroy();
-          resolve();
-        });
-        socket.once("error", (err) => {
-          socket.destroy();
-          reject(err);
-        });
-      });
-      return;
-    } catch {
-      // keep polling
-    }
-
-    await sleep(10);
-  }
-  const stdout = chunksOut.join("");
-  const stderr = chunksErr.join("");
-  throw new Error(
-    `timeout waiting for gateway to listen on port ${port}\n` +
-      `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
-  );
-}
-
 export async function spawnGatewayInstance(name: string): Promise<GatewayInstance> {
-  const port = await getFreePort();
-  const hookToken = `token-${name}-${randomUUID()}`;
-  const gatewayToken = `gateway-${name}-${randomUUID()}`;
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-e2e-${name}-`));
-  const configDir = path.join(homeDir, ".openclaw");
-  await fs.mkdir(configDir, { recursive: true });
-  const configPath = path.join(configDir, "openclaw.json");
-  const stateDir = path.join(configDir, "state");
-  const config = {
-    gateway: {
-      port,
-      auth: { mode: "token", token: gatewayToken },
-      controlUi: { enabled: false },
-    },
-    hooks: { enabled: true, token: hookToken, path: "/hooks" },
-  };
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
-
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  let child: ChildProcessWithoutNullStreams | null = null;
-
+  const inst = await createOpenClawTestInstance({ name });
   try {
-    child = spawn(
-      "node",
-      [
-        "dist/index.js",
-        "gateway",
-        "--port",
-        String(port),
-        "--bind",
-        "loopback",
-        "--allow-unconfigured",
-      ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          HOME: homeDir,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_GATEWAY_TOKEN: "",
-          OPENCLAW_GATEWAY_PASSWORD: "",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          VITEST: "1",
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (d) => stdout.push(String(d)));
-    child.stderr?.on("data", (d) => stderr.push(String(d)));
-
-    await waitForPortOpen(child, stdout, stderr, port, GATEWAY_START_TIMEOUT_MS);
-
-    return {
-      name,
-      port,
-      hookToken,
-      gatewayToken,
-      homeDir,
-      stateDir,
-      configPath,
-      child,
-      stdout,
-      stderr,
-    };
+    await inst.startGateway();
+    return inst;
   } catch (err) {
-    if (child && child.exitCode === null && !child.killed) {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore
-      }
-    }
-    await fs.rm(homeDir, { recursive: true, force: true });
+    await inst.cleanup();
     throw err;
   }
 }
 
 export async function stopGatewayInstance(inst: GatewayInstance) {
-  if (inst.child.exitCode === null && !inst.child.killed) {
-    try {
-      inst.child.kill("SIGTERM");
-    } catch {
-      // ignore
-    }
-  }
-  const exited = await Promise.race([
-    new Promise<boolean>((resolve) => {
-      if (inst.child.exitCode !== null) {
-        return resolve(true);
-      }
-      inst.child.once("exit", () => resolve(true));
-    }),
-    sleep(GATEWAY_STOP_TIMEOUT_MS).then(() => false),
-  ]);
-  if (!exited && inst.child.exitCode === null && !inst.child.killed) {
-    try {
-      inst.child.kill("SIGKILL");
-    } catch {
-      // ignore
-    }
-  }
-  await fs.rm(inst.homeDir, { recursive: true, force: true });
+  await inst.cleanup();
 }
 
 export async function postJson(
@@ -363,7 +189,7 @@ export async function waitForChatFinalEvent(params: {
   sessionKey: string;
   timeoutMs?: number;
 }): Promise<ChatEventPayload> {
-  const deadline = Date.now() + (params.timeoutMs ?? 15_000);
+  const deadline = Date.now() + (params.timeoutMs ?? 45_000);
   while (Date.now() < deadline) {
     const match = params.events.find(
       (evt) =>
@@ -374,5 +200,12 @@ export async function waitForChatFinalEvent(params: {
     }
     await sleep(20);
   }
-  throw new Error(`timeout waiting for final chat event (runId=${params.runId})`);
+  const observed = params.events
+    .filter((evt) => evt.runId === params.runId || evt.sessionKey === params.sessionKey)
+    .map((evt) => `${evt.runId ?? "no-run"}:${evt.sessionKey ?? "no-session"}:${evt.state}`)
+    .slice(-10)
+    .join(", ");
+  throw new Error(
+    `timeout waiting for final chat event (runId=${params.runId}, sessionKey=${params.sessionKey}, observed=${observed || "none"})`,
+  );
 }

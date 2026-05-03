@@ -3,10 +3,8 @@ summary: "Exec tool usage, stdin modes, and TTY support"
 read_when:
   - Using or modifying the exec tool
   - Debugging stdin or TTY behavior
-title: "Exec Tool"
+title: "Exec tool"
 ---
-
-# Exec tool
 
 Run shell commands in the workspace. Supports foreground + background execution via `process`.
 If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
@@ -14,22 +12,58 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 
 ## Parameters
 
-- `command` (required)
-- `workdir` (defaults to cwd)
-- `env` (key/value overrides)
-- `yieldMs` (default 10000): auto-background after delay
-- `background` (bool): background immediately
-- `timeout` (seconds, default 1800): kill on expiry
-- `pty` (bool): run in a pseudo-terminal when available (TTY-only CLIs, coding agents, terminal UIs)
-- `host` (`auto | sandbox | gateway | node`): where to execute
-- `security` (`deny | allowlist | full`): enforcement mode for `gateway`/`node`
-- `ask` (`off | on-miss | always`): approval prompts for `gateway`/`node`
-- `node` (string): node id/name for `host=node`
-- `elevated` (bool): request elevated mode (escape the sandbox onto the configured host path); `security=full` is only forced when elevated resolves to `full`
+<ParamField path="command" type="string" required>
+Shell command to run.
+</ParamField>
+
+<ParamField path="workdir" type="string" default="cwd">
+Working directory for the command.
+</ParamField>
+
+<ParamField path="env" type="object">
+Key/value environment overrides merged on top of the inherited environment.
+</ParamField>
+
+<ParamField path="yieldMs" type="number" default="10000">
+Auto-background the command after this delay (ms).
+</ParamField>
+
+<ParamField path="background" type="boolean" default="false">
+Background the command immediately instead of waiting for `yieldMs`.
+</ParamField>
+
+<ParamField path="timeout" type="number" default="tools.exec.timeoutSec">
+Override the configured exec timeout for this call. Set `timeout: 0` only when the command should run without the exec process timeout.
+</ParamField>
+
+<ParamField path="pty" type="boolean" default="false">
+Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, and terminal UIs.
+</ParamField>
+
+<ParamField path="host" type="'auto' | 'sandbox' | 'gateway' | 'node'" default="auto">
+Where to execute. `auto` resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise.
+</ParamField>
+
+<ParamField path="security" type="'deny' | 'allowlist' | 'full'">
+Enforcement mode for `gateway` / `node` execution.
+</ParamField>
+
+<ParamField path="ask" type="'off' | 'on-miss' | 'always'">
+Approval prompt behavior for `gateway` / `node` execution.
+</ParamField>
+
+<ParamField path="node" type="string">
+Node id/name when `host=node`.
+</ParamField>
+
+<ParamField path="elevated" type="boolean" default="false">
+Request elevated mode — escape the sandbox onto the configured host path. `security=full` is forced only when elevated resolves to `full`.
+</ParamField>
 
 Notes:
 
 - `host` defaults to `auto`: sandbox when sandbox runtime is active for the session, otherwise gateway.
+- `host` only accepts `auto`, `sandbox`, `gateway`, or `node`. It is not a hostname selector; hostname-like values are rejected before the command runs.
 - `auto` is the default routing strategy, not a wildcard. Per-call `host=node` is allowed from `auto`; per-call `host=gateway` is only allowed when no sandbox runtime is active.
 - With no extra config, `host=auto` still "just works": no sandbox means it resolves to `gateway`; a live sandbox means it stays in the sandbox.
 - `elevated` escapes the sandbox onto the configured host path: `gateway` by default, or `node` when `tools.exec.host=node` (or the session default is `host=node`). It is only available when elevated access is enabled for the current session/provider.
@@ -37,6 +71,7 @@ Notes:
 - `node` requires a paired node (companion app or headless node host).
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
 - `exec host=node` is the only shell-execution path for nodes; the legacy `nodes.run` wrapper has been removed.
+- `timeout` applies to foreground, background, `yieldMs`, gateway, sandbox, and node `system.run` execution. If omitted, OpenClaw uses `tools.exec.timeoutSec`; explicit `timeout: 0` disables the exec process timeout for that call.
 - On non-Windows hosts, exec uses `SHELL` when set; if `SHELL` is `fish`, it prefers `bash` (or `sh`)
   from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
 - On Windows hosts, exec prefers PowerShell 7 (`pwsh`) discovery (Program Files, ProgramW6432, then PATH),
@@ -44,6 +79,7 @@ Notes:
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
   prevent binary hijacking or injected code.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
+- `openclaw channels login` is blocked from `exec` because it is an interactive channel-auth flow; run it in a terminal on the gateway host, or use the channel-native login tool from chat when one exists.
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto`
   resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently
   running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
@@ -61,16 +97,17 @@ Notes:
 
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
 - `tools.exec.approvalRunningNoticeMs` (default: 10000): emit a single “running” notice when an approval-gated exec runs longer than this (0 disables).
+- `tools.exec.timeoutSec` (default: 1800): default per-command exec timeout in seconds. Per-call `timeout` overrides it; per-call `timeout: 0` disables the exec process timeout.
 - `tools.exec.host` (default: `auto`; resolves to `sandbox` when sandbox runtime is active, `gateway` otherwise)
 - `tools.exec.security` (default: `deny` for sandbox, `full` for gateway + node when unset)
 - `tools.exec.ask` (default: `off`)
-- No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host `~/.openclaw/exec-approvals.json`; see [Exec approvals](/tools/exec-approvals#no-approval-yolo-mode).
+- No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host `~/.openclaw/exec-approvals.json`; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval).
 - YOLO comes from the host-policy defaults (`security=full`, `ask=off`), not from `host=auto`. If you want to force gateway or node routing, set `tools.exec.host` or use `/exec host=...`.
-- In `security=full` plus `ask=off` mode, host exec follows the configured policy directly; there is no extra heuristic command-obfuscation prefilter.
+- In `security=full` plus `ask=off` mode, host exec follows the configured policy directly; there is no extra heuristic command-obfuscation prefilter or script-preflight rejection layer.
 - `tools.exec.node` (default: unset)
 - `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` always require explicit approval. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms still prompt each time.
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
-- `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
+- `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals-advanced#safe-bins-stdin-only).
 - `tools.exec.safeBinTrustedDirs`: additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted. Built-in defaults are `/bin` and `/usr/bin`.
 - `tools.exec.safeBinProfiles`: optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`).
 
@@ -142,11 +179,13 @@ only path.
 
 ## Allowlist + safe bins
 
-Manual allowlist enforcement matches **resolved binary paths only** (no basename matches). When
-`security=allowlist`, shell commands are auto-allowed only if every pipeline segment is
-allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
-allowlist mode unless every top-level segment satisfies the allowlist (including safe bins).
-Redirections remain unsupported.
+Manual allowlist enforcement matches resolved binary path globs and bare command-name
+globs. Bare names match only commands invoked through PATH, so `rg` can match
+`/opt/homebrew/bin/rg` when the command is `rg`, but not `./rg` or `/tmp/rg`.
+When `security=allowlist`, shell commands are auto-allowed only if every pipeline
+segment is allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections
+are rejected in allowlist mode unless every top-level segment satisfies the
+allowlist (including safe bins). Redirections remain unsupported.
 Durable `allow-always` trust does not bypass that rule: a chained command still requires every
 top-level segment to match.
 
@@ -165,7 +204,7 @@ Do not treat `safeBins` as a generic allowlist, and do not add interpreter/runti
 `openclaw security audit` and `openclaw doctor` also warn when you explicitly add broad-behavior bins such as `jq` back into `safeBins`.
 If you explicitly allowlist interpreters, enable `tools.exec.strictInlineEval` so inline code-eval forms still require a fresh approval.
 
-For full policy details and examples, see [Exec approvals](/tools/exec-approvals#safe-bins-stdin-only) and [Safe bins versus allowlist](/tools/exec-approvals#safe-bins-versus-allowlist).
+For full policy details and examples, see [Exec approvals](/tools/exec-approvals-advanced#safe-bins-stdin-only) and [Safe bins versus allowlist](/tools/exec-approvals-advanced#safe-bins-versus-allowlist).
 
 ## Examples
 
@@ -215,7 +254,7 @@ when you want to disable it or restrict it to specific models:
 {
   tools: {
     exec: {
-      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.4"] },
+      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.5"] },
     },
   },
 }

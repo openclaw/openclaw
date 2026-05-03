@@ -1,9 +1,10 @@
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
+  expandAllowFromWithAccessGroups,
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
@@ -26,6 +27,7 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
 }
 
 export async function checkInboundAccessControl(params: {
+  cfg: OpenClawConfig;
   accountId: string;
   from: string;
   selfE164: string | null;
@@ -42,18 +44,19 @@ export async function checkInboundAccessControl(params: {
   };
   remoteJid: string;
 }): Promise<InboundAccessControlResult> {
-  const cfg = loadConfig();
   const policy = resolveWhatsAppInboundPolicy({
-    cfg,
+    cfg: params.cfg,
     accountId: params.accountId,
     selfE164: params.selfE164,
   });
-  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
-    provider: "whatsapp",
-    accountId: policy.account.accountId,
-    dmPolicy: policy.dmPolicy,
-    shouldRead: policy.shouldReadStorePairingApprovals,
-  });
+  const storeAllowFrom = params.group
+    ? []
+    : await readStoreAllowFromForDmPolicy({
+        provider: "whatsapp",
+        accountId: policy.account.accountId,
+        dmPolicy: policy.dmPolicy,
+        shouldRead: policy.shouldReadStorePairingApprovals,
+      });
   const pairingGraceMs =
     typeof params.pairingGraceMs === "number" && params.pairingGraceMs > 0
       ? params.pairingGraceMs
@@ -73,13 +76,47 @@ export async function checkInboundAccessControl(params: {
     accountId: policy.account.accountId,
     log: (message) => logWhatsAppVerbose(params.verbose, message),
   });
+  const accessGroupSenderId = params.group ? (params.senderE164 ?? params.from) : params.from;
+  const isAccessGroupSenderAllowed = (senderId: string, allowEntries: string[]) => {
+    return params.group
+      ? policy.isGroupSenderAllowed(allowEntries, senderId)
+      : policy.isDmSenderAllowed(allowEntries, senderId);
+  };
+  const [allowFrom, groupAllowFrom] = await Promise.all([
+    expandAllowFromWithAccessGroups({
+      cfg: params.cfg,
+      allowFrom: params.group ? policy.configuredAllowFrom : policy.dmAllowFrom,
+      channel: "whatsapp",
+      accountId: policy.account.accountId,
+      senderId: accessGroupSenderId,
+      isSenderAllowed: isAccessGroupSenderAllowed,
+    }),
+    expandAllowFromWithAccessGroups({
+      cfg: params.cfg,
+      allowFrom: policy.groupAllowFrom,
+      channel: "whatsapp",
+      accountId: policy.account.accountId,
+      senderId: accessGroupSenderId,
+      isSenderAllowed: isAccessGroupSenderAllowed,
+    }),
+  ]);
+  const dmStoreAllowFrom = params.group
+    ? []
+    : await expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: storeAllowFrom,
+        channel: "whatsapp",
+        accountId: policy.account.accountId,
+        senderId: accessGroupSenderId,
+        isSenderAllowed: isAccessGroupSenderAllowed,
+      });
   const access = resolveDmGroupAccessWithLists({
     isGroup: params.group,
     dmPolicy: policy.dmPolicy,
     groupPolicy: policy.groupPolicy,
-    allowFrom: params.group ? policy.configuredAllowFrom : policy.dmAllowFrom,
-    groupAllowFrom: policy.groupAllowFrom,
-    storeAllowFrom,
+    allowFrom,
+    groupAllowFrom,
+    storeAllowFrom: dmStoreAllowFrom,
     isSenderAllowed: (allowEntries) => {
       return params.group
         ? policy.isGroupSenderAllowed(allowEntries, params.senderE164)

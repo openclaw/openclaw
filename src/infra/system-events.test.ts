@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
+import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
-import { isCronSystemEvent } from "./heartbeat-runner.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { isCronSystemEvent } from "./heartbeat-events-filter.js";
 import {
+  consumeSelectedSystemEventEntries,
   consumeSystemEventEntries,
   drainSystemEventEntries,
   enqueueSystemEvent,
@@ -120,6 +121,37 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key)).toEqual(["second"]);
   });
 
+  it("consumes selected inspected entries and preserves unselected queued events", () => {
+    const key = "agent:main:test-consume-selected";
+    enqueueSystemEvent("first", { sessionKey: key, contextKey: "event:first" });
+    enqueueSystemEvent("second", { sessionKey: key, contextKey: "event:second" });
+    enqueueSystemEvent("third", { sessionKey: key, contextKey: "event:third" });
+    const selected = peekSystemEventEntries(key).filter((event) => event.text !== "second");
+
+    expect(consumeSelectedSystemEventEntries(key, selected).map((entry) => entry.text)).toEqual([
+      "first",
+      "third",
+    ]);
+    expect(peekSystemEvents(key)).toEqual(["second"]);
+  });
+
+  it("matches consumed delivery contexts through normalized route identity", () => {
+    const key = "agent:main:test-consume-route-context";
+    enqueueSystemEvent("first", {
+      sessionKey: key,
+      deliveryContext: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: 42.9,
+      },
+    });
+    const inspected = peekSystemEventEntries(key);
+    inspected[0].deliveryContext!.threadId = "42";
+
+    expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual(["first"]);
+    expect(peekSystemEvents(key)).toEqual([]);
+  });
+
   it("resolves the newest effective delivery context from queued events", () => {
     const key = "agent:main:test-delivery-context";
     enqueueSystemEvent("Restarted", {
@@ -192,6 +224,32 @@ describe("system events (session routing)", () => {
     const result = await drainFormattedEvents(key);
     expect(result).toBeUndefined();
     expect(peekSystemEvents(key)).toEqual([]);
+  });
+
+  it("leaves exec completion events queued for the dedicated heartbeat", async () => {
+    const key = "agent:main:test-exec-completion-filter";
+    enqueueSystemEvent("Exec failed (abc12345, signal SIGTERM) :: browser auth timed out", {
+      sessionKey: key,
+      trusted: false,
+    });
+
+    const result = await drainFormattedEvents(key);
+    expect(result).toBeUndefined();
+    expect(peekSystemEvents(key)).toEqual([
+      "Exec failed (abc12345, signal SIGTERM) :: browser auth timed out",
+    ]);
+  });
+
+  it("drains generic events without consuming pending exec completions", async () => {
+    const key = "agent:main:test-exec-completion-prefix";
+    enqueueSystemEvent("Model switched to gpt-5.5", { sessionKey: key });
+    enqueueSystemEvent("Exec finished (gateway id=abc12345, code 0)", { sessionKey: key });
+    enqueueSystemEvent("Node connected", { sessionKey: key });
+
+    const result = await drainFormattedEvents(key);
+    expect(result).toContain("Model switched to gpt-5.5");
+    expect(result).toContain("Node connected");
+    expect(peekSystemEvents(key)).toEqual(["Exec finished (gateway id=abc12345, code 0)"]);
   });
 
   it("prefixes every line of a multi-line event", async () => {

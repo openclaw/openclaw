@@ -8,7 +8,6 @@ import {
   listRuntimeMusicGenerationProviders,
 } from "../../music-generation/runtime.js";
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
@@ -20,6 +19,12 @@ import {
   listRuntimeVideoGenerationProviders,
 } from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
+import {
+  gatewaySubagentState,
+  setGatewayNodesRuntime,
+  setGatewaySubagentRuntime,
+  clearGatewaySubagentRuntime,
+} from "./gateway-bindings.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -33,6 +38,11 @@ import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
 export type { CreatePluginRuntimeOptions } from "./types.js";
+export {
+  clearGatewaySubagentRuntime,
+  setGatewayNodesRuntime,
+  setGatewaySubagentRuntime,
+} from "./gateway-bindings.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
@@ -105,6 +115,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
       getApiKeyForModel({
         model: params.model,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
       }),
     getRuntimeAuthForModel: (params) =>
       getRuntimeAuthForModel({
@@ -116,6 +127,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
       resolveApiKeyForProvider({
         provider: params.provider,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
       }),
   };
 }
@@ -139,39 +151,6 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
 // A process-global holder lets explicitly gateway-bindable runtimes resolve the
 // active gateway subagent dynamically without changing the default behavior for
 // ordinary plugin runtimes.
-
-const GATEWAY_SUBAGENT_SYMBOL: unique symbol = Symbol.for(
-  "openclaw.plugin.gatewaySubagentRuntime",
-) as unknown as typeof GATEWAY_SUBAGENT_SYMBOL;
-
-type GatewaySubagentState = {
-  subagent: PluginRuntime["subagent"] | undefined;
-};
-
-const gatewaySubagentState = resolveGlobalSingleton<GatewaySubagentState>(
-  GATEWAY_SUBAGENT_SYMBOL,
-  () => ({
-    subagent: undefined,
-  }),
-);
-
-/**
- * Set the process-global gateway subagent runtime.
- * Called during gateway startup so that gateway-bindable plugin runtimes can
- * resolve subagent methods dynamically even when their registry was cached
- * before the gateway finished loading plugins.
- */
-export function setGatewaySubagentRuntime(subagent: PluginRuntime["subagent"]): void {
-  gatewaySubagentState.subagent = subagent;
-}
-
-/**
- * Reset the process-global gateway subagent runtime.
- * Used by tests to avoid leaking gateway state across module reloads.
- */
-export function clearGatewaySubagentRuntime(): void {
-  gatewaySubagentState.subagent = undefined;
-}
 
 /**
  * Create a late-binding subagent that resolves to:
@@ -200,6 +179,29 @@ function createLateBindingSubagent(
   });
 }
 
+function createUnavailableNodesRuntime(): PluginRuntime["nodes"] {
+  const unavailable = () => {
+    throw new Error("Plugin node runtime is only available inside the Gateway.");
+  };
+  return {
+    list: unavailable,
+    invoke: unavailable,
+  };
+}
+
+function createLateBindingNodes(allowGatewayBinding = false): PluginRuntime["nodes"] {
+  const unavailable = createUnavailableNodesRuntime();
+  if (!allowGatewayBinding) {
+    return unavailable;
+  }
+  return new Proxy(unavailable, {
+    get(_target, prop, _receiver) {
+      const resolved = gatewaySubagentState.nodes ?? unavailable;
+      return Reflect.get(resolved, prop, resolved);
+    },
+  });
+}
+
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
@@ -216,6 +218,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       _options.subagent,
       _options.allowGatewaySubagentBinding === true,
     ),
+    nodes: _options.nodes ?? createLateBindingNodes(_options.allowGatewaySubagentBinding === true),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     webSearch: {
@@ -225,7 +228,12 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     channel: createRuntimeChannel(),
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
-    state: { resolveStateDir },
+    state: {
+      resolveStateDir,
+      openKeyedStore: () => {
+        throw new Error("openKeyedStore is only available through the plugin runtime proxy.");
+      },
+    },
     tasks,
     taskFlow,
   } satisfies Omit<
@@ -261,7 +269,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
   defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
 
-  return runtime as PluginRuntime;
+  return runtime as unknown as PluginRuntime;
 }
 
 export type { PluginRuntime } from "./types.js";

@@ -53,11 +53,27 @@
   },
   "redirects": [
     {
+      "source": "/install/migrating-matrix",
+      "destination": "/channels/matrix-migration"
+    },
+    {
+      "source": "/help/gpt54-codex-agentic-parity",
+      "destination": "/help/gpt55-codex-agentic-parity"
+    },
+    {
+      "source": "/help/gpt54-codex-agentic-parity-maintainers",
+      "destination": "/help/gpt55-codex-agentic-parity-maintainers"
+    },
+    {
       "source": "/mcp",
       "destination": "/cli/mcp"
     },
     {
       "source": "/providers/modelstudio",
+      "destination": "/providers/qwen"
+    },
+    {
+      "source": "/providers/qwen_modelstudio",
       "destination": "/providers/qwen"
     },
     {
@@ -327,6 +343,14 @@
     {
       "source": "/bonjour",
       "destination": "/gateway/bonjour"
+    },
+    {
+      "source": "/gateway/config-tts",
+      "destination": "/tools/tts"
+    },
+    {
+      "source": "/gateway/observability",
+      "destination": "/gateway/opentelemetry"
     },
     {
       "source": "/browser",
@@ -964,6 +988,22 @@
                 "pages": ["install/index", "install/installer", "install/node"]
               },
               {
+                "group": "Maintenance",
+                "pages": [
+                  "install/updating",
+                  {
+                    "group": "Migrating",
+                    "pages": [
+                      "install/migrating",
+                      "install/migrating-claude",
+                      "install/migrating-hermes"
+                    ]
+                  },
+                  "install/uninstall",
+                  "install/development-channels"
+                ]
+              },
+              {
                 "group": "Containers",
                 "pages": [
                   "install/ansible",
@@ -996,14 +1036,8 @@
                 ]
               },
               {
-                "group": "Maintenance",
-                "pages": [
-                  "install/updating",
-                  "install/migrating",
-                  "install/migrating-matrix",
-                  "install/uninstall",
-                  "install/development-channels"
-                ]
+                "group": "Advanced setup",
+                "pages": ["start/setup", "pi-dev"]
               }
             ]
           },
@@ -1015,29 +1049,42 @@
                 "pages": ["channels/index"]
               },
               {
-                "group": "Messaging platforms",
+                "group": "Mainstream messaging",
                 "pages": [
-                  "channels/bluebubbles",
                   "channels/discord",
-                  "channels/feishu",
+                  "channels/slack",
+                  "channels/telegram",
+                  "channels/whatsapp",
+                  "channels/signal",
+                  "channels/msteams",
                   "channels/googlechat",
                   "channels/imessage",
-                  "channels/irc",
-                  "channels/line",
+                  "channels/bluebubbles",
                   "channels/matrix",
+                  "channels/matrix-migration",
+                  "channels/matrix-push-rules"
+                ]
+              },
+              {
+                "group": "Developer and self-hosted",
+                "pages": [
+                  "channels/irc",
                   "channels/mattermost",
-                  "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
-                  "channels/qqbot",
-                  "channels/signal",
-                  "channels/slack",
-                  "channels/synology-chat",
-                  "channels/telegram",
                   "channels/tlon",
-                  "channels/twitch",
+                  "channels/synology-chat",
+                  "channels/twitch"
+                ]
+              },
+              {
+                "group": "Regional platforms",
+                "pages": [
+                  "channels/line",
                   "channels/wechat",
-                  "channels/whatsapp",
+                  "channels/qqbot",
+                  "channels/feishu",
+                  "channels/yuanbao",
                   "channels/zalo",
                   "channels/zalouser"
                 ]
@@ -1046,12 +1093,14 @@
                 "group": "Configuration",
                 "pages": [
                   "channels/pairing",
+                  "channels/access-groups",
                   "channels/group-messages",
                   "channels/groups",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
-                  "channels/troubleshooting"
+                  "channels/troubleshooting",
+                  "channels/qa-channel"
                 ]
               }
             ]
@@ -1065,6 +1114,7 @@
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",
+                  "concepts/agent-runtimes",
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/context-engine",
@@ -1072,13 +1122,16 @@
                   "concepts/soul",
                   "concepts/oauth",
                   "start/bootstrapping",
-                  "concepts/experimental-features"
+                  "concepts/experimental-features",
+                  "concepts/qa-e2e-automation",
+                  "concepts/qa-matrix"
                 ]
               },
               {
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/session",
+                  "concepts/channel-docking",
                   "concepts/session-pruning",
                   "concepts/session-tool",
                   {
@@ -1090,6 +1143,7 @@
                       "concepts/memory-honcho",
                       "concepts/memory-search",
                       "concepts/active-memory",
+                      "concepts/commitments",
                       "concepts/dreaming"
                     ]
                   },
@@ -1100,6 +1154,7 @@
                 "group": "Multi-agent",
                 "pages": [
                   "concepts/multi-agent",
+                  "concepts/parallel-specialist-lanes",
                   "concepts/presence",
                   "concepts/delegate-architecture"
                 ]
@@ -1110,7 +1165,8 @@
                   "concepts/messages",
                   "concepts/streaming",
                   "concepts/retry",
-                  "concepts/queue"
+                  "concepts/queue",
+                  "concepts/queue-steering"
                 ]
               }
             ]
@@ -1126,33 +1182,47 @@
                 "group": "Plugins",
                 "pages": [
                   "tools/plugin",
+                  "plugins/manage-plugins",
                   "plugins/community",
+                  "plugins/plugin-inventory",
+                  "plugins/reference",
                   "plugins/bundles",
+                  "plugins/dependency-resolution",
                   "plugins/codex-harness",
+                  "plugins/codex-computer-use",
+                  "plugins/google-meet",
                   "plugins/webhooks",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/memory-lancedb",
+                  "plugins/message-presentation",
+                  "plugins/skill-workshop",
                   "plugins/zalouser",
                   {
-                    "group": "Building Plugins",
+                    "group": "Building plugins",
                     "pages": [
                       "plugins/building-plugins",
+                      "plugins/hooks",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
+                      "plugins/compatibility",
                       "plugins/sdk-migration"
                     ]
                   },
                   {
-                    "group": "SDK Reference",
+                    "group": "Plugin SDK reference",
                     "pages": [
                       "plugins/sdk-overview",
+                      "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
+                      "plugins/sdk-channel-turn",
                       "plugins/sdk-agent-harness",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
                       "plugins/manifest",
-                      "plugins/architecture"
+                      "plugins/architecture",
+                      "plugins/architecture-internals"
                     ]
                   }
                 ]
@@ -1169,7 +1239,7 @@
                 ]
               },
               {
-                "group": "Automation & Tasks",
+                "group": "Automation and tasks",
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
@@ -1182,19 +1252,39 @@
               {
                 "group": "Tools",
                 "pages": [
-                  "tools/media-overview",
                   "tools/apply-patch",
+                  "tools/btw",
+                  "tools/code-execution",
+                  "tools/diffs",
+                  "tools/elevated",
+                  "tools/exec-approvals",
+                  "tools/exec-approvals-advanced",
+                  "tools/exec",
+                  "tools/image-generation",
+                  "tools/llm-task",
+                  "tools/lobster",
+                  "tools/media-overview",
+                  "tools/music-generation",
+                  "tools/pdf",
+                  "tools/reactions",
+                  "tools/thinking",
+                  "tools/tokenjuice",
+                  "tools/loop-detection",
+                  "tools/trajectory",
+                  "tools/tts",
+                  "tools/video-generation",
                   {
-                    "group": "Web Browser",
+                    "group": "Web browser",
                     "pages": [
                       "tools/browser",
+                      "tools/browser-control",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
                       "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
                     ]
                   },
                   {
-                    "group": "Web Tools",
+                    "group": "Web tools",
                     "pages": [
                       "tools/web-fetch",
                       "tools/web",
@@ -1211,22 +1301,7 @@
                       "tools/searxng-search",
                       "tools/tavily"
                     ]
-                  },
-                  "tools/btw",
-                  "tools/code-execution",
-                  "tools/diffs",
-                  "tools/elevated",
-                  "tools/exec",
-                  "tools/exec-approvals",
-                  "tools/image-generation",
-                  "tools/music-generation",
-                  "tools/llm-task",
-                  "tools/lobster",
-                  "tools/loop-detection",
-                  "tools/pdf",
-                  "tools/reactions",
-                  "tools/thinking",
-                  "tools/video-generation"
+                  }
                 ]
               },
               {
@@ -1235,6 +1310,7 @@
                   "tools/agent-send",
                   "tools/subagents",
                   "tools/acp-agents",
+                  "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
                 ]
               }
@@ -1259,20 +1335,26 @@
                   "providers/bedrock-mantle",
                   "providers/anthropic",
                   "providers/arcee",
+                  "providers/azure-speech",
+                  "providers/cerebras",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",
                   "providers/deepgram",
+                  "providers/deepinfra",
                   "providers/deepseek",
+                  "providers/elevenlabs",
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
                   "providers/glm",
                   "providers/google",
+                  "providers/gradium",
                   "providers/groq",
                   "providers/huggingface",
                   "providers/inferrs",
+                  "providers/inworld",
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/lmstudio",
@@ -1289,9 +1371,11 @@
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",
+                  "providers/senseaudio",
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
+                  "providers/tencent",
                   "providers/together",
                   "providers/venice",
                   "providers/vercel-ai-gateway",
@@ -1322,23 +1406,38 @@
               {
                 "group": "macOS companion app",
                 "pages": [
-                  "platforms/mac/dev-setup",
-                  "platforms/mac/menu-bar",
-                  "platforms/mac/voicewake",
-                  "platforms/mac/voice-overlay",
-                  "platforms/mac/webchat",
-                  "platforms/mac/canvas",
-                  "platforms/mac/child-process",
-                  "platforms/mac/health",
-                  "platforms/mac/icon",
-                  "platforms/mac/logging",
-                  "platforms/mac/permissions",
-                  "platforms/mac/remote",
-                  "platforms/mac/signing",
-                  "platforms/mac/bundled-gateway",
-                  "platforms/mac/xpc",
-                  "platforms/mac/skills",
-                  "platforms/mac/peekaboo"
+                  {
+                    "group": "Setup",
+                    "pages": [
+                      "platforms/mac/dev-setup",
+                      "platforms/mac/menu-bar",
+                      "platforms/mac/icon",
+                      "platforms/mac/permissions",
+                      "platforms/mac/signing"
+                    ]
+                  },
+                  {
+                    "group": "Runtime",
+                    "pages": [
+                      "platforms/mac/bundled-gateway",
+                      "platforms/mac/child-process",
+                      "platforms/mac/health",
+                      "platforms/mac/logging",
+                      "platforms/mac/remote",
+                      "platforms/mac/xpc"
+                    ]
+                  },
+                  {
+                    "group": "Features",
+                    "pages": [
+                      "platforms/mac/voicewake",
+                      "platforms/mac/voice-overlay",
+                      "platforms/mac/webchat",
+                      "platforms/mac/canvas",
+                      "platforms/mac/skills",
+                      "platforms/mac/peekaboo"
+                    ]
+                  }
                 ]
               }
             ]
@@ -1351,31 +1450,54 @@
                 "pages": [
                   "gateway/index",
                   {
-                    "group": "Configuration and operations",
+                    "group": "Configuration",
                     "pages": [
                       "gateway/configuration",
                       "gateway/configuration-reference",
-                      "gateway/configuration-examples",
+                      "gateway/config-agents",
+                      "gateway/config-channels",
+                      "gateway/config-tools",
+                      "gateway/configuration-examples"
+                    ]
+                  },
+                  {
+                    "group": "Authentication and secrets",
+                    "pages": [
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
                       "gateway/secrets-plan-contract",
-                      "gateway/trusted-proxy-auth",
+                      "gateway/trusted-proxy-auth"
+                    ]
+                  },
+                  {
+                    "group": "Health and diagnostics",
+                    "pages": [
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
-                      "gateway/logging",
                       "logging",
+                      "gateway/opentelemetry",
+                      "gateway/prometheus",
+                      "gateway/logging",
+                      "gateway/diagnostics",
+                      "gateway/troubleshooting"
+                    ]
+                  },
+                  {
+                    "group": "Scaling and operations",
+                    "pages": [
                       "gateway/gateway-lock",
                       "gateway/background-process",
-                      "gateway/multiple-gateways",
-                      "gateway/troubleshooting"
+                      "gateway/multiple-gateways"
                     ]
                   },
                   {
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/audit-checks",
+                      "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
@@ -1412,6 +1534,7 @@
               {
                 "group": "Security",
                 "pages": [
+                  "security/network-proxy",
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
                   "security/CONTRIBUTING-THREAT-MODEL"
@@ -1455,11 +1578,13 @@
                     "group": "Gateway and service",
                     "pages": [
                       "cli/backup",
+                      "cli/crestodian",
                       "cli/daemon",
                       "cli/doctor",
                       "cli/gateway",
                       "cli/health",
                       "cli/logs",
+                      "cli/migrate",
                       "cli/onboard",
                       "cli/reset",
                       "cli/secrets",
@@ -1478,10 +1603,12 @@
                       "cli/hooks",
                       "cli/infer",
                       "cli/memory",
+                      "cli/commitments",
                       "cli/message",
                       "cli/models",
                       "cli/sessions",
-                      "cli/system"
+                      "cli/system",
+                      "cli/tasks"
                     ]
                   },
                   {
@@ -1528,6 +1655,7 @@
                       "cli/dns",
                       "cli/docs",
                       "cli/mcp",
+                      "cli/proxy",
                       "cli/wiki"
                     ]
                   }
@@ -1535,7 +1663,12 @@
               },
               {
                 "group": "RPC and API",
-                "pages": ["reference/rpc", "reference/device-models"]
+                "pages": [
+                  "reference/rpc",
+                  "concepts/openclaw-sdk",
+                  "reference/openclaw-sdk-api-design",
+                  "reference/device-models"
+                ]
               },
               {
                 "group": "Templates",
@@ -1563,6 +1696,7 @@
                   "reference/transcript-hygiene",
                   "reference/memory-config",
                   "reference/rich-output-protocol",
+                  "reference/session-management-compaction",
                   "date-time"
                 ]
               },
@@ -1573,16 +1707,24 @@
                   "concepts/markdown-formatting",
                   "concepts/typing-indicators",
                   "concepts/usage-tracking",
-                  "concepts/timezone"
+                  "concepts/timezone",
+                  "help/gpt55-codex-agentic-parity",
+                  "help/gpt55-codex-agentic-parity-maintainers"
                 ]
               },
               {
                 "group": "Project",
-                "pages": ["reference/credits"]
+                "pages": ["reference/application-modernization-plan", "reference/credits"]
               },
               {
-                "group": "Release policy",
-                "pages": ["reference/RELEASING", "reference/test"]
+                "group": "Release and CI",
+                "pages": [
+                  "reference/RELEASING",
+                  "reference/full-release-validation",
+                  "reference/test",
+                  "ci",
+                  "help/scripts"
+                ]
               }
             ]
           },
@@ -1590,39 +1732,24 @@
             "tab": "Help",
             "groups": [
               {
-                "group": "Help",
-                "pages": ["help/index", "help/troubleshooting", "help/faq"]
+                "group": "Start here",
+                "pages": ["help/index", "help/troubleshooting", "help/debugging"]
               },
               {
-                "group": "Community",
-                "pages": ["start/lore"]
+                "group": "FAQ",
+                "pages": ["help/faq", "help/faq-first-run", "help/faq-models"]
               },
               {
-                "group": "Environment and debugging",
-                "pages": [
-                  "help/environment",
-                  "help/debugging",
-                  "help/testing",
-                  "help/scripts",
-                  "debug/node-issue",
-                  "diagnostics/flags"
-                ]
+                "group": "Testing",
+                "pages": ["help/testing", "help/testing-updates-plugins", "help/testing-live"]
               },
               {
-                "group": "Compaction internals",
-                "pages": ["reference/session-management-compaction"]
+                "group": "Diagnostics",
+                "pages": ["help/environment", "diagnostics/flags", "debug/node-issue"]
               },
               {
-                "group": "Developer setup",
-                "pages": ["start/setup", "pi-dev"]
-              },
-              {
-                "group": "Contributing",
-                "pages": ["ci"]
-              },
-              {
-                "group": "Docs meta",
-                "pages": ["start/hubs", "start/docs-directory"]
+                "group": "Community and meta",
+                "pages": ["start/lore", "start/hubs", "start/docs-directory"]
               }
             ]
           }

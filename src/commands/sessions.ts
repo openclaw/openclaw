@@ -1,12 +1,15 @@
+import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
+  resolveSessionDisplayModelRef,
   resolveSessionDisplayDefaults,
   resolveSessionDisplayModel,
 } from "./sessions-display-model.js";
@@ -25,12 +28,13 @@ import {
 type SessionRow = SessionDisplayRow & {
   agentId: string;
   kind: "direct" | "group" | "global" | "unknown";
+  agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
 };
 
 const AGENT_PAD = 10;
 const KIND_PAD = 6;
 const TOKENS_PAD = 20;
-let contextLookupRuntimePromise: Promise<typeof import("../agents/context.js")> | null = null;
+const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
 
 const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
@@ -69,8 +73,7 @@ const formatTokensCell = (
 };
 
 async function lookupContextTokensForDisplay(model: string): Promise<number | undefined> {
-  contextLookupRuntimePromise ??= import("../agents/context.js");
-  const { lookupContextTokens } = await contextLookupRuntimePromise;
+  const { lookupContextTokens } = await contextLookupRuntimeLoader.load();
   return lookupContextTokens(model, { allowAsyncLoad: false });
 }
 
@@ -112,7 +115,7 @@ export async function sessionsCommand(
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
   const configContextTokens =
@@ -146,12 +149,14 @@ export async function sessionsCommand(
   const rows = targets
     .flatMap((target) => {
       const store = loadSessionStore(target.storePath);
-      return toSessionDisplayRows(store).map((row) =>
-        Object.assign({}, row, {
-          agentId: parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
+      return toSessionDisplayRows(store).map((row) => {
+        const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
+        return Object.assign({}, row, {
+          agentId,
+          agentRuntime: resolveAgentRuntimeMetadata(cfg, agentId),
           kind: classifySessionKey(row.key, store[row.key]),
-        }),
-      );
+        });
+      });
     })
     .filter((row) => {
       if (activeMinutes === undefined) {
@@ -180,7 +185,7 @@ export async function sessionsCommand(
       activeMinutes: activeMinutes ?? null,
       sessions: await Promise.all(
         rows.map(async (r) => {
-          const model = resolveSessionDisplayModel(cfg, r);
+          const modelRef = resolveSessionDisplayModelRef(cfg, r);
           return {
             ...r,
             totalTokens: resolveSessionTotalTokens(r) ?? null,
@@ -189,10 +194,11 @@ export async function sessionsCommand(
             contextTokens:
               r.contextTokens ??
               configuredContextTokens ??
-              (await lookupContextTokensForDisplay(model)) ??
+              (await lookupContextTokensForDisplay(modelRef.model)) ??
               configContextTokens ??
               null,
-            model,
+            modelProvider: modelRef.provider,
+            model: modelRef.model,
           };
         }),
       ),

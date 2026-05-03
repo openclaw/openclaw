@@ -27,6 +27,7 @@ export type SkillScanSummary = {
 };
 
 export type SkillScanOptions = {
+  excludeTestFiles?: boolean;
   includeFiles?: string[];
   maxFiles?: number;
   maxFileBytes?: number;
@@ -51,6 +52,8 @@ const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const FILE_SCAN_CACHE_MAX = 5000;
 const DIR_ENTRY_CACHE_MAX = 5000;
+const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
+const TEST_FILE_NAME_PATTERN = /\.(?:mock|spec|test)\.[^.]+$/i;
 
 type FileScanCacheEntry = {
   size: number;
@@ -216,9 +219,32 @@ function truncateEvidence(evidence: string, maxLen = 120): string {
   return `${evidence.slice(0, maxLen)}…`;
 }
 
+function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
+  const command = match[1];
+  if (command !== "exec") {
+    return false;
+  }
+
+  const matchIndex = match.index;
+  if (matchIndex <= 0 || line[matchIndex - 1] !== ".") {
+    return false;
+  }
+
+  return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
+}
+
+function stripFullLineCommentsForHeuristics(source: string): string {
+  return source
+    .split("\n")
+    .map((line) => (line.trimStart().startsWith("//") ? "" : line))
+    .join("\n");
+}
+
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
   const lines = source.split("\n");
+  const heuristicSource = stripFullLineCommentsForHeuristics(source);
+  const heuristicLines = heuristicSource.split("\n");
   const matchedLineRules = new Set<string>();
 
   // --- Line rules ---
@@ -239,9 +265,13 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
         continue;
       }
 
+      if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
+        continue;
+      }
+
       // Special handling for suspicious-network: check port
       if (rule.ruleId === "suspicious-network") {
-        const port = parseInt(match[1], 10);
+        const port = Number.parseInt(match[1], 10);
         if (STANDARD_PORTS.has(port)) {
           continue;
         }
@@ -270,10 +300,10 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       continue;
     }
 
-    if (!rule.pattern.test(source)) {
+    if (!rule.pattern.test(heuristicSource)) {
       continue;
     }
-    if (rule.requiresContext && !rule.requiresContext.test(source)) {
+    if (rule.requiresContext && !rule.requiresContext.test(heuristicSource)) {
       continue;
     }
 
@@ -281,7 +311,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let matchLine = 0;
     let matchEvidence = "";
     for (let i = 0; i < lines.length; i++) {
-      if (rule.pattern.test(lines[i])) {
+      if (rule.pattern.test(heuristicLines[i] ?? "")) {
         matchLine = i + 1;
         matchEvidence = lines[i].trim();
         break;
@@ -315,13 +345,26 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 
 function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOptions> {
   return {
+    excludeTestFiles: opts?.excludeTestFiles ?? false,
     includeFiles: opts?.includeFiles ?? [],
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
     maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
   };
 }
 
-async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<string[]> {
+function isExcludedTestDirectoryName(name: string): boolean {
+  return TEST_DIRECTORY_NAMES.has(name);
+}
+
+function isExcludedTestFileName(name: string): boolean {
+  return TEST_FILE_NAME_PATTERN.test(name);
+}
+
+async function walkDirWithLimit(
+  dirPath: string,
+  maxFiles: number,
+  excludeTestFiles: boolean,
+): Promise<string[]> {
   const files: string[] = [];
   const stack: string[] = [dirPath];
 
@@ -338,6 +381,13 @@ async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<stri
       }
       // Skip hidden dirs and node_modules
       if (entry.name.startsWith(".") || entry.name === "node_modules") {
+        continue;
+      }
+      if (
+        excludeTestFiles &&
+        ((entry.kind === "dir" && isExcludedTestDirectoryName(entry.name)) ||
+          (entry.kind === "file" && isExcludedTestFileName(entry.name)))
+      ) {
         continue;
       }
 
@@ -440,7 +490,7 @@ async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOp
     return forcedFiles.slice(0, opts.maxFiles);
   }
 
-  const walkedFiles = await walkDirWithLimit(dirPath, opts.maxFiles);
+  const walkedFiles = await walkDirWithLimit(dirPath, opts.maxFiles, opts.excludeTestFiles);
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));
   const out = [...forcedFiles];
   for (const walkedFile of walkedFiles) {

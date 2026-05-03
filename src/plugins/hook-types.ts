@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type {
   ReplyDispatchKind,
@@ -7,6 +8,7 @@ import type {
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
+import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import {
   PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -28,6 +30,12 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
+import type {
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+} from "./host-hook-turn-types.js";
 
 export type {
   PluginHookBeforeAgentStartEvent,
@@ -44,6 +52,12 @@ export {
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./hook-before-agent-start.types.js";
 export type {
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+} from "./host-hook-turn-types.js";
+export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookMessageContext,
@@ -55,11 +69,15 @@ export type {
 
 export type PluginHookName =
   | "before_model_resolve"
+  | "agent_turn_prepare"
   | "before_prompt_build"
   | "before_agent_start"
   | "before_agent_reply"
+  | "model_call_started"
+  | "model_call_ended"
   | "llm_input"
   | "llm_output"
+  | "before_agent_finalize"
   | "agent_end"
   | "before_compaction"
   | "after_compaction"
@@ -80,17 +98,23 @@ export type PluginHookName =
   | "subagent_ended"
   | "gateway_start"
   | "gateway_stop"
+  | "heartbeat_prompt_contribution"
+  | "cron_changed"
   | "before_dispatch"
   | "reply_dispatch"
   | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
+  "agent_turn_prepare",
   "before_prompt_build",
   "before_agent_start",
   "before_agent_reply",
+  "model_call_started",
+  "model_call_ended",
   "llm_input",
   "llm_output",
+  "before_agent_finalize",
   "agent_end",
   "before_compaction",
   "after_compaction",
@@ -111,6 +135,8 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "heartbeat_prompt_contribution",
+  "cron_changed",
   "before_dispatch",
   "reply_dispatch",
   "before_install",
@@ -127,8 +153,10 @@ export const isPluginHookName = (hookName: unknown): hookName is PluginHookName 
   typeof hookName === "string" && pluginHookNameSet.has(hookName as PluginHookName);
 
 export const PROMPT_INJECTION_HOOK_NAMES = [
+  "agent_turn_prepare",
   "before_prompt_build",
   "before_agent_start",
+  "heartbeat_prompt_contribution",
 ] as const satisfies readonly PluginHookName[];
 
 export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
@@ -138,8 +166,24 @@ const promptInjectionHookNameSet = new Set<PluginHookName>(PROMPT_INJECTION_HOOK
 export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   promptInjectionHookNameSet.has(hookName);
 
+export const CONVERSATION_HOOK_NAMES = [
+  "llm_input",
+  "llm_output",
+  "before_agent_finalize",
+  "agent_end",
+] as const satisfies readonly PluginHookName[];
+
+export type ConversationHookName = (typeof CONVERSATION_HOOK_NAMES)[number];
+
+const conversationHookNameSet = new Set<PluginHookName>(CONVERSATION_HOOK_NAMES);
+
+export const isConversationHookName = (hookName: PluginHookName): boolean =>
+  conversationHookNameSet.has(hookName);
+
 export type PluginHookAgentContext = {
   runId?: string;
+  jobId?: string;
+  trace?: DiagnosticTraceContext;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -172,11 +216,48 @@ export type PluginHookLlmInputEvent = {
   imagesCount: number;
 };
 
+export type PluginHookModelCallBaseEvent = {
+  runId: string;
+  callId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider: string;
+  model: string;
+  api?: string;
+  transport?: string;
+};
+
+export type PluginHookModelCallStartedEvent = PluginHookModelCallBaseEvent;
+
+export type PluginHookModelCallEndedEvent = PluginHookModelCallBaseEvent & {
+  durationMs: number;
+  outcome: "completed" | "error";
+  errorCategory?: string;
+  failureKind?: "aborted" | "connection_closed" | "connection_reset" | "terminated" | "timeout";
+  requestPayloadBytes?: number;
+  responseStreamBytes?: number;
+  timeToFirstByteMs?: number;
+  upstreamRequestIdHash?: string;
+};
+
 export type PluginHookLlmOutputEvent = {
   runId: string;
   sessionId: string;
   provider: string;
   model: string;
+  /**
+   * Fully resolved provider/model ref used for the call.
+   *
+   * This intentionally keeps the provider prefix so operator tooling can
+   * distinguish e.g. openai-codex/gpt-5.4 from codex/gpt-5.4 even when display
+   * names collapse to just the model id.
+   */
+  resolvedRef?: string;
+  /**
+   * Harness/backend responsible for the model loop. Kept separate from
+   * `resolvedRef` so provider/model consumers keep a stable parse contract.
+   */
+  harnessId?: string;
   assistantTexts: string[];
   lastAssistant?: unknown;
   usage?: {
@@ -189,10 +270,35 @@ export type PluginHookLlmOutputEvent = {
 };
 
 export type PluginHookAgentEndEvent = {
+  runId?: string;
   messages: unknown[];
   success: boolean;
   error?: string;
   durationMs?: number;
+};
+
+export type PluginHookBeforeAgentFinalizeEvent = {
+  runId?: string;
+  sessionId: string;
+  sessionKey?: string;
+  turnId?: string;
+  provider?: string;
+  model?: string;
+  cwd?: string;
+  transcriptPath?: string;
+  stopHookActive: boolean;
+  lastAssistantMessage?: string;
+  messages?: unknown[];
+};
+
+export type PluginHookBeforeAgentFinalizeResult = {
+  /**
+   * continue: accept normal finalization.
+   * revise: block finalization and ask the harness for another model pass.
+   * finalize: force finalization even if another hook requested revision.
+   */
+  action?: "continue" | "revise" | "finalize";
+  reason?: string;
 };
 
 export type PluginHookBeforeCompactionEvent = {
@@ -218,6 +324,7 @@ export type PluginHookAfterCompactionEvent = {
 
 export type PluginHookInboundClaimResult = {
   handled: boolean;
+  reply?: ReplyPayload;
 };
 
 export type PluginHookBeforeDispatchEvent = {
@@ -247,10 +354,13 @@ export type PluginHookReplyDispatchEvent = {
   ctx: FinalizedMsgContext;
   runId?: string;
   sessionKey?: string;
+  images?: Array<{ data: string; mimeType: string }>;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  suppressReplyLifecycle?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -285,6 +395,7 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
 };
@@ -475,6 +586,9 @@ export type PluginHookSubagentEndedEvent = {
 
 export type PluginHookGatewayContext = {
   port?: number;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  getCron?: () => PluginHookGatewayCronService | undefined;
 };
 
 export type PluginHookGatewayStartEvent = {
@@ -485,13 +599,113 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+export type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped";
+
+export type PluginHookGatewayCronDeliveryStatus =
+  | "not-requested"
+  | "delivered"
+  | "not-delivered"
+  | "unknown";
+
+export type PluginHookGatewayCronJobState = {
+  nextRunAtMs?: number;
+  runningAtMs?: number;
+  lastRunAtMs?: number;
+  lastRunStatus?: PluginHookGatewayCronRunStatus;
+  lastError?: string;
+  lastDurationMs?: number;
+};
+
+export type PluginHookGatewayCronJob = {
+  id: string;
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  schedule?:
+    | {
+        kind: "cron";
+        expr?: string;
+        tz?: string;
+        staggerMs?: number;
+      }
+    | {
+        kind: "at";
+        at?: string;
+      }
+    | {
+        kind: "every";
+        everyMs?: number;
+        anchorMs?: number;
+      };
+  sessionTarget?: string;
+  wakeMode?: string;
+  payload?: {
+    kind?: string;
+    text?: string;
+  };
+  state?: PluginHookGatewayCronJobState;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+};
+
+export type PluginHookCronChangedEvent = {
+  action: "added" | "updated" | "removed" | "started" | "finished";
+  jobId: string;
+  job?: PluginHookGatewayCronJob;
+  runAtMs?: number;
+  durationMs?: number;
+  status?: PluginHookGatewayCronRunStatus;
+  error?: string;
+  summary?: string;
+  delivered?: boolean;
+  deliveryStatus?: PluginHookGatewayCronDeliveryStatus;
+  deliveryError?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+};
+
+export type PluginHookGatewayCronCreateInput = {
+  name: string;
+  description: string;
+  enabled: boolean;
+  schedule: {
+    kind: string;
+    expr: string;
+    tz?: string;
+  };
+  sessionTarget: string;
+  wakeMode: string;
+  payload: {
+    kind: string;
+    text?: string;
+  };
+};
+
+export type PluginHookGatewayCronUpdateInput = Partial<PluginHookGatewayCronCreateInput>;
+
+export type PluginHookGatewayCronRemoveResult = {
+  removed?: boolean;
+};
+
+export type PluginHookGatewayCronService = {
+  list: (opts?: { includeDisabled?: boolean }) => Promise<PluginHookGatewayCronJob[]>;
+  add: (input: PluginHookGatewayCronCreateInput) => Promise<unknown>;
+  update: (id: string, patch: PluginHookGatewayCronUpdateInput) => Promise<unknown>;
+  remove: (id: string) => Promise<PluginHookGatewayCronRemoveResult>;
+};
+
 export type PluginInstallTargetType = "skill" | "plugin";
 export type PluginInstallRequestKind =
   | "skill-install"
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
 export type PluginInstallSourcePathKind = "file" | "directory";
 
 export type PluginInstallFinding = {
@@ -573,6 +787,10 @@ export type PluginHookBeforeInstallResult = {
 };
 
 export type PluginHookHandlerMap = {
+  agent_turn_prepare: (
+    event: PluginAgentTurnPrepareEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginAgentTurnPrepareResult | void> | PluginAgentTurnPrepareResult | void;
   before_model_resolve: (
     event: PluginHookBeforeModelResolveEvent,
     ctx: PluginHookAgentContext,
@@ -584,6 +802,7 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
+  /** @deprecated Use before_model_resolve and before_prompt_build. */
   before_agent_start: (
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
@@ -592,11 +811,26 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentReplyEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentReplyResult | void> | PluginHookBeforeAgentReplyResult | void;
+  model_call_started: (
+    event: PluginHookModelCallStartedEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  model_call_ended: (
+    event: PluginHookModelCallEndedEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
   llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  before_agent_finalize: (
+    event: PluginHookBeforeAgentFinalizeEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookBeforeAgentFinalizeResult | void>
+    | PluginHookBeforeAgentFinalizeResult
+    | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,
@@ -685,6 +919,17 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  heartbeat_prompt_contribution: (
+    event: PluginHeartbeatPromptContributionEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHeartbeatPromptContributionResult | void>
+    | PluginHeartbeatPromptContributionResult
+    | void;
+  cron_changed: (
+    event: PluginHookCronChangedEvent,
+    ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
   before_install: (
     event: PluginHookBeforeInstallEvent,
     ctx: PluginHookBeforeInstallContext,
@@ -696,5 +941,6 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   hookName: K;
   handler: PluginHookHandlerMap[K];
   priority?: number;
+  timeoutMs?: number;
   source: string;
 };

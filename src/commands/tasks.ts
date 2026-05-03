@@ -1,3 +1,5 @@
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -20,9 +22,11 @@ import {
   type TaskAuditCode,
   type TaskAuditSeverity,
 } from "../tasks/task-registry.audit.js";
+import { compareTaskAuditFindingSortKeys } from "../tasks/task-registry.audit.shared.js";
 import {
   getInspectableTaskAuditSummary,
   getInspectableTaskRegistrySummary,
+  configureTaskRegistryMaintenance,
   previewTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
 } from "../tasks/task-registry.maintenance.js";
@@ -43,8 +47,14 @@ const RUN_PAD = 10;
 const info = theme.info;
 
 async function loadTaskCancelConfig() {
-  const { loadConfig } = await import("../config/config.js");
-  return loadConfig();
+  return getRuntimeConfig();
+}
+
+function configureTaskMaintenanceFromConfig(): void {
+  const cfg = getRuntimeConfig();
+  configureTaskRegistryMaintenance({
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+  });
 }
 
 function truncate(value: string, maxChars: number) {
@@ -156,19 +166,18 @@ type TaskSystemAuditFinding = {
 };
 
 function compareSystemAuditFindings(left: TaskSystemAuditFinding, right: TaskSystemAuditFinding) {
-  const severityRank = (severity: TaskSystemAuditSeverity) => (severity === "error" ? 0 : 1);
-  const severityDiff = severityRank(left.severity) - severityRank(right.severity);
-  if (severityDiff !== 0) {
-    return severityDiff;
-  }
-  const leftAge = left.ageMs ?? -1;
-  const rightAge = right.ageMs ?? -1;
-  if (leftAge !== rightAge) {
-    return rightAge - leftAge;
-  }
-  const leftCreatedAt = left.task?.createdAt ?? left.flow?.createdAt ?? 0;
-  const rightCreatedAt = right.task?.createdAt ?? right.flow?.createdAt ?? 0;
-  return leftCreatedAt - rightCreatedAt;
+  return compareTaskAuditFindingSortKeys(
+    {
+      severity: left.severity,
+      ageMs: left.ageMs,
+      createdAt: left.task?.createdAt ?? left.flow?.createdAt ?? 0,
+    },
+    {
+      severity: right.severity,
+      ageMs: right.ageMs,
+      createdAt: right.task?.createdAt ?? right.flow?.createdAt ?? 0,
+    },
+  );
 }
 
 function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
@@ -417,6 +426,7 @@ export async function tasksAuditCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  configureTaskMaintenanceFromConfig();
   const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
   const { allFindings, filteredFindings, taskFindings, summary } = toSystemAuditFindings({
@@ -491,6 +501,7 @@ export async function tasksMaintenanceCommand(
   opts: { json?: boolean; apply?: boolean },
   runtime: RuntimeEnv,
 ) {
+  configureTaskMaintenanceFromConfig();
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();
   const taskMaintenance = opts.apply
@@ -531,7 +542,7 @@ export async function tasksMaintenanceCommand(
 
   runtime.log(
     info(
-      `Tasks maintenance (${opts.apply ? "applied" : "preview"}): tasks ${taskMaintenance.reconciled} reconcile · ${taskMaintenance.cleanupStamped} cleanup stamp · ${taskMaintenance.pruned} prune; task-flows ${flowMaintenance.reconciled} reconcile · ${flowMaintenance.pruned} prune`,
+      `Tasks maintenance (${opts.apply ? "applied" : "preview"}): tasks ${taskMaintenance.reconciled} reconcile · ${taskMaintenance.recovered} recovered · ${taskMaintenance.cleanupStamped} cleanup stamp · ${taskMaintenance.pruned} prune; task-flows ${flowMaintenance.reconciled} reconcile · ${flowMaintenance.pruned} prune`,
     ),
   );
   runtime.log(

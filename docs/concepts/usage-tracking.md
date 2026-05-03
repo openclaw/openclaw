@@ -3,10 +3,8 @@ summary: "Usage tracking surfaces and credential requirements"
 read_when:
   - You are wiring provider usage/quota surfaces
   - You need to explain usage tracking behavior or auth requirements
-title: "Usage Tracking"
+title: "Usage tracking"
 ---
-
-# Usage tracking
 
 ## What it is
 
@@ -41,6 +39,9 @@ title: "Usage Tracking"
   `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota
   surface, prefers stored MiniMax OAuth when present, and otherwise falls back
   to `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`.
+  Usage polling derives the Coding Plan host from `models.providers.minimax-portal.baseUrl`
+  or `models.providers.minimax.baseUrl` when configured, and otherwise uses the
+  MiniMax CN host.
   MiniMax's raw `usage_percent` / `usagePercent` fields mean **remaining**
   quota, so OpenClaw inverts them before display; count-based fields win when
   present.
@@ -57,3 +58,9 @@ Usage is hidden when no usable provider usage auth can be resolved. Providers
 can supply plugin-specific usage auth logic; otherwise OpenClaw falls back to
 matching OAuth/API-key credentials from auth profiles, environment variables,
 or config.
+
+## Related
+
+- [Token use and costs](/reference/token-use)
+- [API usage and costs](/reference/api-usage-costs)
+- [Prompt caching](/reference/prompt-caching)

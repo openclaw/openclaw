@@ -6,8 +6,6 @@ read_when:
 title: "Setup"
 ---
 
-# Setup
-
 <Note>
 If you are setting up for the first time, start with [Getting Started](/start/getting-started).
 For onboarding details, see [Onboarding (CLI)](/start/wizard).
@@ -15,14 +13,18 @@ For onboarding details, see [Onboarding (CLI)](/start/wizard).
 
 ## TL;DR
 
-- **Tailoring lives outside the repo:** `~/.openclaw/workspace` (workspace) + `~/.openclaw/openclaw.json` (config).
-- **Stable workflow:** install the macOS app; let it run the bundled Gateway.
-- **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
+Pick a setup workflow based on how often you want updates and whether you want to run the Gateway yourself:
+
+- **Tailoring lives outside the repo:** keep your config and workspace in `~/.openclaw/openclaw.json` and `~/.openclaw/workspace/` so repo updates don't touch them.
+- **Stable workflow (recommended for most):** install the macOS app and let it run the bundled Gateway.
+- **Bleeding edge workflow (dev):** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
 
 ## Prereqs (from source)
 
 - Node 24 recommended (Node 22 LTS, currently `22.14+`, still supported)
-- `pnpm` preferred (or Bun if you intentionally use the [Bun workflow](/install/bun))
+- `pnpm` required for source checkouts. OpenClaw loads bundled plugins from the
+  `extensions/*` pnpm workspace packages in dev mode, so root `npm install` does
+  not prepare the full source tree.
 - Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
 
 ## Tailoring strategy (so updates do not hurt)
@@ -44,7 +46,7 @@ From inside this repo, use the local CLI entry:
 openclaw setup
 ```
 
-If you don’t have a global install yet, run it via `pnpm openclaw setup` (or `bun run openclaw setup` if you are using the Bun workflow).
+If you don’t have a global install yet, run it via `pnpm openclaw setup`.
 
 ## Run the Gateway from this repo
 
@@ -96,19 +98,14 @@ pnpm openclaw setup
 pnpm gateway:watch
 ```
 
-`gateway:watch` runs the gateway in watch mode and reloads on relevant source,
-config, and bundled-plugin metadata changes.
+`gateway:watch` starts or restarts the Gateway watch process in a named tmux
+session and auto-attaches from interactive terminals. Non-interactive shells stay
+detached and print `tmux attach -t openclaw-gateway-watch-main`; use
+`OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch` to keep an interactive run
+detached, or `pnpm gateway:watch:raw` for foreground watch mode. The watcher
+reloads on relevant source, config, and bundled-plugin metadata changes.
 `pnpm openclaw setup` is the one-time local config/workspace initialization step for a fresh checkout.
 `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` while developing the Control UI.
-
-If you are intentionally using the Bun workflow, the equivalent commands are:
-
-```bash
-bun install
-# First run only (or after resetting local OpenClaw config/workspace)
-bun run openclaw setup
-bun run gateway:watch
-```
 
 ### 2) Point the macOS app at your running Gateway
 
@@ -154,7 +151,7 @@ Use this when debugging auth or deciding what to back up:
 ## Updating (without wrecking your setup)
 
 - Keep `~/.openclaw/workspace` and `~/.openclaw/` as “your stuff”; don’t put personal prompts/config into the `openclaw` repo.
-- Updating source: `git pull` + your chosen package-manager install step (`pnpm install` by default; `bun install` for Bun workflow) + keep using the matching `gateway:watch` command.
+- Updating source: `git pull` + `pnpm install` + keep using `pnpm gateway:watch`.
 
 ## Linux (systemd user service)
 

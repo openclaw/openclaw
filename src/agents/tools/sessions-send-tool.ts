@@ -1,9 +1,17 @@
 import crypto from "node:crypto";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
+import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -12,9 +20,11 @@ import {
 } from "../../utils/message-channel.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
+  type AgentWaitResult,
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../run-wait.js";
+import { loadSessionEntryByKey } from "../subagent-announce-delivery.js";
 import {
   describeSessionsSendTool,
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -42,6 +52,29 @@ const SessionsSendToolSchema = Type.Object({
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+
+type SessionsSendRouteEntry = Pick<SessionEntry, "acp" | "parentSessionKey" | "spawnedBy">;
+
+function isRequesterParentOfNativeSubagentSession(params: {
+  entry: SessionsSendRouteEntry | null | undefined;
+  requesterSessionKey: string | null | undefined;
+  targetSessionKey: string;
+}): boolean {
+  if (!params.entry || params.entry.acp || !isSubagentSessionKey(params.targetSessionKey)) {
+    return false;
+  }
+  const requester = normalizeOptionalString(params.requesterSessionKey);
+  if (!requester) {
+    return false;
+  }
+  const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
+  const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
+  return requester === spawnedBy || requester === parentSessionKey;
+}
+
+function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
+  return result.endedAt !== undefined || Boolean(result.stopReason || result.livenessState);
+}
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
@@ -251,6 +284,15 @@ export function createSessionsSendTool(opts?: {
           sessionKey: displayKey,
         });
       }
+      if (parseSessionThreadInfoFast(resolvedKey).threadId) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error:
+            "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
+          sessionKey: displayKey,
+        });
+      }
 
       // Capture the pre-run assistant snapshot before starting the nested run.
       // Fast in-process test doubles and short-circuit agent paths can finish
@@ -270,26 +312,67 @@ export function createSessionsSendTool(opts?: {
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
+      const inputProvenance = {
+        kind: "inter_session" as const,
+        sourceSessionKey: opts?.agentSessionKey,
+        sourceChannel: opts?.agentChannel,
+        sourceTool: "sessions_send",
+      };
       const sendParams = {
-        message,
+        message: annotateInterSessionPromptText(message, inputProvenance),
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
         lane: resolveNestedAgentLaneForSession(resolvedKey),
         extraSystemPrompt: agentMessageContext,
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: opts?.agentSessionKey,
-          sourceChannel: opts?.agentChannel,
-          sourceTool: "sessions_send",
-        },
+        inputProvenance,
       };
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
-      const delivery = { status: "pending", mode: "announce" as const };
+
+      // Skip the A2A ping-pong + announce flow when the current caller is the
+      // parent of a parent-owned child session it spawned itself and another
+      // parent-visible result path already exists.
+      //
+      // ACP background sessions report through the internal task completion
+      // path. Waited native subagent sends return the child reply inline. In
+      // both cases treating the child as a peer agent wakes the parent with
+      // the child's reply, can generate another user-facing response, and can
+      // forward that response back to the child as a new message — producing a
+      // ping-pong loop (bounded by maxPingPongTurns, but visible as duplicate
+      // conversation output).
+      //
+      // The skip is gated on requester ownership, not just target type: an
+      // unrelated sender that can see the same target (e.g. under
+      // `tools.sessions.visibility=all`) must still go through the normal A2A
+      // path so it actually receives a follow-up delivery.
+      const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
+      const skipAcpA2AFlow = isRequesterParentOfBackgroundAcpSession(
+        targetSessionEntry,
+        effectiveRequesterKey,
+      );
+      const skipNativeParentA2AFlow =
+        timeoutSeconds !== 0 &&
+        isRequesterParentOfNativeSubagentSession({
+          entry: targetSessionEntry,
+          requesterSessionKey: effectiveRequesterKey,
+          targetSessionKey: resolvedKey,
+        });
+      const skipA2AFlow = skipAcpA2AFlow || skipNativeParentA2AFlow;
+      // When the A2A flow is skipped, no follow-up announcement will fire and
+      // the reply (when present) is returned inline via the `reply` field.
+      // Reflect that in the metadata so the parent LLM does not wait for a
+      // second result that will never arrive.
+      const delivery = skipA2AFlow
+        ? ({ status: "skipped", mode: "announce" } as const)
+        : ({ status: "pending", mode: "announce" } as const);
+
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+        if (skipA2AFlow) {
+          return;
+        }
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,
@@ -298,6 +381,7 @@ export function createSessionsSendTool(opts?: {
           maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,
+          baseline: baselineReply,
           roundOneReply,
           waitRunId,
         });
@@ -343,6 +427,15 @@ export function createSessionsSendTool(opts?: {
       });
 
       if (result.status === "timeout") {
+        if (!isTerminalAgentWaitTimeout(result)) {
+          startA2AFlow(undefined, runId);
+          return jsonResult({
+            runId,
+            status: "accepted",
+            sessionKey: displayKey,
+            delivery,
+          });
+        }
         return jsonResult({
           runId,
           status: "timeout",

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
-import { withTempHome } from "../../test/helpers/temp-home.js";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
@@ -94,11 +94,175 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Compactions: 2");
     expect(normalized).toContain("Session: agent:main:main");
     expect(normalized).toContain("updated 10m ago");
-    expect(normalized).toContain("Runtime: direct");
+    expect(normalized).toContain("Execution: direct");
+    expect(normalized).toContain("Runtime: OpenClaw Pi Default");
+    expect(normalized).not.toContain("Runner:");
     expect(normalized).toContain("Think: medium");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
+  });
+
+  it("does not render stale totalTokens as current context usage", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/pi:opus",
+        contextTokens: 1_000_000,
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        inputTokens: 3_800_000,
+        outputTokens: 20_000,
+        totalTokens: 3_800_000,
+        totalTokensFresh: false,
+        contextTokens: 1_000_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      now: 10 * 60_000,
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Context: ?/1.0m");
+    expect(normalized).not.toContain("Context: 3.8m/1.0m");
+  });
+
+  it("shows sanitized TTS provider details in the voice status line", async () => {
+    await withTempHome(async () => {
+      const text = buildStatusMessage({
+        config: {
+          messages: {
+            tts: {
+              auto: "always",
+              provider: "openai",
+              providers: {
+                openai: {
+                  displayName: "NeuTTS local",
+                  baseUrl: "http://user:secret@127.0.0.1:18801/v1?token=hidden#fragment",
+                  model: "neutts-nano",
+                  voice: "clara",
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        agent: {},
+        now: 0,
+      });
+      const normalized = normalizeTestText(text);
+
+      expect(normalized).toContain(
+        "Voice: always · provider=openai · name=NeuTTS local · model=neutts-nano · voice=clara · endpoint=custom(http://127.0.0.1:18801/v1)",
+      );
+      expect(normalized).not.toContain("secret");
+      expect(normalized).not.toContain("token=hidden");
+      expect(normalized).not.toContain("fragment");
+    });
+  });
+
+  it("shows the model runtime for CLI-backed providers", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/opus",
+      },
+      sessionEntry: {
+        sessionId: "cli",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "opus",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runtime: Claude CLI");
+  });
+
+  it("falls back to the configured CLI provider when session provider fields are empty", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/opus",
+      },
+      sessionEntry: {
+        sessionId: "cli-default",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runtime: Claude CLI");
+  });
+
+  it("shows the ACP runtime agent and backend when ACP owns the session", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "acp",
+        updatedAt: 0,
+        acp: {
+          backend: "acpx",
+          agent: "gemini",
+          runtimeSessionName: "status-test",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 0,
+        },
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runtime: gemini (acp/acpx)");
+  });
+
+  it("sanitizes runtime labels sourced from session metadata", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "acp-sanitized",
+        updatedAt: 0,
+        acp: {
+          backend: "acpx\nrewritten",
+          agent: "gemini\u001b[2K",
+          runtimeSessionName: "status-test",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 0,
+        },
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Runtime: gemini (acp/acpx\\nrewritten)");
+    expect(normalized).not.toContain("\u001b");
   });
 
   it("falls back to sessionEntry levels when resolved levels are not passed", () => {
@@ -276,7 +440,66 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Fast: on");
+    expect(normalizeTestText(text)).toContain("Fast");
+  });
+
+  it("shows the Codex harness as the model runtime when resolved", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "codex-harness",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      resolvedHarness: "codex",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("Runtime: OpenAI Codex");
+    expect(normalized).not.toContain("· codex");
+  });
+
+  it("shows the default PI harness as the model runtime", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "pi-harness",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      resolvedHarness: "pi",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("Runtime: OpenClaw Pi Default");
+    expect(normalized).not.toContain("· pi");
+  });
+
+  it("hides fast mode when disabled", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "fast-off",
+        updatedAt: 0,
+        fastMode: false,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).not.toContain("Fast");
   });
 
   it("shows configured text verbosity for the active model", () => {
@@ -378,6 +601,51 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("channel override");
   });
 
+  it("uses the channel override model context window instead of stale persisted context", () => {
+    const text = buildStatusMessage({
+      config: {
+        channels: {
+          modelByChannel: {
+            discord: {
+              "123": "minimax-portal/MiniMax-M2.7",
+            },
+          },
+        },
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            anthropic: {
+              models: [{ id: "claude-opus-4-6", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "minimax-portal/MiniMax-M2.7",
+        contextTokens: 1_048_576,
+      },
+      sessionEntry: {
+        sessionId: "channel-context-window",
+        updatedAt: 0,
+        channel: "discord",
+        groupId: "123",
+        totalTokens: 49_000,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Model: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("channel override");
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
   it("shows 1M context window when anthropic context1m is enabled", () => {
     const text = buildStatusMessage({
       config: {
@@ -406,6 +674,26 @@ describe("buildStatusMessage", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
+  });
+
+  it("shows 1M context window for claude opus 4.7 variants", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "claude-cli/claude-opus-4.7-20260219",
+      },
+      sessionEntry: {
+        sessionId: "opus47",
+        updatedAt: 0,
+        totalTokens: 200_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 200k/1.0m");
+    expect(normalized).not.toContain("Context: 200k/200k");
   });
 
   it("recomputes context window from the active model after switching away from a smaller session override", () => {
@@ -764,7 +1052,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Runtime: docker/all");
+    expect(normalizeTestText(text)).toContain("Execution: docker/all");
   });
 
   it("shows verbose/elevated labels only when enabled", () => {
@@ -1212,6 +1500,53 @@ describe("buildStatusMessage", () => {
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("does not render stale context usage from transcript fallback", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-stale-transcript-context";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          usage: {
+            input: 3_800_000,
+            output: 20_000,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 3_820_000,
+          },
+        });
+
+        const text = buildStatusMessage({
+          agent: {
+            model: "anthropic/claude-opus-4-6",
+            contextTokens: 1_000_000,
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            inputTokens: 3_800_000,
+            outputTokens: 20_000,
+            totalTokens: 3_800_000,
+            totalTokensFresh: false,
+            contextTokens: 1_000_000,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+        const normalized = normalizeTestText(text);
+
+        expect(normalized).toContain("Context: ?/1.0m");
+        expect(normalized).not.toContain("Context: 3.8m/1.0m");
+        expect(normalized).not.toContain("Context: 3.82m/1.0m");
       },
       { prefix: "openclaw-status-" },
     );
@@ -1684,6 +2019,7 @@ describe("buildCommandsMessage", () => {
     expect(text).toContain("/skill - Run a skill by name.");
     expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
     expect(text).toContain("/compact - Compact the session context.");
+    expect(text).toContain("/models - List model providers/models.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });

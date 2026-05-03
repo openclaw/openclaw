@@ -8,7 +8,6 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import {
   applySetupAccountConfigPatch,
-  clearSetupPromotionRuntimeModuleCache,
   createEnvPatchedAccountSetupAdapter,
   createPatchedAccountSetupAdapter,
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -54,6 +53,7 @@ function resolveMatrixSingleAccountPromotionTarget(params: {
 }
 
 beforeEach(() => {
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -83,7 +83,6 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-  clearSetupPromotionRuntimeModuleCache();
   resetPluginRuntimeStateForTest();
 });
 

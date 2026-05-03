@@ -16,6 +16,24 @@ describe("TtsConfigSchema openai speed and instructions", () => {
     ).not.toThrow();
   });
 
+  it("accepts openai extraBody objects for compatible TTS endpoints", () => {
+    expect(() =>
+      TtsConfigSchema.parse({
+        providers: {
+          openai: {
+            baseUrl: "http://localhost:8880/v1",
+            model: "kokoro",
+            voice: "em_alex",
+            extraBody: {
+              lang: "e",
+              speed: 1.2,
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects out-of-range openai speed", () => {
     expect(() =>
       TtsConfigSchema.parse({
@@ -38,5 +56,56 @@ describe("TtsConfigSchema openai speed and instructions", () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it("accepts provider-specific persona bindings and structured prompt fields", () => {
+    expect(() =>
+      TtsConfigSchema.parse({
+        persona: "alfred",
+        personas: {
+          alfred: {
+            label: "Alfred",
+            description: "Dry, warm British butler narrator.",
+            provider: "google",
+            fallbackPolicy: "preserve-persona",
+            prompt: {
+              profile: "A brilliant British butler.",
+              scene: "A quiet late-night study.",
+              sampleContext: "The speaker is answering a trusted operator.",
+              style: "Refined and lightly amused.",
+              accent: "British English.",
+              pacing: "Measured.",
+              constraints: ["Do not read configuration values aloud."],
+            },
+            providers: {
+              google: {
+                model: "gemini-3.1-flash-tts-preview",
+                voiceName: "Algieba",
+                promptTemplate: "audio-profile-v1",
+              },
+              openai: {
+                model: "gpt-4o-mini-tts",
+                voice: "cedar",
+                instructions: "Speak with dry warmth.",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects persona rewrite config until runtime behavior exists", () => {
+    expect(() =>
+      TtsConfigSchema.parse({
+        personas: {
+          alfred: {
+            rewrite: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
 });

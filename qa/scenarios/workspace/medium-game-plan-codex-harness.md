@@ -11,7 +11,7 @@ coverage:
     - models.codex-cli
 objective: Verify the Codex app-server harness can plan and build a medium-complex self-contained browser game.
 successCriteria:
-  - A live-frontier run fails fast unless the selected primary model is codex/gpt-5.4.
+  - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.5 with the Codex harness forced.
   - The scenario forces the Codex embedded harness and disables PI fallback.
   - The prompt explicitly asks the agent to enter plan mode before editing.
   - The agent writes a self-contained HTML game with a canvas loop, controls, scoring, waves, pause, and restart.
@@ -25,10 +25,10 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model codex/gpt-5.4 --alt-model codex/gpt-5.4 --scenario medium-game-plan-codex-harness`.
+  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5 --fast --thinking medium --scenario medium-game-plan-codex-harness`.
   config:
     requiredProvider: codex
-    requiredModel: gpt-5.4
+    requiredModel: gpt-5.5
     harnessRuntime: codex
     harnessFallback: none
     artifactFile: star-garden-defenders-codex.html
@@ -52,7 +52,7 @@ execution:
 
 ```yaml qa-flow
 steps:
-  - name: confirms GPT-5.4 Codex harness target
+  - name: confirms GPT-5.5 Codex harness target
     actions:
       - set: selected
         value:
@@ -78,8 +78,8 @@ steps:
                   patch:
                     agents:
                       defaults:
-                        embeddedHarness:
-                          runtime:
+                        agentRuntime:
+                          id:
                             expr: config.harnessRuntime
                           fallback:
                             expr: config.harnessFallback
@@ -96,14 +96,14 @@ steps:
               args:
                 - ref: env
             - assert:
-                expr: "snapshot.config.agents?.defaults?.embeddedHarness?.runtime === config.harnessRuntime"
+                expr: "snapshot.config.agents?.defaults?.agentRuntime?.id === config.harnessRuntime"
                 message:
-                  expr: "`expected embeddedHarness.runtime=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.embeddedHarness)}`"
+                  expr: "`expected agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.agentRuntime)}`"
             - assert:
-                expr: "snapshot.config.agents?.defaults?.embeddedHarness?.fallback === config.harnessFallback"
+                expr: "snapshot.config.agents?.defaults?.agentRuntime?.fallback === config.harnessFallback"
                 message:
-                  expr: "`expected embeddedHarness.fallback=${config.harnessFallback}, got ${JSON.stringify(snapshot.config.agents?.defaults?.embeddedHarness)}`"
-    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.embeddedHarness?.runtime} fallback=${snapshot.config.agents?.defaults?.embeddedHarness?.fallback}` : `mock mode: parsed ${scenario.id}`"
+                  expr: "`expected agentRuntime.fallback=${config.harnessFallback}, got ${JSON.stringify(snapshot.config.agents?.defaults?.agentRuntime)}`"
+    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.agentRuntime?.id} fallback=${snapshot.config.agents?.defaults?.agentRuntime?.fallback}` : `mock mode: parsed ${scenario.id}`"
   - name: builds the medium game artifact
     actions:
       - if:

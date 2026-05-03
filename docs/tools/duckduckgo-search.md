@@ -4,10 +4,8 @@ read_when:
   - You want a web search provider that requires no API key
   - You want to use DuckDuckGo for web_search
   - You need a zero-config search fallback
-title: "DuckDuckGo Search"
+title: "DuckDuckGo search"
 ---
-
-# DuckDuckGo Search
 
 OpenClaw supports DuckDuckGo as a **key-free** `web_search` provider. No API
 key or account is required.
@@ -66,12 +64,21 @@ Optional plugin-level settings for region and SafeSearch:
 
 ## Tool parameters
 
-| Parameter    | Description                                                |
-| ------------ | ---------------------------------------------------------- |
-| `query`      | Search query (required)                                    |
-| `count`      | Results to return (1-10, default: 5)                       |
-| `region`     | DuckDuckGo region code (e.g. `us-en`, `uk-en`, `de-de`)    |
-| `safeSearch` | SafeSearch level: `strict`, `moderate` (default), or `off` |
+<ParamField path="query" type="string" required>
+Search query.
+</ParamField>
+
+<ParamField path="count" type="number" default="5">
+Results to return (1–10).
+</ParamField>
+
+<ParamField path="region" type="string">
+DuckDuckGo region code (e.g. `us-en`, `uk-en`, `de-de`).
+</ParamField>
+
+<ParamField path="safeSearch" type="'strict' | 'moderate' | 'off'" default="moderate">
+SafeSearch level.
+</ParamField>
 
 Region and SafeSearch can also be set in plugin config (see above) — tool
 parameters override config values per-query.

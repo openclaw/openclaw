@@ -6,15 +6,13 @@ read_when:
 title: "Web"
 ---
 
-# Web (Gateway)
-
 The Gateway serves a small **browser Control UI** (Vite + Lit) from the same port as the Gateway WebSocket:
 
 - default: `http://<host>:18789/`
+- with `gateway.tls.enabled: true`: `https://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
-Capabilities live in [Control UI](/web/control-ui).
-This page focuses on bind modes, security, and web-facing surfaces.
+Capabilities live in [Control UI](/web/control-ui). The rest of this page focuses on bind modes, security, and web-facing surfaces.
 
 ## Webhooks
 
@@ -102,6 +100,8 @@ Open:
   gateway token (even on loopback).
 - In shared-secret mode, the UI sends `connect.params.auth.token` or
   `connect.params.auth.password`.
+- When `gateway.tls.enabled: true`, local dashboard and status helpers render
+  `https://` dashboard URLs and `wss://` WebSocket URLs.
 - In identity-bearing modes such as Tailscale Serve or `trusted-proxy`, the
   WebSocket auth check is satisfied from request headers instead.
 - For non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins`

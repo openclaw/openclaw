@@ -11,13 +11,13 @@
 //   - #60715 BB health check fails on LAN/private serverUrl
 //   - #66869 move `?password=` → header auth (future-proofed via AuthStrategy)
 
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isBlockedHostnameOrIp, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { extractAttachments } from "./monitor-normalize.js";
 import { postMultipartFormData } from "./multipart.js";
 import { resolveRequestUrl } from "./request-url.js";
-import { DEFAULT_ACCOUNT_ID } from "./runtime-api.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import {
@@ -41,7 +41,7 @@ const DEFAULT_MULTIPART_TIMEOUT_MS = 60_000;
  *   - `blueBubblesHeaderAuth` — header-based auth; flip the default here when
  *     BB Server ships the header-auth change for #66869.
  */
-export interface BlueBubblesAuthStrategy {
+interface BlueBubblesAuthStrategy {
   /**
    * Stable identifier for this strategy. Used by the client cache fingerprint
    * so two clients for the same account + credential that differ only in auth
@@ -149,7 +149,7 @@ export function resolveBlueBubblesClientSsrfPolicy(params: {
 
 // --- Client ----------------------------------------------------------------
 
-export type BlueBubblesClientOptions = {
+type BlueBubblesClientOptions = {
   cfg?: OpenClawConfig;
   accountId?: string;
   serverUrl?: string;
@@ -458,7 +458,7 @@ export class BlueBubblesClient {
 
 type CachedClientEntry = {
   client: BlueBubblesClient;
-  /** Fingerprint of {baseUrl, password, authStrategy.id} — cache hit requires full match. */
+  /** Fingerprint of auth + SSRF-policy inputs — cache hit requires full match. */
   fingerprint: string;
 };
 const clientFingerprints = new Map<string, CachedClientEntry>();
@@ -467,11 +467,19 @@ function buildClientFingerprint(params: {
   baseUrl: string;
   password: string;
   authStrategyId: string;
+  allowPrivateNetwork: boolean;
+  allowPrivateNetworkConfig?: boolean;
 }): string {
-  // authStrategyId is included so two clients for the same account + credential
-  // that differ only in auth strategy do not silently share a cached instance.
-  // (Greptile #68234 P2)
-  return `${params.baseUrl}|${params.password}|${params.authStrategyId}`;
+  // Keep every construction-time behavior input here. The client stores auth
+  // and SSRF policy immutably, so config flips must rebuild without requiring
+  // a process restart or an explicit cache invalidation call.
+  return JSON.stringify({
+    baseUrl: params.baseUrl,
+    password: params.password,
+    authStrategyId: params.authStrategyId,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    allowPrivateNetworkConfig: params.allowPrivateNetworkConfig ?? null,
+  });
 }
 
 /**
@@ -495,6 +503,8 @@ export function createBlueBubblesClient(opts: BlueBubblesClientOptions = {}): Bl
     baseUrl: resolved.baseUrl,
     password: resolved.password,
     authStrategyId: authStrategy.id,
+    allowPrivateNetwork: resolved.allowPrivateNetwork,
+    allowPrivateNetworkConfig: resolved.allowPrivateNetworkConfig,
   });
   const cached = clientFingerprints.get(cacheKey);
   if (cached && cached.fingerprint === fingerprint) {

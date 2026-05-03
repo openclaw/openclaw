@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isGatewayArgv } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
+import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
   readWindowsListeningPidsOnPortSync,
   readWindowsListeningPidsResultSync,
@@ -45,6 +46,7 @@ const MAX_ANCESTOR_WALK_DEPTH = 32;
 const restartLog = createSubsystemLogger("restart");
 let sleepSyncOverride: ((ms: number) => void) | null = null;
 let dateNowOverride: (() => number) | null = null;
+let parentPidOverride: (() => number) | null = null;
 
 function getTimeMs(): number {
   return dateNowOverride ? dateNowOverride() : Date.now();
@@ -68,6 +70,10 @@ function sleepSync(ms: number): void {
       // Best-effort fallback when Atomics.wait is unavailable.
     }
   }
+}
+
+function getParentPid(): number {
+  return parentPidOverride ? parentPidOverride() : process.ppid;
 }
 
 /**
@@ -133,9 +139,9 @@ function readParentPidFromProc(pid: number): number | null {
  * `node:fs` to inject `/proc/<pid>/status` payloads) — there is no
  * reachable override for runtime callers to mutate.
  */
-function getSelfAndAncestorPidsSync(): Set<number> {
+export function getSelfAndAncestorPidsSync(): Set<number> {
   const pids = new Set<number>([process.pid]);
-  const immediateParent = process.ppid;
+  const immediateParent = getParentPid();
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
     return pids;
   }
@@ -419,8 +425,8 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
  * Sends a graceful taskkill first (/T for tree), waits, then escalates to /F.
  */
 function terminateStaleProcessesWindows(pids: number[]): number[] {
-  const taskkillPath = path.join(
-    process.env.SystemRoot ?? "C:\\Windows",
+  const taskkillPath = path.win32.join(
+    getWindowsInstallRoots().systemRoot,
     "System32",
     "taskkill.exe",
   );
@@ -552,6 +558,9 @@ export const __testing = {
   },
   setDateNowOverride(fn: (() => number) | null) {
     dateNowOverride = fn;
+  },
+  setParentPidOverride(fn: (() => number) | null) {
+    parentPidOverride = fn;
   },
   /** Invoke sleepSync directly (bypasses the override) for unit-testing the real Atomics path. */
   callSleepSyncRaw: sleepSync,

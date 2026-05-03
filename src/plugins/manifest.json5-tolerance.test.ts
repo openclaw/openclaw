@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { loadPluginManifest } from "./manifest.js";
+import JSON5 from "json5";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearPluginManifestLoadCache,
+  loadPluginManifest,
+  MAX_PLUGIN_MANIFEST_BYTES,
+} from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -11,6 +16,8 @@ function makeTempDir() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  clearPluginManifestLoadCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -31,6 +38,44 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     if (result.ok) {
       expect(result.manifest.id).toBe("demo");
     }
+  });
+
+  it("uses native JSON parsing for standard JSON manifests", () => {
+    const json5Parse = vi.spyOn(JSON5, "parse");
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "strict-json",
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    expect(json5Parse).not.toHaveBeenCalled();
+  });
+
+  it("reuses unchanged manifest loads by file signature", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "cached-json",
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+
+    const first = loadPluginManifest(dir, false);
+    const second = loadPluginManifest(dir, false);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(readFileSync).toHaveBeenCalledTimes(1);
   });
 
   it("parses a manifest with trailing commas", () => {
@@ -107,10 +152,12 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     const json5Content = `{
   id: "openai",
   activation: {
+    onStartup: false,
     onProviders: ["openai", "", "openai-codex"],
     onCommands: ["models", ""],
     onChannels: ["web", ""],
     onRoutes: ["gateway-webhook", ""],
+    onConfigPaths: ["browser", ""],
     onCapabilities: ["provider", "tool", "wat"]
   },
   setup: {
@@ -129,10 +176,12 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.manifest.activation).toEqual({
+        onStartup: false,
         onProviders: ["openai", "openai-codex"],
         onCommands: ["models"],
         onChannels: ["web"],
         onRoutes: ["gateway-webhook"],
+        onConfigPaths: ["browser"],
         onCapabilities: ["provider", "tool"],
       });
       expect(result.manifest.setup).toEqual({
@@ -167,6 +216,26 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("plugin manifest must be an object");
+    }
+  });
+
+  it("rejects oversized manifests before parsing", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "too-large",
+        configSchema: { type: "object" },
+        padding: "x".repeat(MAX_PLUGIN_MANIFEST_BYTES),
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("unsafe plugin manifest path");
     }
   });
 });

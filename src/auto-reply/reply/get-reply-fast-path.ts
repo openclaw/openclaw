@@ -13,6 +13,7 @@ import {
 } from "../../shared/string-coerce.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { SessionInitResult } from "./session.js";
@@ -77,7 +78,7 @@ export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T):
   return markCompleteReplyConfig(config, { runtimeMode: "full" });
 }
 
-export function isCompleteReplyConfig(config: unknown): config is OpenClawConfig {
+function isCompleteReplyConfig(config: unknown): config is OpenClawConfig {
   return Boolean(
     config &&
     typeof config === "object" &&
@@ -85,7 +86,7 @@ export function isCompleteReplyConfig(config: unknown): config is OpenClawConfig
   );
 }
 
-export function usesFullReplyRuntime(config: unknown): boolean {
+function usesFullReplyRuntime(config: unknown): boolean {
   return Boolean(
     config &&
     typeof config === "object" &&
@@ -94,13 +95,13 @@ export function usesFullReplyRuntime(config: unknown): boolean {
 }
 
 export function resolveGetReplyConfig(params: {
-  loadConfig: () => OpenClawConfig;
+  getRuntimeConfig: () => OpenClawConfig;
   isFastTestEnv: boolean;
   configOverride?: OpenClawConfig;
 }): OpenClawConfig {
   const { configOverride } = params;
   if (configOverride == null) {
-    return params.loadConfig();
+    return params.getRuntimeConfig();
   }
   if (params.isFastTestEnv && !isCompleteReplyConfig(configOverride) && !isSlowReplyTestAllowed()) {
     throw new Error(
@@ -110,7 +111,10 @@ export function resolveGetReplyConfig(params: {
   if (params.isFastTestEnv && isCompleteReplyConfig(configOverride)) {
     return configOverride;
   }
-  return applyMergePatch(params.loadConfig(), configOverride) as OpenClawConfig;
+  if (isCompleteReplyConfig(configOverride)) {
+    return configOverride;
+  }
+  return applyMergePatch(params.getRuntimeConfig(), configOverride) as OpenClawConfig;
 }
 
 export function shouldUseReplyFastTestBootstrap(params: {
@@ -162,10 +166,12 @@ export function buildFastReplyCommandContext(params: {
 }): CommandContext {
   const { ctx, cfg, agentId, sessionKey, isGroup, triggerBodyNormalized, commandAuthorized } =
     params;
+  const originatingChannel = normalizeOptionalLowercaseString(ctx.OriginatingChannel);
   const surface = normalizeOptionalLowercaseString(ctx.Surface ?? ctx.Provider) ?? "";
-  const channel = normalizeOptionalLowercaseString(ctx.Provider ?? surface) ?? "";
-  const from = normalizeOptionalString(ctx.From);
-  const to = normalizeOptionalString(ctx.To);
+  const channel =
+    originatingChannel ?? normalizeOptionalLowercaseString(ctx.Provider ?? surface) ?? "";
+  const from = normalizeOptionalString(ctx.From ?? ctx.SenderId);
+  const to = normalizeOptionalString(ctx.To ?? ctx.OriginatingTo);
   return {
     surface,
     channel,
@@ -218,13 +224,17 @@ export function initFastReplySessionState(params: {
   const strippedForReset = isGroup
     ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
     : triggerBodyNormalized;
-  const resetMatch = strippedForReset.match(/^\/(new|reset)(?:\s|$)/i);
-  const resetTriggered = Boolean(resetMatch);
+  const normalizedResetBody = normalizeCommandBody(strippedForReset, {
+    botUsername: ctx.BotUsername,
+  });
+  const softReset = parseSoftResetCommand(normalizedResetBody);
+  const resetMatch = normalizedResetBody.match(/^\/(new|reset)(?:\s|$)/i);
+  const resetTriggered = Boolean(resetMatch) && !softReset.matched;
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
   const bodyStripped = resetTriggered
-    ? strippedForReset.slice(resetMatch?.[0].length ?? 0).trimStart()
+    ? normalizedResetBody.slice(resetMatch?.[0].length ?? 0).trimStart()
     : (ctx.BodyForAgent ?? ctx.Body ?? "");
   const now = Date.now();
   const sessionFile =
@@ -236,6 +246,8 @@ export function initFastReplySessionState(params: {
     sessionId,
     sessionFile,
     updatedAt: now,
+    sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
+    lastInteractionAt: now,
     thinkingLevel: resetTriggered ? existingEntry?.thinkingLevel : existingEntry?.thinkingLevel,
     verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
     reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,

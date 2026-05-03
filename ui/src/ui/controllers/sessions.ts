@@ -1,6 +1,7 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
+  GatewaySessionRow,
   SessionCompactionCheckpoint,
   SessionsCompactionBranchResult,
   SessionsCompactionListResult,
@@ -28,6 +29,103 @@ export type SessionsState = {
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
 };
+
+type LoadSessionsOverrides = {
+  activeMinutes?: number;
+  limit?: number;
+  includeGlobal?: boolean;
+  includeUnknown?: boolean;
+};
+
+type CreateSessionParams = {
+  agentId?: string;
+  label?: string;
+  model?: string;
+  parentSessionKey?: string;
+};
+
+type CreateSessionResult = {
+  key?: string;
+};
+
+type SessionsLoadControl = {
+  loading: boolean;
+  pending: { overrides?: LoadSessionsOverrides } | null;
+  ownsStateLoading: boolean;
+};
+
+const sessionsLoadControls = new WeakMap<object, SessionsLoadControl>();
+
+const SESSION_EVENT_ROW_FIELDS = [
+  "abortedLastRun",
+  "childSessions",
+  "compactionCheckpointCount",
+  "contextTokens",
+  "displayName",
+  "endedAt",
+  "elevatedLevel",
+  "fastMode",
+  "hasActiveRun",
+  "inputTokens",
+  "kind",
+  "label",
+  "latestCompactionCheckpoint",
+  "model",
+  "modelProvider",
+  "outputTokens",
+  "reasoningLevel",
+  "runtimeMs",
+  "sessionId",
+  "spawnedBy",
+  "startedAt",
+  "status",
+  "subject",
+  "surface",
+  "systemSent",
+  "thinkingDefault",
+  "thinkingLevel",
+  "thinkingOptions",
+  "totalTokens",
+  "totalTokensFresh",
+  "updatedAt",
+  "verboseLevel",
+] as const satisfies readonly (keyof GatewaySessionRow)[];
+
+function getSessionsLoadControl(state: SessionsState): SessionsLoadControl {
+  const key = state as object;
+  let control = sessionsLoadControls.get(key);
+  if (!control) {
+    control = { loading: false, ownsStateLoading: false, pending: null };
+    sessionsLoadControls.set(key, control);
+  }
+  return control;
+}
+
+function takePendingSessionsLoad(
+  control: SessionsLoadControl,
+): { overrides?: LoadSessionsOverrides } | null {
+  const pending = control.pending;
+  control.pending = null;
+  return pending;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object");
+}
+
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function normalizeSessionKind(value: unknown): GatewaySessionRow["kind"] | undefined {
+  return value === "direct" || value === "group" || value === "global" || value === "unknown"
+    ? value
+    : undefined;
+}
+
+function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+}
 
 function checkpointSummarySignature(
   row:
@@ -86,17 +184,28 @@ async function fetchSessionCompactionCheckpoints(state: SessionsState, key: stri
   }
 }
 
-async function withSessionsLoading(state: SessionsState, run: () => Promise<void>) {
+async function withSessionsLoading(
+  state: SessionsState,
+  run: () => Promise<void>,
+): Promise<boolean> {
   if (state.sessionsLoading) {
-    return;
+    return false;
   }
+  const control = getSessionsLoadControl(state);
   state.sessionsLoading = true;
   state.sessionsError = null;
+  let drainedPendingRefresh = false;
   try {
     await run();
   } finally {
     state.sessionsLoading = false;
+    const pending = takePendingSessionsLoad(control);
+    if (pending && state.client && state.connected) {
+      await loadSessions(state, pending.overrides);
+      drainedPendingRefresh = true;
+    }
   }
+  return drainedPendingRefresh;
 }
 
 async function runCompactionMutation<T>(
@@ -125,6 +234,73 @@ async function runCompactionMutation<T>(
   }
 }
 
+export type SessionsChangedApplyResult =
+  | { applied: false }
+  | { applied: true; change: "inserted" | "updated" };
+
+export function applySessionsChangedEvent(
+  state: SessionsState,
+  payload: unknown,
+): SessionsChangedApplyResult {
+  if (!isRecord(payload) || !state.sessionsResult) {
+    return { applied: false };
+  }
+  const eventSession = isRecord(payload.session) ? payload.session : null;
+  const source = eventSession ?? payload;
+  const key =
+    (typeof source.key === "string" && source.key.trim()) ||
+    (typeof payload.sessionKey === "string" && payload.sessionKey.trim()) ||
+    (typeof payload.key === "string" && payload.key.trim()) ||
+    "";
+  if (!key) {
+    return { applied: false };
+  }
+
+  const previousRows = state.sessionsResult.sessions;
+  const existingIndex = previousRows.findIndex((row) => row.key === key);
+  const existing = existingIndex >= 0 ? previousRows[existingIndex] : undefined;
+  const previousCheckpointSignature = checkpointSummarySignature(existing);
+  const fallbackKind = normalizeSessionKind(source.kind) ?? existing?.kind ?? "unknown";
+  const nextRow: GatewaySessionRow = {
+    ...(existing ?? { key, kind: fallbackKind, updatedAt: null }),
+    key,
+    kind: fallbackKind,
+  };
+  const mutableNext = nextRow as unknown as Record<string, unknown>;
+  for (const field of SESSION_EVENT_ROW_FIELDS) {
+    if (!hasOwn(source, field)) {
+      continue;
+    }
+    const value = source[field];
+    if (value === undefined) {
+      delete mutableNext[field];
+    } else {
+      mutableNext[field] = value;
+    }
+  }
+  if (nextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
+    delete nextRow.totalTokens;
+  }
+
+  const nextRows =
+    existingIndex >= 0
+      ? previousRows.map((row, index) => (index === existingIndex ? nextRow : row))
+      : [nextRow, ...previousRows];
+  const sessions = nextRows.toSorted(compareSessionRowsByUpdatedAt);
+  const eventTs = typeof payload.ts === "number" && Number.isFinite(payload.ts) ? payload.ts : null;
+  state.sessionsResult = {
+    ...state.sessionsResult,
+    ts: eventTs == null ? state.sessionsResult.ts : Math.max(state.sessionsResult.ts, eventTs),
+    count: existingIndex >= 0 ? state.sessionsResult.count : state.sessionsResult.count + 1,
+    sessions,
+  };
+
+  if (previousCheckpointSignature !== checkpointSummarySignature(nextRow)) {
+    invalidateCheckpointCacheForKey(state, key);
+  }
+  return { applied: true, change: existingIndex >= 0 ? "updated" : "inserted" };
+}
+
 export async function subscribeSessions(state: SessionsState) {
   if (!state.client || !state.connected) {
     return;
@@ -136,20 +312,51 @@ export async function subscribeSessions(state: SessionsState) {
   }
 }
 
-export async function loadSessions(
-  state: SessionsState,
-  overrides?: {
-    activeMinutes?: number;
-    limit?: number;
-    includeGlobal?: boolean;
-    includeUnknown?: boolean;
-  },
-) {
+export async function loadSessions(state: SessionsState, overrides?: LoadSessionsOverrides) {
   if (!state.client || !state.connected) {
     return;
   }
+  const control = getSessionsLoadControl(state);
+  if (control.loading) {
+    control.pending = { overrides };
+    return;
+  }
+  if (state.sessionsLoading) {
+    control.pending = { overrides };
+    return;
+  }
   const client = state.client;
-  await withSessionsLoading(state, async () => {
+  control.loading = true;
+  control.ownsStateLoading = true;
+  state.sessionsLoading = true;
+  state.sessionsError = null;
+  let currentOverrides: LoadSessionsOverrides | undefined = overrides;
+  try {
+    for (;;) {
+      control.pending = null;
+      await loadSessionsOnce(state, client, currentOverrides);
+      const pending = takePendingSessionsLoad(control);
+      if (!pending || !state.client || !state.connected) {
+        break;
+      }
+      currentOverrides = pending.overrides;
+    }
+  } finally {
+    control.loading = false;
+    control.pending = null;
+    if (control.ownsStateLoading) {
+      state.sessionsLoading = false;
+      control.ownsStateLoading = false;
+    }
+  }
+}
+
+async function loadSessionsOnce(
+  state: SessionsState,
+  client: NonNullable<SessionsState["client"]>,
+  overrides?: LoadSessionsOverrides,
+) {
+  await (async () => {
     const previousRows = new Map(
       (state.sessionsResult?.sessions ?? []).map((row) => [row.key, row] as const),
     );
@@ -195,7 +402,7 @@ export async function loadSessions(
         await fetchSessionCompactionCheckpoints(state, expandedKey);
       }
     }
-  }).catch((err: unknown) => {
+  })().catch((err: unknown) => {
     if (!isMissingOperatorReadScopeError(err)) {
       state.sessionsError = String(err);
       return;
@@ -239,6 +446,33 @@ export async function patchSession(
   }
 }
 
+export async function createSessionAndRefresh(
+  state: SessionsState,
+  params: CreateSessionParams = {},
+  refreshOverrides?: LoadSessionsOverrides,
+): Promise<string | null> {
+  if (!state.client || !state.connected || state.sessionsLoading) {
+    return null;
+  }
+  const client = state.client;
+  let createdKey: string | null = null;
+  try {
+    await withSessionsLoading(state, async () => {
+      const result = await client.request<CreateSessionResult>("sessions.create", params);
+      const key = typeof result?.key === "string" ? result.key.trim() : "";
+      if (!key) {
+        throw new Error("sessions.create returned no key");
+      }
+      createdKey = key;
+      await loadSessions(state, refreshOverrides);
+    });
+  } catch (err) {
+    state.sessionsError = String(err);
+    return null;
+  }
+  return createdKey;
+}
+
 export async function deleteSessionsAndRefresh(
   state: SessionsState,
   keys: string[],
@@ -258,7 +492,7 @@ export async function deleteSessionsAndRefresh(
   }
   const deleted: string[] = [];
   const deleteErrors: string[] = [];
-  await withSessionsLoading(state, async () => {
+  const refreshedDuringDelete = await withSessionsLoading(state, async () => {
     for (const key of keys) {
       try {
         await client.request("sessions.delete", { key, deleteTranscript: true });
@@ -268,7 +502,7 @@ export async function deleteSessionsAndRefresh(
       }
     }
   });
-  if (deleted.length > 0) {
+  if (deleted.length > 0 && !refreshedDuringDelete) {
     await loadSessions(state);
   }
   if (deleteErrors.length > 0) {

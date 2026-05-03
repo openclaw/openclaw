@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -11,13 +10,6 @@ import { findLegacyConfigIssues } from "./legacy.js";
 import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import { validateConfigObject, validateConfigObjectRaw } from "./validation.js";
 import { OpenClawSchema } from "./zod-schema.js";
-import {
-  DiscordConfigSchema,
-  IMessageConfigSchema,
-  SignalConfigSchema,
-  TelegramConfigSchema,
-} from "./zod-schema.providers-core.js";
-import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 describe("$schema key in config (#14998)", () => {
   it("accepts config with $schema string", () => {
@@ -59,6 +51,67 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("accessGroups config", () => {
+  it("accepts Discord channel audience access groups", () => {
+    const result = OpenClawSchema.safeParse({
+      accessGroups: {
+        maintainers: {
+          type: "discord.channelAudience",
+          guildId: "1456350064065904867",
+          channelId: "1456744319972282449",
+          membership: "canViewChannel",
+        },
+      },
+      channels: {
+        discord: {
+          dmPolicy: "allowlist",
+          allowFrom: ["accessGroup:maintainers"],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown access group membership modes", () => {
+    const result = OpenClawSchema.safeParse({
+      accessGroups: {
+        maintainers: {
+          type: "discord.channelAudience",
+          guildId: "guild",
+          channelId: "channel",
+          membership: "roleMember",
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts message sender access groups for any channel", () => {
+    const result = OpenClawSchema.safeParse({
+      accessGroups: {
+        owners: {
+          type: "message.senders",
+          members: {
+            "*": ["global-owner"],
+            telegram: ["12345"],
+            discord: ["discord:67890"],
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "allowlist",
+          allowFrom: ["accessGroup:owners"],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("plugins.slots.contextEngine", () => {
   it("accepts a contextEngine slot id", () => {
     const result = OpenClawSchema.safeParse({
@@ -69,6 +122,93 @@ describe("plugins.slots.contextEngine", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe("models.pricing", () => {
+  it("accepts the model pricing bootstrap toggle", () => {
+    for (const enabled of [true, false]) {
+      const result = OpenClawSchema.safeParse({
+        models: {
+          pricing: { enabled },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects non-boolean model pricing bootstrap values", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        pricing: { enabled: "false" },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("crestodian.rescue", () => {
+  it("accepts documented rescue config", () => {
+    const result = OpenClawSchema.safeParse({
+      crestodian: {
+        rescue: {
+          enabled: "auto",
+          ownerDmOnly: false,
+          pendingTtlMinutes: 5,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts boolean rescue enablement", () => {
+    const result = OpenClawSchema.safeParse({
+      crestodian: {
+        rescue: {
+          enabled: true,
+          ownerDmOnly: true,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown rescue keys", () => {
+    const result = OpenClawSchema.safeParse({
+      crestodian: {
+        rescue: {
+          enabled: true,
+          shell: true,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("diagnostics.otel.captureContent", () => {
+  it("accepts boolean and granular OTEL content capture config", () => {
+    for (const captureContent of [
+      true,
+      false,
+      {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: true,
+        toolInputs: true,
+        toolOutputs: true,
+        systemPrompt: false,
+      },
+    ]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: {
+          otel: {
+            captureContent,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
   });
 });
 
@@ -155,14 +295,77 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   });
 });
 
-describe("plugins.entries.*.hooks.allowPromptInjection", () => {
-  it("accepts boolean values", () => {
+describe("gateway.controlUi.chatMessageMaxWidth", () => {
+  it("accepts constrained CSS width values", () => {
+    for (const value of ["960px", "82%", "min(1280px, 82%)", "calc(100% - 2rem)"]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: {
+          controlUi: {
+            chatMessageMaxWidth: value,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.gateway?.controlUi?.chatMessageMaxWidth).toBe(value);
+      }
+    }
+  });
+
+  it("normalizes whitespace around the width value", () => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        controlUi: {
+          chatMessageMaxWidth: "  min(1280px,   82%)  ",
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.gateway?.controlUi?.chatMessageMaxWidth).toBe("min(1280px, 82%)");
+    }
+  });
+
+  it("rejects arbitrary CSS injection", () => {
+    for (const value of ["url(https://example.com/x)", "960px; color: red", "var(--x)"]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: {
+          controlUi: {
+            chatMessageMaxWidth: value,
+          },
+        },
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+});
+
+describe("plugins.entries.*.hooks", () => {
+  it.each([true, false])("accepts allowConversationAccess=%s", (allowConversationAccess) => {
     const result = OpenClawSchema.safeParse({
       plugins: {
         entries: {
           "voice-call": {
             hooks: {
               allowPromptInjection: false,
+              allowConversationAccess,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts allowPromptInjection=false alongside allowConversationAccess=true", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: false,
+              allowConversationAccess: true,
             },
           },
         },
@@ -178,6 +381,23 @@ describe("plugins.entries.*.hooks.allowPromptInjection", () => {
           "voice-call": {
             hooks: {
               allowPromptInjection: "no",
+              allowConversationAccess: true,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-boolean conversation access values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: false,
+              allowConversationAccess: "yes",
             },
           },
         },
@@ -295,6 +515,27 @@ describe("gateway.tools config", () => {
 });
 
 describe("gateway.channelHealthCheckMinutes", () => {
+  it("accepts preauth handshake timeout tuning", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 30_000,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-positive preauth handshake timeouts", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 0,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.handshakeTimeoutMs");
+    }
+  });
+
   it("accepts zero to disable monitor", () => {
     const res = validateConfigObject({
       gateway: {
@@ -503,58 +744,6 @@ describe("cron webhook schema", () => {
     });
     expect(res.success).toBe(true);
   });
-
-  it("accepts channel textChunkLimit config without reviving legacy message limits", () => {
-    const whatsapp = WhatsAppConfigSchema.safeParse({
-      allowFrom: ["+15555550123"],
-      textChunkLimit: 4444,
-    });
-    const telegram = TelegramConfigSchema.safeParse({
-      enabled: true,
-      textChunkLimit: 3333,
-    });
-    const discord = DiscordConfigSchema.safeParse({
-      enabled: true,
-      textChunkLimit: 1999,
-      maxLinesPerMessage: 17,
-    });
-    const signal = SignalConfigSchema.safeParse({
-      enabled: true,
-      textChunkLimit: 2222,
-    });
-    const imessage = IMessageConfigSchema.safeParse({
-      enabled: true,
-      textChunkLimit: 1111,
-    });
-    const messages = {
-      messagePrefix: "[openclaw]",
-      responsePrefix: "🦞",
-    };
-
-    expect(whatsapp.success).toBe(true);
-    expect(telegram.success).toBe(true);
-    expect(discord.success).toBe(true);
-    expect(signal.success).toBe(true);
-    expect(imessage.success).toBe(true);
-    if (whatsapp.success) {
-      expect(whatsapp.data.textChunkLimit).toBe(4444);
-    }
-    if (telegram.success) {
-      expect(telegram.data.textChunkLimit).toBe(3333);
-    }
-    if (discord.success) {
-      expect(discord.data.textChunkLimit).toBe(1999);
-      expect(discord.data.maxLinesPerMessage).toBe(17);
-    }
-    if (signal.success) {
-      expect(signal.data.textChunkLimit).toBe(2222);
-    }
-    if (imessage.success) {
-      expect(imessage.data.textChunkLimit).toBe(1111);
-    }
-    const legacy = messages as unknown as Record<string, unknown>;
-    expect(legacy.textChunkLimit).toBeUndefined();
-  });
 });
 
 describe("broadcast", () => {
@@ -602,7 +791,7 @@ describe("model compat config schema", () => {
                   supportsUsageInStreaming: true,
                   supportsStrictMode: false,
                   requiresStringContent: true,
-                  thinkingFormat: "qwen",
+                  thinkingFormat: "zai",
                   requiresToolResultName: true,
                   requiresAssistantAfterToolResult: false,
                   requiresThinkingAsText: false,
@@ -680,7 +869,7 @@ describe("config strict validation", () => {
     }
   });
 
-  it("accepts top-level memorySearch via auto-migration and reports legacyIssues", async () => {
+  it("rejects top-level memorySearch without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         memorySearch: {
@@ -692,19 +881,19 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.issues).toEqual([]);
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.some((issue) => issue.message.includes('"memorySearch"'))).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
-      expect(snap.sourceConfig.agents?.defaults?.memorySearch).toMatchObject({
+      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toMatchObject({
         provider: "local",
         fallback: "none",
         query: { maxResults: 7 },
       });
-      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toBeUndefined();
+      expect(snap.sourceConfig.agents?.defaults?.memorySearch).toBeUndefined();
     });
   });
 
-  it("accepts top-level heartbeat agent settings via auto-migration and reports legacyIssues", async () => {
+  it("rejects top-level heartbeat agent settings without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         heartbeat: {
@@ -715,17 +904,18 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.some((issue) => issue.message.includes('"heartbeat"'))).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      expect(snap.sourceConfig.agents?.defaults?.heartbeat).toMatchObject({
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
       });
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
+      expect(snap.sourceConfig.agents?.defaults?.heartbeat).toBeUndefined();
     });
   });
 
-  it("accepts top-level heartbeat visibility via auto-migration and reports legacyIssues", async () => {
+  it("rejects top-level heartbeat visibility without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         heartbeat: {
@@ -737,18 +927,19 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.some((issue) => issue.message.includes('"heartbeat"'))).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      expect(snap.sourceConfig.channels?.defaults?.heartbeat).toMatchObject({
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
         showOk: true,
         showAlerts: false,
         useIndicator: true,
       });
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
+      expect(snap.sourceConfig.channels?.defaults?.heartbeat).toBeUndefined();
     });
   });
 
-  it("accepts legacy messages.tts provider keys via auto-migration and reports legacyIssues", async () => {
+  it("reports legacy messages.tts provider keys without read-time auto-migration", async () => {
     const raw = {
       messages: {
         tts: {
@@ -761,32 +952,16 @@ describe("config strict validation", () => {
       },
     };
     const issues = findLegacyConfigIssues(raw);
-    const migrated = applyRuntimeLegacyConfigMigrations(raw);
 
     expect(issues.some((issue) => issue.path === "messages.tts")).toBe(true);
-    expect(migrated.next).not.toBeNull();
-
-    const next = migrated.next as {
-      messages?: {
-        tts?: {
-          providers?: {
-            elevenlabs?: {
-              apiKey?: string;
-              voiceId?: string;
-            };
-          };
-          elevenlabs?: unknown;
-        };
-      };
-    } | null;
-    expect(next?.messages?.tts?.providers?.elevenlabs).toEqual({
+    expect(raw.messages.tts.elevenlabs).toEqual({
       apiKey: "test-key",
       voiceId: "voice-1",
     });
-    expect(next?.messages?.tts?.elevenlabs).toBeUndefined();
+    expect(raw.messages.tts).not.toHaveProperty("providers");
   });
 
-  it("accepts legacy sandbox perSession via auto-migration and reports legacyIssues", async () => {
+  it("rejects legacy sandbox perSession without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         agents: {
@@ -808,21 +983,19 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(true);
+      expect(snap.issues.some((issue) => issue.path === "agents.list.0.sandbox")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(
         true,
       );
       expect(snap.legacyIssues.some((issue) => issue.path === "agents.list")).toBe(true);
-      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({
-        scope: "session",
-      });
-      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({
-        scope: "shared",
-      });
+      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
+      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
     });
   });
 
-  it("does not treat resolved-only gateway.bind aliases as source-literal legacy or invalid", async () => {
+  it("rejects resolved-only gateway.bind aliases as invalid schema values, not legacy", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         gateway: { bind: "${OPENCLAW_BIND}" },
@@ -832,9 +1005,9 @@ describe("config strict validation", () => {
       process.env.OPENCLAW_BIND = "0.0.0.0";
       try {
         const snap = await readConfigFileSnapshot();
-        expect(snap.valid).toBe(true);
+        expect(snap.valid).toBe(false);
         expect(snap.legacyIssues).toHaveLength(0);
-        expect(snap.issues).toHaveLength(0);
+        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
       } finally {
         if (prev === undefined) {
           delete process.env.OPENCLAW_BIND;
@@ -845,14 +1018,15 @@ describe("config strict validation", () => {
     });
   });
 
-  it("still marks literal gateway.bind host aliases as legacy", async () => {
+  it("rejects literal gateway.bind host aliases as legacy", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         gateway: { bind: "0.0.0.0" },
       });
 
       const snap = await readConfigFileSnapshot();
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
     });
   });

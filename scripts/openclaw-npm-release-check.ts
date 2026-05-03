@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
@@ -22,6 +23,8 @@ type PackageJson = {
   license?: string;
   repository?: { url?: string } | string;
   bin?: Record<string, string>;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
@@ -29,10 +32,11 @@ type PackageJson = {
 export type ParsedReleaseVersion = {
   version: string;
   baseVersion: string;
-  channel: "stable" | "beta";
+  channel: "stable" | "alpha" | "beta";
   year: number;
   month: number;
   day: number;
+  alphaNumber?: number;
   betaNumber?: number;
   correctionNumber?: number;
   date: Date;
@@ -42,15 +46,15 @@ export type ParsedReleaseTag = {
   version: string;
   packageVersion: string;
   baseVersion: string;
-  channel: "stable" | "beta";
+  channel: "stable" | "alpha" | "beta";
   correctionNumber?: number;
   date: Date;
 };
 
 export type NpmPublishPlan = {
-  channel: "stable" | "beta";
-  publishTag: "latest" | "beta";
-  mirrorDistTags: ("latest" | "beta")[];
+  channel: "stable" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta";
+  mirrorDistTags: ("latest" | "alpha" | "beta")[];
 };
 
 export type NpmDistTagMirrorAuth = {
@@ -58,23 +62,29 @@ export type NpmDistTagMirrorAuth = {
   source: "node-auth-token" | "npm-token" | "none";
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+const OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE = "node-llama-cpp";
 const MAX_CALVER_DISTANCE_DAYS = 2;
-const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
-] as const;
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   "dist/control-ui/index.html",
-  ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const FORBIDDEN_PACKED_PATH_RULES = [
+  ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
+    prefix,
+    describe: (packedPath: string) =>
+      `npm package must not include local build metadata "${packedPath}".`,
+  })),
   {
     prefix: "docs/.generated/",
     describe: (packedPath: string) =>
       `npm package must not include generated docs artifact "${packedPath}".`,
+  },
+  {
+    prefix: "docs/channels/qa-channel.md",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel docs "${packedPath}".`,
   },
   {
     prefix: "dist/extensions/qa-channel/",
@@ -87,9 +97,24 @@ const FORBIDDEN_PACKED_PATH_RULES = [
       `npm package must not include private QA lab artifact "${packedPath}".`,
   },
   {
+    prefix: "dist/plugin-sdk/extensions/qa-channel/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel type artifact "${packedPath}".`,
+  },
+  {
     prefix: "dist/plugin-sdk/extensions/qa-lab/",
     describe: (packedPath: string) =>
       `npm package must not include private QA lab type artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/plugin-sdk/qa-channel.",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/plugin-sdk/qa-channel-protocol.",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
   },
   {
     prefix: "dist/qa-runtime-",
@@ -104,6 +129,9 @@ const FORBIDDEN_PACKED_PATH_RULES = [
 ] as const;
 const FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS = [
   "//#region extensions/qa-lab/",
+  "qa-channel/runtime-api.js",
+  "qa-channel.js",
+  "qa-channel-protocol.js",
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;
@@ -166,14 +194,30 @@ export function compareReleaseVersions(left: string, right: string): number | nu
 export function resolveNpmPublishPlan(
   version: string,
   _currentBetaVersion?: string | null,
-  requestedPublishTag?: "latest" | "beta" | null,
+  requestedPublishTag?: "latest" | "alpha" | "beta" | null,
 ): NpmPublishPlan {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
   }
 
-  const publishTag = requestedPublishTag?.trim() === "latest" ? "latest" : "beta";
+  const publishTag =
+    requestedPublishTag?.trim() === "latest"
+      ? "latest"
+      : requestedPublishTag?.trim() === "alpha"
+        ? "alpha"
+        : "beta";
+
+  if (parsedVersion.channel === "alpha") {
+    if (publishTag !== "alpha") {
+      throw new Error("Alpha prereleases must publish to the alpha dist-tag.");
+    }
+    return {
+      channel: "alpha",
+      publishTag: "alpha",
+      mirrorDistTags: [],
+    };
+  }
 
   if (parsedVersion.channel === "beta") {
     if (publishTag !== "beta") {
@@ -270,15 +314,25 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
       `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
   }
-  if (pkg.peerDependencies?.["node-llama-cpp"] !== "3.18.1") {
+  if (pkg.dependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
     errors.push(
-      `package.json peerDependencies["node-llama-cpp"] must be "3.18.1"; found "${
-        pkg.peerDependencies?.["node-llama-cpp"] ?? ""
-      }".`,
+      `package.json dependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
     );
   }
-  if (pkg.peerDependenciesMeta?.["node-llama-cpp"]?.optional !== true) {
-    errors.push('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
+  if (pkg.optionalDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
+    errors.push(
+      `package.json optionalDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it operator-installed.`,
+    );
+  }
+  if (pkg.peerDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
+    errors.push(
+      `package.json peerDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
+    );
+  }
+  if (pkg.peerDependenciesMeta?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
+    errors.push(
+      `package.json peerDependenciesMeta["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
+    );
   }
 
   return errors;
@@ -299,7 +353,7 @@ export function collectReleaseTagErrors(params: {
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
     errors.push(
-      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
+      `package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
     );
   }
 
@@ -311,7 +365,7 @@ export function collectReleaseTagErrors(params: {
   const parsedTag = parseReleaseTagVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
-      `Release tag must match vYYYY.M.D, vYYYY.M.D-beta.N, or fallback correction tag vYYYY.M.D-N; found "${releaseTag || "<missing>"}".`,
+      `Release tag must match vYYYY.M.D, vYYYY.M.D-alpha.N, vYYYY.M.D-beta.N, or fallback correction tag vYYYY.M.D-N; found "${releaseTag || "<missing>"}".`,
     );
   }
 
@@ -532,9 +586,6 @@ function collectPackedTarballErrors(): string[] {
 export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
   const errors: string[] = [];
   for (const packedPath of paths) {
-    if ((LEGACY_UPDATE_COMPAT_PACKED_PATHS as readonly string[]).includes(packedPath)) {
-      continue;
-    }
     const matchedRule = FORBIDDEN_PACKED_PATH_RULES.find((rule) =>
       packedPath.startsWith(rule.prefix),
     );
@@ -553,9 +604,6 @@ export function collectForbiddenPackedContentErrors(
   const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
   const errors: string[] = [];
   for (const packedPath of paths) {
-    if (packedPath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
-      continue;
-    }
     if (
       !FORBIDDEN_PRIVATE_QA_CONTENT_SCAN_PREFIXES.some((prefix) => packedPath.startsWith(prefix))
     ) {

@@ -1,10 +1,16 @@
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  createConnectedChannelStatusPatch,
+  createTransportActivityStatusPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
-import type { MutableDiscordGateway } from "./gateway-handle.js";
+import {
+  DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
+  type MutableDiscordGateway,
+} from "./gateway-handle.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
 import {
   DiscordGatewayLifecycleError,
@@ -13,13 +19,48 @@ import {
 } from "./gateway-supervisor.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
-const DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
-const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS = 30_000;
+const DEFAULT_DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
+const DEFAULT_DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS = 30_000;
+const MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS = 120_000;
+const DISCORD_GATEWAY_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_READY_TIMEOUT_MS";
+const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
 const DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
 const DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
+const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
 
 type GatewayReadyWaitResult = "ready" | "stopped" | "timeout";
+
+function normalizeGatewayReadyTimeoutMs(value: unknown): number | undefined {
+  const numeric =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return undefined;
+  }
+  return Math.min(Math.floor(numeric), MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS);
+}
+
+export function resolveDiscordGatewayReadyTimeoutMs(params?: {
+  configuredTimeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+}): number {
+  return (
+    normalizeGatewayReadyTimeoutMs(params?.configuredTimeoutMs) ??
+    normalizeGatewayReadyTimeoutMs(params?.env?.[DISCORD_GATEWAY_READY_TIMEOUT_ENV]) ??
+    DEFAULT_DISCORD_GATEWAY_READY_TIMEOUT_MS
+  );
+}
+
+export function resolveDiscordGatewayRuntimeReadyTimeoutMs(params?: {
+  configuredTimeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+}): number {
+  return (
+    normalizeGatewayReadyTimeoutMs(params?.configuredTimeoutMs) ??
+    normalizeGatewayReadyTimeoutMs(params?.env?.[DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV]) ??
+    DEFAULT_DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS
+  );
+}
 
 async function restartGatewayAfterReadyTimeout(params: {
   gateway?: Pick<MutableDiscordGateway, "connect" | "disconnect" | "ws">;
@@ -140,12 +181,18 @@ function parseGatewayCloseCode(message: string): number | undefined {
   return Number.isFinite(code) ? code : undefined;
 }
 
+function resolveTransportActivityAt(event: unknown): number {
+  const at = (event as { at?: unknown } | undefined)?.at;
+  return typeof at === "number" && Number.isFinite(at) && at >= 0 ? at : Date.now();
+}
+
 function createGatewayStatusObserver(params: {
   gateway?: Pick<MutableDiscordGateway, "isConnected">;
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   pushStatus: (patch: Parameters<DiscordMonitorStatusSink>[0]) => void;
   isLifecycleStopping: () => boolean;
+  runtimeReadyTimeoutMs: number;
 }) {
   let forceStopHandler: ((err: unknown) => void) | undefined;
   let queuedForceStopError: unknown;
@@ -202,7 +249,7 @@ function createGatewayStatusObserver(params: {
         }
         const at = Date.now();
         const error = new Error(
-          `discord gateway opened but did not reach READY within ${DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS}ms`,
+          `discord gateway opened but did not reach READY within ${params.runtimeReadyTimeoutMs}ms`,
         );
         params.pushStatus({
           connected: false,
@@ -215,7 +262,7 @@ function createGatewayStatusObserver(params: {
         });
         params.runtime.error?.(danger(error.message));
         triggerForceStop(error);
-      }, DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS);
+      }, params.runtimeReadyTimeoutMs);
       readyTimeoutId.unref?.();
     }
   };
@@ -280,14 +327,15 @@ async function waitForGatewayReady(params: {
   pushStatus?: (patch: Parameters<DiscordMonitorStatusSink>[0]) => void;
   runtime: RuntimeEnv;
   beforeRestart?: () => Promise<void> | void;
+  readyTimeoutMs: number;
 }): Promise<void> {
   const waitUntilReady = async (): Promise<GatewayReadyWaitResult> => {
-    const deadlineAt = Date.now() + DISCORD_GATEWAY_READY_TIMEOUT_MS;
+    const deadlineAt = Date.now() + params.readyTimeoutMs;
     while (!params.abortSignal?.aborted) {
       if ((await params.beforePoll?.()) === "stop") {
         return "stopped";
       }
-      if (params.gateway?.isConnected ?? true) {
+      if (params.gateway?.isConnected === true) {
         const at = Date.now();
         params.pushStatus?.({
           ...createConnectedChannelStatusPatch(at),
@@ -312,16 +360,12 @@ async function waitForGatewayReady(params: {
     return;
   }
   if (!params.gateway) {
-    throw new Error(
-      `discord gateway did not reach READY within ${DISCORD_GATEWAY_READY_TIMEOUT_MS}ms`,
-    );
+    throw new Error(`discord gateway did not reach READY within ${params.readyTimeoutMs}ms`);
   }
 
   const restartAt = Date.now();
   params.runtime.error?.(
-    danger(
-      `discord: gateway was not ready after ${DISCORD_GATEWAY_READY_TIMEOUT_MS}ms; restarting gateway`,
-    ),
+    danger(`discord: gateway was not ready after ${params.readyTimeoutMs}ms; restarting gateway`),
   );
   params.pushStatus?.({
     connected: false,
@@ -344,7 +388,7 @@ async function waitForGatewayReady(params: {
 
   if ((await waitUntilReady()) === "timeout") {
     throw new Error(
-      `discord gateway did not reach READY within ${DISCORD_GATEWAY_READY_TIMEOUT_MS}ms after restart`,
+      `discord gateway did not reach READY within ${params.readyTimeoutMs}ms after restart`,
     );
   }
 }
@@ -360,6 +404,8 @@ export async function runDiscordGatewayLifecycle(params: {
   threadBindings: { stop: () => void };
   gatewaySupervisor: DiscordGatewaySupervisor;
   statusSink?: DiscordMonitorStatusSink;
+  gatewayReadyTimeoutMs?: number;
+  gatewayRuntimeReadyTimeoutMs?: number;
 }) {
   const gateway = params.gateway;
   if (gateway) {
@@ -375,17 +421,49 @@ export async function runDiscordGatewayLifecycle(params: {
   const pushStatus = (patch: Parameters<DiscordMonitorStatusSink>[0]) => {
     params.statusSink?.(patch);
   };
+  const gatewayReadyTimeoutMs = resolveDiscordGatewayReadyTimeoutMs({
+    configuredTimeoutMs: params.gatewayReadyTimeoutMs,
+    env: process.env,
+  });
+  const gatewayRuntimeReadyTimeoutMs = resolveDiscordGatewayRuntimeReadyTimeoutMs({
+    configuredTimeoutMs: params.gatewayRuntimeReadyTimeoutMs,
+    env: process.env,
+  });
   const statusObserver = createGatewayStatusObserver({
     gateway,
     abortSignal: params.abortSignal,
     runtime: params.runtime,
     pushStatus,
     isLifecycleStopping: () => lifecycleStopping,
+    runtimeReadyTimeoutMs: gatewayRuntimeReadyTimeoutMs,
   });
   gatewayEmitter?.on("debug", statusObserver.onGatewayDebug);
+  let lastTransportActivityStatusAt: number | undefined;
+  const onGatewayTransportActivity = (event: unknown) => {
+    if (lifecycleStopping || params.abortSignal?.aborted) {
+      return;
+    }
+    const at = resolveTransportActivityAt(event);
+    if (
+      lastTransportActivityStatusAt !== undefined &&
+      at - lastTransportActivityStatusAt < DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS
+    ) {
+      return;
+    }
+    lastTransportActivityStatusAt = at;
+    pushStatus(createTransportActivityStatusPatch(at));
+  };
+  gatewayEmitter?.on(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, onGatewayTransportActivity);
 
   let sawDisallowedIntents = false;
   const handleGatewayEvent = (event: DiscordGatewayEvent): "continue" | "stop" => {
+    if (params.abortSignal?.aborted && event.type === "reconnect-exhausted") {
+      lifecycleStopping = true;
+      params.runtime.log?.(
+        `discord: treating reconnect-exhausted during expected shutdown as clean: ${event.message}`,
+      );
+      return "continue";
+    }
     if (event.type === "disallowed-intents") {
       lifecycleStopping = true;
       sawDisallowedIntents = true;
@@ -432,6 +510,7 @@ export async function runDiscordGatewayLifecycle(params: {
       pushStatus,
       runtime: params.runtime,
       beforeRestart: statusObserver.clearReadyWatch,
+      readyTimeoutMs: gatewayReadyTimeoutMs,
     });
 
     if (drainPendingGatewayErrors() === "stop") {
@@ -460,6 +539,10 @@ export async function runDiscordGatewayLifecycle(params: {
     stopGatewayLogging();
     statusObserver.dispose();
     gatewayEmitter?.removeListener("debug", statusObserver.onGatewayDebug);
+    gatewayEmitter?.removeListener(
+      DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
+      onGatewayTransportActivity,
+    );
     if (params.voiceManager) {
       await params.voiceManager.destroy();
       params.voiceManagerRef.current = null;

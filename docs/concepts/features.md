@@ -5,27 +5,25 @@ read_when:
 title: "Features"
 ---
 
-# Features
-
 ## Highlights
 
 <Columns>
-  <Card title="Channels" icon="message-square">
+  <Card title="Channels" icon="message-square" href="/channels">
     Discord, iMessage, Signal, Slack, Telegram, WhatsApp, WebChat, and more with a single Gateway.
   </Card>
-  <Card title="Plugins" icon="plug">
+  <Card title="Plugins" icon="plug" href="/tools/plugin">
     Bundled plugins add Matrix, Nextcloud Talk, Nostr, Twitch, Zalo, and more without separate installs in normal current releases.
   </Card>
-  <Card title="Routing" icon="route">
+  <Card title="Routing" icon="route" href="/concepts/multi-agent">
     Multi-agent routing with isolated sessions.
   </Card>
-  <Card title="Media" icon="image">
+  <Card title="Media" icon="image" href="/nodes/images">
     Images, audio, video, documents, and image/video generation.
   </Card>
-  <Card title="Apps and UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor" href="/web/control-ui">
     Web Control UI and macOS companion app.
   </Card>
-  <Card title="Mobile nodes" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone" href="/nodes">
     iOS and Android nodes with pairing, voice/chat, and rich device commands.
   </Card>
 </Columns>
@@ -74,3 +72,8 @@ title: "Features"
 - Web search (Brave, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web Search, Perplexity, SearXNG, Tavily)
 - Cron jobs and heartbeat scheduling
 - Skills, plugins, and workflow pipelines (Lobster)
+
+## Related
+
+- [Experimental features](/concepts/experimental-features)
+- [Agent runtime](/concepts/agent)

@@ -40,6 +40,14 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
 ] as const satisfies readonly ErrorPattern[];
 
+const CJK_AUTH_ERROR_PATTERNS = [
+  "无权访问",
+  "认证失败",
+  "鉴权失败",
+  "密钥无效",
+  "apikey 无效",
+] as const satisfies readonly ErrorPattern[];
+
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
 const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
 const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
@@ -69,15 +77,28 @@ const ERROR_PATTERNS = {
     /\btpm\b/i,
     "tokens per minute",
     "tokens per day",
+    // Chinese provider rate-limit messages
+    "请求过于频繁",
+    "调用频率",
+    "频率限制",
+    "配额不足",
+    "配额已用尽",
+    "额度不足",
+    "额度已用尽",
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
     "overloaded",
+    /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i,
     // Match "service unavailable" only when combined with an explicit overload
     // indicator — a generic 503 from a proxy/CDN should not be classified as
     // provider-overload (#32828).
     /service[_ ]unavailable.*(?:overload|capacity|high[_ ]demand)|(?:overload|capacity|high[_ ]demand).*service[_ ]unavailable/i,
     "high demand",
+    "high load",
+    // Chinese provider overloaded messages
+    "服务过载",
+    "当前负载过高",
   ],
   serverError: [
     "an error occurred while processing",
@@ -91,6 +112,13 @@ const ERROR_PATTERNS = {
     "upstream error",
     "upstream connect error",
     "connection reset",
+    // Chinese provider server error messages
+    "内部错误",
+    "服务器错误",
+    "服务器内部错误",
+    "系统错误",
+    "系统繁忙",
+    "系统异常",
   ],
   timeout: [
     "timeout",
@@ -105,6 +133,14 @@ const ERROR_PATTERNS = {
     "network request failed",
     "fetch failed",
     "socket hang up",
+    // Chinese provider error messages (ZhipuAI/GLM, Bailian, Kimi/Moonshot, DeepSeek, etc.)
+    "网络错误",
+    "网络异常",
+    "服务暂时不可用",
+    "服务繁忙",
+    "请求超时",
+    "连接超时",
+    "连接错误",
     /\beconn(?:refused|reset|aborted)\b/i,
     /\benetunreach\b/i,
     /\behostunreach\b/i,
@@ -126,20 +162,43 @@ const ERROR_PATTERNS = {
     // falls through to reason=unknown (#58315).
     /\boperation was aborted\b/i,
     /\bstream (?:was )?(?:closed|aborted)\b/i,
+    // Undici transport-level failures during CDN/provider outages (Cloudflare
+    // 502 served with an empty body, socket reset mid-response, body-stream
+    // aborted). These arrive as bare strings on the outer error and, without
+    // an explicit match, the fallback chain is never attempted (#69368).
+    /^terminated$/i,
+    /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
+    // pi-ai's openai-codex provider surfaces `Request failed` when the HTTP
+    // response has no body and no status text (typical of Cloudflare 502s
+    // from the upstream Codex service). Treat it as a transport failure so
+    // the configured fallback chain runs instead of surfacing the error.
+    /^request failed$/i,
+    /\brequest failed after repeated internal retries\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
     "insufficient credits",
+    /used\s+all\s+available\s+credits/i,
+    /(?:monthly\s+)?spend(?:ing)?\s+limit/i,
     /insufficient[_ ]quota/i,
     "credit balance",
     "plans & billing",
-    "insufficient balance",
+    /insufficient[_ ]balance/i,
+    // Fuzzy: "Insufficient MBT balance", "Insufficient token balance", etc.
+    // Exactly one intervening word — avoids false positives like
+    // "insufficient to reconcile the final balance"
+    /\binsufficient\s+\w+\s+balance\b/i,
     "insufficient usd or diem balance",
     /requires?\s+more\s+credits/i,
     /out of extra usage/i,
     /draw from your extra usage/i,
     /extra usage is required(?: for long context requests)?/i,
+    // Chinese provider billing messages
+    "余额不足",
+    "账户余额不足",
+    "欠费",
+    "账户已欠费",
     // Z.ai: error 1311 = model not included in current subscription plan (#48988)
     ZAI_BILLING_CODE_1311_RE,
   ],
@@ -148,6 +207,7 @@ const ERROR_PATTERNS = {
     ...AMBIGUOUS_AUTH_ERROR_PATTERNS,
     ...COMMON_AUTH_ERROR_PATTERNS,
     ...ZAI_AUTH_ERROR_PATTERNS,
+    ...CJK_AUTH_ERROR_PATTERNS,
   ],
   format: [
     "string should match pattern",
@@ -232,6 +292,7 @@ export function isAuthErrorMessage(raw: string): boolean {
     AMBIGUOUS_AUTH_ERROR_PATTERNS,
     COMMON_AUTH_ERROR_PATTERNS,
     ZAI_AUTH_ERROR_PATTERNS,
+    CJK_AUTH_ERROR_PATTERNS,
   ]);
 }
 
@@ -248,5 +309,8 @@ export function isServerErrorMessage(raw: string): boolean {
     return true;
   }
   const scrubbed = value.replace(STATUS_INTERNAL_SERVER_ERROR_RE, "").trim();
-  return scrubbed.length > 0 && matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
+  if (scrubbed === "") {
+    return true;
+  }
+  return matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
 }

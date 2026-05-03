@@ -7,12 +7,14 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
 type ChannelPresenceOptions = {
+  channelIds?: readonly string[];
   includePersistedAuthState?: boolean;
   persistedAuthStateProbe?: {
     listChannelIds: () => readonly string[];
@@ -24,11 +26,29 @@ type ChannelPresenceOptions = {
   };
 };
 
+export type ChannelPresenceSignalSource = "config" | "env" | "persisted-auth";
+
+type ChannelPresenceSignal = {
+  channelId: string;
+  source: ChannelPresenceSignalSource;
+};
+
 export function hasMeaningfulChannelConfig(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
   return Object.keys(value).some((key) => key !== "enabled");
+}
+
+export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): string[] {
+  const channels = isRecord(cfg.channels) ? cfg.channels : null;
+  if (!channels) {
+    return [];
+  }
+  return Object.entries(channels)
+    .filter(([, value]) => isRecord(value) && value.enabled === false)
+    .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
+    .filter((channelId): channelId is string => Boolean(channelId));
 }
 
 function listChannelEnvPrefixes(
@@ -76,8 +96,32 @@ export function listPotentialConfiguredChannelIds(
   env: NodeJS.ProcessEnv = process.env,
   options: ChannelPresenceOptions = {},
 ): string[] {
+  return [
+    ...new Set(
+      listPotentialConfiguredChannelPresenceSignals(cfg, env, options).map(
+        (signal) => signal.channelId,
+      ),
+    ),
+  ];
+}
+
+export function listPotentialConfiguredChannelPresenceSignals(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+  options: ChannelPresenceOptions = {},
+): ChannelPresenceSignal[] {
+  const signals: ChannelPresenceSignal[] = [];
+  const seenSignals = new Set<string>();
+  const addSignal = (channelId: string, source: ChannelPresenceSignalSource) => {
+    const key = `${source}:${channelId}`;
+    if (seenSignals.has(key)) {
+      return;
+    }
+    seenSignals.add(key);
+    signals.push({ channelId, source });
+  };
   const configuredChannelIds = new Set<string>();
-  const channelIds = listBundledChannelPluginIds();
+  const channelIds = options.channelIds ?? listBundledChannelPluginIds(env);
   const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (channels) {
@@ -87,6 +131,7 @@ export function listPotentialConfiguredChannelIds(
       }
       if (hasMeaningfulChannelConfig(value)) {
         configuredChannelIds.add(key);
+        addSignal(key, "config");
       }
     }
   }
@@ -98,6 +143,7 @@ export function listPotentialConfiguredChannelIds(
     for (const [prefix, channelId] of channelEnvPrefixes) {
       if (key.startsWith(prefix)) {
         configuredChannelIds.add(channelId);
+        addSignal(channelId, "env");
       }
     }
   }
@@ -106,11 +152,12 @@ export function listPotentialConfiguredChannelIds(
     for (const channelId of listPersistedAuthStateChannelIds(options)) {
       if (hasPersistedAuthState({ channelId, cfg, env, options })) {
         configuredChannelIds.add(channelId);
+        addSignal(channelId, "persisted-auth");
       }
     }
   }
 
-  return [...configuredChannelIds];
+  return signals.filter((signal) => configuredChannelIds.has(signal.channelId));
 }
 
 function hasEnvConfiguredChannel(
@@ -118,7 +165,7 @@ function hasEnvConfiguredChannel(
   env: NodeJS.ProcessEnv,
   options: ChannelPresenceOptions = {},
 ): boolean {
-  const channelIds = listBundledChannelPluginIds();
+  const channelIds = options.channelIds ?? listBundledChannelPluginIds(env);
   const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   for (const [key, value] of Object.entries(env)) {
     if (!hasNonEmptyString(value)) {

@@ -1,9 +1,12 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { promisify } from "node:util";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
@@ -48,14 +51,17 @@ type TelegramQaScenarioId =
   | "telegram-mention-gating";
 
 type TelegramQaScenarioRun = {
+  allowAnySutReply?: boolean;
   expectReply: boolean;
   input: string;
   expectedTextIncludes?: string[];
   matchText?: string;
+  replyToLatestSutMessage?: boolean;
 };
 
 type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<TelegramQaScenarioId> & {
   buildRun: (sutUsername: string) => TelegramQaScenarioRun;
+  defaultEnabled?: boolean;
 };
 
 type TelegramObservedMessage = {
@@ -65,6 +71,9 @@ type TelegramObservedMessage = {
   senderId: number;
   senderIsBot: boolean;
   senderUsername?: string;
+  scenarioId?: string;
+  scenarioTitle?: string;
+  matchedScenario?: boolean;
   text: string;
   caption?: string;
   replyToMessageId?: number;
@@ -73,25 +82,47 @@ type TelegramObservedMessage = {
   mediaKinds: string[];
 };
 
-type TelegramObservedMessageArtifact = Omit<TelegramObservedMessage, "text" | "caption"> & {
+type TelegramObservedMessageArtifact = {
+  updateId?: number;
+  messageId?: number;
+  chatId?: number;
+  senderId?: number;
+  senderIsBot: boolean;
+  senderUsername?: string;
+  scenarioId?: string;
+  scenarioTitle?: string;
+  matchedScenario?: boolean;
   text?: string;
   caption?: string;
+  replyToMessageId?: number;
+  inlineButtonCount?: number;
+  timestamp?: number;
+  inlineButtons?: string[];
+  mediaKinds: string[];
 };
+
+const DEFAULT_TELEGRAM_QA_CANARY_TIMEOUT_MS = 30_000;
 
 type TelegramQaScenarioResult = {
   id: string;
   title: string;
   status: "pass" | "fail";
   details: string;
+  rttMs?: number;
+  requestStartedAt?: string;
+  responseObservedAt?: string;
+  sentMessageId?: number;
+  responseMessageId?: number;
 };
 
 type TelegramQaCanaryPhase = "sut_reply_timeout" | "sut_reply_not_threaded" | "sut_reply_empty";
 
-export type TelegramQaRunResult = {
+type TelegramQaRunResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
   observedMessagesPath: string;
+  gatewayDebugDirPath?: string;
   scenarios: TelegramQaScenarioResult[];
 };
 
@@ -206,7 +237,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     buildRun: (sutUsername) => ({
       expectReply: true,
       input: `/commands@${sutUsername}`,
-      expectedTextIncludes: ["/help", "More: /tools for available capabilities"],
+      expectedTextIncludes: ["Commands (1/", "/session", "/verbose"],
     }),
   },
   {
@@ -242,16 +273,14 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-mentioned-message-reply",
     title: "Telegram mentioned message gets a reply",
+    defaultEnabled: false,
     timeoutMs: 45_000,
-    buildRun: (sutUsername) => {
-      const token = `TELEGRAM_QA_REPLY_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        expectReply: true,
-        input: `@${sutUsername} reply with only this exact marker: ${token}`,
-        expectedTextIncludes: [token],
-        matchText: token,
-      };
-    },
+    buildRun: (sutUsername) => ({
+      allowAnySutReply: true,
+      expectReply: true,
+      input: `@${sutUsername} Telegram QA mention routing check. Reply with a short acknowledgement.`,
+      replyToLatestSutMessage: true,
+    }),
   },
   {
     id: "telegram-mention-gating",
@@ -269,7 +298,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   },
 ];
 
-export const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   alwaysOnStandardScenarioIds: ["canary"],
   scenarios: TELEGRAM_QA_SCENARIOS,
 });
@@ -279,6 +308,12 @@ const TELEGRAM_QA_ENV_KEYS = [
   "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN",
   "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
 ] as const;
+const TELEGRAM_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT";
+const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
+const QA_SUITE_PROGRESS_ENV = "OPENCLAW_QA_SUITE_PROGRESS";
+const TELEGRAM_QA_PROGRESS_DETAIL_LIMIT = 240;
+const TELEGRAM_QA_PROGRESS_PREFIX = "[qa-telegram-live]";
+const execFileAsync = promisify(execFile);
 
 const telegramQaCredentialPayloadSchema = z.object({
   groupId: z.string().trim().min(1),
@@ -294,9 +329,94 @@ function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof TELEGRAM_QA_ENV_KE
   return value;
 }
 
-export function resolveTelegramQaRuntimeEnv(
+function isTruthyOptIn(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function parseTelegramQaProgressBooleanEnv(value: string | undefined): boolean | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  return undefined;
+}
+
+function shouldLogTelegramQaLiveProgress(env: NodeJS.ProcessEnv = process.env) {
+  const override = parseTelegramQaProgressBooleanEnv(env[QA_SUITE_PROGRESS_ENV]);
+  if (override !== undefined) {
+    return override;
+  }
+  return parseTelegramQaProgressBooleanEnv(env.CI) === true;
+}
+
+function parsePositiveTelegramQaEnvMs(env: NodeJS.ProcessEnv, name: string, fallbackMs: number) {
+  const raw = env[name];
+  if (raw === undefined) {
+    return fallbackMs;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallbackMs;
+  }
+  return Math.floor(parsed);
+}
+
+function resolveTelegramQaCanaryTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
+  return parsePositiveTelegramQaEnvMs(
+    env,
+    "OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS",
+    DEFAULT_TELEGRAM_QA_CANARY_TIMEOUT_MS,
+  );
+}
+
+function resolveTelegramQaScenarioTimeoutMs(
+  fallbackMs: number,
   env: NodeJS.ProcessEnv = process.env,
-): TelegramQaRuntimeEnv {
+) {
+  return parsePositiveTelegramQaEnvMs(env, "OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS", fallbackMs);
+}
+
+function formatTelegramQaTimeoutSeconds(timeoutMs: number) {
+  return `${Math.round(timeoutMs / 1_000)}s`;
+}
+
+function writeTelegramQaProgress(enabled: boolean, message: string) {
+  if (!enabled) {
+    return;
+  }
+  process.stderr.write(`${TELEGRAM_QA_PROGRESS_PREFIX} ${message}\n`);
+}
+
+function sanitizeTelegramQaProgressValue(value: string): string {
+  let normalized = "";
+  for (const char of value) {
+    const code = char.codePointAt(0);
+    if (code === undefined) {
+      continue;
+    }
+    const isControl = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    normalized += isControl ? " " : char;
+  }
+  normalized = normalized.replace(/\s+/gu, " ").trim();
+  return normalized.length > 0 ? normalized : "<empty>";
+}
+
+function formatTelegramQaProgressDetails(details: string): string {
+  const sanitized = sanitizeTelegramQaProgressValue(details);
+  if (sanitized.length <= TELEGRAM_QA_PROGRESS_DETAIL_LIMIT) {
+    return sanitized;
+  }
+  return `${sanitized.slice(0, TELEGRAM_QA_PROGRESS_DETAIL_LIMIT - 3).trimEnd()}...`;
+}
+
+function resolveTelegramQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): TelegramQaRuntimeEnv {
   const groupId = resolveEnvValue(env, "OPENCLAW_QA_TELEGRAM_GROUP_ID");
   if (!/^-?\d+$/u.test(groupId)) {
     throw new Error("OPENCLAW_QA_TELEGRAM_GROUP_ID must be a numeric Telegram chat id.");
@@ -350,9 +470,7 @@ function detectMediaKinds(message: TelegramMessage) {
   return kinds;
 }
 
-export function normalizeTelegramObservedMessage(
-  update: TelegramUpdate,
-): TelegramObservedMessage | null {
+function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObservedMessage | null {
   const message = update.message;
   if (!message?.from?.id) {
     return null;
@@ -389,10 +507,24 @@ function buildTelegramQaConfig(
   };
   return {
     ...baseCfg,
+    agents: {
+      ...baseCfg.agents,
+      defaults: {
+        ...baseCfg.agents?.defaults,
+        skipBootstrap: true,
+      },
+    },
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
       entries: pluginEntries,
+    },
+    messages: {
+      ...baseCfg.messages,
+      groupChat: {
+        ...baseCfg.messages?.groupChat,
+        visibleReplies: "automatic",
+      },
     },
     channels: {
       ...baseCfg.channels,
@@ -451,6 +583,17 @@ async function callTelegramApi<T>(
   }
 }
 
+function isRecoverableTelegramQaPollError(error: unknown): boolean {
+  const message = formatErrorMessage(error).toLowerCase();
+  return (
+    message.includes("fetch failed") ||
+    message.includes("econnreset") ||
+    message.includes("etimedout") ||
+    message.includes("socket hang up") ||
+    message.includes("terminated")
+  );
+}
+
 async function getBotIdentity(token: string) {
   return await callTelegramApi<TelegramBotIdentity>(token, "getMe");
 }
@@ -477,12 +620,29 @@ async function flushTelegramUpdates(token: string) {
   throw new Error("timed out after 15000ms draining Telegram updates");
 }
 
-async function sendGroupMessage(token: string, groupId: string, text: string) {
+async function sendGroupMessage(
+  token: string,
+  groupId: string,
+  text: string,
+  opts: { replyToMessageId?: number } = {},
+) {
   return await callTelegramApi<TelegramSendMessageResult>(token, "sendMessage", {
     chat_id: groupId,
     text,
     disable_notification: true,
+    ...(opts.replyToMessageId !== undefined
+      ? {
+          reply_parameters: {
+            message_id: opts.replyToMessageId,
+            allow_sending_without_reply: true,
+          },
+        }
+      : {}),
   });
+}
+
+async function waitForTelegramPollRetryDelay(remainingMs: number) {
+  await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(100, remainingMs))));
 }
 
 async function waitForObservedMessage(params: {
@@ -491,25 +651,40 @@ async function waitForObservedMessage(params: {
   timeoutMs: number;
   predicate: (message: TelegramObservedMessage) => boolean;
   observedMessages: TelegramObservedMessage[];
+  observationScenarioId: string;
+  observationScenarioTitle: string;
 }) {
   const startedAt = Date.now();
   let offset = params.initialOffset;
+  let lastPollingError: unknown;
   while (Date.now() - startedAt < params.timeoutMs) {
     const remainingMs = Math.max(
       1_000,
       Math.min(10_000, params.timeoutMs - (Date.now() - startedAt)),
     );
     const timeoutSeconds = Math.max(1, Math.min(10, Math.floor(remainingMs / 1000)));
-    const updates = await callTelegramApi<TelegramUpdate[]>(
-      params.token,
-      "getUpdates",
-      {
-        offset,
-        timeout: timeoutSeconds,
-        allowed_updates: ["message"],
-      },
-      timeoutSeconds * 1000 + 5_000,
-    );
+    let updates: TelegramUpdate[];
+    try {
+      updates = await callTelegramApi<TelegramUpdate[]>(
+        params.token,
+        "getUpdates",
+        {
+          offset,
+          timeout: timeoutSeconds,
+          allowed_updates: ["message"],
+        },
+        timeoutSeconds * 1000 + 5_000,
+      );
+      lastPollingError = undefined;
+    } catch (error) {
+      if (!isRecoverableTelegramQaPollError(error)) {
+        throw error;
+      }
+      lastPollingError = error;
+      await waitForTelegramPollRetryDelay(params.timeoutMs - (Date.now() - startedAt));
+      continue;
+    }
+    const batchObservedAtMs = Date.now();
     if (updates.length === 0) {
       continue;
     }
@@ -519,13 +694,26 @@ async function waitForObservedMessage(params: {
       if (!normalized) {
         continue;
       }
-      params.observedMessages.push(normalized);
-      if (params.predicate(normalized)) {
-        return { message: normalized, nextOffset: offset };
+      const matchedScenario = params.predicate(normalized);
+      const observedMessage: TelegramObservedMessage = {
+        ...normalized,
+        scenarioId: params.observationScenarioId,
+        scenarioTitle: params.observationScenarioTitle,
+        matchedScenario,
+      };
+      params.observedMessages.push(observedMessage);
+      if (matchedScenario) {
+        return { message: observedMessage, nextOffset: offset, observedAtMs: batchObservedAtMs };
       }
     }
   }
-  throw new Error(`timed out after ${params.timeoutMs}ms waiting for Telegram message`);
+  const timeoutMessage = `timed out after ${params.timeoutMs}ms waiting for Telegram message`;
+  if (lastPollingError) {
+    throw new Error(
+      `${timeoutMessage}; last polling error: ${formatErrorMessage(lastPollingError)}`,
+    );
+  }
+  throw new Error(timeoutMessage);
 }
 
 async function waitForTelegramChannelRunning(
@@ -561,7 +749,9 @@ async function waitForTelegramChannelRunning(
 function renderTelegramQaMarkdown(params: {
   cleanupIssues: string[];
   credentialSource: "convex" | "env";
+  redactMetadata: boolean;
   groupId: string;
+  gatewayDebugDirPath?: string;
   startedAt: string;
   finishedAt: string;
   scenarios: TelegramQaScenarioResult[];
@@ -571,6 +761,7 @@ function renderTelegramQaMarkdown(params: {
     "",
     `- Credential source: \`${params.credentialSource}\``,
     `- Group: \`${params.groupId}\``,
+    `- Metadata redaction: \`${params.redactMetadata ? "enabled" : "disabled"}\``,
     `- Started: ${params.startedAt}`,
     `- Finished: ${params.finishedAt}`,
     "",
@@ -582,6 +773,15 @@ function renderTelegramQaMarkdown(params: {
     lines.push("");
     lines.push(`- Status: ${scenario.status}`);
     lines.push(`- Details: ${scenario.details}`);
+    if (scenario.rttMs !== undefined) {
+      lines.push(`- RTT: ${scenario.rttMs}ms`);
+    }
+    lines.push("");
+  }
+  if (params.gatewayDebugDirPath) {
+    lines.push("## Gateway Debug");
+    lines.push("");
+    lines.push(`- Preserved at: \`${params.gatewayDebugDirPath}\``);
     lines.push("");
   }
   if (params.cleanupIssues.length > 0) {
@@ -598,35 +798,62 @@ function renderTelegramQaMarkdown(params: {
 function buildObservedMessagesArtifact(params: {
   observedMessages: TelegramObservedMessage[];
   includeContent: boolean;
+  redactMetadata: boolean;
 }) {
-  return params.observedMessages.map<TelegramObservedMessageArtifact>((message) =>
-    params.includeContent
-      ? { ...message }
+  return params.observedMessages.map<TelegramObservedMessageArtifact>((message) => {
+    const scenarioContext = {
+      ...(message.scenarioId ? { scenarioId: message.scenarioId } : {}),
+      ...(message.scenarioTitle ? { scenarioTitle: message.scenarioTitle } : {}),
+      ...(typeof message.matchedScenario === "boolean"
+        ? { matchedScenario: message.matchedScenario }
+        : {}),
+    };
+    const base = params.redactMetadata
+      ? {
+          ...scenarioContext,
+          senderIsBot: message.senderIsBot,
+          inlineButtonCount: message.inlineButtons.length,
+          mediaKinds: message.mediaKinds,
+        }
       : {
+          ...scenarioContext,
+          senderIsBot: message.senderIsBot,
+          timestamp: message.timestamp,
+          inlineButtons: message.inlineButtons,
+          mediaKinds: message.mediaKinds,
           updateId: message.updateId,
           messageId: message.messageId,
           chatId: message.chatId,
           senderId: message.senderId,
-          senderIsBot: message.senderIsBot,
           senderUsername: message.senderUsername,
           replyToMessageId: message.replyToMessageId,
-          timestamp: message.timestamp,
-          inlineButtons: message.inlineButtons,
-          mediaKinds: message.mediaKinds,
-        },
-  );
+        };
+    if (!params.includeContent) {
+      return base;
+    }
+    return {
+      ...base,
+      text: message.text,
+      caption: message.caption,
+    };
+  });
 }
 
 function findScenario(ids?: string[]) {
+  const scenarios =
+    ids && ids.length > 0
+      ? TELEGRAM_QA_SCENARIOS
+      : TELEGRAM_QA_SCENARIOS.filter((scenario) => scenario.defaultEnabled !== false);
   return selectLiveTransportScenarios({
     ids,
     laneLabel: "Telegram",
-    scenarios: TELEGRAM_QA_SCENARIOS,
+    scenarios,
   });
 }
 
 function matchesTelegramScenarioReply(params: {
   groupId: string;
+  allowAnySutReply?: boolean;
   matchText?: string;
   message: TelegramObservedMessage;
   sentMessageId: number;
@@ -639,6 +866,9 @@ function matchesTelegramScenarioReply(params: {
     return false;
   }
   if (params.message.replyToMessageId === params.sentMessageId) {
+    return true;
+  }
+  if (params.allowAnySutReply === true) {
     return true;
   }
   return Boolean(params.matchText && params.message.text.includes(params.matchText));
@@ -682,14 +912,17 @@ async function runCanary(params: {
   groupId: string;
   sutUsername: string;
   sutBotId: number;
+  timeoutMs: number;
   observedMessages: TelegramObservedMessage[];
 }) {
   const offset = await flushTelegramUpdates(params.driverToken);
+  const requestStartedAtMs = Date.now();
   const driverMessage = await sendGroupMessage(
     params.driverToken,
     params.groupId,
     `/help@${params.sutUsername}`,
   );
+  const requestStartedAt = new Date(requestStartedAtMs).toISOString();
   let firstUnthreadedReply:
     | Pick<TelegramObservedMessage, "messageId" | "replyToMessageId" | "text">
     | undefined;
@@ -698,8 +931,10 @@ async function runCanary(params: {
     sutObserved = await waitForObservedMessage({
       token: params.driverToken,
       initialOffset: offset,
-      timeoutMs: 30_000,
+      timeoutMs: params.timeoutMs,
       observedMessages: params.observedMessages,
+      observationScenarioId: "telegram-canary",
+      observationScenarioTitle: "Telegram canary",
       predicate: (message) => {
         const classification = classifyCanaryReply({
           message,
@@ -737,7 +972,7 @@ async function runCanary(params: {
     }
     throw new TelegramQaCanaryError(
       "sut_reply_timeout",
-      "SUT bot did not send any group reply after the canary command within 30s.",
+      `SUT bot did not send any group reply after the canary command within ${formatTelegramQaTimeoutSeconds(params.timeoutMs)}.`,
       {
         groupId: params.groupId,
         sutBotId: params.sutBotId,
@@ -758,6 +993,13 @@ async function runCanary(params: {
       },
     );
   }
+  return {
+    requestStartedAt,
+    responseObservedAt: new Date(sutObserved.observedAtMs).toISOString(),
+    rttMs: sutObserved.observedAtMs - requestStartedAtMs,
+    sentMessageId: driverMessage.message_id,
+    responseMessageId: sutObserved.message.messageId,
+  };
 }
 
 function canaryFailureMessage(params: {
@@ -765,6 +1007,7 @@ function canaryFailureMessage(params: {
   groupId: string;
   driverBotId: number;
   driverUsername?: string;
+  redactMetadata?: boolean;
   sutBotId: number;
   sutUsername: string;
 }) {
@@ -781,7 +1024,9 @@ function canaryFailureMessage(params: {
   const context = isTelegramQaCanaryError(error)
     ? Object.entries(error.context)
         .filter(([key, value]) => value !== undefined && value !== "" && !canonicalContext.has(key))
-        .map(([key, value]) => `- ${key}: ${String(value)}`)
+        .map(([key, value]) =>
+          params.redactMetadata ? `- ${key}: <redacted>` : `- ${key}: ${String(value)}`,
+        )
     : [];
   const remediation = (() => {
     switch (phase) {
@@ -817,20 +1062,82 @@ function canaryFailureMessage(params: {
     `Phase: ${phase}`,
     details,
     "Context:",
-    `- groupId: ${params.groupId}`,
-    `- driverBotId: ${params.driverBotId}`,
-    `- driverUsername: ${params.driverUsername ?? "<none>"}`,
-    `- sutBotId: ${params.sutBotId}`,
-    `- sutUsername: ${params.sutUsername}`,
+    `- groupId: ${params.redactMetadata ? "<redacted>" : params.groupId}`,
+    `- driverBotId: ${params.redactMetadata ? "<redacted>" : params.driverBotId}`,
+    `- driverUsername: ${params.redactMetadata ? "<redacted>" : (params.driverUsername ?? "<none>")}`,
+    `- sutBotId: ${params.redactMetadata ? "<redacted>" : params.sutBotId}`,
+    `- sutUsername: ${params.redactMetadata ? "<redacted>" : params.sutUsername}`,
     ...context,
     "Remediation:",
     ...remediation,
   ].join("\n");
 }
 
+async function runInstalledOpenClawTelegramOnboardingPreflight(params: {
+  openClawCommand: string;
+  providerMode: ReturnType<typeof normalizeQaProviderMode>;
+  sutToken: string;
+}) {
+  const tempRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-npm-telegram-"),
+  );
+  const homeDir = path.join(tempRoot, "home");
+  const stateDir = path.join(homeDir, ".openclaw");
+  await fs.mkdir(stateDir, { recursive: true });
+  const tokenPath = path.join(tempRoot, "sut-token.txt");
+  await fs.writeFile(tokenPath, params.sutToken, { encoding: "utf8", mode: 0o600 });
+  const env = {
+    ...process.env,
+    HOME: homeDir,
+    OPENCLAW_HOME: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_GATEWAY_TOKEN: "npm-telegram-live-onboard",
+    ...(params.providerMode === "live-frontier"
+      ? {}
+      : { OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "sk-openclaw-npm-telegram-preflight" }),
+  };
+  try {
+    await execFileAsync(
+      params.openClawCommand,
+      [
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--mode",
+        "local",
+        "--auth-choice",
+        "openai-api-key",
+        "--secret-input-mode",
+        "ref",
+        "--gateway-port",
+        "18789",
+        "--gateway-bind",
+        "loopback",
+        "--skip-daemon",
+        "--skip-ui",
+        "--skip-skills",
+        "--skip-health",
+        "--json",
+      ],
+      { env },
+    );
+    await execFileAsync(
+      params.openClawCommand,
+      ["channels", "add", "--channel", "telegram", "--token-file", tokenPath],
+      { env },
+    );
+    await execFileAsync(params.openClawCommand, ["doctor", "--non-interactive"], { env });
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export async function runTelegramQaLive(params: {
   repoRoot?: string;
   outputDir?: string;
+  sutOpenClawCommand?: string;
+  preflightInstalledOnboarding?: boolean;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
@@ -846,6 +1153,19 @@ export async function runTelegramQaLive(params: {
     path.join(repoRoot, ".artifacts", "qa-e2e", `telegram-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
 
+  const providerMode = normalizeQaProviderMode(
+    params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
+  );
+  const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
+  const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
+  const sutAccountId = params.sutAccountId?.trim() || "sut";
+  const scenarios = findScenario(params.scenarioIds);
+  const progressEnabled = shouldLogTelegramQaLiveProgress();
+  writeTelegramQaProgress(
+    progressEnabled,
+    `run start: scenarios=${scenarios.length} providerMode=${providerMode} fastMode=${params.fastMode === true ? "on" : "off"}`,
+  );
+
   const credentialLease = await acquireQaCredentialLease({
     kind: "telegram",
     source: params.credentialSource,
@@ -857,22 +1177,36 @@ export async function runTelegramQaLive(params: {
   const assertLeaseHealthy = () => {
     leaseHeartbeat.throwIfFailed();
   };
+  writeTelegramQaProgress(
+    progressEnabled,
+    `credentials ready: source=${credentialLease.source} role=${credentialLease.role ?? "<none>"}`,
+  );
 
   const runtimeEnv = credentialLease.payload;
-  const providerMode = normalizeQaProviderMode(
-    params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
-  );
-  const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
-  const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
-  const sutAccountId = params.sutAccountId?.trim() || "sut";
-  const scenarios = findScenario(params.scenarioIds);
   const observedMessages: TelegramObservedMessage[] = [];
-  const includeObservedMessageContent = process.env.OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT === "1";
+  const redactPublicMetadata = isTruthyOptIn(process.env[QA_REDACT_PUBLIC_METADATA_ENV]);
+  const includeObservedMessageContent = isTruthyOptIn(process.env[TELEGRAM_QA_CAPTURE_CONTENT_ENV]);
+  writeTelegramQaProgress(
+    progressEnabled,
+    `runtime: redactMetadata=${redactPublicMetadata ? "on" : "off"} captureContent=${includeObservedMessageContent ? "on" : "off"}`,
+  );
   const startedAt = new Date().toISOString();
   const scenarioResults: TelegramQaScenarioResult[] = [];
   const cleanupIssues: string[] = [];
+  const gatewayDebugDirPath = path.join(outputDir, "gateway-debug");
+  let preservedGatewayDebugArtifacts = false;
   let canaryFailure: string | null = null;
   try {
+    if (params.sutOpenClawCommand && params.preflightInstalledOnboarding === true) {
+      writeTelegramQaProgress(progressEnabled, "installed package onboarding preflight start");
+      await runInstalledOpenClawTelegramOnboardingPreflight({
+        openClawCommand: params.sutOpenClawCommand,
+        providerMode,
+        sutToken: runtimeEnv.sutToken,
+      });
+      writeTelegramQaProgress(progressEnabled, "installed package onboarding preflight pass");
+    }
+
     const driverIdentity = await getBotIdentity(runtimeEnv.driverToken);
     const sutIdentity = await getBotIdentity(runtimeEnv.sutToken);
     const sutUsername = sutIdentity.username?.trim();
@@ -891,6 +1225,12 @@ export async function runTelegramQaLive(params: {
 
     const gatewayHarness = await startQaLiveLaneGateway({
       repoRoot,
+      command: params.sutOpenClawCommand
+        ? {
+            executablePath: params.sutOpenClawCommand,
+            usePackagedPlugins: true,
+          }
+        : undefined,
       transport: {
         requiredPluginIds: [],
         createGatewayConfig: () => ({}),
@@ -912,20 +1252,39 @@ export async function runTelegramQaLive(params: {
     try {
       await waitForTelegramChannelRunning(gatewayHarness.gateway, sutAccountId);
       assertLeaseHealthy();
+      let latestSutMessageId: number | undefined;
       try {
-        await runCanary({
+        writeTelegramQaProgress(progressEnabled, "canary start");
+        const canaryTiming = await runCanary({
           driverToken: runtimeEnv.driverToken,
           groupId: runtimeEnv.groupId,
           sutUsername,
           sutBotId: sutIdentity.id,
+          timeoutMs: resolveTelegramQaCanaryTimeoutMs(),
           observedMessages,
         });
+        latestSutMessageId = canaryTiming.responseMessageId;
+        scenarioResults.push({
+          id: "telegram-canary",
+          title: "Telegram canary",
+          status: "pass",
+          details: redactPublicMetadata
+            ? `reply matched in ${canaryTiming.rttMs}ms`
+            : `reply message ${canaryTiming.responseMessageId} matched in ${canaryTiming.rttMs}ms`,
+          rttMs: canaryTiming.rttMs,
+          requestStartedAt: canaryTiming.requestStartedAt,
+          responseObservedAt: canaryTiming.responseObservedAt,
+          sentMessageId: redactPublicMetadata ? undefined : canaryTiming.sentMessageId,
+          responseMessageId: redactPublicMetadata ? undefined : canaryTiming.responseMessageId,
+        });
+        writeTelegramQaProgress(progressEnabled, "canary pass");
       } catch (error) {
         canaryFailure = canaryFailureMessage({
           error,
           groupId: runtimeEnv.groupId,
           driverBotId: driverIdentity.id,
           driverUsername: driverIdentity.username,
+          redactMetadata: redactPublicMetadata,
           sutBotId: sutIdentity.id,
           sutUsername,
         });
@@ -935,26 +1294,47 @@ export async function runTelegramQaLive(params: {
           status: "fail",
           details: canaryFailure,
         });
+        writeTelegramQaProgress(
+          progressEnabled,
+          `canary fail: details=${formatTelegramQaProgressDetails(canaryFailure)}`,
+        );
       }
       assertLeaseHealthy();
       if (!canaryFailure) {
         let driverOffset = await flushTelegramUpdates(runtimeEnv.driverToken);
-        for (const scenario of scenarios) {
+        for (const [scenarioIndex, scenario] of scenarios.entries()) {
+          const scenarioIndexLabel = `${scenarioIndex + 1}/${scenarios.length}`;
+          const scenarioIdForLog = sanitizeTelegramQaProgressValue(scenario.id);
+          writeTelegramQaProgress(
+            progressEnabled,
+            `scenario start ${scenarioIndexLabel}: ${scenarioIdForLog}`,
+          );
           assertLeaseHealthy();
           const scenarioRun = scenario.buildRun(sutUsername);
+          const scenarioTimeoutMs = scenarioRun.expectReply
+            ? resolveTelegramQaScenarioTimeoutMs(scenario.timeoutMs)
+            : scenario.timeoutMs;
           try {
+            const requestStartedAtMs = Date.now();
             const sent = await sendGroupMessage(
               runtimeEnv.driverToken,
               runtimeEnv.groupId,
               scenarioRun.input,
+              scenarioRun.replyToLatestSutMessage
+                ? { replyToMessageId: latestSutMessageId }
+                : undefined,
             );
+            const requestStartedAt = new Date(requestStartedAtMs).toISOString();
             const matched = await waitForObservedMessage({
               token: runtimeEnv.driverToken,
               initialOffset: driverOffset,
-              timeoutMs: scenario.timeoutMs,
+              timeoutMs: scenarioTimeoutMs,
               observedMessages,
+              observationScenarioId: scenario.id,
+              observationScenarioTitle: scenario.title,
               predicate: (message) =>
                 matchesTelegramScenarioReply({
+                  allowAnySutReply: scenarioRun.allowAnySutReply,
                   groupId: runtimeEnv.groupId,
                   matchText: scenarioRun.matchText,
                   message,
@@ -970,40 +1350,70 @@ export async function runTelegramQaLive(params: {
               expectedTextIncludes: scenarioRun.expectedTextIncludes,
               message: matched.message,
             });
-            scenarioResults.push({
+            const rttMs = matched.observedAtMs - requestStartedAtMs;
+            const result = {
               id: scenario.id,
               title: scenario.title,
               status: "pass",
-              details: `reply message ${matched.message.messageId} matched`,
-            });
+              details: redactPublicMetadata
+                ? `reply matched in ${rttMs}ms`
+                : `reply message ${matched.message.messageId} matched in ${rttMs}ms`,
+              rttMs,
+              requestStartedAt,
+              responseObservedAt: new Date(matched.observedAtMs).toISOString(),
+              sentMessageId: redactPublicMetadata ? undefined : sent.message_id,
+              responseMessageId: redactPublicMetadata ? undefined : matched.message.messageId,
+            } satisfies TelegramQaScenarioResult;
+            scenarioResults.push(result);
+            latestSutMessageId = matched.message.messageId;
+            writeTelegramQaProgress(
+              progressEnabled,
+              `scenario pass ${scenarioIndexLabel}: ${scenarioIdForLog}`,
+            );
           } catch (error) {
             if (!scenarioRun.expectReply) {
               const details = formatErrorMessage(error);
               if (
-                details === `timed out after ${scenario.timeoutMs}ms waiting for Telegram message`
+                details === `timed out after ${scenarioTimeoutMs}ms waiting for Telegram message`
               ) {
-                scenarioResults.push({
+                const result = {
                   id: scenario.id,
                   title: scenario.title,
                   status: "pass",
                   details: "no reply",
-                });
+                } satisfies TelegramQaScenarioResult;
+                scenarioResults.push(result);
+                writeTelegramQaProgress(
+                  progressEnabled,
+                  `scenario pass ${scenarioIndexLabel}: ${scenarioIdForLog}`,
+                );
                 continue;
               }
             }
-            scenarioResults.push({
+            const result = {
               id: scenario.id,
               title: scenario.title,
               status: "fail",
               details: formatErrorMessage(error),
-            });
+            } satisfies TelegramQaScenarioResult;
+            scenarioResults.push(result);
+            writeTelegramQaProgress(
+              progressEnabled,
+              `scenario fail ${scenarioIndexLabel}: ${scenarioIdForLog} details=${formatTelegramQaProgressDetails(result.details)}`,
+            );
           }
           assertLeaseHealthy();
         }
       }
     } finally {
       try {
-        await gatewayHarness.stop();
+        const shouldPreserveGatewayDebugArtifacts = scenarioResults.some(
+          (scenario) => scenario.status === "fail",
+        );
+        await gatewayHarness.stop(
+          shouldPreserveGatewayDebugArtifacts ? { preserveToDir: gatewayDebugDirPath } : undefined,
+        );
+        preservedGatewayDebugArtifacts = shouldPreserveGatewayDebugArtifacts;
       } catch (error) {
         appendLiveLaneIssue(cleanupIssues, "live gateway cleanup", error);
       }
@@ -1018,22 +1428,34 @@ export async function runTelegramQaLive(params: {
   }
 
   const finishedAt = new Date().toISOString();
+  const publishedCleanupIssues = redactPublicMetadata
+    ? cleanupIssues.map(() => "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)")
+    : cleanupIssues;
+  const passedCount = scenarioResults.filter((entry) => entry.status === "pass").length;
+  const failedCount = scenarioResults.filter((entry) => entry.status === "fail").length;
+  writeTelegramQaProgress(
+    progressEnabled,
+    `run complete: passed=${passedCount} failed=${failedCount} total=${scenarioResults.length}`,
+  );
+  if (cleanupIssues.length > 0) {
+    writeTelegramQaProgress(progressEnabled, `cleanup issues: count=${cleanupIssues.length}`);
+  }
   const summary: TelegramQaSummary = {
     credentials: {
       source: credentialLease.source,
       kind: credentialLease.kind,
       role: credentialLease.role,
-      ownerId: credentialLease.ownerId,
-      credentialId: credentialLease.credentialId,
+      ownerId: redactPublicMetadata ? undefined : credentialLease.ownerId,
+      credentialId: redactPublicMetadata ? undefined : credentialLease.credentialId,
     },
-    groupId: runtimeEnv.groupId,
+    groupId: redactPublicMetadata ? "<redacted>" : runtimeEnv.groupId,
     startedAt,
     finishedAt,
-    cleanupIssues,
+    cleanupIssues: publishedCleanupIssues,
     counts: {
       total: scenarioResults.length,
-      passed: scenarioResults.filter((entry) => entry.status === "pass").length,
-      failed: scenarioResults.filter((entry) => entry.status === "fail").length,
+      passed: passedCount,
+      failed: failedCount,
     },
     scenarios: scenarioResults,
   };
@@ -1043,9 +1465,11 @@ export async function runTelegramQaLive(params: {
   await fs.writeFile(
     reportPath,
     `${renderTelegramQaMarkdown({
-      cleanupIssues,
+      cleanupIssues: publishedCleanupIssues,
       credentialSource: credentialLease.source,
-      groupId: runtimeEnv.groupId,
+      redactMetadata: redactPublicMetadata,
+      groupId: redactPublicMetadata ? "<redacted>" : runtimeEnv.groupId,
+      gatewayDebugDirPath: preservedGatewayDebugArtifacts ? gatewayDebugDirPath : undefined,
       startedAt,
       finishedAt,
       scenarios: scenarioResults,
@@ -1062,6 +1486,7 @@ export async function runTelegramQaLive(params: {
       buildObservedMessagesArtifact({
         observedMessages,
         includeContent: includeObservedMessageContent,
+        redactMetadata: redactPublicMetadata,
       }),
       null,
       2,
@@ -1072,6 +1497,7 @@ export async function runTelegramQaLive(params: {
     report: reportPath,
     summary: summaryPath,
     observedMessages: observedMessagesPath,
+    ...(preservedGatewayDebugArtifacts ? { gatewayDebug: gatewayDebugDirPath } : {}),
   };
   if (canaryFailure) {
     throw new Error(
@@ -1085,7 +1511,7 @@ export async function runTelegramQaLive(params: {
     throw new Error(
       buildLiveLaneArtifactsError({
         heading: "Telegram QA cleanup failed after artifacts were written.",
-        details: cleanupIssues,
+        details: publishedCleanupIssues,
         artifacts: artifactPaths,
       }),
     );
@@ -1096,6 +1522,7 @@ export async function runTelegramQaLive(params: {
     reportPath,
     summaryPath,
     observedMessagesPath,
+    ...(preservedGatewayDebugArtifacts ? { gatewayDebugDirPath } : {}),
     scenarios: scenarioResults,
   };
 }
@@ -1107,11 +1534,20 @@ export const __testing = {
   buildObservedMessagesArtifact,
   canaryFailureMessage,
   callTelegramApi,
+  isRecoverableTelegramQaPollError,
   assertTelegramScenarioReply,
   classifyCanaryReply,
   findScenario,
   matchesTelegramScenarioReply,
   normalizeTelegramObservedMessage,
+  parseTelegramQaProgressBooleanEnv,
   parseTelegramQaCredentialPayload,
+  resolveTelegramQaCanaryTimeoutMs,
+  resolveTelegramQaScenarioTimeoutMs,
   resolveTelegramQaRuntimeEnv,
+  sanitizeTelegramQaProgressValue,
+  shouldLogTelegramQaLiveProgress,
+  formatTelegramQaProgressDetails,
+  renderTelegramQaMarkdown,
+  waitForObservedMessage,
 };

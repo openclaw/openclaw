@@ -1,22 +1,23 @@
 import { ChannelType } from "discord-api-types/v10";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   clearPluginCommands,
   executePluginCommand,
   matchPluginCommand,
   registerPluginCommand,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTestRegistry,
   setActivePluginRegistry,
-} from "../../../../test/helpers/plugins/plugin-registry.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import {
-  createMockCommandInteraction,
+  createMockCommandInteraction as createInteraction,
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
@@ -30,31 +31,11 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   resolveDirectStatusReplyForSession: vi.fn(),
 }));
 
-function createInteraction(params?: {
-  channelType?: ChannelType;
-  channelId?: string;
-  threadParentId?: string | null;
-  guildId?: string;
-  guildName?: string;
-}): MockCommandInteraction {
-  return createMockCommandInteraction({
-    userId: "owner",
-    username: "tester",
-    globalName: "Tester",
-    channelType: params?.channelType ?? ChannelType.DM,
-    channelId: params?.channelId ?? "dm-1",
-    threadParentId: params?.threadParentId,
-    guildId: params?.guildId ?? null,
-    guildName: params?.guildName,
-    interactionId: "interaction-1",
-  });
-}
-
 function createConfig(): OpenClawConfig {
   return {
     channels: {
       discord: {
-        dm: { enabled: true, policy: "open" },
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
       },
     },
   } as OpenClawConfig;
@@ -99,7 +80,7 @@ function createConfiguredAcpCase(params: {
           ? {
               channels: {
                 discord: {
-                  dm: { enabled: true, policy: "open" },
+                  dm: { enabled: true, policy: "open", allowFrom: ["*"] },
                 },
               },
             }
@@ -548,6 +529,88 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it("returns an explicit warning instead of success when dispatch produces zero visible replies", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: { final: 0, block: 0, tool: 0 },
+      queuedFinal: false,
+    } as never);
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "⚠️ Command produced no visible reply.",
+        ephemeral: true,
+      }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when dispatch reports a queued final without visible counts", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: { final: 0, block: 0, tool: 0 },
+      queuedFinal: true,
+    } as never);
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: "⚠️ Command produced no visible reply." }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("returns an explicit warning when a direct plugin command has no visible reply", async () => {
+    const cfg = createConfig();
+    const commandSpec: NativeCommandSpec = {
+      name: "cron_jobs",
+      description: "List cron jobs",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction();
+    const pluginMatch = {
+      command: {
+        name: "cron_jobs",
+        description: "List cron jobs",
+        pluginId: "cron-jobs",
+        acceptsArgs: false,
+        handler: vi.fn().mockResolvedValue({ text: "" }),
+      },
+      args: undefined,
+    };
+
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
+    runtimeModuleMocks.executePluginCommand.mockResolvedValue({});
+    const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
+      {} as never,
+    );
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "⚠️ Command produced no visible reply." }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
   it("forwards Discord thread metadata into direct plugin command execution", async () => {
     const cfg = {
       commands: {
@@ -562,10 +625,12 @@ describe("Discord native plugin command dispatch", () => {
                 "thread-123": {
                   enabled: true,
                   requireMention: false,
+                  users: ["user:owner"],
                 },
                 "parent-456": {
                   enabled: true,
                   requireMention: false,
+                  users: ["user:owner"],
                 },
               },
             },
@@ -612,6 +677,89 @@ describe("Discord native plugin command dispatch", () => {
         sessionKey: "agent:main:discord:channel:thread-123",
         messageThreadId: "thread-123",
         threadParentId: "parent-456",
+      }),
+    );
+  });
+
+  it("preserves fetched thread parent metadata when interaction parentId getter throws", async () => {
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "345678901234567890": {
+              channels: {
+                "partial-thread-123": {
+                  enabled: true,
+                  requireMention: false,
+                  users: ["user:owner"],
+                },
+                "partial-parent-456": {
+                  enabled: true,
+                  requireMention: false,
+                  users: ["user:owner"],
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "cron_jobs",
+      description: "List cron jobs",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction({
+      channelType: ChannelType.PublicThread,
+      channelId: "partial-thread-123",
+      guildId: "345678901234567890",
+      guildName: "Test Guild",
+    });
+    defineThrowingDiscordChannelGetter(interaction.channel, "parentId");
+    (interaction.client as { fetchChannel: ReturnType<typeof vi.fn> }).fetchChannel = vi.fn(
+      async (channelId: string) => {
+        if (channelId === "partial-thread-123") {
+          return {
+            id: "partial-thread-123",
+            type: ChannelType.PublicThread,
+            parentId: "partial-parent-456",
+          };
+        }
+        if (channelId === "partial-parent-456") {
+          return { id: "partial-parent-456", type: ChannelType.GuildText, name: "Parent" };
+        }
+        return null;
+      },
+    );
+    const pluginMatch = {
+      command: {
+        name: "cron_jobs",
+        description: "List cron jobs",
+        pluginId: "cron-jobs",
+        acceptsArgs: false,
+        handler: vi.fn().mockResolvedValue({ text: "jobs" }),
+      },
+      args: undefined,
+    };
+
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
+    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      text: "direct plugin output",
+    });
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        from: "discord:channel:partial-thread-123",
+        messageThreadId: "partial-thread-123",
+        threadParentId: "partial-parent-456",
       }),
     );
   });

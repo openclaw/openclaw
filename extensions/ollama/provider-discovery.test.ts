@@ -1,8 +1,9 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { type OpenClawConfig, withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ollamaProviderDiscovery } from "./provider-discovery.js";
 
@@ -92,6 +93,18 @@ describe("Ollama provider", () => {
     json: async () => ({}),
   });
 
+  const stubTagsFetch = (names: string[] = []) => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/api/tags")) {
+        return tagsResponse(names);
+      }
+      return notFoundJsonResponse();
+    });
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    return fetchMock;
+  };
+
   it("should not include ollama when no API key is configured", async () => {
     const provider = await runOllamaCatalog({
       env: { OLLAMA_API_KEY: undefined },
@@ -101,20 +114,13 @@ describe("Ollama provider", () => {
   });
 
   it("should use native ollama api type", async () => {
-    const fetchMock = vi.fn(async (input: unknown) => {
-      const url = String(input);
-      if (url.endsWith("/api/tags")) {
-        return tagsResponse([]);
-      }
-      return notFoundJsonResponse();
-    });
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    const fetchMock = stubTagsFetch();
 
     await withOllamaApiKey(async () => {
       const provider = await runOllamaCatalog({});
 
       expect(provider).toBeDefined();
-      expect(provider?.apiKey).toBe("OLLAMA_API_KEY");
+      expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
       expect(provider?.api).toBe("ollama");
       expect(provider?.baseUrl).toBe("http://127.0.0.1:11434");
       expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 0 });
@@ -122,14 +128,7 @@ describe("Ollama provider", () => {
   });
 
   it("should preserve explicit ollama baseUrl on implicit provider injection", async () => {
-    const fetchMock = vi.fn(async (input: unknown) => {
-      const url = String(input);
-      if (url.endsWith("/api/tags")) {
-        return tagsResponse([]);
-      }
-      return notFoundJsonResponse();
-    });
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    const fetchMock = stubTagsFetch();
 
     await withOllamaApiKey(async () => {
       const provider = await runOllamaCatalog({
@@ -212,7 +211,7 @@ describe("Ollama provider", () => {
       vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
       const provider = await runOllamaCatalog({
-        env: { VITEST: "", NODE_ENV: "development" },
+        env: { OLLAMA_API_KEY: OLLAMA_LOCAL_AUTH_MARKER, VITEST: "", NODE_ENV: "development" },
       });
 
       expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
@@ -426,6 +425,43 @@ describe("Ollama provider", () => {
       expect(provider?.baseUrl).toBe("http://remote-ollama:11434");
       expect(provider?.api).toBe("ollama");
       expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+      expect(provider?.models).toHaveLength(1);
+    });
+  });
+
+  it("should not use synthetic local auth for configured cloud providers without apiKey", async () => {
+    await withoutAmbientOllamaEnv(async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+
+      const provider = await runOllamaCatalog({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.com/v1",
+                models: [
+                  {
+                    id: "gpt-oss:20b",
+                    name: "GPT-OSS 20B",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 81920,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        env: { VITEST: "", NODE_ENV: "development" },
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(provider?.baseUrl).toBe("https://ollama.com");
+      expect(provider?.api).toBe("ollama");
+      expect(provider?.apiKey).toBeUndefined();
       expect(provider?.models).toHaveLength(1);
     });
   });

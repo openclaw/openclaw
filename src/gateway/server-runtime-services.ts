@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
+import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
 
 type GatewayRuntimeServiceLogger = {
   child: (name: string) => {
@@ -68,6 +69,57 @@ function recoverPendingOutboundDeliveries(params: {
   })().catch((err) => params.log.error(`Delivery recovery failed: ${String(err)}`));
 }
 
+function recoverPendingSessionDeliveries(params: {
+  deps: import("../cli/deps.types.js").CliDeps;
+  log: GatewayRuntimeServiceLogger;
+  maxEnqueuedAt: number;
+}): void {
+  const timer = setTimeout(() => {
+    void (async () => {
+      const { recoverPendingRestartContinuationDeliveries } =
+        await import("./server-restart-sentinel.js");
+      const logRecovery = params.log.child("session-delivery-recovery");
+      await recoverPendingRestartContinuationDeliveries({
+        deps: params.deps,
+        log: logRecovery,
+        maxEnqueuedAt: params.maxEnqueuedAt,
+      });
+    })().catch((err) => params.log.error(`Session delivery recovery failed: ${String(err)}`));
+  }, 1_250);
+  timer.unref?.();
+}
+
+function startGatewayModelPricingRefreshOnDemand(params: {
+  config: OpenClawConfig;
+  pluginLookUpTable?: PluginMetadataRegistryView;
+  log: GatewayRuntimeServiceLogger;
+}): () => void {
+  if (!isGatewayModelPricingEnabled(params.config)) {
+    return () => {};
+  }
+  let stopped = false;
+  let stopRefresh: (() => void) | undefined;
+  void (async () => {
+    const { startGatewayModelPricingRefresh } = await import("./model-pricing-cache.js");
+    if (stopped) {
+      return;
+    }
+    stopRefresh = startGatewayModelPricingRefresh({
+      config: params.config,
+      ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+    });
+    if (stopped) {
+      stopRefresh();
+      stopRefresh = undefined;
+    }
+  })().catch((err) => params.log.error(`Model pricing refresh failed to start: ${String(err)}`));
+  return () => {
+    stopped = true;
+    stopRefresh?.();
+    stopRefresh = undefined;
+  };
+}
+
 export function startGatewayRuntimeServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
@@ -78,7 +130,6 @@ export function startGatewayRuntimeServices(params: {
   channelHealthMonitor: ChannelHealthMonitor | null;
   stopModelPricingRefresh: () => void;
 } {
-  // Keep scheduled work inert until post-attach sidecars finish.
   const channelHealthMonitor = startGatewayChannelHealthMonitor({
     cfg: params.cfgAtStart,
     channelManager: params.channelManager,
@@ -87,26 +138,22 @@ export function startGatewayRuntimeServices(params: {
   return {
     heartbeatRunner: createNoopHeartbeatRunner(),
     channelHealthMonitor,
-    stopModelPricingRefresh:
-      !params.minimalTestGateway && !isVitestRuntimeEnv()
-        ? startGatewayModelPricingRefresh({ config: params.cfgAtStart })
-        : () => {},
+    stopModelPricingRefresh: () => {},
   };
 }
 
-/**
- * Activate cron scheduler, heartbeat runner, and pending delivery recovery
- * after gateway sidecars are fully started and chat.history is available.
- */
 export function activateGatewayScheduledServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
+  deps: import("../cli/deps.types.js").CliDeps;
+  sessionDeliveryRecoveryMaxEnqueuedAt: number;
   cron: { start: () => Promise<void> };
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
-}): { heartbeatRunner: HeartbeatRunner } {
+  pluginLookUpTable?: PluginMetadataRegistryView;
+}): { heartbeatRunner: HeartbeatRunner; stopModelPricingRefresh: () => void } {
   if (params.minimalTestGateway) {
-    return { heartbeatRunner: createNoopHeartbeatRunner() };
+    return { heartbeatRunner: createNoopHeartbeatRunner(), stopModelPricingRefresh: () => {} };
   }
   const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });
   startGatewayCronWithLogging({
@@ -117,5 +164,17 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
-  return { heartbeatRunner };
+  recoverPendingSessionDeliveries({
+    deps: params.deps,
+    log: params.log,
+    maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
+  });
+  const stopModelPricingRefresh = !isVitestRuntimeEnv()
+    ? startGatewayModelPricingRefreshOnDemand({
+        config: params.cfgAtStart,
+        ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+        log: params.log,
+      })
+    : () => {};
+  return { heartbeatRunner, stopModelPricingRefresh };
 }

@@ -7,21 +7,22 @@ type OpenAICompletionsCompatDefaultsInput = {
   endpointClass: ProviderEndpointClass;
   knownProviderFamily: string;
   supportsNativeStreamingUsageCompat?: boolean;
+  supportsOpenAICompletionsStreamingUsageCompat?: boolean;
   usesExplicitProxyLikeEndpoint?: boolean;
 };
 
-export type OpenAICompletionsCompatDefaults = {
+type OpenAICompletionsCompatDefaults = {
   supportsStore: boolean;
   supportsDeveloperRole: boolean;
   supportsReasoningEffort: boolean;
   supportsUsageInStreaming: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
-  thinkingFormat: "openai" | "openrouter" | "zai";
+  thinkingFormat: "openai" | "openrouter" | "deepseek" | "zai";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
 };
 
-export type DetectedOpenAICompletionsCompat = {
+type DetectedOpenAICompletionsCompat = {
   capabilities: ProviderRequestCapabilities;
   defaults: OpenAICompletionsCompatDefaults;
 };
@@ -38,6 +39,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass,
     knownProviderFamily,
     supportsNativeStreamingUsageCompat = false,
+    supportsOpenAICompletionsStreamingUsageCompat = false,
     usesExplicitProxyLikeEndpoint = false,
   } = input;
   const isDefaultRoute = endpointClass === "default";
@@ -51,6 +53,9 @@ export function resolveOpenAICompletionsCompatDefaults(
   const isZai =
     endpointClass === "zai-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
+  const isDeepSeek =
+    endpointClass === "deepseek-native" ||
+    (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek"));
   const isNonStandard =
     endpointClass === "cerebras-native" ||
     endpointClass === "chutes-native" ||
@@ -77,20 +82,28 @@ export function resolveOpenAICompletionsCompatDefaults(
       endpointClass !== "xai-native" &&
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
-      !isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat),
+      supportsOpenAICompletionsStreamingUsageCompat ||
+      (!isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
-    thinkingFormat: isZai ? "zai" : isOpenRouterLike ? "openrouter" : "openai",
+    thinkingFormat: isDeepSeek
+      ? "deepseek"
+      : isZai
+        ? "zai"
+        : isOpenRouterLike
+          ? "openrouter"
+          : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
   };
 }
 
-export function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
+function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
   input: Pick<
     ProviderRequestCapabilities,
     | "endpointClass"
     | "knownProviderFamily"
     | "supportsNativeStreamingUsageCompat"
+    | "supportsOpenAICompletionsStreamingUsageCompat"
     | "usesExplicitProxyLikeEndpoint"
   > & {
     provider?: string;
@@ -100,7 +113,9 @@ export function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
 }
 
 export function detectOpenAICompletionsCompat(
-  model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id" | "compat">,
+  model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
+    compat?: { supportsStore?: boolean } | null;
+  },
 ): DetectedOpenAICompletionsCompat {
   const capabilities = resolveProviderRequestCapabilities({
     provider: model.provider,

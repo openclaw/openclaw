@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type {
+  DetachedRunningTaskCreateParams,
+  DetachedTaskCreateParams,
+  DetachedTaskFinalizeParams,
+} from "./detached-task-runtime-contract.js";
 import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import {
   cancelTaskById,
@@ -11,7 +16,7 @@ import {
   listTasksForFlowId,
   markTaskLostById,
   markTaskRunningByRunId,
-  markTaskTerminalByRunId,
+  finalizeTaskRunByRunId as finalizeTaskRunByRunIdInRegistry,
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
 } from "./runtime-internal.js";
@@ -32,7 +37,6 @@ import type {
   TaskRecord,
   TaskRegistrySummary,
   TaskRuntime,
-  TaskScopeKind,
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
@@ -84,31 +88,8 @@ function ensureSingleTaskFlow(params: {
   }
 }
 
-type TaskRunCreateParams = {
-  runtime: TaskRuntime;
-  taskKind?: string;
-  sourceId?: string;
-  requesterSessionKey?: string;
-  ownerKey?: string;
-  scopeKind?: TaskScopeKind;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  parentFlowId?: string;
-  childSessionKey?: string;
-  parentTaskId?: string;
-  agentId?: string;
-  runId?: string;
-  label?: string;
-  task: string;
-  preferMetadata?: boolean;
-  notifyPolicy?: TaskNotifyPolicy;
-  deliveryStatus?: TaskDeliveryStatus;
-};
-
-type RunningTaskRunCreateParams = TaskRunCreateParams & {
-  startedAt?: number;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-};
+type TaskRunCreateParams = DetachedTaskCreateParams;
+type RunningTaskRunCreateParams = DetachedRunningTaskCreateParams;
 
 export function createQueuedTaskRun(params: TaskRunCreateParams): TaskRecord {
   const task = createTaskRecord({
@@ -188,17 +169,14 @@ export function completeTaskRunByRunId(params: {
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
 }) {
-  return markTaskTerminalByRunId({
-    runId: params.runId,
-    runtime: params.runtime,
-    sessionKey: params.sessionKey,
+  return finalizeTaskRunByRunId({
+    ...params,
     status: "succeeded",
-    endedAt: params.endedAt,
-    lastEventAt: params.lastEventAt,
-    progressSummary: params.progressSummary,
-    terminalSummary: params.terminalSummary,
-    terminalOutcome: params.terminalOutcome,
   });
+}
+
+export function finalizeTaskRunByRunId(params: DetachedTaskFinalizeParams) {
+  return finalizeTaskRunByRunIdInRegistry(params);
 }
 
 export function failTaskRunByRunId(params: {
@@ -212,16 +190,9 @@ export function failTaskRunByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
 }) {
-  return markTaskTerminalByRunId({
-    runId: params.runId,
-    runtime: params.runtime,
-    sessionKey: params.sessionKey,
+  return finalizeTaskRunByRunId({
+    ...params,
     status: params.status ?? "failed",
-    endedAt: params.endedAt,
-    lastEventAt: params.lastEventAt,
-    error: params.error,
-    progressSummary: params.progressSummary,
-    terminalSummary: params.terminalSummary,
   });
 }
 
@@ -240,6 +211,7 @@ export function setDetachedTaskDeliveryStatusByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 }) {
   return setTaskRunDeliveryStatusByRunId(params);
 }

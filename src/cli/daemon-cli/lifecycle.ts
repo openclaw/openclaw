@@ -7,10 +7,12 @@ import {
   formatGatewayPidList,
   signalVerifiedGatewayPidSync,
 } from "../../infra/gateway-processes.js";
+import { type GatewayRestartIntent, writeGatewayRestartIntentSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
+import { parseDurationMs } from "../parse-duration.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
 import {
   runServiceRestart,
@@ -29,10 +31,18 @@ import {
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
+import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
+const WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS = 180_000;
+
+function postRestartHealthAttempts(): number {
+  return process.platform === "win32"
+    ? Math.ceil(WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS / POST_RESTART_HEALTH_DELAY_MS)
+    : POST_RESTART_HEALTH_ATTEMPTS;
+}
 
 function formatRestartFailure(params: {
   health: GatewayRestartSnapshot;
@@ -114,7 +124,25 @@ async function stopGatewayWithoutServiceManager(port: number) {
   };
 }
 
-async function restartGatewayWithoutServiceManager(port: number) {
+function resolveGatewayRestartIntentOptions(
+  opts: DaemonLifecycleOptions,
+): GatewayRestartIntent | undefined {
+  if (opts.force && opts.wait !== undefined) {
+    throw new Error("--force cannot be combined with --wait");
+  }
+  if (opts.force) {
+    return { force: true };
+  }
+  if (opts.wait !== undefined) {
+    return { waitMs: parseDurationMs(opts.wait) };
+  }
+  return undefined;
+}
+
+async function restartGatewayWithoutServiceManager(
+  port: number,
+  restartIntent?: GatewayRestartIntent,
+) {
   await assertUnmanagedGatewayRestartEnabled(port);
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
@@ -125,6 +153,10 @@ async function restartGatewayWithoutServiceManager(port: number) {
       `multiple gateway processes are listening on port ${port}: ${formatGatewayPidList(pids)}; use "openclaw gateway status --deep" before retrying restart`,
     );
   }
+  writeGatewayRestartIntentSync({
+    targetPid: pids[0],
+    ...(restartIntent ? { intent: restartIntent } : {}),
+  });
   signalVerifiedGatewayPidSync(pids[0], "SIGUSR1");
   return {
     result: "restarted" as const,
@@ -143,14 +175,23 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
+  const service = resolveGatewayService();
   return await runServiceStart({
     serviceNoun: "Gateway",
-    service: resolveGatewayService(),
+    service,
     renderStartHints: renderGatewayServiceStartHints,
     onNotLoaded:
       process.platform === "darwin"
         ? async () => await recoverInstalledLaunchAgent({ result: "started" })
         : undefined,
+    repairLoadedService: async ({ json, stdout, state, issues }) =>
+      await repairLoadedGatewayServiceForStart({
+        service,
+        json,
+        stdout,
+        state,
+        issues,
+      }),
     opts,
   });
 }
@@ -180,31 +221,42 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
+  const restartIntent = resolveGatewayRestartIntentOptions(opts);
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPortFallback(),
   );
-  const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
+  const restartHealthAttempts = postRestartHealthAttempts();
+  const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
 
   return await runServiceRestart({
     serviceNoun: "Gateway",
     service,
     renderStartHints: renderGatewayServiceStartHints,
-    opts,
+    opts: {
+      ...opts,
+      ...(restartIntent ? { restartIntent } : {}),
+    },
     checkTokenDrift: true,
     onNotLoaded: async () => {
-      const handled = await restartGatewayWithoutServiceManager(restartPort);
+      if (process.platform === "darwin") {
+        const recovered = await recoverInstalledLaunchAgent({ result: "restarted" });
+        if (recovered) {
+          return recovered;
+        }
+      }
+      const handled = await restartGatewayWithoutServiceManager(restartPort, restartIntent);
       if (handled) {
         restartedWithoutServiceManager = true;
         return handled;
       }
-      return await recoverInstalledLaunchAgent({ result: "restarted" });
+      return null;
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {
         const health = await waitForGatewayHealthyListener({
           port: restartPort,
-          attempts: POST_RESTART_HEALTH_ATTEMPTS,
+          attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
         });
         if (health.healthy) {
@@ -233,7 +285,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       let health = await waitForGatewayHealthyRestart({
         service,
         port: restartPort,
-        attempts: POST_RESTART_HEALTH_ATTEMPTS,
+        attempts: restartHealthAttempts,
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
         includeUnknownListenersAsStale: process.platform === "win32",
       });
@@ -254,7 +306,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         health = await waitForGatewayHealthyRestart({
           service,
           port: restartPort,
-          attempts: POST_RESTART_HEALTH_ATTEMPTS,
+          attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
           includeUnknownListenersAsStale: process.platform === "win32",
         });

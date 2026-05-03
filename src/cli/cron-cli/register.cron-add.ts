@@ -6,18 +6,21 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import { resolveCronCreateSchedule } from "./schedule-options.js";
 import {
   getCronChannelOptions,
+  coerceCronDeliveryPreviews,
   handleCronCliError,
   parseCronToolsAllow,
   printCronJson,
   printCronList,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
+import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 
 export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
@@ -53,7 +56,8 @@ export function registerCronListCommand(cron: Command) {
             return;
           }
           const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
-          printCronList(jobs, defaultRuntime);
+          const deliveryPreviews = coerceCronDeliveryPreviews(res);
+          printCronList(jobs, defaultRuntime, { deliveryPreviews });
         } catch (err) {
           handleCronCliError(err);
         }
@@ -82,7 +86,11 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
       .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
-      .option("--tz <iana>", "Timezone for cron expressions (IANA)", "")
+      .option(
+        "--tz <iana>",
+        "Timezone for cron expressions (IANA; cron default: Gateway host local timezone)",
+        "",
+      )
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
       .option("--system-event <text>", "System event payload (main session)")
@@ -95,14 +103,15 @@ export function registerCronAddCommand(cron: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
-      .option("--announce", "Announce summary to a chat (subagent-style)", false)
-      .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
-      .option("--no-deliver", "Disable announce delivery and skip main-session summary")
+      .option("--announce", "Fallback-deliver final text to a chat", false)
+      .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
+      .option("--no-deliver", "Disable runner fallback delivery")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`, "last")
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
+      .option("--thread-id <id>", "Telegram forum topic thread id")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
       .option("--json", "Output JSON", false)
@@ -163,7 +172,9 @@ export function registerCronAddCommand(cron: Command) {
           const sessionTargetRaw = normalizeOptionalString(opts.session) ?? "";
           const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
           const sessionTarget =
-            sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
+            sessionSource === "cli"
+              ? normalizeCronSessionTargetOption(sessionTargetRaw) || ""
+              : inferredSessionTarget;
           const isCustomSessionTarget =
             normalizeLowercaseStringOrEmpty(sessionTarget).startsWith("session:") &&
             Boolean(normalizeOptionalString(sessionTarget.slice(8)));
@@ -191,9 +202,16 @@ export function registerCronAddCommand(cron: Command) {
           }
 
           const accountId = normalizeOptionalString(opts.account);
+          const threadId = parseCronThreadIdOption(opts.threadId);
+          const hasThreadId = typeof threadId === "number";
 
-          if (accountId && (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")) {
-            throw new Error("--account requires a non-main agentTurn job with delivery.");
+          if (
+            (accountId || hasThreadId) &&
+            (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")
+          ) {
+            throw new Error(
+              "--account and --thread-id require a non-main agentTurn job with delivery.",
+            );
           }
 
           const deliveryMode =
@@ -214,6 +232,15 @@ export function registerCronAddCommand(cron: Command) {
 
           const sessionKey = normalizeOptionalString(opts.sessionKey);
 
+          if (payload.kind === "agentTurn" && !agentId) {
+            defaultRuntime.error(
+              theme.warn(
+                "No --agent specified; the job will run with the configured default agent. " +
+                  "Specify --agent to choose a specific agent.",
+              ),
+            );
+          }
+
           const params = {
             name,
             description,
@@ -230,6 +257,7 @@ export function registerCronAddCommand(cron: Command) {
                   mode: deliveryMode,
                   channel: normalizeOptionalString(opts.channel),
                   to: normalizeOptionalString(opts.to),
+                  threadId,
                   accountId,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }

@@ -67,6 +67,7 @@ type MessageSendParams = {
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
   accountId?: string;
@@ -220,8 +221,8 @@ async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfi
   if (cfg) {
     return cfg;
   }
-  const { loadConfig } = await loadMessageConfigRuntime();
-  return loadConfig();
+  const { getRuntimeConfig } = await loadMessageConfigRuntime();
+  return getRuntimeConfig();
 }
 
 async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
@@ -242,6 +243,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       text: params.content,
       mediaUrl: params.mediaUrl,
       mediaUrls: params.mediaUrls,
+      audioAsVoice: params.asVoice === true,
     },
   ]);
   const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
@@ -327,10 +329,12 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       message: params.content,
       mediaUrl: params.mediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
+      asVoice: params.asVoice,
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
       agentId: params.agentId,
       channel,
+      replyToId: params.replyToId,
       sessionKey: params.mirror?.sessionKey,
       idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },

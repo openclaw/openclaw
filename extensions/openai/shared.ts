@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   cloneFirstTemplateModel,
@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { OPENAI_RESPONSES_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { createOpenAINativeWebSearchWrapper } from "./native-web-search.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
   resolveOpenAITransportTurnState,
@@ -31,7 +32,7 @@ type SyntheticOpenAIModelCatalogEntry = {
   cost?: SyntheticOpenAIModelCatalogCost;
 };
 
-export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
 export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
@@ -47,7 +48,7 @@ function hasSupportedOpenAIResponsesTransport(
   return transport === "auto" || transport === "sse" || transport === "websocket";
 }
 
-export function defaultOpenAIResponsesExtraParams(
+function defaultOpenAIResponsesExtraParams(
   extraParams: Record<string, unknown> | undefined,
   options?: { openaiWsWarmup?: boolean },
 ): Record<string, unknown> | undefined {
@@ -82,6 +83,14 @@ const resolveOpenAIResponsesWebSocketSessionPolicy: NonNullable<
   OpenAIResponsesProviderHooks["resolveWebSocketSessionPolicy"]
 > = (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx);
 
+const wrapOpenAIResponsesStreamFn = OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn;
+const wrapOpenAIResponsesProviderStreamFn: NonNullable<
+  OpenAIResponsesProviderHooks["wrapStreamFn"]
+> = (ctx) =>
+  createOpenAINativeWebSearchWrapper(wrapOpenAIResponsesStreamFn?.(ctx) ?? ctx.streamFn, {
+    config: ctx.config,
+  });
+
 export function buildOpenAIResponsesProviderHooks(options?: {
   openaiWsWarmup?: boolean;
 }): OpenAIResponsesProviderHooks {
@@ -89,6 +98,7 @@ export function buildOpenAIResponsesProviderHooks(options?: {
     buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
     ...OPENAI_RESPONSES_STREAM_HOOKS,
+    wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
     resolveTransportTurnState: resolveOpenAIResponsesTransportTurnState,
     resolveWebSocketSessionPolicy: resolveOpenAIResponsesWebSocketSessionPolicy,
   };

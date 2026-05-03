@@ -46,6 +46,7 @@ import {
   isInvalidStreamingEventOrderError,
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
+  isStreamingJsonParseError,
   sanitizeUserFacingText,
 } from "./sanitize-user-facing-text.js";
 import type { FailoverReason } from "./types.js";
@@ -53,6 +54,7 @@ import type { FailoverReason } from "./types.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
+  formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
   sanitizeUserFacingText,
@@ -269,6 +271,9 @@ export type ProviderRuntimeFailureKind =
   | "schema"
   | "sandbox_blocked"
   | "replay_invalid"
+  | "empty_response"
+  | "no_error_details"
+  | "unclassified"
   | "unknown";
 
 const BILLING_402_HINTS = [
@@ -329,16 +334,43 @@ const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b/i;
+const NO_BODY_HTTP_WRAPPER_RE =
+  /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;
 
 function stripErrorPrefix(raw: string): string {
   return raw.replace(/^error:\s*/i, "").trim();
 }
 
-function inferSignalStatus(signal: FailoverSignal): number | undefined {
+export function inferSignalStatus(signal: FailoverSignal): number | undefined {
   if (typeof signal.status === "number" && Number.isFinite(signal.status)) {
     return signal.status;
   }
   return extractLeadingHttpStatus(stripErrorPrefix(signal.message?.trim() ?? ""))?.code;
+}
+
+function isExplicitNoBodyHttpMessage(raw: string | undefined, status?: number): boolean {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const candidate = extractLeadingHttpStatus(trimmed) ? trimmed : stripErrorPrefix(trimmed);
+  const leadingStatus = extractLeadingHttpStatus(candidate);
+  if (leadingStatus) {
+    if (typeof status === "number" && leadingStatus.code !== status) {
+      return false;
+    }
+    return NO_BODY_HTTP_WRAPPER_RE.test(leadingStatus.rest);
+  }
+  return NO_BODY_HTTP_WRAPPER_RE.test(candidate);
+}
+
+export function isUnclassifiedNoBodyHttpSignal(signal: FailoverSignal): boolean {
+  const status = inferSignalStatus(signal);
+  if (status !== 400 && status !== 422) {
+    return false;
+  }
+  const message = signal.message?.trim();
+  return !message || isExplicitNoBodyHttpMessage(message, status);
 }
 
 function isHtmlErrorResponse(raw: string, status?: number): boolean {
@@ -682,6 +714,15 @@ function classifyFailoverClassificationFromHttpStatus(
     if (messageClassification) {
       return messageClassification;
     }
+    // When the response has no body at all, or only surfaces as an HTTP wrapper
+    // like "400 status code (no body)", return null instead of defaulting to
+    // "format". These shapes are likely transient proxy issues — classifying
+    // them as "format" triggers a compaction loop that cannot recover.
+    if (isUnclassifiedNoBodyHttpSignal({ status, message })) {
+      return null;
+    }
+    // Body exists but couldn't be classified — still treat as format error
+    // since the provider rejected the request schema.
     return toReasonClassification("format");
   }
   return null;
@@ -716,11 +757,13 @@ function isProvider(provider: string | undefined, match: string): boolean {
   return Boolean(normalized && normalized.includes(match));
 }
 
-function isAnthropicGenericUnknownError(raw: string, provider?: string): boolean {
-  return (
-    isProvider(provider, "anthropic") &&
-    (normalizeOptionalLowercaseString(raw)?.includes("an unknown error occurred") ?? false)
-  );
+// pi-ai providers throw `Error("An unknown error occurred")` provider-agnostically
+// (anthropic, google, vertex, openai-completions, mistral, bedrock, etc.) when a
+// stream ends with stopReason === "aborted" | "error" without specific info. Treat
+// it as a transient transport failure so the configured fallback chain rotates
+// instead of returning the bare string to the user (#71620).
+function isGenericUnknownStreamError(raw: string): boolean {
+  return /^\s*an unknown error occurred\.?\s*$/i.test(raw);
 }
 
 function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
@@ -796,7 +839,7 @@ function classifyFailoverClassificationFromMessage(
   if (isAuthErrorMessage(raw)) {
     return toReasonClassification("auth");
   }
-  if (isAnthropicGenericUnknownError(raw, provider)) {
+  if (isGenericUnknownStreamError(raw)) {
     return toReasonClassification("timeout");
   }
   if (isOpenRouterProviderReturnedError(raw, provider)) {
@@ -812,7 +855,7 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("format");
   }
   if (isExactUnknownNoDetailsError(raw)) {
-    return toReasonClassification("unknown");
+    return toReasonClassification("no_error_details");
   }
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
@@ -861,7 +904,7 @@ export function classifyProviderRuntimeFailureKind(
   const status = inferSignalStatus(normalizedSignal);
 
   if (!message && typeof status !== "number") {
-    return "unknown";
+    return "empty_response";
   }
   if (normalizedSignal.code === "refresh_contention") {
     return "refresh_contention";
@@ -919,7 +962,10 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isTimeoutTransportErrorMessage(message, status)) {
     return "timeout";
   }
-  return "unknown";
+  if (message && isExactUnknownNoDetailsError(message)) {
+    return "no_error_details";
+  }
+  return "unclassified";
 }
 
 export function formatAssistantErrorText(
@@ -1092,6 +1138,10 @@ export function formatAssistantErrorText(
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
+  }
+
+  if (isStreamingJsonParseError(raw)) {
+    return "LLM streaming response contained a malformed fragment. Please try again.";
   }
 
   // Never return raw unhandled errors - log for debugging but return safe message

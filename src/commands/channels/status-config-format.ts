@@ -2,7 +2,7 @@ import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../../channels/account-snapshot-fields.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import {
   buildChannelAccountSnapshot,
   buildReadOnlySourceChannelAccountSnapshot,
@@ -19,6 +19,11 @@ import {
   buildChannelAccountLine,
   type ChatChannel,
 } from "./shared.js";
+
+type ChannelStatusPluginLabel = {
+  id: ChatChannel;
+  meta: { label?: string };
+};
 
 export async function formatConfigChannelsStatusLines(
   cfg: OpenClawConfig,
@@ -37,18 +42,26 @@ export async function formatConfigChannelsStatusLines(
     lines.push("");
   }
 
-  const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
+  const accountLines = (
+    plugin: ChannelStatusPluginLabel,
+    accounts: Array<Record<string, unknown>>,
+  ) =>
     accounts.map((account) => {
       const bits: string[] = [];
       appendEnabledConfiguredLinkedBits(bits, account);
       appendModeBit(bits, account);
       appendTokenSourceBits(bits, account);
       appendBaseUrlBit(bits, account);
-      return buildChannelAccountLine(provider, account, bits);
+      return buildChannelAccountLine(plugin.id, account, bits, {
+        channelLabel: plugin.meta.label ?? plugin.id,
+      });
     });
 
-  const plugins = listChannelPlugins();
   const sourceConfig = opts?.sourceConfig ?? cfg;
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    activationSourceConfig: sourceConfig,
+    includeSetupFallbackPlugins: true,
+  });
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(cfg);
     if (!accountIds.length) {
@@ -76,7 +89,7 @@ export async function formatConfigChannelsStatusLines(
       );
     }
     if (snapshots.length > 0) {
-      lines.push(...accountLines(plugin.id, snapshots));
+      lines.push(...accountLines(plugin, snapshots));
     }
   }
 

@@ -1,9 +1,10 @@
 import {
   defineBundledChannelEntry,
+  type OpenClawPluginCommandDefinition,
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/channel-entry-contract";
 
-type RegisteredLineCardCommand = Parameters<OpenClawPluginApi["registerCommand"]>[0];
+type RegisteredLineCardCommand = OpenClawPluginCommandDefinition;
 
 let lineCardCommandPromise: Promise<RegisteredLineCardCommand> | null = null;
 
@@ -31,7 +32,7 @@ export default defineBundledChannelEntry({
   description: "LINE Messaging API channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "linePlugin",
   },
   runtime: {

@@ -19,8 +19,8 @@ export type { ToolProfileId } from "./tool-policy-shared.js";
 export type OwnerOnlyToolApprovalClass = "control_plane" | "exec_capable" | "interactive";
 
 // Keep tool-policy browser-safe: do not import tools/common at runtime.
-function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean): AnyAgentTool {
-  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
+function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, authorized: boolean): AnyAgentTool {
+  if (tool.ownerOnly !== true || authorized || !tool.execute) {
     return tool;
   }
   return {
@@ -32,7 +32,6 @@ function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean):
 }
 
 const OWNER_ONLY_TOOL_APPROVAL_CLASS_FALLBACKS = new Map<string, OwnerOnlyToolApprovalClass>([
-  ["whatsapp_login", "interactive"],
   ["cron", "control_plane"],
   ["gateway", "control_plane"],
   ["nodes", "exec_capable"],
@@ -52,17 +51,30 @@ function isOwnerOnlyTool(tool: AnyAgentTool) {
   return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
 }
 
-export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+/**
+ * Filters owner-only tools unless the sender is an owner or a server-side
+ * runtime grant authorizes a specific owner-only tool for this run.
+ */
+export function applyOwnerOnlyToolPolicy(
+  tools: AnyAgentTool[],
+  senderIsOwner: boolean,
+  ownerOnlyToolAllowlist?: string[],
+) {
+  const allowedOwnerOnlyTools = new Set(
+    ownerOnlyToolAllowlist?.map((name) => normalizeToolName(name)) ?? [],
+  );
+  const isAuthorized = (tool: AnyAgentTool) =>
+    senderIsOwner || allowedOwnerOnlyTools.has(normalizeToolName(tool.name));
   const withGuard = tools.map((tool) => {
     if (!isOwnerOnlyTool(tool)) {
       return tool;
     }
-    return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
+    return wrapOwnerOnlyToolExecution(tool, isAuthorized(tool));
   });
   if (senderIsOwner) {
     return withGuard;
   }
-  return withGuard.filter((tool) => !isOwnerOnlyTool(tool));
+  return withGuard.filter((tool) => !isOwnerOnlyTool(tool) || isAuthorized(tool));
 }
 
 export type ToolPolicyLike = {

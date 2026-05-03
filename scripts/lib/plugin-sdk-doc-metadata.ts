@@ -6,7 +6,7 @@ export type PluginSdkDocCategory =
   | "runtime"
   | "utilities";
 
-export type PluginSdkDocMetadata = {
+type PluginSdkDocMetadata = {
   category: PluginSdkDocCategory;
 };
 
@@ -41,13 +41,28 @@ export const pluginSdkDocMetadata = {
   "plugin-entry": {
     category: "core",
   },
+  "plugin-test-api": {
+    category: "utilities",
+  },
+  "plugin-test-contracts": {
+    category: "utilities",
+  },
+  "plugin-test-runtime": {
+    category: "utilities",
+  },
   "channel-actions": {
     category: "channel",
   },
   "channel-config-schema": {
     category: "channel",
   },
+  "channel-config-schema-legacy": {
+    category: "channel",
+  },
   "channel-contract": {
+    category: "channel",
+  },
+  "channel-contract-testing": {
     category: "channel",
   },
   "channel-pairing": {
@@ -60,6 +75,9 @@ export const pluginSdkDocMetadata = {
     category: "channel",
   },
   "command-auth": {
+    category: "channel",
+  },
+  zalouser: {
     category: "channel",
   },
   "command-status": {
@@ -77,7 +95,7 @@ export const pluginSdkDocMetadata = {
   "provider-onboard": {
     category: "provider",
   },
-  opencode: {
+  "provider-selection-runtime": {
     category: "provider",
   },
   "runtime-store": {
@@ -92,22 +110,30 @@ export const pluginSdkDocMetadata = {
   testing: {
     category: "utilities",
   },
+  "channel-test-helpers": {
+    category: "utilities",
+  },
+  "agent-runtime-test-contracts": {
+    category: "utilities",
+  },
+  "channel-target-testing": {
+    category: "utilities",
+  },
+  "provider-test-contracts": {
+    category: "utilities",
+  },
+  "provider-http-test-mocks": {
+    category: "utilities",
+  },
+  "test-env": {
+    category: "utilities",
+  },
+  "test-fixtures": {
+    category: "utilities",
+  },
 } as const satisfies Record<string, PluginSdkDocMetadata>;
 
 export type PluginSdkDocEntrypoint = keyof typeof pluginSdkDocMetadata;
-
-export const pluginSdkDocCategories = [
-  "core",
-  "channel",
-  "provider",
-  "runtime",
-  "utilities",
-  "legacy",
-] as const satisfies readonly PluginSdkDocCategory[];
-
-export const pluginSdkDocEntrypoints = Object.keys(
-  pluginSdkDocMetadata,
-) as PluginSdkDocEntrypoint[];
 
 export function resolvePluginSdkDocImportSpecifier(entrypoint: PluginSdkDocEntrypoint): string {
   return entrypoint === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entrypoint}`;
