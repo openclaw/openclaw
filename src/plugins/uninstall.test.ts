@@ -1264,7 +1264,8 @@ describe("uninstallPlugin", () => {
   it("deletes managed git install repos outside the extensions directory", async () => {
     const stateDir = path.join(tempDir, "state");
     const extensionsDir = path.join(stateDir, "extensions");
-    const installPath = path.join(stateDir, "git", "git-abc123", "repo");
+    const installParent = path.join(stateDir, "git", "git-abc123");
+    const installPath = path.join(installParent, "repo");
     await fs.mkdir(installPath, { recursive: true });
     await fs.writeFile(path.join(installPath, "index.js"), "// git plugin");
 
@@ -1284,6 +1285,35 @@ describe("uninstallPlugin", () => {
       directory: true,
     });
     await expect(fs.access(installPath)).rejects.toThrow();
+    await expect(fs.access(installParent)).rejects.toThrow();
+  });
+
+  it("keeps non-empty managed git install parents after deleting the repo", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const installParent = path.join(stateDir, "git", "git-abc123");
+    const installPath = path.join(installParent, "repo");
+    await fs.mkdir(installPath, { recursive: true });
+    await fs.writeFile(path.join(installPath, "index.js"), "// git plugin");
+    await fs.writeFile(path.join(installParent, "keep.txt"), "keep");
+
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        entries: createSinglePluginEntries(),
+        installs: {
+          "my-plugin": createGitInstallRecord("my-plugin", installPath),
+        },
+      }),
+      pluginId: "my-plugin",
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    expectSuccessfulUninstallActions(result, {
+      directory: true,
+    });
+    await expect(fs.access(installPath)).rejects.toThrow();
+    await expect(fs.access(path.join(installParent, "keep.txt"))).resolves.toBeUndefined();
   });
 
   it("does not delete symlinked git install targets that resolve outside the managed git root", async () => {

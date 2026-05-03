@@ -342,7 +342,7 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
-  it.each([
+  const officialLaunchPluginCases = [
     {
       spec: "@openclaw/acpx",
       pluginId: "acpx",
@@ -363,8 +363,10 @@ describe("installPluginFromNpmSpec", () => {
       pluginId: "voice-call",
       indexJs: `import { spawn } from "node:child_process";\nspawn("ngrok", ["http", "3000"]);`,
     },
-  ])(
-    "allows official npm plugin $spec with reviewed launch code",
+  ];
+
+  it.each(officialLaunchPluginCases)(
+    "blocks direct official npm plugin $spec with launch code without source provenance",
     async ({ spec, pluginId, indexJs }) => {
       const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
       const warnings: string[] = [];
@@ -380,6 +382,45 @@ describe("installPluginFromNpmSpec", () => {
       const result = await installPluginFromNpmSpec({
         spec,
         npmDir: npmRoot,
+        logger: {
+          info: () => {},
+          warn: (msg: string) => warnings.push(msg),
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        return;
+      }
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(fs.existsSync(path.join(npmRoot, "node_modules", spec))).toBe(false);
+      expect(
+        warnings.some((warning) =>
+          warning.includes("allowed because it is an official OpenClaw package"),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each(officialLaunchPluginCases)(
+    "allows source-linked official npm plugin $spec with reviewed launch code",
+    async ({ spec, pluginId, indexJs }) => {
+      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+      const warnings: string[] = [];
+      mockNpmViewAndInstall({
+        spec,
+        packageName: spec,
+        version: "2026.5.2",
+        pluginId,
+        npmRoot,
+        indexJs,
+      });
+
+      const result = await installPluginFromNpmSpec({
+        spec,
+        npmDir: npmRoot,
+        expectedPluginId: pluginId,
+        trustedSourceLinkedOfficialInstall: true,
         logger: {
           info: () => {},
           warn: (msg: string) => warnings.push(msg),

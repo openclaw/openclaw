@@ -1257,7 +1257,7 @@ export function resolveSessionModelRef(
 }
 
 export async function resolveGatewayModelSupportsImages(params: {
-  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
   provider?: string;
   model?: string;
 }): Promise<boolean> {
@@ -1266,7 +1266,7 @@ export async function resolveGatewayModelSupportsImages(params: {
   }
 
   try {
-    const catalog = await params.loadGatewayModelCatalog();
+    const catalog = await params.loadGatewayModelCatalog({ readOnly: false });
     const modelEntry = findModelCatalogEntry(catalog, {
       provider: params.provider,
       modelId: params.model,
@@ -1430,8 +1430,12 @@ export function buildGatewaySessionRow(params: {
   transcriptUsageMaxBytes?: number;
   storeChildSessionsByKey?: Map<string, string[]>;
   rowContext?: SessionListRowContext;
+  skipTranscriptUsageFallback?: boolean;
+  lightweightListRow?: boolean;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
+  const lightweight = params.lightweightListRow === true;
+  const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const now = params.now ?? Date.now();
   const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
@@ -1533,7 +1537,8 @@ export function buildGatewaySessionRow(params: {
       entry,
     }) === undefined;
   const transcriptUsage =
-    needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd
+    !skipTranscriptUsage &&
+    (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
       ? resolveTranscriptUsageFallback({
           cfg,
           key,
@@ -1580,33 +1585,36 @@ export function buildGatewaySessionRow(params: {
   const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
   const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
   const selectedOrRuntimeModel = selectedModel?.model ?? model;
-  const rowModelIdentity = resolveSessionDisplayModelIdentityRef({
-    cfg,
-    agentId: sessionAgentId,
-    provider: selectedOrRuntimeModelProvider,
-    model: selectedOrRuntimeModel,
-  });
+  const rowModelIdentity = lightweight
+    ? { provider: selectedOrRuntimeModelProvider, model: selectedOrRuntimeModel }
+    : resolveSessionDisplayModelIdentityRef({
+        cfg,
+        agentId: sessionAgentId,
+        provider: selectedOrRuntimeModelProvider,
+        model: selectedOrRuntimeModel,
+      });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
-  const estimatedCostUsd =
-    resolveEstimatedSessionCostUsd({
-      cfg,
-      provider: rowModelProvider,
-      model: rowModel,
-      entry,
-    }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
-  const contextTokens =
-    resolvePositiveNumber(entry?.contextTokens) ??
-    resolvePositiveNumber(transcriptUsage?.contextTokens) ??
-    resolvePositiveNumber(
-      resolveContextTokensForModel({
+  const estimatedCostUsd = lightweight
+    ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
+    : (resolveEstimatedSessionCostUsd({
         cfg,
         provider: rowModelProvider,
         model: rowModel,
-        // Gateway/session listing is read-only; don't start async model discovery.
-        allowAsyncLoad: false,
-      }),
-    );
+        entry,
+      }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
+  const contextTokens = lightweight
+    ? resolvePositiveNumber(entry?.contextTokens)
+    : (resolvePositiveNumber(entry?.contextTokens) ??
+      resolvePositiveNumber(transcriptUsage?.contextTokens) ??
+      resolvePositiveNumber(
+        resolveContextTokensForModel({
+          cfg,
+          provider: rowModelProvider,
+          model: rowModel,
+          allowAsyncLoad: false,
+        }),
+      ));
 
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
@@ -1627,14 +1635,11 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = listThinkingLevelOptions(
-    thinkingProvider,
-    thinkingModel,
-    params.modelCatalog,
-  );
-  const pluginExtensions = entry
-    ? projectPluginSessionExtensionsSync({ sessionKey: key, entry })
-    : [];
+  const thinkingLevels = lightweight
+    ? []
+    : listThinkingLevelOptions(thinkingProvider, thinkingModel, params.modelCatalog);
+  const pluginExtensions =
+    !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
   return {
     key,
@@ -1662,13 +1667,15 @@ export function buildGatewaySessionRow(params: {
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveGatewaySessionThinkingDefault({
-      cfg,
-      provider: thinkingProvider,
-      model: thinkingModel,
-      agentId: sessionAgentId,
-      modelCatalog: params.modelCatalog,
-    }),
+    thinkingDefault: lightweight
+      ? entry?.thinkingLevel
+      : resolveGatewaySessionThinkingDefault({
+          cfg,
+          provider: thinkingProvider,
+          model: thinkingModel,
+          agentId: sessionAgentId,
+          modelCatalog: params.modelCatalog,
+        }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
@@ -2016,6 +2023,8 @@ export async function listSessionsFromStoreAsync(params: {
       transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
       storeChildSessionsByKey: getRowContext().storeChildSessionsByKey,
       rowContext: getRowContext(),
+      skipTranscriptUsageFallback: true,
+      lightweightListRow: true,
     });
     if (
       entry?.sessionId &&

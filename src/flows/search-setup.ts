@@ -353,6 +353,9 @@ async function finalizeSearchProviderSetup(params: {
         pluginId: installEntry.pluginId,
         label: installEntry.label,
         install: installEntry.install,
+        ...(installEntry.trustedSourceLinkedOfficialInstall
+          ? { trustedSourceLinkedOfficialInstall: true }
+          : {}),
       },
       prompter: params.prompter,
       runtime: params.runtime,
