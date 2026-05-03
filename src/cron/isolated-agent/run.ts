@@ -506,6 +506,8 @@ async function prepareCronRunContext(params: {
     input.job.payload.kind === "agentTurn" ? input.job.payload.externalContentSource : undefined;
   const hookExternalContentSource =
     payloadHookExternalContentSource ?? resolveHookExternalContentSource(baseSessionKey);
+  const forceNewSession =
+    input.job.sessionTarget === "isolated" && hookExternalContentSource === undefined;
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(input.cfg, agentId);
   const agentDir = resolveAgentDir(input.cfg, agentId);
@@ -523,7 +525,7 @@ async function prepareCronRunContext(params: {
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
-    forceNew: input.job.sessionTarget === "isolated",
+    forceNew: forceNewSession,
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   if (!cronSession.sessionEntry.sessionFile?.trim()) {
