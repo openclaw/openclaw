@@ -1,12 +1,7 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
-export const PluginJsonValueSchema = Type.Cyclic(
-  {
-    PluginJsonValue: Type.Unknown(),
-  },
-  "PluginJsonValue",
-);
+export const PluginJsonValueSchema = Type.Unknown();
 
 export const PluginControlUiDescriptorSchema = Type.Object(
   {
