@@ -378,7 +378,7 @@ pnpm test:docker:rerun <run-id>      # download Docker artifacts and print combi
 pnpm test:docker:timings <summary>   # slow-lane and phase critical-path summaries
 ```
 
-The scheduled live/E2E workflow runs the full release-path Docker suite daily.
+The scheduled live/E2E workflow runs a stable daily dispatcher profile instead of the full release-path sweep. It logs the parent dispatch job, runs workflow sanity before dispatch, then calls the reusable live/E2E workflow with repo E2E enabled, targeted Docker lanes for `config-reload`, `mcp-channels`, and `plugin-update`, OpenWebUI disabled, and an OpenAI live-model smoke. Use manual release validation or `release_test_profile=full` when you need broad provider, media, OpenWebUI, ACP, and Codex release-path coverage.
 
 ## Plugin Prerelease
 
