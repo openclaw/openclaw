@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
@@ -53,9 +54,16 @@ export async function ensureLoaded(
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
+  let canonicalShapeChanged = false;
   for (const [index, job] of jobs.entries()) {
     const raw = job as unknown as Record<string, unknown>;
     const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
+    let generatedMissingId = false;
+    if (typeof raw.id !== "string" || raw.id.trim().length === 0) {
+      raw.id = randomUUID();
+      generatedMissingId = true;
+      canonicalShapeChanged = true;
+    }
     let normalized: Record<string, unknown> | null;
     try {
       normalized = normalizeCronJobInput(raw);
@@ -77,6 +85,16 @@ export async function ensureLoaded(
       state.deps.log.warn(
         { storePath: state.deps.storePath, jobId: resolvedId },
         "cron: job used legacy jobId field; normalized id in memory (run openclaw doctor --fix to persist canonical shape)",
+      );
+    }
+    if (generatedMissingId) {
+      state.deps.log.warn(
+        {
+          storePath: state.deps.storePath,
+          jobId: hydrated.id,
+          jobName: typeof hydrated.name === "string" ? hydrated.name : undefined,
+        },
+        "cron: job missing id; generated a stable id and will persist canonical shape",
       );
     }
     // Persisted legacy jobs may predate the required `enabled` field.
@@ -132,6 +150,10 @@ export async function ensureLoaded(
 
   if (!opts?.skipRecompute) {
     recomputeNextRuns(state);
+  }
+
+  if (canonicalShapeChanged) {
+    await persist(state);
   }
 }
 

@@ -152,6 +152,80 @@ describe("cron service store seam coverage", () => {
     expect(raw.jobs[0]?.id).toBeUndefined();
   });
 
+  it("generates and persists unique ids for hand-authored jobs missing ids", async () => {
+    const { storePath } = await makeStorePath();
+    const firstNextRunAtMs = STORE_TEST_NOW - 30_000;
+    const secondNextRunAtMs = STORE_TEST_NOW - 15_000;
+
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              name: "missing id one",
+              enabled: true,
+              createdAtMs: STORE_TEST_NOW - 60_000,
+              updatedAtMs: STORE_TEST_NOW - 60_000,
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "main",
+              wakeMode: "now",
+              payload: { kind: "systemEvent", text: "one" },
+              state: { nextRunAtMs: firstNextRunAtMs },
+            },
+            {
+              name: "missing id two",
+              enabled: true,
+              createdAtMs: STORE_TEST_NOW - 45_000,
+              updatedAtMs: STORE_TEST_NOW - 45_000,
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "main",
+              wakeMode: "now",
+              payload: { kind: "systemEvent", text: "two" },
+              state: { nextRunAtMs: secondNextRunAtMs },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    const loadedIds = state.store?.jobs.map((job) => job.id) ?? [];
+    expect(loadedIds).toHaveLength(2);
+    expect(new Set(loadedIds).size).toBe(2);
+    expect(loadedIds.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(state.store?.jobs[0]?.state.nextRunAtMs).toBe(firstNextRunAtMs);
+    expect(state.store?.jobs[1]?.state.nextRunAtMs).toBe(secondNextRunAtMs);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ storePath, jobId: loadedIds[0], jobName: "missing id one" }),
+      expect.stringContaining("missing id"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ storePath, jobId: loadedIds[1], jobName: "missing id two" }),
+      expect.stringContaining("missing id"),
+    );
+
+    const persistedConfig = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: Array<{ id?: string; state?: unknown }>;
+    };
+    expect(persistedConfig.jobs.map((job) => job.id)).toEqual(loadedIds);
+    expect(persistedConfig.jobs.map((job) => job.state)).toEqual([{}, {}]);
+
+    const persistedState = JSON.parse(
+      await fs.readFile(storePath.replace(/\.json$/, "-state.json"), "utf8"),
+    ) as { jobs: Record<string, { state?: { nextRunAtMs?: number } }> };
+    expect(persistedState.jobs[loadedIds[0]]?.state?.nextRunAtMs).toBe(firstNextRunAtMs);
+    expect(persistedState.jobs[loadedIds[1]]?.state?.nextRunAtMs).toBe(secondNextRunAtMs);
+  });
+
   it("preserves disabled jobs when persisted booleans roundtrip through string values", async () => {
     const { storePath } = await makeStorePath();
 
