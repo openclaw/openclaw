@@ -555,6 +555,7 @@ export async function runSubagentAnnounceFlow(params: {
           : targetRequesterOrigin,
       completionDirectOrigin,
       directOrigin,
+      sourceRunId: params.childRunId,
       sourceSessionKey: params.childSessionKey,
       sourceChannel: INTERNAL_MESSAGE_CHANNEL,
       sourceTool: "subagent_announce",
