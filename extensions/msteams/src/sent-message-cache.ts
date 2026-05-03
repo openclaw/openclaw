@@ -118,16 +118,16 @@ function rememberPersistentSentMessage(params: {
 async function lookupPersistentSentMessage(params: {
   conversationId: string;
   messageId: string;
-}): Promise<boolean> {
+}): Promise<number | undefined> {
   const store = getPersistentSentMessageStore();
   if (!store) {
-    return false;
+    return undefined;
   }
   try {
-    return Boolean(await store.lookup(makePersistentKey(params.conversationId, params.messageId)));
+    return (await store.lookup(makePersistentKey(params.conversationId, params.messageId)))?.sentAt;
   } catch (error) {
     disablePersistentSentMessageStore(error);
-    return false;
+    return undefined;
   }
 }
 
@@ -159,11 +159,12 @@ export async function wasMSTeamsMessageSentWithPersistence(params: {
   if (wasMSTeamsMessageSent(params.conversationId, params.messageId)) {
     return true;
   }
-  const found = await lookupPersistentSentMessage(params);
-  if (found) {
-    rememberSentMessageInMemory(params.conversationId, params.messageId, Date.now());
+  const sentAt = await lookupPersistentSentMessage(params);
+  if (sentAt == null) {
+    return false;
   }
-  return found;
+  rememberSentMessageInMemory(params.conversationId, params.messageId, sentAt);
+  return wasMSTeamsMessageSent(params.conversationId, params.messageId);
 }
 
 export function clearMSTeamsSentMessageCache(): void {
