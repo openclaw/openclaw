@@ -533,13 +533,32 @@ private func readLineWithPrompt(_ prompt: String) throws -> String {
 }
 
 private func readPasswordWithPrompt(_ prompt: String) throws -> String {
-    // getpass(3) writes the prompt to /dev/tty and reads input without echo,
-    // returning a pointer to a static buffer overwritten on the next call.
-    // We immediately copy into a Swift String so the buffer can be reused.
-    let promptText = "\(prompt): "
-    let result: UnsafeMutablePointer<CChar>? = promptText.withCString { getpass($0) }
-    guard let buf = result else {
+    // Use termios to disable echo rather than getpass(3): getpass truncates
+    // input at _PASSWORD_LEN (128 chars on BSD/macOS), which would silently
+    // discard longer credentials such as JWTs or extended provider tokens.
+    print("\(prompt): ", terminator: "")
+    fflush(stdout)
+
+    var oldTerm = termios()
+    let echoDisabled: Bool
+    if isatty(STDIN_FILENO) != 0 && tcgetattr(STDIN_FILENO, &oldTerm) == 0 {
+        var newTerm = oldTerm
+        newTerm.c_lflag &= ~tcflag_t(ECHO)
+        echoDisabled = tcsetattr(STDIN_FILENO, TCSANOW, &newTerm) == 0
+    } else {
+        echoDisabled = false
+    }
+    defer {
+        if echoDisabled {
+            _ = tcsetattr(STDIN_FILENO, TCSANOW, &oldTerm)
+        }
+        // The user's Enter keystroke wasn't echoed while ECHO was disabled;
+        // emit a newline so subsequent output starts on its own line.
+        print("")
+    }
+
+    guard let line = readLine() else {
         throw WizardCliError.cancelled
     }
-    return String(cString: buf)
+    return line
 }
