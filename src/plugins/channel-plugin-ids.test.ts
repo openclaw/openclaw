@@ -301,6 +301,18 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         providers: [],
         cliBackends: [],
       },
+      {
+        id: "lossless-claw",
+        kind: "context-engine",
+        channels: [],
+        // No activation.onStartup — this is the bug scenario (#76576):
+        // external context-engine plugins do not set onStartup but must be
+        // included in gateway startup when selected via plugins.slots.contextEngine.
+        origin: "installed",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
     ].map(withManifestLoadPaths) as PluginManifestRecord[],
     diagnostics: [],
   };
@@ -436,7 +448,13 @@ function createStartupConfig(params: {
   allowPluginIds?: string[];
   noConfiguredChannels?: boolean;
   memorySlot?: string;
+  contextEngine?: string;
 }) {
+  const slotsConfig = {
+    ...(params.memorySlot ? { memory: params.memorySlot } : {}),
+    ...(params.contextEngine ? { contextEngine: params.contextEngine } : {}),
+  };
+  const hasSlots = Object.keys(slotsConfig).length > 0;
   return {
     ...(params.noConfiguredChannels
       ? {
@@ -453,7 +471,7 @@ function createStartupConfig(params: {
       ? {
           plugins: {
             ...(params.allowPluginIds?.length ? { allow: params.allowPluginIds } : {}),
-            ...(params.memorySlot ? { slots: { memory: params.memorySlot } } : {}),
+            ...(hasSlots ? { slots: slotsConfig } : {}),
             entries: Object.fromEntries(
               params.enabledPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
             ),
@@ -465,12 +483,10 @@ function createStartupConfig(params: {
               allow: params.allowPluginIds,
             },
           }
-        : params.memorySlot
+        : hasSlots
           ? {
               plugins: {
-                slots: {
-                  memory: params.memorySlot,
-                },
+                slots: slotsConfig,
               },
             }
           : {}),
@@ -1092,6 +1108,44 @@ describe("resolveGatewayStartupPluginIds", () => {
         enabledPluginIds: ["memory-lancedb"],
       }),
       expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("includes the selected context-engine slot plugin in startup scope even without activation.onStartup (#76576)", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["lossless-claw"],
+        contextEngine: "lossless-claw",
+      }),
+      expected: ["demo-channel", "browser", "memory-core", "lossless-claw"],
+    });
+  });
+
+  it("does not include context-engine plugins not selected via the slot", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["lossless-claw"],
+      }),
+      expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("does not include the context-engine slot plugin when it is the built-in legacy engine", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        contextEngine: "legacy",
+      }),
+      expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("normalizes the context-engine slot id before startup filtering", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["lossless-claw"],
+        contextEngine: "Lossless-Claw",
+      }),
+      expected: ["demo-channel", "browser", "memory-core", "lossless-claw"],
     });
   });
 
