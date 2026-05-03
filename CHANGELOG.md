@@ -104,7 +104,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
+- Plugins/SDK: allow community plugins to use `api.runtime.state.openKeyedStore` for restart-safe keyed state by declaring `"contracts": { "usesKeyedStore": true }` in their manifest. Community plugins are subject to a 500-entry-per-namespace limit (vs 1,000 for bundled plugins) while keeping the same per-plugin total limit of 1,000 live rows. Bundled plugins retain implicit access. Fixes #76433.
+- Plugins/onboarding: let Manual setup install optional official plugins, including ClawHub-backed diagnostics with npm fallback, and expose the external Codex plugin as a selectable provider setup choice. Thanks @vincentkoc.
 - Plugins/ClawHub: make diagnostics, onboarding, doctor repair, and channel setup carry ClawPack metadata through install records while keeping explicit `clawhub:` installs on ClawHub and bare package installs on npm for the launch cutover. Thanks @vincentkoc.
 - Plugins/runtime: scope broad runtime preloads to the effective plugin ids derived from config, startup planning, configured channels, slots, and auto-enable rules instead of importing every discoverable plugin.
 - Agents/runtime: reuse the startup-loaded plugin registry for request-time providers, tools, channel actions, web/capability/memory/migration helpers, and memoized provider extra-params so stable embedded-run inputs no longer repeat plugin registry resolution while model-specific transport hook patches stay isolated. Thanks @DmitryPogodaev.

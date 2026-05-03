@@ -398,6 +398,12 @@ export type PluginManifestContracts = {
    */
   externalAuthProviders?: string[];
   memoryEmbeddingProviders?: string[];
+  /**
+   * Declares that this plugin uses the openKeyedStore API for restart-safe
+   * keyed state. Community plugins must declare this capability to access
+   * openKeyedStore. Bundled plugins have implicit access.
+   */
+  usesKeyedStore?: boolean;
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
