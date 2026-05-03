@@ -978,4 +978,35 @@ describe("plugin scheduled turns", () => {
       }),
     ).resolves.toEqual({ removed: 0, failed: 0 });
   });
+
+  it("blocks registration-time schedule and unschedule calls before activation", async () => {
+    workflowMocks.callGatewayTool.mockResolvedValue({ ok: true });
+    const activeFixture = createPluginRegistryFixture();
+    setActivePluginRegistry(activeFixture.registry.registry);
+
+    const loadingFixture = createPluginRegistryFixture();
+    const loadingApi = loadingFixture.registry.createApi(
+      createPluginRecord({
+        id: "preactivation-scheduler",
+        name: "Preactivation Scheduler",
+        origin: "bundled",
+      }),
+      { config: loadingFixture.config },
+    );
+
+    await expect(
+      loadingApi.scheduleSessionTurn({
+        sessionKey: "agent:main:main",
+        message: "wake",
+        delayMs: 10,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      loadingApi.unscheduleSessionTurnsByTag({
+        sessionKey: "agent:main:main",
+        tag: "nudge",
+      }),
+    ).resolves.toEqual({ removed: 0, failed: 0 });
+    expect(workflowMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
 });
