@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -11,6 +11,10 @@ import {
   resolveSelectedClawHubPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-clawhub-release.ts";
+import {
+  collectPublishablePluginPackages,
+  OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+} from "../scripts/lib/plugin-npm-release.ts";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -69,6 +73,89 @@ describe("collectClawHubPublishablePluginPackages", () => {
       "Demo Plugin: extension directory name must match",
     );
   });
+
+  it("validates only selected package names when filters are provided", () => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["broken-plugin"],
+    });
+    writeFileSync(
+      join(repoDir, "extensions", "broken-plugin", "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/broken-plugin",
+          version: "2026.4.1",
+          openclaw: {
+            extensions: ["./index.ts"],
+            release: {
+              publishToClawHub: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    expect(
+      collectClawHubPublishablePluginPackages(repoDir, {
+        packageNames: ["@openclaw/demo-plugin"],
+      }).map((plugin) => plugin.packageName),
+    ).toEqual(["@openclaw/demo-plugin"]);
+  });
+});
+
+describe("OpenClaw dual-published plugin metadata", () => {
+  const dualPublishedPlugins = [
+    {
+      extensionId: "diagnostics-otel",
+      packageName: "@openclaw/diagnostics-otel",
+    },
+    {
+      extensionId: "diagnostics-prometheus",
+      packageName: "@openclaw/diagnostics-prometheus",
+    },
+  ] as const;
+
+  it("keeps diagnostics plugins selectable through both ClawHub and npm release paths", () => {
+    const packageNames = dualPublishedPlugins.map((plugin) => plugin.packageName);
+    const clawHubPublishable = collectClawHubPublishablePluginPackages(undefined, {
+      packageNames,
+    });
+    const npmPublishable = collectPublishablePluginPackages(undefined, {
+      packageNames,
+    });
+
+    expect(clawHubPublishable.map((plugin) => plugin.packageName)).toEqual(packageNames);
+    expect(npmPublishable.map((plugin) => plugin.packageName)).toEqual(packageNames);
+
+    for (const plugin of dualPublishedPlugins) {
+      const packageJson = JSON.parse(
+        readFileSync(`extensions/${plugin.extensionId}/package.json`, "utf8"),
+      ) as {
+        openclaw?: {
+          install?: {
+            clawhubSpec?: string;
+            defaultChoice?: string;
+            npmSpec?: string;
+          };
+          release?: {
+            publishToClawHub?: boolean;
+            publishToNpm?: boolean;
+          };
+        };
+      };
+
+      expect(packageJson.openclaw?.install).toMatchObject({
+        clawhubSpec: `clawhub:${plugin.packageName}`,
+        defaultChoice: "npm",
+        npmSpec: plugin.packageName,
+      });
+      expect(packageJson.openclaw?.release).toMatchObject({
+        publishToClawHub: true,
+        publishToNpm: true,
+      });
+    }
+  });
 });
 
 describe("collectClawHubVersionGateErrors", () => {
@@ -115,10 +202,17 @@ describe("collectClawHubVersionGateErrors", () => {
         {
           name: "@openclaw/demo-plugin",
           version: "2026.4.1",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
           openclaw: {
             extensions: ["./index.ts"],
             compat: {
               pluginApi: ">=2026.4.1",
+            },
+            install: {
+              npmSpec: "@openclaw/demo-plugin",
             },
             build: {
               openclawVersion: "2026.4.1",
@@ -155,21 +249,7 @@ describe("collectClawHubVersionGateErrors", () => {
 
   it("does not require a version bump for shared release-tooling changes", () => {
     const repoDir = createTempPluginRepo();
-    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
-
-    mkdirSync(join(repoDir, "scripts"), { recursive: true });
-    writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "shared tooling",
-    ]);
-    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+    const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir);
 
     const errors = collectClawHubVersionGateErrors({
       rootDir: repoDir,
@@ -186,21 +266,7 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
     const repoDir = createTempPluginRepo({
       extraExtensionIds: ["demo-two"],
     });
-    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
-
-    mkdirSync(join(repoDir, "scripts"), { recursive: true });
-    writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "shared tooling",
-    ]);
-    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+    const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir);
 
     const selected = resolveSelectedClawHubPublishablePluginPackages({
       rootDir: repoDir,
@@ -262,6 +328,38 @@ describe("collectPluginClawHubReleasePlan", () => {
       version: "2026.4.1",
     });
   });
+
+  it("plans selected packages without validating unrelated publishable packages", async () => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["broken-plugin"],
+    });
+    writeFileSync(
+      join(repoDir, "extensions", "broken-plugin", "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/broken-plugin",
+          version: "2026.4.1",
+          openclaw: {
+            extensions: ["./index.ts"],
+            release: {
+              publishToClawHub: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl: async () => new Response("{}", { status: 404 }),
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+  });
 });
 
 describe("collectPluginClawHubReleasePathsFromGitRange", () => {
@@ -306,6 +404,10 @@ function createTempPluginRepo(
         {
           name: `@openclaw/${currentExtensionId}`,
           version: "2026.4.1",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
           openclaw: {
             extensions: ["./index.ts"],
             ...(options.includeClawHubContract === false
@@ -318,6 +420,9 @@ function createTempPluginRepo(
                     openclawVersion: "2026.4.1",
                   },
                 }),
+            install: {
+              npmSpec: `@openclaw/${currentExtensionId}`,
+            },
             release: {
               publishToClawHub: options.publishToClawHub ?? true,
             },
@@ -346,6 +451,26 @@ function createTempPluginRepo(
   ]);
 
   return repoDir;
+}
+
+function commitSharedReleaseToolingChange(repoDir: string) {
+  const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+  mkdirSync(join(repoDir, "scripts"), { recursive: true });
+  writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
+  git(repoDir, ["add", "."]);
+  git(repoDir, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-m",
+    "shared tooling",
+  ]);
+  const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+  return { baseRef, headRef };
 }
 
 function git(cwd: string, args: string[]) {

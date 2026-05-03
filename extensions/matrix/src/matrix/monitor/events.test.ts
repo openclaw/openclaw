@@ -148,6 +148,9 @@ function createHarness(params?: {
         }),
   } as unknown as MatrixClient;
 
+  const dmPolicy = params?.dmPolicy ?? "open";
+  const allowFrom = params?.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
+
   registerMatrixMonitorEvents({
     cfg: params?.cfg ?? { channels: { matrix: {} } },
     client,
@@ -155,9 +158,9 @@ function createHarness(params?: {
       accountId: params?.accountId ?? "default",
       encryption: params?.authEncryption ?? true,
     } as MatrixAuth,
-    allowFrom: params?.allowFrom ?? [],
+    allowFrom,
     dmEnabled: params?.dmEnabled ?? true,
-    dmPolicy: params?.dmPolicy ?? "open",
+    dmPolicy,
     readStoreAllowFrom,
     directTracker: {
       invalidateRoom,
@@ -196,6 +199,9 @@ function createHarness(params?: {
     flushTasks,
     runDetachedTask,
     roomMessageListener: listeners.get("room.message") as RoomEventListener | undefined,
+    roomDecryptedEventListener: listeners.get("room.decrypted_event") as
+      | RoomEventListener
+      | undefined,
     failedDecryptListener: listeners.get("room.failed_decryption") as
       | FailedDecryptListener
       | undefined,
@@ -400,6 +406,29 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     const body = getSentNoticeBody(sendMessage, 0);
     expect(body).toContain("Matrix verification request received from @alice:example.org.");
     expect(body).toContain('Open "Verify by emoji"');
+  });
+
+  it("routes late-decrypted room messages through the normal room handler", async () => {
+    const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
+    if (!roomDecryptedEventListener) {
+      throw new Error("room.decrypted_event listener was not registered");
+    }
+    const event: MatrixRawEvent = {
+      event_id: "$decrypted1",
+      sender: "@alice:example.org",
+      type: EventType.RoomMessage,
+      origin_server_ts: Date.now(),
+      content: {
+        msgtype: "m.text",
+        body: "@bot late decrypt trigger",
+      },
+    };
+
+    roomDecryptedEventListener("!room:example.org", event);
+
+    await flushTasks();
+    expect(onRoomMessage).toHaveBeenCalledTimes(1);
+    expect(onRoomMessage).toHaveBeenCalledWith("!room:example.org", event);
   });
 
   it("blocks verification request notices when dmPolicy pairing would block the sender", async () => {
@@ -940,7 +969,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
   });
 
   it("ignores verification notices in unrelated non-DM rooms", async () => {
-    const { sendMessage, roomEventListener } = createHarness({
+    const { sendMessage, roomEventListener, flushTasks } = createHarness({
       joinedMembersByRoom: {
         "!group:example.org": ["@alice:example.org", "@bot:example.org", "@ops:example.org"],
       },
@@ -972,13 +1001,12 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledTimes(0);
-    });
+    await flushTasks();
+    expect(sendMessage).toHaveBeenCalledTimes(0);
   });
 
   it("routes unmapped verification summaries to the room marked direct in member state", async () => {
-    const { sendMessage, verificationSummaryListener } = createHarness({
+    const { sendMessage, verificationSummaryListener, flushTasks } = createHarness({
       joinedMembersByRoom: {
         "!fallback:example.org": ["@alice:example.org", "@bot:example.org"],
         "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
@@ -1018,24 +1046,24 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       updatedAt: new Date("2026-02-25T21:42:55.000Z").toISOString(),
     });
 
-    await vi.waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledTimes(1);
-    });
+    await flushTasks();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
     expect((sendMessage.mock.calls as unknown[][])[0]?.[0]).toBe("!dm:example.org");
   });
 
   it("prefers the active direct room over a stale remembered strict room for unmapped summaries", async () => {
-    const { sendMessage, roomEventListener, verificationSummaryListener } = createHarness({
-      joinedMembersByRoom: {
-        "!fallback:example.org": ["@alice:example.org", "@bot:example.org"],
-        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
-      },
-      memberStateByRoomUser: {
-        "!dm:example.org": {
-          "@bot:example.org": { is_direct: true },
+    const { sendMessage, roomEventListener, verificationSummaryListener, flushTasks } =
+      createHarness({
+        joinedMembersByRoom: {
+          "!fallback:example.org": ["@alice:example.org", "@bot:example.org"],
+          "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
         },
-      },
-    });
+        memberStateByRoomUser: {
+          "!dm:example.org": {
+            "@bot:example.org": { is_direct: true },
+          },
+        },
+      });
     if (!verificationSummaryListener) {
       throw new Error("verification.summary listener was not registered");
     }
@@ -1050,9 +1078,8 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledTimes(1);
-    });
+    await flushTasks();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
     sendMessage.mockClear();
 
     verificationSummaryListener({
@@ -1080,14 +1107,13 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       updatedAt: new Date("2026-02-25T21:42:55.000Z").toISOString(),
     });
 
-    await vi.waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledTimes(1);
-    });
+    await flushTasks();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
     expect((sendMessage.mock.calls as unknown[][])[0]?.[0]).toBe("!dm:example.org");
   });
 
   it("does not emit duplicate SAS notices for the same verification payload", async () => {
-    const { sendMessage, roomEventListener, listVerifications } = createHarness({
+    const { sendMessage, roomEventListener, listVerifications, flushTasks } = createHarness({
       verifications: [
         {
           id: "verification-3",
@@ -1114,9 +1140,8 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         "m.relates_to": { event_id: "$req3" },
       },
     });
-    await vi.waitFor(() => {
-      expect(sendMessage.mock.calls.length).toBeGreaterThan(0);
-    });
+    await flushTasks();
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(0);
 
     roomEventListener("!room:example.org", {
       event_id: "$key3",
@@ -1127,9 +1152,8 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         "m.relates_to": { event_id: "$req3" },
       },
     });
-    await vi.waitFor(() => {
-      expect(listVerifications).toHaveBeenCalledTimes(2);
-    });
+    await flushTasks();
+    expect(listVerifications).toHaveBeenCalledTimes(2);
 
     const sasBodies = getSentNoticeBodies(sendMessage).filter((body) =>
       body.includes("SAS emoji:"),
@@ -1138,7 +1162,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
   });
 
   it("ignores cancelled verification flows when DM fallback resolves SAS notices", async () => {
-    const { sendMessage, roomEventListener } = createHarness({
+    const { sendMessage, roomEventListener, flushTasks } = createHarness({
       joinedMembersByRoom: {
         "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
       },
@@ -1190,16 +1214,16 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      const bodies = getSentNoticeBodies(sendMessage);
-      expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
-    });
+    await flushTasks();
+    expect(
+      getSentNoticeBodies(sendMessage).some((body) => body.includes("SAS decimal: 6158 1986 3513")),
+    ).toBe(true);
     const bodies = getSentNoticeBodies(sendMessage);
     expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(false);
   });
 
   it("preserves strict-room SAS fallback when active DM inspection cannot resolve a room", async () => {
-    const { sendMessage, roomEventListener } = createHarness({
+    const { sendMessage, roomEventListener, flushTasks } = createHarness({
       joinedMembersByRoom: {
         "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
       },
@@ -1235,14 +1259,14 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      const bodies = getSentNoticeBodies(sendMessage);
-      expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
-    });
+    await flushTasks();
+    expect(
+      getSentNoticeBodies(sendMessage).some((body) => body.includes("SAS decimal: 6158 1986 3513")),
+    ).toBe(true);
   });
 
   it("prefers the active verification for the current DM when multiple active summaries exist", async () => {
-    const { sendMessage, roomEventListener } = createHarness({
+    const { sendMessage, roomEventListener, flushTasks } = createHarness({
       joinedMembersByRoom: {
         "!dm-current:example.org": ["@alice:example.org", "@bot:example.org"],
       },
@@ -1296,16 +1320,16 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      const bodies = getSentNoticeBodies(sendMessage);
-      expect(bodies.some((body) => body.includes("SAS decimal: 6158 1986 3513"))).toBe(true);
-    });
+    await flushTasks();
+    expect(
+      getSentNoticeBodies(sendMessage).some((body) => body.includes("SAS decimal: 6158 1986 3513")),
+    ).toBe(true);
     const bodies = getSentNoticeBodies(sendMessage);
     expect(bodies.some((body) => body.includes("SAS decimal: 1111 2222 3333"))).toBe(false);
   });
 
   it("does not emit SAS notices for cancelled verification events", async () => {
-    const { sendMessage, roomEventListener } = createHarness({
+    const { sendMessage, roomEventListener, flushTasks } = createHarness({
       joinedMembersByRoom: {
         "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
       },
@@ -1342,9 +1366,8 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledTimes(1);
-    });
+    await flushTasks();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
     const body = getSentNoticeBody(sendMessage, 0);
     expect(body).toContain("Matrix verification cancelled by @alice:example.org");
     expect(body).not.toContain("SAS decimal:");

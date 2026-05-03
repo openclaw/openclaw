@@ -1,10 +1,14 @@
-import { listPotentialConfiguredChannelIds } from "../../../channels/config-presence.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  listExplicitConfiguredChannelIdsForConfig,
+  resolveConfiguredChannelPresencePolicy,
+} from "../../../plugins/channel-plugin-ids.js";
 import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../../../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 
 export type ChannelPluginBlockerHit = {
@@ -40,17 +44,30 @@ export function scanConfiguredChannelPluginBlockers(
     return [];
   }
   const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(cfg, env).map((id) => id.trim()),
+    listExplicitConfiguredChannelIdsForConfig(cfg)
+      .map((channelId) => normalizeOptionalLowercaseString(channelId))
+      .filter((channelId): channelId is string => Boolean(channelId)),
   );
   if (configuredChannelIds.size === 0) {
     return [];
   }
 
   const pluginsConfig = normalizePluginsConfig(cfg.plugins);
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
     env,
+    includeDisabled: true,
   });
+  const activeConfiguredChannelIds = new Set(
+    resolveConfiguredChannelPresencePolicy({
+      config: cfg,
+      env,
+      includePersistedAuthState: false,
+      manifestRecords: registry.plugins,
+    })
+      .filter((entry) => entry.effective)
+      .map((entry) => entry.channelId),
+  );
   const hits: ChannelPluginBlockerHit[] = [];
 
   for (const plugin of registry.plugins) {
@@ -74,8 +91,15 @@ export function scanConfiguredChannelPluginBlockers(
       continue;
     }
 
-    for (const channelId of plugin.channels) {
+    for (const rawChannelId of plugin.channels) {
+      const channelId = normalizeOptionalLowercaseString(rawChannelId);
+      if (!channelId) {
+        continue;
+      }
       if (!configuredChannelIds.has(channelId)) {
+        continue;
+      }
+      if (activeConfiguredChannelIds.has(channelId)) {
         continue;
       }
       hits.push({

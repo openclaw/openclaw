@@ -1,3 +1,4 @@
+import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   SearchConfigRecord,
   WebSearchProviderPlugin,
@@ -6,6 +7,16 @@ import type {
 import { createWebSearchProviderContractFields } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
+
+type BraveWebSearchRuntime = typeof import("./brave-web-search-provider.runtime.js");
+
+let braveWebSearchRuntimePromise: Promise<BraveWebSearchRuntime> | undefined;
+
+function loadBraveWebSearchRuntime(): Promise<BraveWebSearchRuntime> {
+  braveWebSearchRuntimePromise ??= import("./brave-web-search-provider.runtime.js");
+  return braveWebSearchRuntimePromise;
+}
+
 const BraveSearchSchema = {
   type: "object",
   properties: {
@@ -101,8 +112,10 @@ function resolveBraveMode(searchConfig?: Record<string, unknown>): "web" | "llm-
 
 function createBraveToolDefinition(
   searchConfig?: SearchConfigRecord,
+  config?: Parameters<typeof isDiagnosticFlagEnabled>[1],
 ): WebSearchProviderToolDefinition {
   const braveMode = resolveBraveMode(searchConfig);
+  const diagnosticsEnabled = isDiagnosticFlagEnabled("brave.http", config);
 
   return {
     description:
@@ -111,8 +124,8 @@ function createBraveToolDefinition(
         : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
     parameters: BraveSearchSchema,
     execute: async (args) => {
-      const { executeBraveSearch } = await import("./brave-web-search-provider.runtime.js");
-      return await executeBraveSearch(args, searchConfig);
+      const { executeBraveSearch } = await loadBraveWebSearchRuntime();
+      return await executeBraveSearch(args, searchConfig, { diagnosticsEnabled });
     },
   };
 }
@@ -127,7 +140,7 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
     envVars: ["BRAVE_API_KEY"],
     placeholder: "BSA...",
     signupUrl: "https://brave.com/search/api/",
-    docsUrl: "https://docs.openclaw.ai/brave-search",
+    docsUrl: "https://docs.openclaw.ai/tools/brave-search",
     autoDetectOrder: 10,
     credentialPath: BRAVE_CREDENTIAL_PATH,
     ...createWebSearchProviderContractFields({
@@ -143,6 +156,7 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
           resolveProviderWebSearchPluginConfig(ctx.config, "brave"),
           { mirrorApiKeyToTopLevel: true },
         ),
+        ctx.config,
       ),
   };
 }

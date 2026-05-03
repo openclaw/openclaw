@@ -1,14 +1,20 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 
 type ThinkingProviderPlugin = {
   id: string;
   aliases?: string[];
+  hookAliases?: string[];
   isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  resolveThinkingProfile?: (
+    ctx: ProviderDefaultThinkingPolicyContext,
+  ) => ProviderThinkingProfile | null | undefined;
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
@@ -32,16 +38,22 @@ function matchesProviderId(provider: ThinkingProviderPlugin, providerId: string)
   if (normalizeProviderId(provider.id) === normalized) {
     return true;
   }
-  return (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalized);
+  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
+    (alias) => normalizeProviderId(alias) === normalized,
+  );
 }
 
 function resolveActiveThinkingProvider(providerId: string): ThinkingProviderPlugin | undefined {
   const state = (
     globalThis as typeof globalThis & { [PLUGIN_REGISTRY_STATE]?: ThinkingRegistryState }
   )[PLUGIN_REGISTRY_STATE];
-  return state?.activeRegistry?.providers?.find((entry) => {
+  const activeProvider = state?.activeRegistry?.providers?.find((entry) => {
     return matchesProviderId(entry.provider, providerId);
   })?.provider;
+  if (activeProvider) {
+    return activeProvider;
+  }
+  return undefined;
 }
 
 type ThinkingHookParams<TContext> = {
@@ -59,6 +71,20 @@ export function resolveProviderXHighThinking(
   params: ThinkingHookParams<ProviderThinkingPolicyContext>,
 ) {
   return resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
+}
+
+export function resolveProviderThinkingProfile(
+  params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
+) {
+  const activeProfile = resolveActiveThinkingProvider(params.provider)?.resolveThinkingProfile?.(
+    params.context,
+  );
+  if (activeProfile) {
+    return activeProfile;
+  }
+  return resolveBundledProviderPolicySurface(params.provider)?.resolveThinkingProfile?.(
+    params.context,
+  );
 }
 
 export function resolveProviderDefaultThinkingLevel(

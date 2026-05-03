@@ -4,6 +4,7 @@ export type SessionState = {
   sessionId?: string;
   sessionKey?: string;
   lastActivity: number;
+  lastStuckWarnAgeMs?: number;
   state: SessionStateValue;
   queueDepth: number;
   toolCallHistory?: ToolCallRecord[];
@@ -15,6 +16,7 @@ export type ToolCallRecord = {
   toolName: string;
   argsHash: string;
   toolCallId?: string;
+  runId?: string;
   resultHash?: string;
   unknownToolName?: string;
   timestamp: number;

@@ -7,7 +7,11 @@ read_when:
 title: "Install"
 ---
 
-# Install
+## System requirements
+
+- **Node 24** (recommended) or Node 22.14+ — the installer script handles this automatically
+- **macOS, Linux, or Windows** — both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
+- `pnpm` is only needed if you build from source
 
 ## Recommended: installer script
 
@@ -43,12 +47,6 @@ To install without running onboarding:
 
 For all flags and CI/automation options, see [Installer internals](/install/installer).
 
-## System requirements
-
-- **Node 24** (recommended) or Node 22.14+ — the installer script handles this automatically
-- **macOS, Linux, or Windows** — both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
-- `pnpm` is only needed if you build from source
-
 ## Alternative install methods
 
 ### Local prefix installer (`install-cli.sh`)
@@ -62,6 +60,10 @@ curl -fsSL https://openclaw.ai/install-cli.sh | bash
 
 It supports npm installs by default, plus git-checkout installs under the same
 prefix flow. Full reference: [Installer internals](/install/installer#install-clish).
+
+Already installed? Switch between package and git installs with
+`openclaw update --channel dev` and `openclaw update --channel stable`. See
+[Updating](/install/updating#switch-between-npm-and-git-installs).
 
 ### npm, pnpm, or bun
 
@@ -115,7 +117,7 @@ For contributors or anyone who wants to run from a local checkout:
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
-pnpm install && pnpm ui:build && pnpm build
+pnpm install && pnpm build && pnpm ui:build
 pnpm link --global
 openclaw onboard --install-daemon
 ```

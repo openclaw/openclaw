@@ -116,11 +116,16 @@ const collectSynologyChatSecurityWarnings =
       "- Synology Chat: dangerouslyAllowInheritedWebhookPath=true opts a named account into a shared inherited webhook path. Prefer an explicit per-account webhookPath.",
     (account) =>
       account.dmPolicy === "open" &&
+      account.allowedUserIds.length === 0 &&
+      '- Synology Chat: dmPolicy="open" with empty allowedUserIds blocks all senders. Add allowedUserIds=["*"] for public DMs or set explicit user IDs.',
+    (account) =>
+      account.dmPolicy === "open" &&
+      account.allowedUserIds.includes("*") &&
       '- Synology Chat: dmPolicy="open" allows any user to message the bot. Consider "allowlist" for production use.',
     (account) =>
       account.dmPolicy === "allowlist" &&
       account.allowedUserIds.length === 0 &&
-      '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open".',
+      '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open" with allowedUserIds=["*"].',
   );
 
 type SynologyChatOutboundResult = {
@@ -150,6 +155,7 @@ type SynologyChatPlugin = Omit<
     }) => string[];
   };
   messaging: {
+    targetPrefixes?: readonly string[];
     normalizeTarget: (target: string) => string | undefined;
     targetResolver: {
       looksLikeId: (id: string) => boolean;
@@ -232,13 +238,14 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
       },
       approvalCapability: synologyChatApprovalAuth,
       messaging: {
+        targetPrefixes: ["synology-chat", "synology_chat", "synology"],
         normalizeTarget: (target: string) => {
           const trimmed = target.trim();
           if (!trimmed) {
             return undefined;
           }
           // Strip common prefixes
-          return trimmed.replace(/^synology[-_]?chat:/i, "").trim();
+          return trimmed.replace(/^synology(?:[-_]?chat)?:/i, "").trim();
         },
         targetResolver: {
           looksLikeId: (id: string) => {
@@ -247,7 +254,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
               return false;
             }
             // Synology Chat user IDs are numeric
-            return /^\d+$/.test(trimmed) || /^synology[-_]?chat:/i.test(trimmed);
+            return /^\d+$/.test(trimmed) || /^synology(?:[-_]?chat)?:/i.test(trimmed);
           },
           hint: "<userId>",
         },

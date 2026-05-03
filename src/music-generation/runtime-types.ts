@@ -21,6 +21,9 @@ export type GenerateMusicParams = {
   durationSeconds?: number;
   format?: MusicGenerationOutputFormat;
   inputImages?: MusicGenerationSourceImage[];
+  autoProviderFallback?: boolean;
+  /** Optional per-request provider timeout in milliseconds. */
+  timeoutMs?: number;
 };
 
 export type GenerateMusicRuntimeResult = {

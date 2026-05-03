@@ -1,11 +1,12 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
-import type { PromptMode } from "../system-prompt.types.js";
+import type { PromptMode, SilentReplyPromptMode } from "../system-prompt.types.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
 import type { ReasoningLevel, ThinkLevel } from "./utils.js";
 
@@ -21,6 +22,7 @@ export function buildEmbeddedSystemPrompt(params: {
   heartbeatPrompt?: string;
   skillsPrompt?: string;
   docsPath?: string;
+  sourcePath?: string;
   ttsHint?: string;
   reactionGuidance?: {
     level: "minimal" | "extensive";
@@ -29,8 +31,15 @@ export function buildEmbeddedSystemPrompt(params: {
   workspaceNotes?: string[];
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
+  /** Controls the generic silent-reply section. Channel-aware prompts can set "none". */
+  silentReplyPromptMode?: SilentReplyPromptMode;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Registered runtime slash/native command names such as `codex`. */
+  nativeCommandNames?: string[];
+  /** Plugin-owned prompt guidance for registered native slash commands. */
+  nativeCommandGuidanceLines?: string[];
   runtimeInfo: {
     agentId?: string;
     host: string;
@@ -69,11 +78,16 @@ export function buildEmbeddedSystemPrompt(params: {
     heartbeatPrompt: params.heartbeatPrompt,
     skillsPrompt: params.skillsPrompt,
     docsPath: params.docsPath,
+    sourcePath: params.sourcePath,
     ttsHint: params.ttsHint,
     workspaceNotes: params.workspaceNotes,
     reactionGuidance: params.reactionGuidance,
     promptMode: params.promptMode,
+    silentReplyPromptMode: params.silentReplyPromptMode,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     acpEnabled: params.acpEnabled,
+    nativeCommandNames: params.nativeCommandNames,
+    nativeCommandGuidanceLines: params.nativeCommandGuidanceLines,
     runtimeInfo: params.runtimeInfo,
     messageToolHints: params.messageToolHints,
     sandboxInfo: params.sandboxInfo,

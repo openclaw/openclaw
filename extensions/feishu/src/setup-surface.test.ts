@@ -1,14 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
-import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import {
+  createNonExitingRuntimeEnv,
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { FeishuProbeResult } from "./types.js";
+
+const { probeFeishuMock } = vi.hoisted(() => ({
+  probeFeishuMock: vi.fn<() => Promise<FeishuProbeResult>>(async () => ({
+    ok: false,
+    error: "mocked",
+  })),
+}));
 
 vi.mock("./probe.js", () => ({
-  probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
+  probeFeishu: probeFeishuMock,
 }));
 
 vi.mock("./app-registration.js", () => ({
@@ -67,9 +75,13 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
 
 const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
 const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
-type FeishuConfigureRuntime = Parameters<typeof feishuConfigure>[0]["runtime"];
 
 describe("feishu setup wizard", () => {
+  beforeEach(() => {
+    probeFeishuMock.mockReset();
+    probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
+  });
+
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
       .fn()
@@ -95,13 +107,18 @@ describe("feishu setup wizard", () => {
           },
         } as never,
         prompter,
-        runtime: createNonExitingTypedRuntimeEnv<FeishuConfigureRuntime>(),
+        runtime: createNonExitingRuntimeEnv(),
       }),
     ).resolves.toBeTruthy();
   });
 });
 
 describe("feishu setup wizard status", () => {
+  beforeEach(() => {
+    probeFeishuMock.mockReset();
+    probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
+  });
+
   it("treats SecretRef appSecret as configured when appId is present", async () => {
     const status = await feishuGetStatus({
       cfg: {
@@ -120,6 +137,39 @@ describe("feishu setup wizard status", () => {
     });
 
     expect(status.configured).toBe(true);
+  });
+
+  it("probes the resolved default account in multi-account config", async () => {
+    probeFeishuMock.mockResolvedValueOnce({ ok: true, botName: "Feishu Main" });
+
+    const status = await feishuGetStatus({
+      cfg: {
+        channels: {
+          feishu: {
+            enabled: true,
+            defaultAccount: "main-bot",
+            accounts: {
+              "main-bot": {
+                appId: "cli_main",
+                appSecret: "main-app-secret", // pragma: allowlist secret
+                connectionMode: "websocket",
+              },
+            },
+          },
+        },
+      } as never,
+      ...baseStatusContext,
+    });
+
+    expect(status.configured).toBe(true);
+    expect(status.statusLines).toEqual(["Feishu: connected as Feishu Main"]);
+    expect(probeFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "main-bot",
+        appId: "cli_main",
+        appSecret: "main-app-secret", // pragma: allowlist secret
+      }),
+    );
   });
 
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {

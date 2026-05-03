@@ -54,7 +54,7 @@ export const baseStatusOverviewScanFields = {
   ...baseStatusGatewaySnapshot,
 };
 
-export const baseStatusGatewayService = {
+const baseStatusGatewayService = {
   label: "LaunchAgent",
   installed: true,
   managedByOpenClaw: true,
@@ -62,7 +62,7 @@ export const baseStatusGatewayService = {
   runtimeShort: "running",
 };
 
-export const baseStatusNodeService = {
+const baseStatusNodeService = {
   label: "node",
   installed: true,
   loadedText: "loaded",
@@ -80,7 +80,7 @@ export const baseStatusOverviewSurface = {
   ...baseStatusServices,
 } as unknown as StatusOverviewSurface;
 
-export const baseStatusSummary = {
+const baseStatusSummary = {
   tasks: { total: 3, active: 1, failures: 0, byStatus: { queued: 1, running: 1 } },
   taskAudit: { errors: 1, warnings: 0 },
   heartbeat: {
@@ -92,14 +92,14 @@ export const baseStatusSummary = {
   sessions: {
     count: 2,
     paths: ["store.json"],
-    defaults: { model: "gpt-5.4", contextTokens: 12_000 },
+    defaults: { model: "gpt-5.5", contextTokens: 12_000 },
     recent: [
       {
         key: "session-key",
         kind: "direct",
         updatedAt: 1,
         age: 5_000,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         totalTokens: 12_000,
         totalTokensFresh: true,
         remainingTokens: 4_000,
@@ -112,14 +112,14 @@ export const baseStatusSummary = {
   },
 } as unknown as StatusSummary;
 
-export const baseStatusAgentStatus = {
+const baseStatusAgentStatus = {
   defaultId: "main",
   bootstrapPendingCount: 1,
   totalSessions: 2,
   agents: [{ id: "main", lastActiveAgeMs: 60_000 }] as AgentLocalStatus[],
 };
 
-export const baseStatusMemory = {
+const baseStatusMemory = {
   agentId: "main",
   files: 1,
   chunks: 2,
@@ -128,50 +128,69 @@ export const baseStatusMemory = {
   cache: {},
 } as unknown as MemoryStatusSnapshot;
 
-export const baseStatusMemoryPlugin = {
+const baseStatusMemoryPlugin = {
   enabled: true,
   slot: "memory",
 } as const satisfies MemoryPluginStatus;
 
-export const baseStatusPluginCompatibility = [
+const baseStatusPluginCompatibility = [
   { pluginId: "a", severity: "warn", message: "legacy" },
 ] as PluginCompatibilityNotice[];
 
-export function createStatusLastHeartbeat(): HeartbeatEventPayload {
+function createStatusLastHeartbeat(): HeartbeatEventPayload {
   return {
     ts: Date.now() - 30_000,
     status: "ok-token",
-    channel: "discord",
+    channel: "quietchat",
     accountId: "acct",
   };
 }
 
-export const statusTestDecorators = {
+function createStatusHealth() {
+  return {
+    ok: true as const,
+    ts: Date.now(),
+    durationMs: 42,
+    channels: {},
+    channelOrder: [],
+    channelLabels: {},
+    heartbeatSeconds: 60,
+    defaultAgentId: "main",
+    agents: [],
+    sessions: {
+      path: "store.json",
+      count: 2,
+      recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
+    },
+  };
+}
+
+const statusTestDecorators = {
   ok: (value: string) => `ok(${value})`,
   warn: (value: string) => `warn(${value})`,
   muted: (value: string) => `muted(${value})`,
   accentDim: (value: string) => `accent(${value})`,
 };
 
-export const statusTestFormatting = {
+const statusTestFormatting = {
   shortenText: (value: string) => value,
   formatCliCommand: (value: string) => `cmd:${value}`,
   formatTimeAgo: (value: number) => `${value}ms`,
   formatKTokens: (value: number) => `${Math.round(value / 1000)}k`,
   formatTokensCompact: () => "12k",
   formatPromptCacheCompact: () => "cache ok",
-  formatHealthChannelLines: () => ["Discord: OK · ready"],
+  formatHealthChannelLines: () => ["QuietChat: OK · ready"],
   formatPluginCompatibilityNotice: (notice: { message?: unknown }) => String(notice.message),
   formatUpdateAvailableHint: () => "update available",
 };
 
-export const statusTestMemoryResolvers = {
+const statusTestMemoryResolvers = {
   resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" as Tone }),
   resolveMemoryFtsState: () => ({ state: "ready", tone: "warn" as Tone }),
   resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" as Tone }),
 };
 
-export const statusTestTheme = {
+const statusTestTheme = {
   heading: (value: string) => `# ${value}`,
   muted: (value: string) => `muted(${value})`,
   warn: (value: string) => `warn(${value})`,
@@ -186,22 +205,7 @@ export function createStatusCommandOverviewRowsParams(
     surface: baseStatusOverviewSurface,
     osLabel: "macOS",
     summary: baseStatusSummary,
-    health: {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 42,
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-      heartbeatSeconds: 60,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: {
-        path: "store.json",
-        count: 2,
-        recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
-      },
-    },
+    health: createStatusHealth(),
     lastHeartbeat: createStatusLastHeartbeat(),
     agentStatus: baseStatusAgentStatus,
     memory: baseStatusMemory,
@@ -235,33 +239,18 @@ export function createStatusCommandReportDataParams(
         },
       ],
     },
-    health: {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 42,
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-      heartbeatSeconds: 60,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: {
-        path: "store.json",
-        count: 2,
-        recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
-      },
-    },
+    health: createStatusHealth(),
     usageLines: ["usage line"],
     lastHeartbeat: createStatusLastHeartbeat(),
     agentStatus: baseStatusAgentStatus,
     channels: {
-      rows: [{ id: "discord", label: "Discord", enabled: true, state: "ok", detail: "ready" }],
+      rows: [{ id: "quietchat", label: "QuietChat", enabled: true, state: "ok", detail: "ready" }],
     },
-    channelIssues: [{ channel: "discord", message: "warn msg" }],
+    channelIssues: [{ channel: "quietchat", message: "warn msg" }],
     memory: baseStatusMemory,
     memoryPlugin: baseStatusMemoryPlugin,
     pluginCompatibility: baseStatusPluginCompatibility,
-    pairingRecovery: { requestId: "req-1" },
+    pairingRecovery: { requestId: "req-1", reason: null, remediationHint: null },
     tableWidth: 120,
     ...statusTestDecorators,
     ...statusTestFormatting,

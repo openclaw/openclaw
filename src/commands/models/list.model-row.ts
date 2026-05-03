@@ -1,30 +1,25 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ModelRow } from "./list.types.js";
 
-export type ModelAuthAvailabilityResolver = (params: {
+export type ListRowModel = {
+  id: string;
+  name: string;
   provider: string;
-  cfg: OpenClawConfig;
-  authStore: AuthProfileStore;
-}) => boolean;
+  input: Array<"text" | "image" | "document">;
+  baseUrl?: string;
+  contextWindow?: number | null;
+  contextTokens?: number | null;
+};
 
-function authStoreHasProviderProfile(authStore: AuthProfileStore, provider: string): boolean {
-  return Object.values(authStore.profiles ?? {}).some(
-    (credential) => credential.provider === provider,
-  );
-}
+export type ModelAuthAvailabilityResolver = (provider: string) => boolean;
 
 export function toModelRow(params: {
-  model?: Model<Api>;
+  model?: ListRowModel;
   key: string;
   tags: string[];
   aliases?: string[];
   availableKeys?: Set<string>;
-  cfg?: OpenClawConfig;
-  authStore?: AuthProfileStore;
   allowProviderAvailabilityFallback?: boolean;
   hasAuthForProvider?: ModelAuthAvailabilityResolver;
 }): ModelRow {
@@ -34,8 +29,6 @@ export function toModelRow(params: {
     tags,
     aliases = [],
     availableKeys,
-    cfg,
-    authStore,
     allowProviderAvailabilityFallback = false,
   } = params;
   if (!model) {
@@ -52,7 +45,7 @@ export function toModelRow(params: {
   }
 
   const input = model.input.join("+") || "text";
-  const local = isLocalBaseUrl(model.baseUrl);
+  const local = isLocalBaseUrl(model.baseUrl ?? "");
   const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
   // Prefer model-level registry availability when present.
   // Fall back to provider-level auth heuristics only if registry availability isn't available,
@@ -60,17 +53,7 @@ export function toModelRow(params: {
   const available =
     availableKeys !== undefined && !allowProviderAvailabilityFallback
       ? modelIsAvailable
-      : modelIsAvailable ||
-        (cfg && authStore
-          ? (
-              params.hasAuthForProvider ??
-              ((input) => authStoreHasProviderProfile(input.authStore, input.provider))
-            )({
-              provider: model.provider,
-              cfg,
-              authStore,
-            })
-          : false);
+      : modelIsAvailable || (params.hasAuthForProvider?.(model.provider) ?? false);
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {
@@ -89,6 +72,7 @@ export function toModelRow(params: {
     name: model.name || model.id,
     input,
     contextWindow: model.contextWindow ?? null,
+    ...(typeof model.contextTokens === "number" ? { contextTokens: model.contextTokens } : {}),
     local,
     available,
     tags: Array.from(mergedTags),

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
+  isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isServerErrorMessage,
 } from "./failover-matches.js";
 
 describe("Z.ai vendor error codes (#48988)", () => {
@@ -68,6 +70,20 @@ describe("Z.ai vendor error codes (#48988)", () => {
       expect(isRateLimitErrorMessage("rate limit exceeded")).toBe(true);
     });
 
+    it("OpenAI model-capacity text is classified as overloaded", () => {
+      expect(
+        isOverloadedErrorMessage("Selected model is at capacity. Please try a different model."),
+      ).toBe(true);
+    });
+
+    it("OpenRouter high-load text is classified as overloaded", () => {
+      expect(
+        isOverloadedErrorMessage(
+          "The service is currently experiencing high load and cannot process your request.",
+        ),
+      ).toBe(true);
+    });
+
     it("billing still classified correctly", () => {
       expect(isBillingErrorMessage("insufficient credits")).toBe(true);
     });
@@ -75,5 +91,15 @@ describe("Z.ai vendor error codes (#48988)", () => {
     it("auth still classified correctly", () => {
       expect(isAuthErrorMessage("invalid api key provided")).toBe(true);
     });
+  });
+});
+
+describe("server error status classification", () => {
+  it("classifies a bare internal server error status as server error", () => {
+    expect(isServerErrorMessage("status: internal server error")).toBe(true);
+  });
+
+  it("does not classify prefixed plain internal server error status prose", () => {
+    expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
   });
 });

@@ -1,6 +1,12 @@
+import { writeFile } from "node:fs/promises";
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
@@ -146,7 +152,52 @@ describe("gateway pre-auth hardening", () => {
     }
   });
 
+  it("uses gateway.handshakeTimeoutMs for idle unauthenticated sockets", async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH missing in gateway preauth test");
+    }
+    await writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          gateway: {
+            handshakeTimeoutMs: 250,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    try {
+      const harness = await createGatewaySuiteHarness({
+        serverOptions: { auth: { mode: "none" } },
+      });
+      try {
+        const ws = await harness.openWs();
+        await readConnectChallengeNonce(ws);
+        const close = await new Promise<{ code: number; elapsedMs: number }>((resolve) => {
+          const startedAt = Date.now();
+          ws.once("close", (code) => {
+            resolve({ code, elapsedMs: Date.now() - startedAt });
+          });
+        });
+        expect(close.code).toBe(1000);
+        expect(close.elapsedMs).toBeGreaterThan(0);
+        expect(close.elapsedMs).toBeLessThan(PREAUTH_HANDSHAKE_TEST_CLOSE_LIMIT_MS);
+      } finally {
+        await harness.close();
+      }
+    } finally {
+      await writeFile(configPath, "{}\n", "utf-8");
+    }
+  });
+
   it("rejects oversized pre-auth connect frames before application-level auth responses", async () => {
+    resetDiagnosticEventsForTest();
+    const events: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onDiagnosticEvent((event) => events.push(event));
     const harness = await createGatewaySuiteHarness();
     try {
       const ws = await harness.openWs();
@@ -176,7 +227,18 @@ describe("gateway pre-auth hardening", () => {
 
       const result = await closed;
       expect(result.code).toBe(1009);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "payload.large",
+          surface: "gateway.ws.preauth",
+          action: "rejected",
+          limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+          reason: "preauth_frame_limit",
+        }),
+      );
     } finally {
+      stopDiagnostics();
+      resetDiagnosticEventsForTest();
       await harness.close();
     }
   });
@@ -208,7 +270,9 @@ describe("gateway pre-auth hardening", () => {
         });
         req.once("response", (res) => {
           res.resume();
-          resolve(res.statusCode ?? 0);
+          res.once("end", () => {
+            resolve(res.statusCode ?? 0);
+          });
         });
         req.once("error", reject);
         req.end();

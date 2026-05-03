@@ -1,12 +1,14 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
-import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
-import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import {
+  convertMarkdownTables,
+  resolveMarkdownTableMode,
+} from "openclaw/plugin-sdk/markdown-table-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
+import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
@@ -14,6 +16,12 @@ import {
 } from "./accounts.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
+import { isWhatsAppNewsletterJid } from "./normalize.js";
+import {
+  normalizeWhatsAppPayloadText,
+  prepareWhatsAppOutboundMedia,
+  resolveWhatsAppOutboundMediaUrls,
+} from "./outbound-media-contract.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
@@ -51,7 +59,7 @@ export async function sendMessageWhatsApp(
   body: string,
   options: {
     verbose: boolean;
-    cfg?: OpenClawConfig;
+    cfg: OpenClawConfig;
     mediaUrl?: string;
     mediaUrls?: readonly string[];
     mediaAccess?: {
@@ -61,23 +69,28 @@ export async function sendMessageWhatsApp(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
+    audioAsVoice?: boolean;
     accountId?: string;
+    quotedMessageKey?: {
+      id: string;
+      remoteJid: string;
+      fromMe: boolean;
+      participant?: string;
+      messageText?: string;
+    };
+    preserveLeadingWhitespace?: boolean;
   },
 ): Promise<{ messageId: string; toJid: string }> {
-  let text = body.trimStart();
+  let text = options.preserveLeadingWhitespace ? body : normalizeWhatsAppPayloadText(body);
   const jid = toWhatsappJid(to);
-  const mediaUrls = Array.isArray(options.mediaUrls)
-    ? options.mediaUrls
-        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-        .filter(Boolean)
-    : [];
-  const primaryMediaUrl = options.mediaUrl?.trim() || mediaUrls[0];
+  const mediaUrls = resolveWhatsAppOutboundMediaUrls(options);
+  const primaryMediaUrl = mediaUrls[0];
   if (!text && !primaryMediaUrl) {
     return { messageId: "", toJid: jid };
   }
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const cfg = options.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp send");
   const { listener: active, accountId: resolvedAccountId } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
@@ -104,47 +117,56 @@ export async function sendMessageWhatsApp(
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
+    let visibleTextAfterVoice: string | undefined;
     if (primaryMediaUrl) {
-      const media = await loadOutboundMediaFromUrl(primaryMediaUrl, {
-        maxBytes: resolveWhatsAppMediaMaxBytes(account),
-        mediaAccess: options.mediaAccess,
-        mediaLocalRoots: options.mediaLocalRoots,
-        mediaReadFile: options.mediaReadFile,
-      });
+      const media = await prepareWhatsAppOutboundMedia(
+        await loadOutboundMediaFromUrl(primaryMediaUrl, {
+          maxBytes: resolveWhatsAppMediaMaxBytes(account),
+          mediaAccess: options.mediaAccess,
+          mediaLocalRoots: options.mediaLocalRoots,
+          mediaReadFile: options.mediaReadFile,
+        }),
+        primaryMediaUrl,
+      );
       const caption = text || undefined;
       mediaBuffer = media.buffer;
-      mediaType = media.contentType ?? "application/octet-stream";
-      if (media.kind === "audio") {
-        // WhatsApp expects explicit opus codec for PTT voice notes.
-        mediaType =
-          media.contentType === "audio/ogg"
-            ? "audio/ogg; codecs=opus"
-            : (media.contentType ?? "application/octet-stream");
-      } else if (media.kind === "video") {
-        text = caption ?? "";
-      } else if (media.kind === "image") {
-        text = caption ?? "";
-      } else {
+      mediaType = media.mimetype;
+      if (media.kind === "audio" && caption) {
+        visibleTextAfterVoice = caption;
+        text = "";
+      } else if (media.kind === "document") {
         text = caption ?? "";
         documentFileName = media.fileName;
+      } else {
+        text = caption ?? "";
       }
     }
     outboundLog.info(`Sending message -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""}`);
     logger.info({ jid: redactedJid, hasMedia: Boolean(primaryMediaUrl) }, "sending message");
-    await active.sendComposingTo(to);
+    if (!isWhatsAppNewsletterJid(jid)) {
+      await active.sendComposingTo(to);
+    }
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName
+      options.gifPlayback || accountId || documentFileName || options.quotedMessageKey
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
+            ...(options.quotedMessageKey ? { quotedMessageKey: options.quotedMessageKey } : {}),
             accountId,
           }
         : undefined;
     const result = sendOptions
       ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
       : await active.sendMessage(to, text, mediaBuffer, mediaType);
+    if (visibleTextAfterVoice) {
+      if (sendOptions) {
+        await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined, sendOptions);
+      } else {
+        await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined);
+      }
+    }
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
@@ -161,6 +183,23 @@ export async function sendMessageWhatsApp(
   }
 }
 
+export async function sendTypingWhatsApp(
+  to: string,
+  options: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+  },
+): Promise<void> {
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp typing send");
+  const { listener: active } = requireOutboundActiveWebListener({
+    cfg,
+    accountId: options.accountId,
+  });
+  if (!isWhatsAppNewsletterJid(toWhatsappJid(to))) {
+    await active.sendComposingTo(to);
+  }
+}
+
 export async function sendReactionWhatsApp(
   chatJid: string,
   messageId: string,
@@ -170,10 +209,11 @@ export async function sendReactionWhatsApp(
     fromMe?: boolean;
     participant?: string;
     accountId?: string;
+    cfg: OpenClawConfig;
   },
 ): Promise<void> {
   const correlationId = generateSecureUuid();
-  const cfg = loadConfig();
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp reaction");
   const { listener: active } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
@@ -211,11 +251,11 @@ export async function sendReactionWhatsApp(
 export async function sendPollWhatsApp(
   to: string,
   poll: PollInput,
-  options: { verbose: boolean; accountId?: string; cfg?: OpenClawConfig },
+  options: { verbose: boolean; accountId?: string; cfg: OpenClawConfig },
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const cfg = options.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp poll");
   const { listener: active } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,

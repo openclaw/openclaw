@@ -1,11 +1,14 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
 const loadChatHistoryMock = vi.fn();
+const applySessionsChangedEventMock = vi.fn();
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   flushChatQueueForEvent: vi.fn(),
+  refreshChatAvatar: vi.fn(),
 }));
 vi.mock("./app-settings.ts", () => ({
   applySettings: vi.fn(),
@@ -41,6 +44,7 @@ vi.mock("./controllers/nodes.ts", () => ({
   loadNodes: vi.fn(),
 }));
 vi.mock("./controllers/sessions.ts", () => ({
+  applySessionsChangedEvent: applySessionsChangedEventMock,
   loadSessions: loadSessionsMock,
   subscribeSessions: vi.fn(),
 }));
@@ -111,12 +115,74 @@ function createHost() {
 describe("handleGatewayEvent sessions.changed", () => {
   it("reloads sessions when the gateway pushes a sessions.changed event", () => {
     loadSessionsMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
     const host = createHost();
 
     handleGatewayEvent(host, {
       type: "event",
       event: "sessions.changed",
       payload: { sessionKey: "agent:main:main", reason: "patch" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionsMock).toHaveBeenCalledWith(host);
+  });
+
+  it("does not reload sessions for applied message-phase session patches to existing rows", () => {
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: true, change: "updated" });
+    const host = createHost();
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: "agent:main:main",
+        phase: "message",
+        updatedAt: 123,
+        totalTokens: 456,
+      },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads sessions when an applied message-phase event inserts a session row", () => {
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock
+      .mockReset()
+      .mockReturnValue({ applied: true, change: "inserted" });
+    const host = createHost();
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: "agent:main:new",
+        phase: "message",
+        updatedAt: 123,
+        totalTokens: 456,
+      },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionsMock).toHaveBeenCalledWith(host);
+  });
+
+  it("reloads sessions when a message-phase event cannot patch local state", () => {
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    const host = createHost();
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "agent:main:main", phase: "message" },
       seq: 1,
     });
 

@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
 import { messageCommand } from "../../../commands/message.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
@@ -6,7 +7,7 @@ import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.
 import { defaultRuntime } from "../../../runtime.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
 import { createDefaultDeps } from "../../deps.js";
-import { ensurePluginRegistryLoaded } from "../../plugin-registry.js";
+import { ensurePluginRegistryLoaded, type PluginRegistryScope } from "../../plugin-registry.js";
 
 export type MessageCliHelpers = {
   withMessageBase: (command: Command) => Command;
@@ -14,6 +15,9 @@ export type MessageCliHelpers = {
   withRequiredMessageTarget: (command: Command) => Command;
   runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
 };
+
+const GATEWAY_STOP_TIMEOUT_MS = 2500;
+const ACTIONS_WITHOUT_STOP_HOOKS = new Set(["read"]);
 
 function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
   const { account, ...rest } = opts;
@@ -24,11 +28,39 @@ function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, 
 }
 
 async function runPluginStopHooks(): Promise<void> {
-  await runGlobalGatewayStopSafely({
+  let timeout: NodeJS.Timeout | null = null;
+  const hookRun = runGlobalGatewayStopSafely({
     event: { reason: "cli message action complete" },
     ctx: {},
     onError: (err) => defaultRuntime.error(danger(`gateway_stop hook failed: ${String(err)}`)),
   });
+  const bounded = new Promise<"timeout">((resolve) => {
+    timeout = setTimeout(() => resolve("timeout"), GATEWAY_STOP_TIMEOUT_MS);
+    timeout.unref?.();
+  });
+  const result = await Promise.race([hookRun.then(() => "done" as const), bounded]);
+  if (timeout) {
+    clearTimeout(timeout);
+  }
+  if (result === "timeout") {
+    defaultRuntime.error(
+      danger(`gateway_stop hook exceeded ${GATEWAY_STOP_TIMEOUT_MS}ms; continuing`),
+    );
+  }
+}
+
+function resolveMessagePluginLoadOptions(
+  opts: Record<string, unknown>,
+): { scope: PluginRegistryScope; onlyChannelIds?: string[] } | undefined {
+  const scopedChannel = resolveMessageSecretScope({
+    channel: opts.channel,
+    target: opts.target,
+    targets: opts.targets,
+  }).channel;
+  if (scopedChannel) {
+    return { scope: "configured-channels", onlyChannelIds: [scopedChannel] };
+  }
+  return { scope: "configured-channels" };
 }
 
 export function createMessageCliHelpers(
@@ -50,7 +82,7 @@ export function createMessageCliHelpers(
 
   const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
     setVerbose(Boolean(opts.verbose));
-    ensurePluginRegistryLoaded();
+    ensurePluginRegistryLoaded(resolveMessagePluginLoadOptions(opts));
     const deps = createDefaultDeps();
     let failed = false;
     await runCommandWithRuntime(
@@ -70,7 +102,9 @@ export function createMessageCliHelpers(
         defaultRuntime.error(danger(String(err)));
       },
     );
-    await runPluginStopHooks();
+    if (!ACTIONS_WITHOUT_STOP_HOOKS.has(action)) {
+      await runPluginStopHooks();
+    }
     defaultRuntime.exit(failed ? 1 : 0);
   };
 

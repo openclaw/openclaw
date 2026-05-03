@@ -9,6 +9,7 @@ type GatewayRequest = { method?: string; params?: Record<string, unknown> };
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
+  updateSessionStoreMock: vi.fn(),
 }));
 
 const hookRunnerMocks = vi.hoisted(() => ({
@@ -64,6 +65,7 @@ async function spawn(params?: {
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: "run" | "session";
+  context?: "isolated" | "fork";
   agentSessionKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
@@ -79,6 +81,7 @@ async function spawn(params?: {
         : {}),
       ...(params?.thread ? { thread: true } : {}),
       ...(params?.mode ? { mode: params.mode } : {}),
+      context: params?.context ?? "isolated",
     },
     {
       agentSessionKey: params?.agentSessionKey ?? "main",
@@ -138,7 +141,8 @@ function expectThreadBindFailureCleanup(
 beforeAll(async () => {
   ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
     callGatewayMock: hoisted.callGatewayMock,
-    loadConfig: () => hoisted.configOverride,
+    getRuntimeConfig: () => hoisted.configOverride,
+    updateSessionStoreMock: hoisted.updateSessionStoreMock,
     hookRunner: {
       hasHooks: (hookName: string) =>
         hookName === "subagent_spawning" ||
@@ -157,6 +161,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
+    hoisted.updateSessionStoreMock.mockReset();
     hookRunnerMocks.hasSubagentEndedHook = true;
     hookRunnerMocks.runSubagentSpawning.mockClear();
     hookRunnerMocks.runSubagentSpawned.mockClear();
@@ -165,8 +170,21 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       session: {
         mainKey: "main",
         scope: "per-sender",
+        threadBindings: {
+          defaultSpawnContext: "isolated",
+        },
       },
     });
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.updateSessionStoreMock.mockImplementation(
+      async (_storePath: unknown, mutator: unknown) => {
+        if (typeof mutator !== "function") {
+          throw new Error("missing session store mutator");
+        }
+        await mutator(store);
+        return store;
+      },
+    );
     hoisted.callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.patch") {
@@ -194,6 +212,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: 456,
+      context: "isolated",
     });
 
     expect(result).toMatchObject({ status: "accepted", runId: "run-1" });
@@ -272,6 +291,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       thread: true,
       mode: "run",
       agentTo: "channel:123",
+      context: "isolated",
     });
 
     expect(result).toMatchObject({ status: "accepted", runId: "run-1", mode: "run" });
@@ -295,6 +315,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       mode: "session",
       agentAccountId: "work",
       agentTo: "channel:123",
+      context: "isolated",
     });
 
     expectThreadBindFailureCleanup(result, /thread/i);
@@ -312,6 +333,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       mode: "session",
       agentAccountId: "work",
       agentTo: "channel:123",
+      context: "isolated",
     });
 
     expectThreadBindFailureCleanup(result, /unable to create or bind a thread/i);
@@ -335,6 +357,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       mode: "session",
       agentChannel: "signal",
       agentTo: "+123",
+      context: "isolated",
     });
 
     expectErrorResultMessage(result, /only discord/i);
@@ -351,6 +374,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: "456",
+      context: "isolated",
     });
 
     expect(result).toMatchObject({ status: "error" });
@@ -384,6 +408,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: "456",
+      context: "isolated",
     });
 
     expect(result).toMatchObject({ status: "error" });
@@ -398,11 +423,21 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   });
 
   it("cleans up the provisional session when lineage patching fails after thread binding", async () => {
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.updateSessionStoreMock.mockImplementation(
+      async (_storePath: unknown, mutator: unknown) => {
+        if (typeof mutator !== "function") {
+          throw new Error("missing session store mutator");
+        }
+        await mutator(store);
+        if (Object.values(store).some((entry) => typeof entry.spawnedBy === "string")) {
+          throw new Error("lineage patch failed");
+        }
+        return store;
+      },
+    );
     hoisted.callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
-      if (request.method === "sessions.patch" && typeof request.params?.spawnedBy === "string") {
-        throw new Error("lineage patch failed");
-      }
       if (request.method === "sessions.delete") {
         return { ok: true };
       }
@@ -418,12 +453,11 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: "456",
+      context: "isolated",
     });
 
-    expect(result).toMatchObject({
-      status: "error",
-      error: "lineage patch failed",
-    });
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("lineage patch failed");
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     expect(hookRunnerMocks.runSubagentEnded).not.toHaveBeenCalled();
     const methods = getGatewayMethods();

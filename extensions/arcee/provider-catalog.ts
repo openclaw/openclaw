@@ -19,10 +19,6 @@ export function normalizeArceeOpenRouterBaseUrl(baseUrl: string | undefined): st
   return undefined;
 }
 
-export function isArceeOpenRouterBaseUrl(baseUrl: string | undefined): boolean {
-  return normalizeArceeOpenRouterBaseUrl(baseUrl) === OPENROUTER_BASE_URL;
-}
-
 export function toArceeOpenRouterModelId(modelId: string): string {
   const normalized = modelId.trim();
   if (!normalized || normalized.startsWith("arcee/")) {
@@ -36,10 +32,9 @@ export function buildArceeCatalogModels(): NonNullable<ModelProviderConfig["mode
 }
 
 export function buildArceeOpenRouterCatalogModels(): NonNullable<ModelProviderConfig["models"]> {
-  return buildArceeCatalogModels().map((model) => ({
-    ...model,
-    id: toArceeOpenRouterModelId(model.id),
-  }));
+  return buildArceeCatalogModels().map((model) =>
+    Object.assign({}, model, { id: toArceeOpenRouterModelId(model.id) }),
+  );
 }
 
 export function buildArceeProvider(): ModelProviderConfig {

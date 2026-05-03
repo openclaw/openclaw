@@ -68,6 +68,7 @@ export function createTelegramPrivateCommandContext(params?: {
   chatId?: number;
   userId?: number;
   username?: string;
+  threadId?: number;
 }) {
   return {
     match: params?.match ?? "",
@@ -75,6 +76,31 @@ export function createTelegramPrivateCommandContext(params?: {
       message_id: params?.messageId ?? 1,
       date: params?.date ?? Math.floor(Date.now() / 1000),
       chat: { id: params?.chatId ?? 100, type: "private" as const },
+      ...(params?.threadId != null ? { message_thread_id: params.threadId } : {}),
+      from: { id: params?.userId ?? 200, username: params?.username ?? "bob" },
+    },
+  };
+}
+
+export function createTelegramGroupCommandContext(params?: {
+  match?: string;
+  messageId?: number;
+  date?: number;
+  chatId?: number;
+  title?: string;
+  userId?: number;
+  username?: string;
+}) {
+  return {
+    match: params?.match ?? "",
+    message: {
+      message_id: params?.messageId ?? 2,
+      date: params?.date ?? Math.floor(Date.now() / 1000),
+      chat: {
+        id: params?.chatId ?? -1001234567890,
+        type: "supergroup" as const,
+        title: params?.title ?? "OpenClaw",
+      },
       from: { id: params?.userId ?? 200, username: params?.username ?? "bob" },
     },
   };

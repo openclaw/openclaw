@@ -14,7 +14,7 @@ import {
 } from "./markdown.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-export type IngestMemoryWikiSourceResult = {
+type IngestMemoryWikiSourceResult = {
   sourcePath: string;
   pageId: string;
   pagePath: string;

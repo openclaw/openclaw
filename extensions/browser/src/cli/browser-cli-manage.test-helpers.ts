@@ -4,10 +4,13 @@ import * as parentCoreApiModule from "../core-api.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
 import * as cliCoreApiModule from "./core-api.js";
 
-type BrowserRequest = { path?: string };
+type BrowserRequest = {
+  path?: string;
+  query?: Record<string, string | number | boolean | undefined>;
+};
 type BrowserRuntimeOptions = { timeoutMs?: number };
 
-export type BrowserManageCall = [unknown, BrowserRequest, BrowserRuntimeOptions | undefined];
+type BrowserManageCall = [unknown, BrowserRequest, BrowserRuntimeOptions | undefined];
 
 const browserManageMocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<

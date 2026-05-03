@@ -6,6 +6,15 @@ import {
 
 const SEARXNG_CREDENTIAL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
 
+type SearxngClientModule = typeof import("./searxng-client.js");
+
+let searxngClientModulePromise: Promise<SearxngClientModule> | undefined;
+
+function loadSearxngClientModule(): Promise<SearxngClientModule> {
+  searxngClientModulePromise ??= import("./searxng-client.js");
+  return searxngClientModulePromise;
+}
+
 const SearxngSearchSchema = {
   type: "object",
   properties: {
@@ -47,12 +56,16 @@ export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
       configuredCredential: { pluginId: "searxng", field: "baseUrl" },
       selectionPluginId: "searxng",
     }),
+    credentialNote: [
+      "For the SearXNG JSON API to work, make sure your SearXNG instance",
+      "has the json format enabled in its settings.yml under search.formats.",
+    ].join("\n"),
     createTool: (ctx) => ({
       description:
         "Search the web using a self-hosted SearXNG instance. Returns titles, URLs, and snippets.",
       parameters: SearxngSearchSchema,
       execute: async (args) => {
-        const { runSearxngSearch } = await import("./searxng-client.js");
+        const { runSearxngSearch } = await loadSearxngClientModule();
         return await runSearxngSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import { readCaptureBlobText, writeCaptureBlob } from "./blob-store.js";
 import type {
   CaptureBlobRecord,
@@ -18,11 +19,16 @@ function ensureParentDir(filePath: string) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
-function openDatabase(dbPath: string): DatabaseSync {
+type OpenedDatabase = {
+  db: DatabaseSync;
+  walMaintenance: SqliteWalMaintenance;
+};
+
+function openDatabase(dbPath: string): OpenedDatabase {
   ensureParentDir(dbPath);
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
+  const walMaintenance = configureSqliteWalMaintenance(db);
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec(`
     CREATE TABLE IF NOT EXISTS capture_sessions (
@@ -62,7 +68,7 @@ function openDatabase(dbPath: string): DatabaseSync {
     CREATE INDEX IF NOT EXISTS capture_events_session_ts_idx ON capture_events(session_id, ts);
     CREATE INDEX IF NOT EXISTS capture_events_flow_idx ON capture_events(flow_id, ts);
   `);
-  return db;
+  return { db, walMaintenance };
 }
 
 function serializeJson(value: unknown): string | null {
@@ -93,16 +99,29 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
 
 export class DebugProxyCaptureStore {
   readonly db: DatabaseSync;
+  private readonly walMaintenance: SqliteWalMaintenance;
+  private closed = false;
 
   constructor(
     readonly dbPath: string,
     readonly blobDir: string,
   ) {
-    this.db = openDatabase(dbPath);
+    const opened = openDatabase(dbPath);
+    this.db = opened.db;
+    this.walMaintenance = opened.walMaintenance;
   }
 
   close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.walMaintenance.close();
     this.db.close();
+    this.closed = true;
+  }
+
+  get isClosed(): boolean {
+    return this.closed;
   }
 
   upsertSession(session: CaptureSessionRecord): void {
@@ -448,12 +467,14 @@ export class DebugProxyCaptureStore {
 
 let cachedStore: DebugProxyCaptureStore | null = null;
 let cachedKey = "";
+let cachedStoreLeases = 0;
 
 export function getDebugProxyCaptureStore(dbPath: string, blobDir: string): DebugProxyCaptureStore {
   const key = `${dbPath}:${blobDir}`;
-  if (!cachedStore || cachedKey !== key) {
+  if (!cachedStore || cachedStore.isClosed || cachedKey !== key) {
     cachedStore = new DebugProxyCaptureStore(dbPath, blobDir);
     cachedKey = key;
+    cachedStoreLeases = 0;
   }
   return cachedStore;
 }
@@ -465,6 +486,30 @@ export function closeDebugProxyCaptureStore(): void {
   cachedStore.close();
   cachedStore = null;
   cachedKey = "";
+  cachedStoreLeases = 0;
+}
+
+export function acquireDebugProxyCaptureStore(
+  dbPath: string,
+  blobDir: string,
+): { store: DebugProxyCaptureStore; release: () => void } {
+  const store = getDebugProxyCaptureStore(dbPath, blobDir);
+  const key = cachedKey;
+  cachedStoreLeases += 1;
+  let released = false;
+  return {
+    store,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      cachedStoreLeases = Math.max(0, cachedStoreLeases - 1);
+      if (cachedStoreLeases === 0 && cachedStore === store && cachedKey === key) {
+        closeDebugProxyCaptureStore();
+      }
+    },
+  };
 }
 
 export function persistEventPayload(

@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import JSON5 from "json5";
 import { z } from "zod";
+import { formatCliCommand } from "../cli/command-format.js";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { shortenHomePath } from "../utils.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 
@@ -16,6 +19,7 @@ type ConfigIO = {
 type EnsureAgentWorkspace = (params: {
   dir: string;
   ensureBootstrapFiles?: boolean;
+  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
 }) => Promise<{ dir: string }>;
 
 type SetupCommandDeps = {
@@ -29,11 +33,40 @@ type SetupCommandDeps = {
   ) => void | Promise<void>;
   mkdir?: (dir: string, options: { recursive: true }) => Promise<unknown>;
   resolveSessionTranscriptsDir?: () => string | Promise<string>;
-  writeConfigFile?: (config: OpenClawConfig) => Promise<void>;
+  replaceConfigFile?: (params: {
+    nextConfig: OpenClawConfig;
+    afterWrite: { mode: "auto" };
+  }) => Promise<unknown>;
 };
 
+type AgentWorkspaceModule = typeof import("../agents/workspace.js");
+type ConfigIOModule = typeof import("../config/config.js");
+type ConfigLoggingModule = typeof import("../config/logging.js");
+
+const agentWorkspaceModuleLoader = createLazyImportLoader<AgentWorkspaceModule>(
+  () => import("../agents/workspace.js"),
+);
+const configIOModuleLoader = createLazyImportLoader<ConfigIOModule>(
+  () => import("../config/config.js"),
+);
+const configLoggingModuleLoader = createLazyImportLoader<ConfigLoggingModule>(
+  () => import("../config/logging.js"),
+);
+
+function loadAgentWorkspaceModule(): Promise<AgentWorkspaceModule> {
+  return agentWorkspaceModuleLoader.load();
+}
+
+function loadConfigIOModule(): Promise<ConfigIOModule> {
+  return configIOModuleLoader.load();
+}
+
+function loadConfigLoggingModule(): Promise<ConfigLoggingModule> {
+  return configLoggingModuleLoader.load();
+}
+
 async function createDefaultConfigIO(): Promise<ConfigIO> {
-  const { createConfigIO } = await import("../config/io.js");
+  const { createConfigIO } = await loadConfigIOModule();
   return createConfigIO();
 }
 
@@ -45,24 +78,27 @@ async function resolveDefaultAgentWorkspaceDir(deps: SetupCommandDeps): Promise<
   if (typeof override === "function") {
     return await override();
   }
-  const { DEFAULT_AGENT_WORKSPACE_DIR } = await import("../agents/workspace.js");
+  const { DEFAULT_AGENT_WORKSPACE_DIR } = await loadAgentWorkspaceModule();
   return DEFAULT_AGENT_WORKSPACE_DIR;
 }
 
 async function ensureDefaultAgentWorkspace(
   params: Parameters<EnsureAgentWorkspace>[0],
 ): ReturnType<EnsureAgentWorkspace> {
-  const { ensureAgentWorkspace } = await import("../agents/workspace.js");
+  const { ensureAgentWorkspace } = await loadAgentWorkspaceModule();
   return ensureAgentWorkspace(params);
 }
 
 async function writeDefaultConfigFile(config: OpenClawConfig): Promise<void> {
-  const { writeConfigFile } = await import("../config/io.js");
-  await writeConfigFile(config);
+  const { replaceConfigFile } = await loadConfigIOModule();
+  await replaceConfigFile({
+    nextConfig: config,
+    afterWrite: { mode: "auto" },
+  });
 }
 
 async function formatDefaultConfigPath(configPath: string): Promise<string> {
-  const { formatConfigPath } = await import("../config/logging.js");
+  const { formatConfigPath } = await loadConfigLoggingModule();
   return formatConfigPath(configPath);
 }
 
@@ -70,7 +106,7 @@ async function logDefaultConfigUpdated(
   runtime: RuntimeEnv,
   opts: { path?: string; suffix?: string },
 ): Promise<void> {
-  const { logConfigUpdated } = await import("../config/logging.js");
+  const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime, opts);
 }
 
@@ -131,7 +167,12 @@ export async function setupCommand(
     defaults.workspace !== workspace ||
     cfg.gateway?.mode !== next.gateway?.mode
   ) {
-    await (deps.writeConfigFile ?? writeDefaultConfigFile)(next);
+    const replaceConfig =
+      deps.replaceConfigFile ?? ((params) => writeDefaultConfigFile(params.nextConfig));
+    await replaceConfig({
+      nextConfig: next,
+      afterWrite: { mode: "auto" },
+    });
     if (!existingRaw.exists) {
       const formatConfigPath = deps.formatConfigPath ?? formatDefaultConfigPath;
       runtime.log(`Wrote ${await formatConfigPath(configPath)}`);
@@ -157,6 +198,7 @@ export async function setupCommand(
   const ws = await (deps.ensureAgentWorkspace ?? ensureDefaultAgentWorkspace)({
     dir: workspace,
     ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
+    skipOptionalBootstrapFiles: next.agents?.defaults?.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
@@ -165,4 +207,10 @@ export async function setupCommand(
   )();
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
+  runtime.log("");
+  runtime.log("Setup complete: local config, workspace, and session directories are ready.");
+  runtime.log(
+    `Next: run ${formatCliCommand("openclaw configure")} to choose models, channels, Gateway, plugins, skills, and health checks.`,
+  );
+  runtime.log(`For full first-run onboarding, run ${formatCliCommand("openclaw setup --wizard")}.`);
 }

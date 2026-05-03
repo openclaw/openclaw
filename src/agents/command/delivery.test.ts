@@ -28,6 +28,7 @@ vi.mock("../../auto-reply/reply/reply-media-paths.runtime.js", () => ({
 
 type NormalizeParams = Parameters<typeof normalizeAgentCommandReplyPayloads>[0];
 type RunResult = NormalizeParams["result"];
+type DeliverParams = Parameters<typeof deliverAgentCommandResult>[0];
 
 const slackOutboundForTest: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -62,6 +63,29 @@ function createResult(overrides: Partial<RunResult> = {}): RunResult {
     },
     ...(overrides.payloads ? { payloads: overrides.payloads } : {}),
   } as RunResult;
+}
+
+async function deliverMediaReplyForTest(outboundSession: DeliverParams["outboundSession"]) {
+  const runtime = { log: vi.fn(), error: vi.fn() };
+  return await deliverAgentCommandResult({
+    cfg: {
+      agents: {
+        list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+      },
+    } as OpenClawConfig,
+    deps: {} as CliDeps,
+    runtime: runtime as never,
+    opts: {
+      message: "go",
+      deliver: true,
+      replyChannel: "slack",
+      replyTo: "#general",
+    } as AgentCommandOpts,
+    outboundSession,
+    sessionEntry: undefined,
+    payloads: [{ text: "here you go", mediaUrls: ["./out/photo.png"] }],
+    result: createResult(),
+  });
 }
 
 describe("normalizeAgentCommandReplyPayloads", () => {
@@ -157,7 +181,6 @@ describe("normalizeAgentCommandReplyPayloads", () => {
   });
 
   it("normalizes reply-media paths before outbound delivery", async () => {
-    const runtime = { log: vi.fn(), error: vi.fn() };
     const normalizerFn = vi.fn(
       async (payload: ReplyPayload): Promise<ReplyPayload> => ({
         ...payload,
@@ -168,28 +191,10 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     createReplyMediaPathNormalizerMock.mockReturnValue(normalizerFn);
     deliverOutboundPayloadsMock.mockResolvedValue([]);
 
-    await deliverAgentCommandResult({
-      cfg: {
-        agents: {
-          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
-        },
-      } as OpenClawConfig,
-      deps: {} as CliDeps,
-      runtime: runtime as never,
-      opts: {
-        message: "go",
-        deliver: true,
-        replyChannel: "slack",
-        replyTo: "#general",
-      } as AgentCommandOpts,
-      outboundSession: {
-        key: "agent:tester:slack:direct:alice",
-        agentId: "tester",
-      } as never,
-      sessionEntry: undefined,
-      payloads: [{ text: "here you go", mediaUrls: ["./out/photo.png"] }],
-      result: createResult(),
-    });
+    await deliverMediaReplyForTest({
+      key: "agent:tester:slack:direct:alice",
+      agentId: "tester",
+    } as never);
 
     expect(createReplyMediaPathNormalizerMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -211,29 +216,10 @@ describe("normalizeAgentCommandReplyPayloads", () => {
   });
 
   it("threads agentId into the normalizer when sessionKey is unresolved", async () => {
-    const runtime = { log: vi.fn(), error: vi.fn() };
     createReplyMediaPathNormalizerMock.mockReturnValue(async (payload: ReplyPayload) => payload);
     deliverOutboundPayloadsMock.mockResolvedValue([]);
 
-    await deliverAgentCommandResult({
-      cfg: {
-        agents: {
-          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
-        },
-      } as OpenClawConfig,
-      deps: {} as CliDeps,
-      runtime: runtime as never,
-      opts: {
-        message: "go",
-        deliver: true,
-        replyChannel: "slack",
-        replyTo: "#general",
-      } as AgentCommandOpts,
-      outboundSession: { agentId: "tester" } as never,
-      sessionEntry: undefined,
-      payloads: [{ text: "here you go", mediaUrls: ["./out/photo.png"] }],
-      result: createResult(),
-    });
+    await deliverMediaReplyForTest({ agentId: "tester" } as never);
 
     expect(createReplyMediaPathNormalizerMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -276,5 +262,49 @@ describe("normalizeAgentCommandReplyPayloads", () => {
         text: "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
       },
     ]);
+  });
+
+  it("merges result metadata overrides into JSON output and returned results", async () => {
+    const runtime = {
+      log: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        json: true,
+        resultMetaOverrides: {
+          transport: "embedded",
+          fallbackFrom: "gateway",
+        },
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "local" }],
+      result: createResult(),
+    });
+
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      {
+        payloads: [{ text: "local", mediaUrl: null }],
+        meta: {
+          durationMs: 1,
+          transport: "embedded",
+          fallbackFrom: "gateway",
+        },
+      },
+      2,
+    );
+    expect(delivered.meta).toMatchObject({
+      durationMs: 1,
+      transport: "embedded",
+      fallbackFrom: "gateway",
+    });
   });
 });

@@ -42,6 +42,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       resolveRequireMention: resolveLineGroupRequireMention,
     },
     messaging: {
+      targetPrefixes: ["line"],
       normalizeTarget: (target) => {
         const trimmed = target.trim();
         if (!trimmed) {
@@ -141,6 +142,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
           getLineRuntime().channel.line?.pushMessageLine ??
           (await loadLineChannelRuntime()).pushMessageLine;
         await pushMessageLine(id, message, {
+          cfg,
           accountId: account.accountId,
           channelAccessToken: account.channelAccessToken,
         });

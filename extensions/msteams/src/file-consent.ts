@@ -9,8 +9,11 @@
  */
 
 import { lookup } from "node:dns/promises";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { buildUserAgent } from "./user-agent.js";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 /**
  * Allowlist of domains that are valid targets for file consent uploads.
@@ -156,7 +159,7 @@ export async function validateConsentUploadUrl(
   }
 }
 
-export interface FileConsentCardParams {
+interface FileConsentCardParams {
   filename: string;
   description?: string;
   sizeInBytes: number;
@@ -164,7 +167,7 @@ export interface FileConsentCardParams {
   context?: Record<string, unknown>;
 }
 
-export interface FileInfoCardParams {
+interface FileInfoCardParams {
   filename: string;
   contentUrl: string;
   uniqueId: string;
@@ -204,7 +207,7 @@ export function buildFileInfoCard(params: FileInfoCardParams) {
   };
 }
 
-export interface FileConsentUploadInfo {
+interface FileConsentUploadInfo {
   name: string;
   uploadUrl: string;
   contentUrl: string;
@@ -212,7 +215,7 @@ export interface FileConsentUploadInfo {
   fileType: string;
 }
 
-export interface FileConsentResponse {
+interface FileConsentResponse {
   action: "accept" | "decline";
   uploadInfo?: FileConsentUploadInfo;
   context?: Record<string, unknown>;

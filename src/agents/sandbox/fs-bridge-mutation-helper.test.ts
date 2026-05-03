@@ -81,6 +81,46 @@ describe("sandbox pinned mutation helper", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "preserves existing target file mode while writing",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const filePath = path.join(workspace, "note.txt");
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(filePath, "before", "utf8");
+        await fs.chmod(filePath, 0o644);
+
+        const result = runMutation(["write", workspace, "", "note.txt", "0"], "after");
+
+        expect(result.status).toBe(0);
+        await expect(fs.readFile(filePath, "utf8")).resolves.toBe("after");
+        const fileStat = await fs.stat(filePath);
+        expect(fileStat.mode & 0o777).toBe(0o644);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps restrictive existing target file mode while writing",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const filePath = path.join(workspace, "secret.txt");
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(filePath, "before", "utf8");
+        await fs.chmod(filePath, 0o600);
+
+        const result = runMutation(["write", workspace, "", "secret.txt", "0"], "after");
+
+        expect(result.status).toBe(0);
+        await expect(fs.readFile(filePath, "utf8")).resolves.toBe("after");
+        const fileStat = await fs.stat(filePath);
+        expect(fileStat.mode & 0o777).toBe(0o600);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "reads through a pinned directory fd and rejects hardlinked files",
     async () => {
       await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
@@ -126,29 +166,7 @@ describe("sandbox pinned mutation helper", () => {
         const result = runWritePlan(
           ["write", workspace, "nested/deeper", "note.txt", "1"],
           "hello",
-        );
-
-        expect(result.status).toBe(0);
-        await expect(
-          fs.readFile(path.join(workspace, "nested", "deeper", "note.txt"), "utf8"),
-        ).resolves.toBe("hello");
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32" && hasAbsolutePythonCandidate)(
-    "finds an absolute python when the write plan runs with an empty PATH",
-    async () => {
-      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
-        const workspace = path.join(root, "workspace");
-        await fs.mkdir(workspace, { recursive: true });
-
-        const result = runWritePlan(
-          ["write", workspace, "nested/deeper", "note.txt", "1"],
-          "hello",
-          {
-            PATH: "",
-          },
+          hasAbsolutePythonCandidate ? { PATH: "" } : undefined,
         );
 
         expect(result.status).toBe(0);

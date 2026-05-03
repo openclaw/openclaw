@@ -1,14 +1,14 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { createBlueBubblesClientFromParts } from "./client.js";
 import type { BaseProbeResult } from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
-import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
 
 export type BlueBubblesProbe = BaseProbeResult & {
   status?: number | null;
 };
 
-export type BlueBubblesServerInfo = {
+type BlueBubblesServerInfo = {
   os_version?: string;
   server_version?: string;
   private_api?: boolean;
@@ -47,15 +47,14 @@ export async function fetchBlueBubblesServerInfo(params: {
     return cached.info;
   }
 
-  const ssrfPolicy = params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
-  const url = buildBlueBubblesApiUrl({ baseUrl, path: "/api/v1/server/info", password });
+  const client = createBlueBubblesClientFromParts({
+    baseUrl,
+    password,
+    allowPrivateNetwork: params.allowPrivateNetwork === true,
+    timeoutMs: params.timeoutMs ?? 5000,
+  });
   try {
-    const res = await blueBubblesFetchWithTimeout(
-      url,
-      { method: "GET" },
-      params.timeoutMs ?? 5000,
-      ssrfPolicy,
-    );
+    const res = await client.getServerInfo({ timeoutMs: params.timeoutMs ?? 5000 });
     if (!res.ok) {
       return null;
     }
@@ -81,7 +80,7 @@ export async function fetchBlueBubblesServerInfo(params: {
  * Get cached server info synchronously (for use in describeMessageTool).
  * Returns null if not cached or expired.
  */
-export function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesServerInfo | null {
+function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesServerInfo | null {
   const cacheKey = normalizeOptionalString(accountId) || "default";
   const cached = serverInfoCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
@@ -113,7 +112,7 @@ export function isBlueBubblesPrivateApiEnabled(accountId?: string): boolean {
 /**
  * Parse macOS version string (e.g., "15.0.1" or "26.0") into major version number.
  */
-export function parseMacOSMajorVersion(version?: string | null): number | null {
+function parseMacOSMajorVersion(version?: string | null): number | null {
   if (!version) {
     return null;
   }
@@ -134,11 +133,6 @@ export function isMacOS26OrHigher(accountId?: string): boolean {
   return major !== null && major >= 26;
 }
 
-/** Clear the server info cache (for testing) */
-export function clearServerInfoCache(): void {
-  serverInfoCache.clear();
-}
-
 export async function probeBlueBubbles(params: {
   baseUrl?: string | null;
   password?: string | null;
@@ -153,15 +147,14 @@ export async function probeBlueBubbles(params: {
   if (!password) {
     return { ok: false, error: "password not configured" };
   }
-  const probeSsrfPolicy = params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
-  const url = buildBlueBubblesApiUrl({ baseUrl, path: "/api/v1/ping", password });
+  const client = createBlueBubblesClientFromParts({
+    baseUrl,
+    password,
+    allowPrivateNetwork: params.allowPrivateNetwork === true,
+    timeoutMs: params.timeoutMs,
+  });
   try {
-    const res = await blueBubblesFetchWithTimeout(
-      url,
-      { method: "GET" },
-      params.timeoutMs,
-      probeSsrfPolicy,
-    );
+    const res = await client.ping({ timeoutMs: params.timeoutMs });
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }

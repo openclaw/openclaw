@@ -36,6 +36,48 @@ describe("command-registration-policy", () => {
         hasBuiltinPrimary: false,
       }),
     ).toBe(false);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "help", "--help"],
+        primary: "help",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "help", "voicecall"],
+        primary: "help",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "auth", "login"],
+        primary: "auth",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "tool", "image_generate"],
+        primary: "tool",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "tools", "effective"],
+        primary: "tools",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "googlemeet", "login"],
+        primary: "googlemeet",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(false);
   });
 
   it("matches lazy subcommand registration policy", () => {

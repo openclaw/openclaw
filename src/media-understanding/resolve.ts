@@ -11,7 +11,7 @@ import {
   DEFAULT_MAX_CHARS_BY_CAPABILITY,
   DEFAULT_MEDIA_CONCURRENCY,
   DEFAULT_PROMPT,
-} from "./defaults.js";
+} from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
@@ -63,13 +63,6 @@ export function resolveMaxBytes(params: {
     return configured;
   }
   return DEFAULT_MAX_BYTES[params.capability];
-}
-
-export function resolveCapabilityConfig(
-  cfg: OpenClawConfig,
-  capability: MediaUnderstandingCapability,
-): MediaUnderstandingConfig | undefined {
-  return cfg.tools?.media?.[capability];
 }
 
 export function resolveScopeDecision(params: {

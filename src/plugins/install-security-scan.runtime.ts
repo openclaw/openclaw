@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import {
@@ -70,7 +71,24 @@ type PluginInstallRequestKind =
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
+
+type SkillInstallSpec = {
+  id?: string;
+  kind: "brew" | "node" | "go" | "uv" | "download";
+  label?: string;
+  bins?: string[];
+  os?: string[];
+  formula?: string;
+  package?: string;
+  module?: string;
+  url?: string;
+  archive?: string;
+  extract?: boolean;
+  stripComponents?: number;
+  targetDir?: string;
+};
 
 export type InstallSecurityScanResult = {
   blocked?: {
@@ -159,10 +177,44 @@ function pathContainsNodeModulesSegment(relativePath: string): boolean {
     .includes("node_modules");
 }
 
+function isTrustedOpenClawPeerSymlink(relativePath: string): boolean {
+  const segments = relativePath.split(/[\\/]+/);
+  return (
+    (segments.length === 2 && segments[0] === "node_modules" && segments[1] === "openclaw") ||
+    (segments.length === 3 &&
+      segments[0] === "node_modules" &&
+      segments[1] === ".bin" &&
+      segments[2] === "openclaw")
+  );
+}
+
+async function resolveTrustedHostOpenClawRootRealPath(): Promise<string | null> {
+  const hostRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url,
+  });
+  if (!hostRoot) {
+    return null;
+  }
+  return await fs.realpath(hostRoot).catch(() => path.resolve(hostRoot));
+}
+
+function isTrustedHostOpenClawPath(params: {
+  resolvedTargetPath: string;
+  trustedHostOpenClawRootRealPath: string | null;
+}): boolean {
+  return (
+    params.trustedHostOpenClawRootRealPath !== null &&
+    isPathInside(params.trustedHostOpenClawRootRealPath, params.resolvedTargetPath)
+  );
+}
+
 async function inspectNodeModulesSymlinkTarget(params: {
   rootRealPath: string;
   symlinkPath: string;
   symlinkRelativePath: string;
+  trustedHostOpenClawRootRealPath: string | null;
 }): Promise<
   Pick<PackageManifestTraversalResult, "blockedDirectoryFinding" | "blockedFileFinding">
 > {
@@ -179,6 +231,18 @@ async function inspectNodeModulesSymlinkTarget(params: {
   }
 
   if (!isPathInside(params.rootRealPath, resolvedTargetPath)) {
+    // Workspace package managers can leave peer links back to the OpenClaw host
+    // package. Trust only the exact peer-link shapes and only when the resolved
+    // target stays inside the host package root.
+    if (
+      isTrustedOpenClawPeerSymlink(params.symlinkRelativePath) &&
+      isTrustedHostOpenClawPath({
+        resolvedTargetPath,
+        trustedHostOpenClawRootRealPath: params.trustedHostOpenClawRootRealPath,
+      })
+    ) {
+      return {};
+    }
     throw new Error(
       `manifest dependency scan found node_modules symlink target outside install root at ${params.symlinkRelativePath}`,
     );
@@ -270,6 +334,7 @@ async function collectPackageManifestPaths(
 ): Promise<PackageManifestTraversalResult> {
   const limits = resolvePackageManifestTraversalLimits();
   const rootRealPath = await fs.realpath(rootDir).catch(() => rootDir);
+  const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
   const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
   const packageManifestPaths: string[] = [];
   const visitedDirectories = new Set<string>();
@@ -339,6 +404,7 @@ async function collectPackageManifestPaths(
             rootRealPath,
             symlinkPath: nextPath,
             symlinkRelativePath: relativeNextPath,
+            trustedHostOpenClawRootRealPath,
           });
           if (symlinkTargetInspection.blockedDirectoryFinding) {
             firstBlockedDirectoryFinding ??= symlinkTargetInspection.blockedDirectoryFinding;
@@ -464,6 +530,7 @@ async function scanDirectoryTarget(params: {
 }): Promise<BuiltinInstallScan> {
   try {
     const scanSummary = await scanDirectoryWithSummary(params.path, {
+      excludeTestFiles: true,
       includeFiles: params.includeFiles,
     });
     const builtinScan = buildBuiltinScanFromSummary(scanSummary);
@@ -487,6 +554,7 @@ async function scanDirectoryTarget(params: {
 function buildBlockedScanResult(params: {
   builtinScan: BuiltinInstallScan;
   dangerouslyForceUnsafeInstall?: boolean;
+  trustedSourceLinkedOfficialInstall?: boolean;
   targetLabel: string;
 }): InstallSecurityScanResult | undefined {
   if (params.builtinScan.status === "error") {
@@ -501,7 +569,7 @@ function buildBlockedScanResult(params: {
     };
   }
   if (params.builtinScan.critical > 0) {
-    if (params.dangerouslyForceUnsafeInstall) {
+    if (params.dangerouslyForceUnsafeInstall || params.trustedSourceLinkedOfficialInstall) {
       return undefined;
     }
     return {
@@ -527,6 +595,16 @@ function logDangerousForceUnsafeInstall(params: {
   );
 }
 
+function logTrustedSourceLinkedOfficialInstall(params: {
+  findings: Array<{ file: string; line: number; message: string; severity: string }>;
+  logger: InstallScanLogger;
+  targetLabel: string;
+}) {
+  params.logger.warn?.(
+    `WARNING: ${params.targetLabel} allowed because it is an official OpenClaw package: ${buildCriticalDetails({ findings: params.findings })}`,
+  );
+}
+
 function resolveBuiltinScanDecision(
   params: InstallSafetyOverrides & {
     builtinScan: BuiltinInstallScan;
@@ -537,10 +615,17 @@ function resolveBuiltinScanDecision(
   const builtinBlocked = buildBlockedScanResult({
     builtinScan: params.builtinScan,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     targetLabel: params.targetLabel,
   });
   if (params.dangerouslyForceUnsafeInstall && params.builtinScan.critical > 0) {
     logDangerousForceUnsafeInstall({
+      findings: params.builtinScan.findings,
+      logger: params.logger,
+      targetLabel: params.targetLabel,
+    });
+  } else if (params.trustedSourceLinkedOfficialInstall && params.builtinScan.critical > 0) {
+    logTrustedSourceLinkedOfficialInstall({
       findings: params.builtinScan.findings,
       logger: params.logger,
       targetLabel: params.targetLabel,
@@ -581,21 +666,7 @@ async function runBeforeInstallHook(params: {
   builtinScan: BuiltinInstallScan;
   skill?: {
     installId: string;
-    installSpec?: {
-      id?: string;
-      kind: "brew" | "node" | "go" | "uv" | "download";
-      label?: string;
-      bins?: string[];
-      os?: string[];
-      formula?: string;
-      package?: string;
-      module?: string;
-      url?: string;
-      archive?: string;
-      extract?: boolean;
-      stripComponents?: number;
-      targetDir?: string;
-    };
+    installSpec?: SkillInstallSpec;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file";
@@ -757,6 +828,7 @@ export async function scanPackageInstallSourceRuntime(
     builtinScan,
     logger: params.logger,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     targetLabel: `Plugin "${params.pluginId}" installation`,
   });
 
@@ -843,21 +915,7 @@ export async function scanFileInstallSourceRuntime(
 export async function scanSkillInstallSourceRuntime(params: {
   dangerouslyForceUnsafeInstall?: boolean;
   installId: string;
-  installSpec?: {
-    id?: string;
-    kind: "brew" | "node" | "go" | "uv" | "download";
-    label?: string;
-    bins?: string[];
-    os?: string[];
-    formula?: string;
-    package?: string;
-    module?: string;
-    url?: string;
-    archive?: string;
-    extract?: boolean;
-    stripComponents?: number;
-    targetDir?: string;
-  };
+  installSpec?: SkillInstallSpec;
   logger: InstallScanLogger;
   origin: string;
   skillName: string;
@@ -874,6 +932,7 @@ export async function scanSkillInstallSourceRuntime(params: {
   const builtinBlocked = buildBlockedScanResult({
     builtinScan,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: false,
     targetLabel: `Skill "${params.skillName}" installation`,
   });
   if (params.dangerouslyForceUnsafeInstall && builtinScan.critical > 0) {

@@ -1,7 +1,10 @@
+import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { listProfilesForProvider } from "./auth-profiles.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
@@ -22,6 +25,7 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;
   disablePluginTools?: boolean;
+  authProfileStore?: AuthProfileStore;
 };
 
 export function resolveOpenClawPluginToolsForOptions(params: {
@@ -33,7 +37,6 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     return [];
   }
 
-  const runtimeSnapshot = getActiveSecretsRuntimeSnapshot();
   const deliveryContext = normalizeDeliveryContext({
     channel: params.options?.agentChannel,
     to: params.options?.agentTo,
@@ -41,14 +44,31 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     threadId: params.options?.agentThreadId,
   });
 
+  const resolveCurrentRuntimeConfig = () => {
+    const currentRuntimeSnapshot = getActiveSecretsRuntimeSnapshot();
+    return selectApplicableRuntimeConfig({
+      inputConfig: params.resolvedConfig ?? params.options?.config,
+      runtimeConfig: currentRuntimeSnapshot?.config,
+      runtimeSourceConfig: currentRuntimeSnapshot?.sourceConfig,
+    });
+  };
+  const authProfileStore = params.options?.authProfileStore;
   const pluginTools = resolvePluginTools({
     ...resolveOpenClawPluginToolInputs({
       options: params.options,
       resolvedConfig: params.resolvedConfig,
-      runtimeConfig: runtimeSnapshot?.config,
+      runtimeConfig: resolveCurrentRuntimeConfig(),
+      getRuntimeConfig: resolveCurrentRuntimeConfig,
     }),
     existingToolNames: params.existingToolNames ?? new Set<string>(),
     toolAllowlist: params.options?.pluginToolAllowlist,
+    allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
+    ...(authProfileStore
+      ? {
+          hasAuthForProvider: (providerId) =>
+            listProfilesForProvider(authProfileStore, providerId).length > 0,
+        }
+      : {}),
   });
 
   return applyPluginToolDeliveryDefaults({

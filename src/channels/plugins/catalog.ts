@@ -3,12 +3,17 @@ import path from "node:path";
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
+import {
+  describePluginInstallSource,
+  type PluginInstallSourceInfo,
+} from "../../plugins/install-source-info.js";
 import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "../../plugins/manifest.js";
+import { listOfficialExternalChannelCatalogEntries } from "../../plugins/official-external-plugin-catalog.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
-import { resolveChannelExposure } from "./exposure.js";
+import { buildManifestChannelMeta } from "./channel-meta.js";
 import type { ChannelMeta } from "./types.public.js";
 
 export type ChannelUiMetaEntry = {
@@ -27,16 +32,16 @@ export type ChannelUiCatalog = {
   byId: Record<string, ChannelUiMetaEntry>;
 };
 
+export type ChannelPluginCatalogInstall = PluginPackageInstall &
+  ({ clawhubSpec: string } | { npmSpec: string });
+
 export type ChannelPluginCatalogEntry = {
   id: string;
   pluginId?: string;
   origin?: PluginOrigin;
   meta: ChannelMeta;
-  install: {
-    npmSpec: string;
-    localPath?: string;
-    defaultChoice?: "npm" | "local";
-  };
+  install: ChannelPluginCatalogInstall;
+  installSource?: PluginInstallSourceInfo;
 };
 
 type CatalogOptions = {
@@ -65,6 +70,7 @@ type ExternalCatalogEntry = {
 
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
+const officialCatalogEntriesByPath = new Map<string, ExternalCatalogEntry[] | null>();
 
 type ManifestKey = typeof MANIFEST_KEY;
 
@@ -140,6 +146,32 @@ function loadCatalogEntriesFromPaths(paths: Iterable<string>): ExternalCatalogEn
   return entries;
 }
 
+function loadOfficialCatalogEntriesFromPaths(paths: Iterable<string>): ExternalCatalogEntry[] {
+  const entries: ExternalCatalogEntry[] = [];
+  for (const resolvedPath of paths) {
+    const cached = officialCatalogEntriesByPath.get(resolvedPath);
+    if (cached !== undefined) {
+      if (cached) {
+        entries.push(...cached);
+      }
+      continue;
+    }
+    if (!fs.existsSync(resolvedPath)) {
+      officialCatalogEntriesByPath.set(resolvedPath, null);
+      continue;
+    }
+    try {
+      const payload = JSON.parse(fs.readFileSync(resolvedPath, "utf-8")) as unknown;
+      const parsed = parseCatalogEntries(payload);
+      officialCatalogEntriesByPath.set(resolvedPath, parsed);
+      entries.push(...parsed);
+    } catch {
+      officialCatalogEntriesByPath.set(resolvedPath, null);
+    }
+  }
+  return entries;
+}
+
 function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
   if (options.officialCatalogPaths && options.officialCatalogPaths.length > 0) {
     return options.officialCatalogPaths.map((entry) => entry.trim()).filter(Boolean);
@@ -164,7 +196,13 @@ function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
 }
 
 function loadOfficialCatalogEntries(options: CatalogOptions): ChannelPluginCatalogEntry[] {
-  return loadCatalogEntriesFromPaths(resolveOfficialCatalogPaths(options))
+  const builtInEntries = listOfficialExternalChannelCatalogEntries();
+  const officialPaths = resolveOfficialCatalogPaths(options);
+  const fileEntries =
+    options.officialCatalogPaths && options.officialCatalogPaths.length > 0
+      ? loadCatalogEntriesFromPaths(officialPaths)
+      : loadOfficialCatalogEntriesFromPaths(officialPaths);
+  return [...builtInEntries, ...fileEntries]
     .map((entry) => buildExternalCatalogEntry(entry))
     .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
 }
@@ -182,43 +220,20 @@ function toChannelMeta(params: {
   const docsPath = params.channel.docsPath?.trim() || `/channels/${params.id}`;
   const blurb = params.channel.blurb?.trim() || "";
   const systemImage = params.channel.systemImage?.trim();
-  const exposure = resolveChannelExposure(params.channel);
 
-  return {
+  return buildManifestChannelMeta({
     id: params.id,
+    channel: params.channel,
     label,
     selectionLabel,
-    ...(detailLabel ? { detailLabel } : {}),
     docsPath,
     docsLabel: normalizeOptionalString(params.channel.docsLabel),
     blurb,
-    ...(params.channel.aliases ? { aliases: params.channel.aliases } : {}),
-    ...(params.channel.preferOver ? { preferOver: params.channel.preferOver } : {}),
-    ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
-    ...(params.channel.selectionDocsPrefix
-      ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
-      : {}),
-    ...(params.channel.selectionDocsOmitLabel !== undefined
-      ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
-      : {}),
-    ...(params.channel.selectionExtras ? { selectionExtras: params.channel.selectionExtras } : {}),
+    detailLabel,
     ...(systemImage ? { systemImage } : {}),
-    ...(params.channel.markdownCapable !== undefined
-      ? { markdownCapable: params.channel.markdownCapable }
-      : {}),
-    exposure,
-    ...(params.channel.quickstartAllowFrom !== undefined
-      ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }
-      : {}),
-    ...(params.channel.forceAccountBinding !== undefined
-      ? { forceAccountBinding: params.channel.forceAccountBinding }
-      : {}),
-    ...(params.channel.preferSessionLookupForAnnounceTarget !== undefined
-      ? {
-          preferSessionLookupForAnnounceTarget: params.channel.preferSessionLookupForAnnounceTarget,
-        }
-      : {}),
-  };
+    arrayFieldMode: "defined",
+    selectionDocsPrefixMode: "truthy",
+  });
 }
 
 function resolveInstallInfo(params: {
@@ -227,19 +242,53 @@ function resolveInstallInfo(params: {
   packageDir?: string;
   workspaceDir?: string;
 }): ChannelPluginCatalogEntry["install"] | null {
-  const npmSpec = params.install?.npmSpec?.trim() ?? params.packageName?.trim();
-  if (!npmSpec) {
+  const clawhubSpec = normalizeOptionalString(params.install?.clawhubSpec);
+  const npmSpec =
+    normalizeOptionalString(params.install?.npmSpec) ?? normalizeOptionalString(params.packageName);
+  if (!clawhubSpec && !npmSpec) {
     return null;
   }
   let localPath = normalizeOptionalString(params.install?.localPath);
   if (!localPath && params.workspaceDir && params.packageDir) {
     localPath = path.relative(params.workspaceDir, params.packageDir) || undefined;
   }
-  const defaultChoice = params.install?.defaultChoice ?? (localPath ? "local" : "npm");
+  const requestedDefaultChoice = params.install?.defaultChoice;
+  const defaultChoice: NonNullable<PluginPackageInstall["defaultChoice"]> =
+    requestedDefaultChoice === "clawhub" && clawhubSpec
+      ? "clawhub"
+      : requestedDefaultChoice === "npm" && npmSpec
+        ? "npm"
+        : requestedDefaultChoice === "local" && localPath
+          ? "local"
+          : clawhubSpec
+            ? "clawhub"
+            : localPath
+              ? "local"
+              : "npm";
+  const install = {
+    ...(localPath ? { localPath } : {}),
+    defaultChoice,
+    ...(params.install?.minHostVersion ? { minHostVersion: params.install.minHostVersion } : {}),
+    ...(params.install?.expectedIntegrity
+      ? { expectedIntegrity: params.install.expectedIntegrity }
+      : {}),
+    ...(params.install?.allowInvalidConfigRecovery === true
+      ? { allowInvalidConfigRecovery: true }
+      : {}),
+  };
+  if (clawhubSpec) {
+    return {
+      clawhubSpec,
+      ...(npmSpec ? { npmSpec } : {}),
+      ...install,
+    };
+  }
+  if (!npmSpec) {
+    return null;
+  }
   return {
     npmSpec,
-    ...(localPath ? { localPath } : {}),
-    ...(defaultChoice ? { defaultChoice } : {}),
+    ...install,
   };
 }
 
@@ -279,6 +328,9 @@ function buildCatalogEntryFromManifest(params: {
     ...(params.origin ? { origin: params.origin } : {}),
     meta,
     install,
+    installSource: describePluginInstallSource(install, {
+      expectedPackageName: params.packageName,
+    }),
   };
 }
 

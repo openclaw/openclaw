@@ -3,11 +3,9 @@ summary: "Complete reference for CLI setup flow, auth/model setup, outputs, and 
 read_when:
   - You need detailed behavior for openclaw onboard
   - You are debugging onboarding results or integrating onboarding clients
-title: "CLI Setup Reference"
+title: "CLI setup reference"
 sidebarTitle: "CLI reference"
 ---
-
-# CLI Setup Reference
 
 This page is the full reference for `openclaw onboard`.
 For the short guide, see [Onboarding (CLI)](/start/wizard).
@@ -39,14 +37,17 @@ It does not install or modify anything on the remote host.
       - Config only
       - Config + credentials + sessions
       - Full reset (also removes workspace)
+
   </Step>
   <Step title="Model and auth">
     - Full option matrix is in [Auth and model options](#auth-and-model-options).
+
   </Step>
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
     - Seeds workspace files needed for first-run bootstrap ritual.
     - Workspace layout: [Agent workspace](/concepts/agent-workspace).
+
   </Step>
   <Step title="Gateway">
     - Prompts for port, bind, auth mode, and tailscale exposure.
@@ -60,6 +61,7 @@ It does not install or modify anything on the remote host.
       - Cannot be combined with `--gateway-token`.
     - Disable auth only if you fully trust every local process.
     - Non-loopback binds still require auth.
+
   </Step>
   <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): optional QR login
@@ -83,18 +85,22 @@ It does not install or modify anything on the remote host.
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
     - Runtime selection: Node (recommended; required for WhatsApp and Telegram). Bun is not recommended.
+
   </Step>
   <Step title="Health check">
     - Starts gateway (if needed) and runs `openclaw health`.
     - `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported.
+
   </Step>
   <Step title="Skills">
     - Reads available skills and checks requirements.
     - Lets you choose node manager: npm, pnpm, or bun.
     - Installs optional dependencies (some use Homebrew on macOS).
+
   </Step>
   <Step title="Finish">
     - Summary and next steps, including iOS, Android, and macOS app options.
+
   </Step>
 </Steps>
 
@@ -121,6 +127,7 @@ What you set:
 - Discovery hints:
   - macOS: Bonjour (`dns-sd`)
   - Linux: Avahi (`avahi-browse`)
+
 </Note>
 
 ## Auth and model options
@@ -129,23 +136,22 @@ What you set:
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
   </Accordion>
-  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
-    If `~/.codex/auth.json` exists, the wizard can reuse it.
-    Reused Codex CLI credentials stay managed by Codex CLI; on expiry OpenClaw
-    re-reads that source first and, when the provider can refresh it, writes
-    the refreshed credential back to Codex storage instead of taking ownership
-    itself.
-  </Accordion>
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
 
-    Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
+    Sets `agents.defaults.model` to `openai-codex/gpt-5.5` when model is unset or already OpenAI-family.
+
+  </Accordion>
+  <Accordion title="OpenAI Code subscription (device pairing)">
+    Browser pairing flow with a short-lived device code.
+
+    Sets `agents.defaults.model` to `openai-codex/gpt-5.5` when model is unset or already OpenAI-family.
 
   </Accordion>
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.4` when model is unset, `openai/*`, or `openai-codex/*`.
+    Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or `openai-codex/*`.
 
   </Accordion>
   <Accordion title="xAI (Grok) API key">
@@ -205,6 +211,7 @@ What you set:
     - `--custom-api-key` (optional; falls back to `CUSTOM_API_KEY`)
     - `--custom-provider-id` (optional)
     - `--custom-compatibility <openai|anthropic>` (optional; default `openai`)
+    - `--custom-image-input` / `--custom-text-input` (optional; override inferred model input capability)
 
   </Accordion>
   <Accordion title="Skip">
@@ -215,6 +222,7 @@ What you set:
 Model behavior:
 
 - Pick default model from detected options, or enter provider and model manually.
+- Custom-provider onboarding infers image support for common model IDs and asks only when the model name is unknown.
 - When onboarding starts from a provider auth choice, the model picker prefers
   that provider automatically. For Volcengine and BytePlus, the same preference
   also matches their coding-plan variants (`volcengine-plan/*`,
@@ -263,6 +271,7 @@ is only a legacy import source.
 Typical fields in `~/.openclaw/openclaw.json`:
 
 - `agents.defaults.workspace`
+- `agents.defaults.skipBootstrap` when `--skip-bootstrap` is passed
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)

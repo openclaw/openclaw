@@ -1,15 +1,14 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { applyAuthProfileConfig, upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { applyAuthProfileConfig } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { resolveQaAgentAuthDir, writeQaAuthProfiles } from "./auth-store.js";
 
 /** Providers the mock harness stages placeholder credentials for by default. */
-export const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
+const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
 
 /** Agent IDs the mock harness stages credentials under. */
-export const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
+const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
 
-export function buildQaMockProfileId(provider: string): string {
+function buildQaMockProfileId(provider: string): string {
   return `qa-mock-${provider}`;
 }
 
@@ -42,21 +41,20 @@ export async function stageQaMockAuthProfiles(params: {
   const providers = [...new Set(params.providers ?? QA_MOCK_AUTH_PROVIDERS)];
   let next = params.cfg;
   for (const agentId of agentIds) {
-    const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
-    await fs.mkdir(agentDir, { recursive: true });
-    for (const provider of providers) {
-      const profileId = buildQaMockProfileId(provider);
-      upsertAuthProfile({
-        profileId,
-        credential: {
-          type: "api_key",
-          provider,
-          key: "qa-mock-not-a-real-key",
-          displayName: `QA mock ${provider} credential`,
-        },
-        agentDir,
-      });
-    }
+    await writeQaAuthProfiles({
+      agentDir: resolveQaAgentAuthDir({ stateDir: params.stateDir, agentId }),
+      profiles: Object.fromEntries(
+        providers.map((provider) => [
+          buildQaMockProfileId(provider),
+          {
+            type: "api_key",
+            provider,
+            key: "qa-mock-not-a-real-key",
+            displayName: `QA mock ${provider} credential`,
+          },
+        ]),
+      ),
+    });
   }
   for (const provider of providers) {
     next = applyAuthProfileConfig(next, {

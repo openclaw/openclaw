@@ -1,6 +1,6 @@
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { escapeRegExp } from "../utils.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 export type HeartbeatTask = {
@@ -13,6 +13,7 @@ export type HeartbeatTask = {
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
 export const HEARTBEAT_PROMPT =
   "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
+export const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
@@ -71,7 +72,7 @@ export function resolveHeartbeatPrompt(raw?: string): string {
   return trimmed || HEARTBEAT_PROMPT;
 }
 
-export type StripHeartbeatMode = "heartbeat" | "message";
+type StripHeartbeatMode = "heartbeat" | "message";
 
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   let text = raw.trim();

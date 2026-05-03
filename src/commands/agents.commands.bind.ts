@@ -6,6 +6,8 @@ import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { describeBinding } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 
 type AgentBindingsModule = typeof import("./agents.bindings.js");
@@ -28,29 +30,12 @@ type AgentsUnbindOptions = {
   json?: boolean;
 };
 
-let agentBindingsModulePromise: Promise<AgentBindingsModule> | undefined;
+const agentBindingsModuleLoader = createLazyImportLoader<AgentBindingsModule>(
+  () => import("./agents.bindings.js"),
+);
 
 function loadAgentBindingsModule(): Promise<AgentBindingsModule> {
-  agentBindingsModulePromise ??= import("./agents.bindings.js");
-  return agentBindingsModulePromise;
-}
-
-function describeBinding(binding: AgentRouteBinding): string {
-  const match = binding.match;
-  const parts = [match.channel];
-  if (match.accountId) {
-    parts.push(`accountId=${match.accountId}`);
-  }
-  if (match.peer) {
-    parts.push(`peer=${match.peer.kind}:${match.peer.id}`);
-  }
-  if (match.guildId) {
-    parts.push(`guild=${match.guildId}`);
-  }
-  if (match.teamId) {
-    parts.push(`team=${match.teamId}`);
-  }
-  return parts.join(" ");
+  return agentBindingsModuleLoader.load();
 }
 
 function resolveAgentId(

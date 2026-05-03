@@ -21,10 +21,12 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionMessages } from "../../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
+import { CommandLane } from "../../process/lanes.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -35,6 +37,7 @@ import {
 } from "./agent-runner-utils.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
+  resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
@@ -46,11 +49,12 @@ import { incrementCompactionCount } from "./session-updates.js";
 
 type PiEmbeddedRuntime = typeof import("../../agents/pi-embedded.js");
 
-let piEmbeddedRuntimePromise: Promise<PiEmbeddedRuntime> | undefined;
+const piEmbeddedRuntimeLoader = createLazyImportLoader<PiEmbeddedRuntime>(
+  () => import("../../agents/pi-embedded.js"),
+);
 
 function loadPiEmbeddedRuntime(): Promise<PiEmbeddedRuntime> {
-  piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.js");
-  return piEmbeddedRuntimePromise;
+  return piEmbeddedRuntimeLoader.load();
 }
 
 async function compactEmbeddedPiSessionDefault(
@@ -96,7 +100,7 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
   });
 }
 
-export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
+function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
   const trimmed = normalizeOptionalString(prompt);
   if (!trimmed) {
     return undefined;
@@ -109,7 +113,7 @@ export function estimatePromptTokensForMemoryFlush(prompt?: string): number | un
   return Math.ceil(tokens);
 }
 
-export function resolveEffectivePromptTokens(
+function resolveEffectivePromptTokens(
   basePromptTokens?: number,
   lastOutputTokens?: number,
   promptTokenEstimate?: number,
@@ -122,6 +126,38 @@ export function resolveEffectivePromptTokens(
   return base + output + estimate;
 }
 
+function resolveMemoryFlushModelFallbackOptions(
+  run: FollowupRun["run"],
+  model?: string,
+  configOverride: FollowupRun["run"]["config"] = run.config,
+) {
+  const options = resolveModelFallbackOptions(run, configOverride);
+  const override = normalizeOptionalString(model);
+  if (!override) {
+    return options;
+  }
+  // A memory-flush maintenance model is an exact override: do not let a failed
+  // local flush silently fall through to the paid active conversation fallback.
+  const slashIdx = override.indexOf("/");
+  if (slashIdx > 0) {
+    const overrideProvider = override.slice(0, slashIdx).trim();
+    const overrideModel = override.slice(slashIdx + 1).trim();
+    if (overrideProvider && overrideModel) {
+      return {
+        ...options,
+        provider: overrideProvider,
+        model: overrideModel,
+        fallbacksOverride: [],
+      };
+    }
+  }
+  return {
+    ...options,
+    model: override,
+    fallbacksOverride: [],
+  };
+}
+
 export type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
@@ -131,6 +167,7 @@ export type SessionTranscriptUsageSnapshot = {
 // transcript reads in time to flip memory-flush gating when needed.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
+const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
 
 function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
   const trimmed = line.trim();
@@ -307,21 +344,65 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
   }
 }
 
-function estimatePromptTokensFromSessionTranscript(params: {
+type TranscriptTokenEstimate = {
+  promptTokens: number;
+  outputTokens?: number;
+  transcriptBytesTokens?: number;
+};
+
+async function estimatePromptTokensFromSessionTranscript(params: {
   sessionId?: string;
-  storePath?: string;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
   sessionFile?: string;
-}): number | undefined {
+  storePath?: string;
+}): Promise<TranscriptTokenEstimate | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }
+  const fallbackSessionFile = normalizeOptionalString(params.sessionFile);
+  const sessionEntryForTranscript =
+    params.sessionEntry?.sessionFile || !fallbackSessionFile
+      ? params.sessionEntry
+      : ({ ...params.sessionEntry, sessionFile: fallbackSessionFile } as SessionEntry);
   try {
-    const messages = readSessionMessages(
+    const snapshot = await readSessionLogSnapshot({
+      sessionId,
+      sessionEntry: sessionEntryForTranscript,
+      sessionKey: params.sessionKey,
+      opts: { storePath: params.storePath },
+      includeByteSize: true,
+      includeUsage: true,
+    });
+    const transcriptBytesTokens =
+      typeof snapshot.byteSize === "number" &&
+      Number.isFinite(snapshot.byteSize) &&
+      snapshot.byteSize > 0
+        ? Math.ceil(snapshot.byteSize / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
+        : undefined;
+    const promptTokens = snapshot.usage?.promptTokens;
+    if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
+      const outputTokens = snapshot.usage?.outputTokens;
+      return {
+        promptTokens: Math.ceil(promptTokens),
+        outputTokens:
+          typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
+            ? Math.ceil(outputTokens)
+            : undefined,
+        transcriptBytesTokens,
+      };
+    }
+    const messages = (await readSessionMessagesAsync(
       sessionId,
       params.storePath,
-      params.sessionFile,
-    ) as AgentMessage[];
+      sessionEntryForTranscript?.sessionFile,
+      {
+        mode: "recent",
+        maxMessages: 200,
+        maxBytes: 1024 * 1024,
+      },
+    )) as AgentMessage[];
     if (messages.length === 0) {
       return undefined;
     }
@@ -329,27 +410,13 @@ function estimatePromptTokensFromSessionTranscript(params: {
     if (!Number.isFinite(estimatedTokens) || estimatedTokens <= 0) {
       return undefined;
     }
-    return Math.ceil(estimatedTokens);
+    return {
+      promptTokens: Math.ceil(estimatedTokens),
+      transcriptBytesTokens,
+    };
   } catch {
     return undefined;
   }
-}
-
-export async function readPromptTokensFromSessionLog(
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  sessionKey?: string,
-  opts?: { storePath?: string },
-): Promise<SessionTranscriptUsageSnapshot | undefined> {
-  const snapshot = await readSessionLogSnapshot({
-    sessionId,
-    sessionEntry,
-    sessionKey,
-    opts,
-    includeByteSize: false,
-    includeUsage: true,
-  });
-  return snapshot.usage;
 }
 
 export async function runPreflightCompactionIfNeeded(params: {
@@ -361,6 +428,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
@@ -399,29 +467,71 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof persistedTotalTokens === "number" &&
     Number.isFinite(persistedTotalTokens) &&
     persistedTotalTokens > 0;
+  const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
+  const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
+  const transcriptSizeSnapshot = shouldCheckActiveTranscriptBytes
+    ? await readSessionLogSnapshot({
+        sessionId: entry.sessionId,
+        sessionEntry:
+          entry.sessionFile || !params.followupRun.run.sessionFile
+            ? entry
+            : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+        sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+        opts: { storePath: params.storePath },
+        includeByteSize: true,
+        includeUsage: false,
+      })
+    : undefined;
+  const activeTranscriptBytes = transcriptSizeSnapshot?.byteSize;
+  const shouldCompactByTranscriptBytes =
+    typeof activeTranscriptBytes === "number" &&
+    typeof maxActiveTranscriptBytes === "number" &&
+    activeTranscriptBytes >= maxActiveTranscriptBytes;
   const shouldUseTranscriptFallback = entry.totalTokensFresh === false || !hasPersistedTotalTokens;
-  if (!shouldUseTranscriptFallback) {
+  if (!shouldUseTranscriptFallback && !shouldCompactByTranscriptBytes) {
     return entry ?? params.sessionEntry;
   }
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
-  const transcriptPromptTokens =
+  const transcriptUsageTokens =
     typeof freshPersistedTokens === "number"
       ? undefined
-      : estimatePromptTokensFromSessionTranscript({
+      : await estimatePromptTokensFromSessionTranscript({
           sessionId: entry.sessionId,
-          storePath: params.storePath,
+          sessionEntry: entry,
+          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
           sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
+          storePath: params.storePath,
         });
-  const projectedTokenCount =
-    typeof transcriptPromptTokens === "number"
-      ? resolveEffectivePromptTokens(transcriptPromptTokens, undefined, promptTokenEstimate)
+  const stalePersistedPromptTokens = hasPersistedTotalTokens
+    ? Math.floor(persistedTotalTokens)
+    : undefined;
+  const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
+  const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
+  const transcriptBytesProjectedTokens =
+    typeof transcriptUsageTokens?.transcriptBytesTokens === "number"
+      ? resolveEffectivePromptTokens(
+          transcriptUsageTokens.transcriptBytesTokens,
+          undefined,
+          promptTokenEstimate,
+        )
       : undefined;
+  const usageProjectedTokenCount =
+    typeof transcriptPromptTokens === "number"
+      ? resolveEffectivePromptTokens(
+          transcriptPromptTokens,
+          transcriptOutputTokens,
+          promptTokenEstimate,
+        )
+      : undefined;
+  const projectedTokenCount = Math.max(
+    usageProjectedTokenCount ?? 0,
+    transcriptBytesProjectedTokens ?? 0,
+    stalePersistedPromptTokens ?? 0,
+  );
   const tokenCountForCompaction =
-    typeof projectedTokenCount === "number" &&
-    Number.isFinite(projectedTokenCount) &&
-    projectedTokenCount > 0
+    Number.isFinite(projectedTokenCount) && projectedTokenCount > 0
       ? projectedTokenCount
       : undefined;
 
@@ -433,24 +543,31 @@ export async function runPreflightCompactionIfNeeded(params: {
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
-      `promptTokensEst=${promptTokenEstimate ?? "undefined"}`,
+      `promptTokensEst=${promptTokenEstimate ?? "undefined"} ` +
+      `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
+      `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"} ` +
+      `sizeTrigger=${shouldCompactByTranscriptBytes}`,
   );
 
-  const shouldCompact = shouldRunPreflightCompaction({
+  const shouldCompactByTokens = shouldRunPreflightCompaction({
     entry,
     tokenCount: tokenCountForCompaction,
     contextWindowTokens,
     reserveTokensFloor,
     softThresholdTokens,
   });
+  const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
     return entry ?? params.sessionEntry;
   }
 
+  const compactionTrigger = shouldCompactByTranscriptBytes ? "transcript_bytes" : "tokens";
   logVerbose(
     `preflightCompaction triggered: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
-      `threshold=${threshold}`,
+      `threshold=${threshold} trigger=${compactionTrigger} ` +
+      `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
+      `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
   );
 
   params.replyOperation.setPhase("preflight_compacting");
@@ -463,6 +580,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const result = await memoryDeps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
+    sandboxSessionKey: params.runtimePolicySessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.followupRun.run.messageProvider,
     groupId: entry.groupId ?? params.followupRun.run.groupId,
@@ -479,10 +597,12 @@ export async function runPreflightCompactionIfNeeded(params: {
     skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
     provider: params.followupRun.run.provider,
     model: params.followupRun.run.model,
+    agentHarnessId:
+      entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
     thinkLevel: params.followupRun.run.thinkLevel,
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
-    currentTokenCount: tokenCountForCompaction,
+    currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
     senderIsOwner: params.followupRun.run.senderIsOwner,
     ownerNumbers: params.followupRun.run.ownerNumbers,
     abortSignal: params.replyOperation.abortSignal,
@@ -502,12 +622,31 @@ export async function runPreflightCompactionIfNeeded(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     tokensAfter: result.result?.tokensAfter,
+    newSessionId: result.result?.sessionId,
+    newSessionFile: result.result?.sessionFile,
   });
   await appendPostCompactionRefreshPrompt({
     cfg: params.cfg,
     followupRun: params.followupRun,
   });
   entry = params.sessionStore?.[params.sessionKey] ?? entry;
+  if (entry) {
+    const previousSessionId = params.followupRun.run.sessionId;
+    params.followupRun.run.sessionId = entry.sessionId;
+    params.replyOperation.updateSessionId(entry.sessionId);
+    if (entry.sessionFile) {
+      params.followupRun.run.sessionFile = entry.sessionFile;
+    }
+    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+    if (queueKey) {
+      memoryDeps.refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId,
+        nextSessionId: entry.sessionId,
+        nextSessionFile: entry.sessionFile,
+      });
+    }
+  }
   return entry ?? params.sessionEntry;
 }
 
@@ -523,6 +662,7 @@ export async function runMemoryFlushIfNeeded(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
@@ -538,7 +678,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     const runtime = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: params.sessionKey,
+      sessionKey: params.runtimePolicySessionKey ?? params.sessionKey,
     });
     if (!runtime.sandboxed) {
       return true;
@@ -744,10 +884,17 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   let postCompactionSessionId: string | undefined;
+  let postCompactionSessionFile: string | undefined;
   try {
     await memoryDeps.runWithModelFallback({
-      ...resolveModelFallbackOptions(params.followupRun.run),
+      ...resolveMemoryFlushModelFallbackOptions(
+        params.followupRun.run,
+        activeMemoryFlushPlan.model,
+        params.cfg,
+      ),
       runId: flushRunId,
+      sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
+      lane: CommandLane.Main,
       run: async (provider, model, runOptions) => {
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: params.followupRun.run,
@@ -762,11 +909,13 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          sandboxSessionKey: params.runtimePolicySessionKey,
           allowGatewaySubagentBinding: true,
           silentExpected: true,
           trigger: "memory",
           memoryFlushWritePath,
           prompt: activeMemoryFlushPlan.prompt,
+          transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature:
@@ -784,6 +933,9 @@ export async function runMemoryFlushIfNeeded(params: {
         });
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
+        }
+        if (result.meta?.agentMeta?.sessionFile) {
+          postCompactionSessionFile = result.meta.agentMeta.sessionFile;
         }
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
@@ -804,6 +956,7 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         newSessionId: postCompactionSessionId,
+        newSessionFile: postCompactionSessionFile,
       });
       const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;
       if (updatedEntry) {

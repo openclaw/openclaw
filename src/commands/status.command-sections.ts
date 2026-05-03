@@ -1,3 +1,8 @@
+import {
+  buildPairingConnectRecoveryTitle,
+  describePairingConnectRequirement,
+  type ConnectPairingRequiredReason,
+} from "../gateway/protocol/connect-error-details.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -18,6 +23,22 @@ type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "se
 type MemoryLike = MemoryStatusSnapshot | null;
 type MemoryPluginLike = MemoryPluginStatus;
 type SessionsRecentLike = SessionStatus;
+type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
+
+export type StatusMemoryStateResolvers = {
+  resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
+    state: string;
+    tone: Tone;
+  };
+  resolveMemoryFtsState: (value: NonNullable<MemoryStatusSnapshot["fts"]>) => {
+    state: string;
+    tone: Tone;
+  };
+  resolveMemoryCacheSummary: (value: NonNullable<MemoryStatusSnapshot["cache"]>) => {
+    text: string;
+    tone: Tone;
+  };
+};
 
 type PluginCompatibilityNoticeLike = {
   severity?: "warn" | "info" | null;
@@ -25,6 +46,8 @@ type PluginCompatibilityNoticeLike = {
 
 type PairingRecoveryLike = {
   requestId?: string | null;
+  reason?: ConnectPairingRequiredReason | null;
+  remediationHint?: string | null;
 };
 
 export const statusHealthColumns: TableColumn[] = [
@@ -115,32 +138,23 @@ export function buildStatusLastHeartbeatValue(params: {
     .join(" · ");
 }
 
-export function buildStatusMemoryValue(params: {
-  memory: MemoryLike;
-  memoryPlugin: MemoryPluginLike;
-  ok: (value: string) => string;
-  warn: (value: string) => string;
-  muted: (value: string) => string;
-  resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
-    state: string;
-    tone: Tone;
-  };
-  resolveMemoryFtsState: (value: NonNullable<MemoryStatusSnapshot["fts"]>) => {
-    state: string;
-    tone: Tone;
-  };
-  resolveMemoryCacheSummary: (value: NonNullable<MemoryStatusSnapshot["cache"]>) => {
-    text: string;
-    tone: Tone;
-  };
-}) {
+export function buildStatusMemoryValue(
+  params: {
+    memory: MemoryLike;
+    memoryPlugin: MemoryPluginLike;
+    ok: (value: string) => string;
+    warn: (value: string) => string;
+    muted: (value: string) => string;
+    memoryUnavailableLabel?: string;
+  } & StatusMemoryStateResolvers,
+) {
   if (!params.memoryPlugin.enabled) {
     const suffix = params.memoryPlugin.reason ? ` (${params.memoryPlugin.reason})` : "";
     return params.muted(`disabled${suffix}`);
   }
   if (!params.memory) {
     const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
-    return params.muted(`enabled (${slot}) · unavailable`);
+    return params.muted(`enabled (${slot}) · ${params.memoryUnavailableLabel ?? "unavailable"}`);
   }
   const parts: string[] = [];
   const dirtySuffix = params.memory.dirty ? ` · ${params.warn("dirty")}` : "";
@@ -247,6 +261,13 @@ export function buildStatusHealthRows(params: {
       Detail: `${params.health.durationMs}ms`,
     },
   ];
+  if (params.health.eventLoop) {
+    rows.push({
+      Item: "Event loop",
+      Status: params.health.eventLoop.degraded ? params.warn("WARN") : params.ok("OK"),
+      Detail: formatEventLoopHealthDetail(params.health.eventLoop),
+    });
+  }
   for (const line of params.formatHealthChannelLines(params.health, { accountMode: "all" })) {
     const colon = line.indexOf(":");
     if (colon === -1) {
@@ -271,6 +292,17 @@ export function buildStatusHealthRows(params: {
     rows.push({ Item: item, Status: status, Detail: detail });
   }
   return rows;
+}
+
+export function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
+  const parts = [
+    eventLoop.reasons.length > 0 ? `reasons ${eventLoop.reasons.join(",")}` : "healthy",
+    `max ${Math.round(eventLoop.delayMaxMs)}ms`,
+    `p99 ${Math.round(eventLoop.delayP99Ms)}ms`,
+    `util ${eventLoop.utilization}`,
+    `cpu ${eventLoop.cpuCoreRatio}`,
+  ];
+  return parts.join(" · ");
 }
 
 export function buildStatusSessionsRows(params: {
@@ -362,7 +394,17 @@ export function buildStatusPairingRecoveryLines(params: {
     return [];
   }
   return [
-    params.warn("Gateway pairing approval required."),
+    params.warn(buildPairingConnectRecoveryTitle(params.pairingRecovery.reason ?? undefined)),
+    ...(params.pairingRecovery.reason
+      ? [
+          params.muted(
+            `Reason: ${describePairingConnectRequirement(params.pairingRecovery.reason)}.`,
+          ),
+        ]
+      : []),
+    ...(params.pairingRecovery.remediationHint
+      ? [params.muted(`Hint: ${params.pairingRecovery.remediationHint}`)]
+      : []),
     ...(params.pairingRecovery.requestId
       ? [
           params.muted(

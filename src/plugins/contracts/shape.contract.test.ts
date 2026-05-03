@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
-} from "../../../test/helpers/plugins/contracts-testkit.js";
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { describe, expect, it } from "vitest";
 import { buildPluginShapeSummary } from "../inspect-shape.js";
 
 describe("plugin shape compatibility matrix", () => {
@@ -98,10 +98,9 @@ describe("plugin shape compatibility matrix", () => {
       workspaceDir: "/virtual-workspace",
       ...registry.registry,
     };
-    const inspect = report.plugins.map((plugin) => ({
-      plugin,
-      ...buildPluginShapeSummary({ plugin, report }),
-    }));
+    const inspect = report.plugins.map((plugin) =>
+      Object.assign({ plugin }, buildPluginShapeSummary({ plugin, report })),
+    );
 
     expect(
       inspect.map((entry) => ({

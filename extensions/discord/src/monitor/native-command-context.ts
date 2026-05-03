@@ -4,7 +4,7 @@ import { resolveDiscordConversationIdentity } from "../conversation-identity.js"
 import { type DiscordChannelConfigResolved, type DiscordGuildEntryResolved } from "./allow-list.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 
-export type BuildDiscordNativeCommandContextParams = {
+type BuildDiscordNativeCommandContextParams = {
   prompt: string;
   commandArgs: CommandArgs;
   sessionKey: string;
@@ -13,6 +13,8 @@ export type BuildDiscordNativeCommandContextParams = {
   interactionId: string;
   channelId: string;
   threadParentId?: string;
+  memberRoleIds?: string[];
+  guildId?: string;
   guildName?: string;
   channelTopic?: string;
   channelConfig?: DiscordChannelConfigResolved | null;
@@ -67,6 +69,10 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     ChatType: params.isDirectMessage ? "direct" : params.isGroupDm ? "group" : "channel",
     ConversationLabel: conversationLabel,
     GroupSubject: params.isGuild ? params.guildName : undefined,
+    GroupSpace: params.isGuild
+      ? (params.guildInfo?.id ?? params.guildInfo?.slug ?? params.guildId)
+      : undefined,
+    MemberRoleIds: params.memberRoleIds,
     GroupSystemPrompt: groupSystemPrompt,
     UntrustedContext: untrustedContext,
     OwnerAllowFrom: ownerAllowFrom,

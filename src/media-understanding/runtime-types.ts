@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
-import type { MediaUnderstandingOutput, MediaUnderstandingProvider } from "./types.js";
+import type {
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+  MediaUnderstandingProvider,
+} from "./types.js";
 
 export type RunMediaUnderstandingFileParams = {
   capability: "image" | "audio" | "video";
@@ -9,6 +13,8 @@ export type RunMediaUnderstandingFileParams = {
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
+  prompt?: string;
+  timeoutMs?: number;
 };
 
 export type RunMediaUnderstandingFileResult = {
@@ -16,6 +22,7 @@ export type RunMediaUnderstandingFileResult = {
   provider?: string;
   model?: string;
   output?: MediaUnderstandingOutput;
+  decision?: MediaUnderstandingDecision;
 };
 
 export type DescribeImageFileParams = {
@@ -24,6 +31,8 @@ export type DescribeImageFileParams = {
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
+  prompt?: string;
+  timeoutMs?: number;
 };
 
 export type DescribeImageFileWithModelParams = {
@@ -38,7 +47,7 @@ export type DescribeImageFileWithModelParams = {
   timeoutMs?: number;
 };
 
-export type DescribeImageFileWithModelResult = Awaited<
+type DescribeImageFileWithModelResult = Awaited<
   ReturnType<NonNullable<MediaUnderstandingProvider["describeImage"]>>
 >;
 
@@ -69,5 +78,7 @@ export type MediaUnderstandingRuntime = {
     params: DescribeImageFileWithModelParams,
   ) => Promise<DescribeImageFileWithModelResult>;
   describeVideoFile: (params: DescribeVideoFileParams) => Promise<RunMediaUnderstandingFileResult>;
-  transcribeAudioFile: (params: TranscribeAudioFileParams) => Promise<{ text: string | undefined }>;
+  transcribeAudioFile: (
+    params: TranscribeAudioFileParams,
+  ) => Promise<RunMediaUnderstandingFileResult>;
 };

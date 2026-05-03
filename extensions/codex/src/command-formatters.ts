@@ -1,8 +1,9 @@
+import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import type { SafeValue } from "./command-rpc.js";
 
-export type CodexStatusProbes = {
+type CodexStatusProbes = {
   models: SafeValue<CodexAppServerModelListResult>;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
@@ -45,10 +46,14 @@ export function formatModels(result: CodexAppServerModelListResult): string {
   if (result.models.length === 0) {
     return "No Codex app-server models returned.";
   }
-  return [
+  const lines = [
     "Codex models:",
     ...result.models.map((model) => `- ${model.id}${model.isDefault ? " (default)" : ""}`),
-  ].join("\n");
+  ];
+  if (result.truncated) {
+    lines.push("- More models available; output truncated.");
+  }
+  return lines.join("\n");
 }
 
 export function formatThreads(response: JsonValue | undefined): string {
@@ -85,6 +90,33 @@ export function formatAccount(
   ].join("\n");
 }
 
+export function formatComputerUseStatus(status: CodexComputerUseStatus): string {
+  const lines = [
+    `Computer Use: ${status.ready ? "ready" : status.enabled ? "not ready" : "disabled"}`,
+  ];
+  lines.push(`Plugin: ${status.pluginName} (${computerUsePluginState(status)})`);
+  lines.push(
+    `MCP server: ${status.mcpServerName}${
+      status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
+    }`,
+  );
+  if (status.marketplaceName) {
+    lines.push(`Marketplace: ${status.marketplaceName}`);
+  }
+  if (status.tools.length > 0) {
+    lines.push(`Tools: ${status.tools.slice(0, 8).join(", ")}`);
+  }
+  lines.push(status.message);
+  return lines.join("\n");
+}
+
+function computerUsePluginState(status: CodexComputerUseStatus): string {
+  if (!status.installed) {
+    return "not installed";
+  }
+  return status.pluginEnabled ? "installed" : "installed, disabled";
+}
+
 export function formatList(response: JsonValue | undefined, label: string): string {
   const entries = extractArray(response);
   if (entries.length === 0) {
@@ -106,8 +138,18 @@ export function buildHelp(): string {
     "- /codex models",
     "- /codex threads [filter]",
     "- /codex resume <thread-id>",
+    "- /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
+    "- /codex binding",
+    "- /codex stop",
+    "- /codex steer <message>",
+    "- /codex model [model]",
+    "- /codex fast [on|off|status]",
+    "- /codex permissions [default|yolo|status]",
+    "- /codex detach",
     "- /codex compact",
     "- /codex review",
+    "- /codex diagnostics [note]",
+    "- /codex computer-use [status|install]",
     "- /codex account",
     "- /codex mcp",
     "- /codex skills",
@@ -118,11 +160,16 @@ function summarizeAccount(value: JsonValue | undefined): string {
   if (!isJsonObject(value)) {
     return "unavailable";
   }
+  const account = isJsonObject(value.account) ? value.account : value;
+  const accountType = readString(account, "type");
+  if (accountType === "amazonBedrock") {
+    return "Amazon Bedrock";
+  }
   return (
-    readString(value, "email") ??
-    readString(value, "accountEmail") ??
-    readString(value, "planType") ??
-    readString(value, "id") ??
+    readString(account, "email") ??
+    readString(account, "accountEmail") ??
+    readString(account, "planType") ??
+    readString(account, "id") ??
     "available"
   );
 }

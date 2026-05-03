@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import { listSetupCliBackendIds } from "./setup-descriptors.js";
+import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 
 type SetupRegistryRuntimeModule = Pick<
   typeof import("./setup-registry.js"),
@@ -19,12 +19,10 @@ const require = createRequire(import.meta.url);
 const SETUP_REGISTRY_RUNTIME_CANDIDATES = ["./setup-registry.js", "./setup-registry.ts"] as const;
 
 let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | null | undefined;
-let bundledSetupCliBackendsCache: SetupCliBackendRuntimeEntry[] | undefined;
 
 export const __testing = {
   resetRuntimeState(): void {
     setupRegistryRuntimeModule = undefined;
-    bundledSetupCliBackendsCache = undefined;
   },
   setRuntimeModuleForTest(module: SetupRegistryRuntimeModule | null | undefined): void {
     setupRegistryRuntimeModule = module;
@@ -32,28 +30,19 @@ export const __testing = {
 };
 
 function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
-  if (bundledSetupCliBackendsCache) {
-    return bundledSetupCliBackendsCache;
-  }
-  bundledSetupCliBackendsCache = loadPluginManifestRegistry({ cache: true }).plugins.flatMap(
-    (plugin) => {
-      if (plugin.origin !== "bundled") {
-        return [];
-      }
-      const backendIds = listSetupCliBackendIds(plugin);
-      if (backendIds.length === 0) {
-        return [];
-      }
-      return backendIds.map(
-        (backendId) =>
-          ({
-            pluginId: plugin.id,
-            backend: { id: backendId },
-          }) satisfies SetupCliBackendRuntimeEntry,
-      );
-    },
-  );
-  return bundledSetupCliBackendsCache;
+  const snapshot = loadManifestMetadataSnapshot({ config: {}, env: process.env });
+  return snapshot.plugins.flatMap((plugin) => {
+    if (plugin.origin !== "bundled" || !isInstalledPluginEnabled(snapshot.index, plugin.id)) {
+      return [];
+    }
+    return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
+      (backendId) =>
+        ({
+          pluginId: plugin.id,
+          backend: { id: backendId },
+        }) satisfies SetupCliBackendRuntimeEntry,
+    );
+  });
 }
 
 function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {
