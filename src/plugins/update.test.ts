@@ -1930,6 +1930,7 @@ describe("syncPluginsForUpdateChannel", () => {
         spec: "@openclaw/legacy-chat",
         mode: "update",
         expectedPluginId: "legacy-chat",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(result.changed).toBe(true);
@@ -2075,6 +2076,7 @@ describe("syncPluginsForUpdateChannel", () => {
         spec: "@openclaw/legacy-chat",
         mode: "update",
         expectedPluginId: "legacy-chat",
+        trustedSourceLinkedOfficialInstall: true,
       }),
     );
     expect(result.changed).toBe(true);

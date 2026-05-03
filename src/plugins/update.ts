@@ -1391,6 +1391,7 @@ export async function syncPluginsForUpdateChannel(params: {
             spec: npmSpec,
             mode: "update",
             expectedPluginId: targetPluginId,
+            trustedSourceLinkedOfficialInstall: true,
             logger,
           });
         }
@@ -1399,6 +1400,7 @@ export async function syncPluginsForUpdateChannel(params: {
           spec: npmSpec,
           mode: "update",
           expectedPluginId: targetPluginId,
+          trustedSourceLinkedOfficialInstall: true,
           logger,
         });
       }
