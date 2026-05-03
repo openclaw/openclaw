@@ -110,6 +110,24 @@ describe("resolveToolEmoji", () => {
       expect(resolveToolEmoji(tool, DEFAULT_EMOJIS)).toBe(expected);
     },
   );
+
+  it("preserves explicit status emoji overrides before exact tool display emojis", () => {
+    const emojis = {
+      ...DEFAULT_EMOJIS,
+      coding: "🧪",
+      web: "🛰️",
+      tool: "🔧",
+    };
+    const overrides = {
+      coding: "🧪",
+      web: "🛰️",
+      tool: "🔧",
+    };
+
+    expect(resolveToolEmoji("exec", emojis, overrides)).toBe("🧪");
+    expect(resolveToolEmoji("web_search", emojis, overrides)).toBe("🛰️");
+    expect(resolveToolEmoji("message", emojis, overrides)).toBe("🔧");
+  });
 });
 
 describe("createStatusReactionController", () => {

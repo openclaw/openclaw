@@ -105,18 +105,28 @@ export const WEB_TOOL_TOKENS: string[] = [
 export function resolveToolEmoji(
   toolName: string | undefined,
   emojis: Required<StatusReactionEmojis>,
+  emojiOverrides?: StatusReactionEmojis,
 ): string {
   const normalized = normalizeOptionalLowercaseString(toolName) ?? "";
   if (!normalized) {
     return emojis.tool;
   }
+
+  const category = WEB_TOOL_TOKENS.some((token) => normalized.includes(token))
+    ? "web"
+    : CODING_TOOL_TOKENS.some((token) => normalized.includes(token))
+      ? "coding"
+      : "tool";
+  if (emojiOverrides?.[category] !== undefined) {
+    return emojis[category];
+  }
   if (Object.hasOwn(TOOL_DISPLAY_CONFIG.tools, normalized)) {
     return resolveToolDisplay({ name: toolName }).emoji;
   }
-  if (WEB_TOOL_TOKENS.some((token) => normalized.includes(token))) {
+  if (category === "web") {
     return emojis.web;
   }
-  if (CODING_TOOL_TOKENS.some((token) => normalized.includes(token))) {
+  if (category === "coding") {
     return emojis.coding;
   }
   return emojis.tool;
@@ -322,7 +332,7 @@ export function createStatusReactionController(params: {
   }
 
   function setTool(toolName?: string): void {
-    const emoji = resolveToolEmoji(toolName, emojis);
+    const emoji = resolveToolEmoji(toolName, emojis, params.emojis);
     scheduleEmoji(emoji);
   }
 
