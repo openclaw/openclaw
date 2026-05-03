@@ -578,6 +578,58 @@ describe("searchMemoryWiki", () => {
     });
   });
 
+  it("keeps wiki results when the shared memory manager is missing search", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "all" },
+      },
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n\nalpha wiki survives malformed shared memory\n",
+      }),
+      "utf8",
+    );
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager: { readFile: vi.fn() } });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      query: "alpha",
+      maxResults: 5,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      corpus: "wiki",
+      title: "Alpha Source",
+    });
+  });
+
+  it("treats shared memory search failures as unavailable for memory-only searches", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    const manager = createMemoryManager();
+    manager.search.mockRejectedValueOnce(new Error("shared search failed"));
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      query: "alpha",
+    });
+
+    expect(results).toEqual([]);
+    expect(manager.search).toHaveBeenCalledWith("alpha", { maxResults: 10 });
+  });
+
   it("uses the active session agent for shared memory search", async () => {
     const { config } = await createQueryVault({
       initialize: true,
