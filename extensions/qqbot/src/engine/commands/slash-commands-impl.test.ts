@@ -1,8 +1,129 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
-import { getFrameworkCommands } from "./slash-commands-impl.js";
+import type { CommandsPort } from "../adapter/commands.port.js";
+import { getFrameworkCommands, initCommands, matchSlashCommand } from "./slash-commands-impl.js";
+import type { SlashCommandContext } from "./slash-commands.js";
+
+type RuntimeConfigApi = ReturnType<NonNullable<CommandsPort["approveRuntimeGetter"]>>["config"];
+type ReplaceConfigFile = RuntimeConfigApi["replaceConfigFile"];
+type ReplaceConfigFileResult = Awaited<ReturnType<ReplaceConfigFile>>;
+
+function installCommandRuntime(currentConfig: OpenClawConfig, writes: OpenClawConfig[]): void {
+  const replaceConfigFile: ReplaceConfigFile = async (params) => {
+    writes.push(params.nextConfig);
+    return undefined as unknown as ReplaceConfigFileResult;
+  };
+
+  initCommands({
+    resolveVersion: () => "test",
+    pluginVersion: "0.0.0-test",
+    approveRuntimeGetter: () => ({
+      config: {
+        current: () => currentConfig,
+        replaceConfigFile,
+      },
+    }),
+  });
+}
+
+function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): SlashCommandContext {
+  return {
+    type: "c2c",
+    senderId: "UNTRUSTED_OPENID",
+    messageId: "msg-1",
+    eventTimestamp: "2026-01-01T00:00:00.000Z",
+    receivedAt: 1,
+    rawContent: "/bot-streaming on",
+    args: "",
+    accountId: "default",
+    appId: "app",
+    accountConfig: { allowFrom: ["*"], streaming: false },
+    commandAuthorized: false,
+    queueSnapshot: {
+      totalPending: 0,
+      activeUsers: 0,
+      maxConcurrentUsers: 1,
+      senderPending: 0,
+    },
+    ...overrides,
+  };
+}
+
+function getWrittenQQBotConfig(write: OpenClawConfig | undefined):
+  | {
+      streaming?: unknown;
+      accounts?: { default?: { streaming?: unknown } };
+    }
+  | undefined {
+  return write?.channels?.qqbot as
+    | {
+        streaming?: unknown;
+        accounts?: { default?: { streaming?: unknown } };
+      }
+    | undefined;
+}
 
 describe("QQBot framework slash commands", () => {
   it("routes bot-approve through the auth-gated framework registry", () => {
     expect(getFrameworkCommands().map((command) => command.name)).toContain("bot-approve");
+  });
+
+  it("routes bot-streaming through the auth-gated framework registry", () => {
+    expect(getFrameworkCommands().map((command) => command.name)).toContain("bot-streaming");
+  });
+
+  it("does not write streaming config when the sender is not command-authorized", async () => {
+    const writes: OpenClawConfig[] = [];
+    installCommandRuntime(
+      {
+        channels: {
+          qqbot: {
+            allowFrom: ["*"],
+            streaming: false,
+          },
+        },
+      },
+      writes,
+    );
+
+    const result = await matchSlashCommand(createStreamingContext());
+
+    expect(result).toContain("权限不足");
+    expect(writes).toHaveLength(0);
+  });
+
+  it("writes streaming config when the sender is command-authorized", async () => {
+    const writes: OpenClawConfig[] = [];
+    installCommandRuntime(
+      {
+        channels: {
+          qqbot: {
+            allowFrom: ["TRUSTED_OPENID"],
+            streaming: false,
+            accounts: {
+              default: {
+                allowFrom: ["TRUSTED_OPENID"],
+                streaming: false,
+              },
+            },
+          },
+        },
+      },
+      writes,
+    );
+
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        senderId: "TRUSTED_OPENID",
+        accountConfig: { allowFrom: ["TRUSTED_OPENID"], streaming: false },
+        commandAuthorized: true,
+      }),
+    );
+
+    const qqbot = getWrittenQQBotConfig(writes[0]);
+    expect(result).toContain("已开启");
+    expect(writes).toHaveLength(1);
+    expect(qqbot?.streaming).toBe(true);
+    expect(qqbot?.accounts?.default?.streaming).toBe(true);
   });
 });
