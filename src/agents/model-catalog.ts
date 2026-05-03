@@ -176,6 +176,9 @@ function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntr
 function normalizePersistedModelCatalogEntry(
   providerRaw: string,
   entry: Record<string, unknown>,
+  defaults?: {
+    contextWindow?: number;
+  },
 ): ModelCatalogEntry | undefined {
   const id = normalizeOptionalString(entry.id) ?? "";
   if (!id) {
@@ -189,7 +192,9 @@ function normalizePersistedModelCatalogEntry(
   const contextWindow =
     typeof entry?.contextWindow === "number" && entry.contextWindow > 0
       ? entry.contextWindow
-      : PI_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW;
+      : defaults?.contextWindow !== undefined
+        ? defaults.contextWindow
+        : PI_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW;
   const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : false;
   const parsedInput = Array.isArray(entry?.input)
     ? entry.input.filter((value): value is ModelInputType =>
@@ -222,8 +227,14 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
     if (!Array.isArray(providerConfig?.models)) {
       continue;
     }
+    const providerContextWindow =
+      typeof providerConfig?.contextWindow === "number" && providerConfig.contextWindow > 0
+        ? providerConfig.contextWindow
+        : undefined;
     for (const entry of providerConfig.models as Record<string, unknown>[]) {
-      const normalized = normalizePersistedModelCatalogEntry(providerRaw, entry);
+      const normalized = normalizePersistedModelCatalogEntry(providerRaw, entry, {
+        contextWindow: providerContextWindow,
+      });
       if (normalized && !shouldSuppressBuiltInModel(normalized)) {
         models.push(normalized);
       }

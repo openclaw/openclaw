@@ -344,6 +344,47 @@ describe("loadModelCatalog", () => {
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
+  it("preserves provider context defaults for persisted read-only catalog rows", async () => {
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          custom: {
+            contextWindow: 262144,
+            models: [
+              { id: "inherits-provider-context" },
+              { id: "overrides-context", contextWindow: 65536 },
+            ],
+          },
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(result).toEqual([
+      {
+        provider: "custom",
+        id: "inherits-provider-context",
+        name: "inherits-provider-context",
+        reasoning: false,
+        contextWindow: 262144,
+        input: ["text"],
+        compat: undefined,
+      },
+      {
+        provider: "custom",
+        id: "overrides-context",
+        name: "overrides-context",
+        reasoning: false,
+        contextWindow: 65536,
+        input: ["text"],
+        compat: undefined,
+      },
+    ]);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(augmentCatalogMock).not.toHaveBeenCalled();
+  });
+
   it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
     mockPiDiscoveryModels([
       {
