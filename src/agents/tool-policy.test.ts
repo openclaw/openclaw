@@ -264,3 +264,38 @@ describe("resolveSandboxToolPolicyForAgent", () => {
     expect(resolved.deny).toEqual(["image"]);
   });
 });
+
+describe("collectExplicitAllowlist", () => {
+  it("collects entries from allow", () => {
+    expect(collectExplicitAllowlist([{ allow: ["read", "write"] }])).toEqual(["read", "write"]);
+  });
+
+  it("collects entries from alsoAllow when allow is absent", () => {
+    expect(collectExplicitAllowlist([{ alsoAllow: ["openrag_search"] }])).toEqual([
+      "openrag_search",
+    ]);
+  });
+
+  it("collects entries from both allow and alsoAllow", () => {
+    expect(
+      collectExplicitAllowlist([{ allow: ["read"], alsoAllow: ["openrag_search"] }]),
+    ).toEqual(["read", "openrag_search"]);
+  });
+
+  it("returns empty array when policy has neither allow nor alsoAllow", () => {
+    expect(collectExplicitAllowlist([{ deny: ["exec"] }])).toEqual([]);
+  });
+
+  it("returns empty array for undefined policies", () => {
+    expect(collectExplicitAllowlist([undefined, undefined])).toEqual([]);
+  });
+
+  it("collects alsoAllow across multiple policies", () => {
+    expect(
+      collectExplicitAllowlist([
+        { alsoAllow: ["openrag_search"] },
+        { alsoAllow: ["custom_tool"] },
+      ]),
+    ).toEqual(["openrag_search", "custom_tool"]);
+  });
+});
