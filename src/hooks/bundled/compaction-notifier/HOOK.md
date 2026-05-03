@@ -2,7 +2,14 @@
 name: compaction-notifier
 description: "Send visible chat notices when session compaction starts and finishes."
 metadata:
-  { "openclaw": { "emoji": "🧹", "events": ["session:compact:before", "session:compact:after"], "always": true } }
+  {
+    "openclaw":
+      {
+        "emoji": "🧹",
+        "events": ["session:compact:before", "session:compact:after"],
+        "always": true,
+      },
+  }
 ---
 
 # Compaction Notifier
