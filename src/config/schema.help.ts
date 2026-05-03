@@ -1644,7 +1644,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.groupChat.visibleReplies":
     'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
   "messages.queue":
-    "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is steer, with followup fallback when steering is unavailable.",
+    "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is collect, which runs compatible queued messages as a followup turn after the debounce window. Use steer explicitly when active-run steering is desired.",
   "messages.queue.mode":
     'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
   "messages.queue.byChannel":

@@ -760,6 +760,10 @@ describe("config help copy quality", () => {
     expect(/relative/i.test(transformModule)).toBe(true);
     expect(/path traversal|reviewed|controlled/i.test(transformModule)).toBe(true);
 
+    const queue = FIELD_HELP["messages.queue"];
+    expect(/Default mode is collect/i.test(queue)).toBe(true);
+    expect(/Default mode is steer/i.test(queue)).toBe(false);
+
     const queueMode = FIELD_HELP["messages.queue.mode"];
     expect(queueMode.includes('"interrupt"')).toBe(true);
     expect(queueMode.includes('"steer+backlog"')).toBe(true);

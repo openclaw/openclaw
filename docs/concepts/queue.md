@@ -25,21 +25,20 @@ We serialize inbound auto-reply runs (all channels) through a tiny in-process qu
 
 When unset, all inbound channel surfaces use:
 
-- `mode: "steer"`
+- `mode: "collect"`
 - `debounceMs: 500`
 - `cap: 20`
 - `drop: "summarize"`
 
-`steer` is the default because it keeps the active model turn responsive without
-starting a second session run. It drains all steering messages that arrived
-before the next model boundary. If the current run cannot accept steering,
-OpenClaw falls back to a followup queue entry.
+`collect` is the default because it keeps later inbound messages in a followup
+turn with their own sender and execution context. If you want active-runtime
+steering, opt into `steer` globally, per channel, or per session.
 
 ## Queue modes
 
 Inbound messages can steer the current run, wait for a followup turn, or do both:
 
-- `steer`: queue steering messages into the active runtime. Pi delivers all pending steering messages **after the current assistant turn finishes executing its tool calls**, before the next LLM call; Codex app-server receives one batched `turn/steer`. If the run is not actively streaming or steering is unavailable, OpenClaw falls back to a followup queue entry.
+- `steer`: explicitly opt into queueing steering messages into the active runtime. Pi delivers all pending steering messages **after the current assistant turn finishes executing its tool calls**, before the next LLM call; Codex app-server receives one batched `turn/steer`. If the run is not actively streaming or steering is unavailable, OpenClaw falls back to a followup queue entry.
 - `queue` (legacy): old one-at-a-time steering. Pi delivers one queued steering message at each model boundary; Codex app-server receives separate `turn/steer` requests. Prefer `steer` unless you need the previous serialized behavior.
 - `followup`: enqueue each message for a later agent turn after the current run ends.
 - `collect`: coalesce queued messages into a **single** followup turn after the quiet window. If messages target different channels/threads, they drain individually to preserve routing.
@@ -59,11 +58,11 @@ Configure globally or per channel via `messages.queue`:
 {
   messages: {
     queue: {
-      mode: "steer",
+      mode: "collect",
       debounceMs: 500,
       cap: 20,
       drop: "summarize",
-      byChannel: { discord: "collect" },
+      byChannel: { discord: "steer" },
     },
   },
 }
@@ -88,7 +87,7 @@ For mode selection, OpenClaw resolves:
 1. Inline or stored per-session `/queue` override.
 2. `messages.queue.byChannel.<channel>`.
 3. `messages.queue.mode`.
-4. Default `steer`.
+4. Default `collect`.
 
 For options, inline or stored `/queue` options win over config. Then
 channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin

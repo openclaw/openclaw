@@ -1950,7 +1950,7 @@ lives on the [Models FAQ](/help/faq-models).
     - `steer-backlog` - steer now, then process backlog
     - `interrupt` - abort current run and start fresh
 
-    Default mode is `steer`. You can add options like `debounce:0.5s cap:25 drop:summarize` for followup modes. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
+    Default mode is `collect`. Opt into `steer` when you want active-run steering, and add options like `debounce:0.5s cap:25 drop:summarize` for followup modes. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
   </Accordion>
 </AccordionGroup>

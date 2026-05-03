@@ -129,8 +129,9 @@ If a run is already active, inbound messages can be queued, steered into the
 current run, or collected for a followup turn.
 
 - Configure via `messages.queue` (and `messages.queue.byChannel`).
-- Default mode is `steer`, with a 500ms followup debounce when steering falls
-  back to queued followup delivery.
+- Default mode is `collect`, with a 500ms debounce before queued followup
+  delivery. Use `steer` or `steer-backlog` only when you want active-run
+  steering.
 - Modes: `steer`, `followup`, `collect`, `steer-backlog`, `interrupt`, and the
   legacy one-at-a-time `queue` mode.
 

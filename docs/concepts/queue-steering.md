@@ -44,11 +44,11 @@ that mode allows it.
 
 | Mode            | Active-run behavior                                                                                                          | Later followup behavior                                                             |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `steer`         | Injects all queued steering messages together at the next runtime boundary. This is the default.                             | Falls back to followup only when steering is unavailable.                           |
+| `steer`         | Explicit opt-in mode that injects all queued steering messages together at the next runtime boundary.                        | Falls back to followup only when steering is unavailable.                           |
 | `queue`         | Legacy one-at-a-time steering. Pi injects one queued message per model boundary; Codex sends separate `turn/steer` requests. | Falls back to followup only when steering is unavailable.                           |
 | `steer-backlog` | Same active-run steering behavior as `steer`.                                                                                | Also keeps the same message for a later followup turn.                              |
 | `followup`      | Does not steer the current run.                                                                                              | Runs queued messages later.                                                         |
-| `collect`       | Does not steer the current run.                                                                                              | Coalesces compatible queued messages into one later turn after the debounce window. |
+| `collect`       | Default mode. Does not steer the current run.                                                                                | Coalesces compatible queued messages into one later turn after the debounce window. |
 | `interrupt`     | Aborts the active run, then starts the newest message.                                                                       | None.                                                                               |
 
 ## Burst example
@@ -70,8 +70,9 @@ session, change the active run's tool policy, or split messages by sender. In
 multi-user channels, inbound prompts already include sender and route context, so
 the next model call can see who sent each message.
 
-Use `collect` when you want OpenClaw to build a later followup turn that can
-coalesce compatible messages and preserve followup queue drop policy. Use
+Default `collect` builds a later followup turn that can coalesce compatible
+messages and preserve followup queue drop policy. Use `steer` only when you want
+the active runtime to receive new input before the next model decision, and use
 `queue` only when you need the older one-at-a-time steering behavior.
 
 ## Debounce
