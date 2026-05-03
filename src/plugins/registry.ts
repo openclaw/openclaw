@@ -2551,25 +2551,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 });
               },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
-              scheduleSessionTurn: (schedule) => {
+              scheduleSessionTurn: async (schedule) => {
                 if (registryParams.activateGlobalSideEffects === false) {
-                  return Promise.resolve(undefined);
+                  return undefined;
                 }
-                const scheduledDuringRegistration = !registry.plugins.some(
-                  (plugin) => plugin.id === record.id,
-                );
+                await Promise.resolve();
                 const shouldCommit = () => {
                   const currentRecord = registry.plugins.find((plugin) => plugin.id === record.id);
                   if (currentRecord) {
                     const activeRegistry = getActivePluginRegistry();
-                    return (
-                      (scheduledDuringRegistration ||
-                        activeRegistry === null ||
-                        activeRegistry === registry) &&
-                      currentRecord.status === "loaded"
-                    );
+                    return activeRegistry === registry && currentRecord.status === "loaded";
                   }
-                  return record.enabled && record.status === "loaded";
+                  return false;
                 };
                 return schedulePluginSessionTurn({
                   pluginId: record.id,
@@ -2580,23 +2573,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   ownerRegistry: registry,
                 });
               },
-              unscheduleSessionTurnsByTag: (request) => {
+              unscheduleSessionTurnsByTag: async (request) => {
                 if (registryParams.activateGlobalSideEffects === false) {
-                  return Promise.resolve({ removed: 0, failed: 0 });
+                  return { removed: 0, failed: 0 };
                 }
-                const calledDuringRegistration = !registry.plugins.some(
-                  (plugin) => plugin.id === record.id,
-                );
+                await Promise.resolve();
                 const currentRecord = registry.plugins.find((plugin) => plugin.id === record.id);
                 const activeRegistry = getActivePluginRegistry();
                 const pluginLoaded = currentRecord
-                  ? (calledDuringRegistration ||
-                      activeRegistry === null ||
-                      activeRegistry === registry) &&
-                    currentRecord.status === "loaded"
-                  : record.enabled && record.status === "loaded";
+                  ? activeRegistry === registry && currentRecord.status === "loaded"
+                  : false;
                 if (!pluginLoaded) {
-                  return Promise.resolve({ removed: 0, failed: 0 });
+                  return { removed: 0, failed: 0 };
                 }
                 return unschedulePluginSessionTurnsByTag({
                   pluginId: record.id,
