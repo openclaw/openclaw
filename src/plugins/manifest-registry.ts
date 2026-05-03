@@ -490,6 +490,20 @@ function pushManifestCompatibilityDiagnostics(params: {
   pushNonBundledChannelConfigDescriptorDiagnostic(params);
 }
 
+function dedupePluginDiagnostics(diagnostics: PluginDiagnostic[]): PluginDiagnostic[] {
+  const seen = new Set<string>();
+  const deduped: PluginDiagnostic[] = [];
+  for (const diagnostic of diagnostics) {
+    const key = JSON.stringify([diagnostic.level, diagnostic.pluginId ?? "", diagnostic.message]);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(diagnostic);
+  }
+  return deduped;
+}
+
 function matchesInstalledPluginRecord(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -786,6 +800,6 @@ export function loadPluginManifestRegistry(
     pushManifestCompatibilityDiagnostics({ record, diagnostics });
   }
 
-  const registry = { plugins: records, diagnostics };
+  const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }

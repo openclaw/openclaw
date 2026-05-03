@@ -400,6 +400,36 @@ describe("loadPluginManifestRegistry", () => {
     expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
+  it("deduplicates compatibility diagnostics when a config plugin replaces a global candidate", () => {
+    const globalDir = makeTempDir();
+    const configDir = makeTempDir();
+    const manifest = {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    };
+    writeManifest(globalDir, manifest);
+    writeManifest(configDir, manifest);
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "external-chat",
+        rootDir: globalDir,
+        origin: "global",
+      }),
+      createPluginCandidate({
+        idHint: "external-chat",
+        rootDir: configDir,
+        origin: "config",
+      }),
+    ]);
+
+    const channelConfigWarnings = registry.diagnostics.filter((diagnostic) =>
+      diagnostic.message.includes("without channelConfigs metadata"),
+    );
+    expect(channelConfigWarnings).toHaveLength(1);
+  });
+
   it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
