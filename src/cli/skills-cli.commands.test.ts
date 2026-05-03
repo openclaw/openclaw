@@ -388,11 +388,44 @@ describe("skills cli commands", () => {
     });
 
     expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({}, "main");
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace-main",
       slug: "calendar",
       logger: expect.any(Object),
     });
+  });
+
+  it("errors when update is called with no slug and no --all", async () => {
+    await expect(runCommand(["skills", "update"])).rejects.toThrow("__exit__:1");
+    expect(runtimeErrors.some((line) => line.includes("Provide a skill slug or use --all"))).toBe(
+      true,
+    );
+    expect(runtimeErrors.some((line) => line.includes("openclaw skills update"))).toBe(true);
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("errors when update is called with both a slug and --all", async () => {
+    await expect(runCommand(["skills", "update", "calendar", "--all"])).rejects.toThrow(
+      "__exit__:1",
+    );
+    expect(
+      runtimeErrors.some((line) => line.includes("Use either a skill slug or --all, not both")),
+    ).toBe(true);
+    expect(runtimeErrors.some((line) => line.includes("openclaw skills update"))).toBe(true);
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("logs and exits cleanly when --all is used with no tracked skills", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
+
+    await runCommand(["skills", "update", "--all"]);
+
+    expect(runtimeLogs.some((line) => line.includes("No tracked ClawHub skills to update"))).toBe(
+      true,
+    );
+    expect(runtimeErrors).toEqual([]);
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
   });
 
   it.each([
