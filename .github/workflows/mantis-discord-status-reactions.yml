@@ -150,12 +150,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p .artifacts/qa-e2e/mantis/discord-status-reactions/worktrees
-          git worktree add --detach .artifacts/qa-e2e/mantis/discord-status-reactions/worktrees/baseline "$BASELINE_SHA"
-          git worktree add --detach .artifacts/qa-e2e/mantis/discord-status-reactions/worktrees/candidate "$CANDIDATE_SHA"
+          worktree_root=".artifacts/qa-e2e/mantis/discord-status-reactions-worktrees"
+          mkdir -p "$worktree_root"
+          git worktree add --detach "$worktree_root/baseline" "$BASELINE_SHA"
+          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
 
           for lane in baseline candidate; do
-            lane_dir=".artifacts/qa-e2e/mantis/discord-status-reactions/worktrees/${lane}"
+            lane_dir="$worktree_root/${lane}"
             echo "Installing ${lane} worktree dependencies"
             pnpm --dir "$lane_dir" install --frozen-lockfile
             echo "Building ${lane} worktree"
@@ -187,13 +188,14 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
           root=".artifacts/qa-e2e/mantis/discord-status-reactions"
+          worktree_root=".artifacts/qa-e2e/mantis/discord-status-reactions-worktrees"
           mkdir -p "$root"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
 
           run_lane() {
             local lane="$1"
-            local repo_root="$root/worktrees/$lane"
-            local output_dir="$root/$lane"
+            local repo_root="$worktree_root/$lane"
+            local output_dir=".artifacts/qa-e2e/mantis/discord-status-reactions/$lane"
             pnpm openclaw qa discord \
               --repo-root "$repo_root" \
               --output-dir "$output_dir" \
@@ -205,6 +207,9 @@ jobs:
               --credential-role ci \
               --scenario discord-status-reactions-tool-only \
               --allow-failures
+            rm -rf "$root/$lane"
+            mkdir -p "$root/$lane"
+            cp -a "$repo_root/$output_dir/." "$root/$lane/"
           }
 
           run_lane baseline
