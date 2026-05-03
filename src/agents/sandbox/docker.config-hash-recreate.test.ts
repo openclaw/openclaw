@@ -303,7 +303,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
       spawnState.inspectRunning = false;
       spawnState.labelHash = "";
-      registryMocks.readRegistry.mockResolvedValue({ entries: [] });
+      registryMocks.readRegistryEntry.mockResolvedValue(null);
       registryMocks.updateRegistry.mockResolvedValue(undefined);
 
       await expect(
