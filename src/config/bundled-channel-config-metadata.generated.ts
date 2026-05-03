@@ -15660,6 +15660,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           minimum: 0,
           maximum: 9007199254740991,
         },
+        replyToOfflineMessages: {
+          type: "boolean",
+        },
+        offlineMessageMaxAgeSeconds: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+        },
         replyToMode: {
           anyOf: [
             {
@@ -15946,6 +15954,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               debounceMs: {
                 type: "integer",
                 minimum: 0,
+                maximum: 9007199254740991,
+              },
+              replyToOfflineMessages: {
+                type: "boolean",
+              },
+              offlineMessageMaxAgeSeconds: {
+                type: "integer",
+                exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
               replyToMode: {

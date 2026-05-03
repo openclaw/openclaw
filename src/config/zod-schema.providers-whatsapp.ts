@@ -94,6 +94,8 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     debounceMs: params.useDefaults
       ? z.number().int().nonnegative().optional().default(0)
       : z.number().int().nonnegative().optional(),
+    replyToOfflineMessages: z.boolean().optional(),
+    offlineMessageMaxAgeSeconds: z.number().int().positive().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
