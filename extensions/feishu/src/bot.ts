@@ -1206,6 +1206,8 @@ export async function handleFeishuMessage(params: {
         Provider: "feishu" as const,
         Surface: "feishu" as const,
         MessageSid: ctx.messageId,
+        MessageThreadId: ctx.rootId ?? undefined,
+        ReplyToId: ctx.parentId ?? undefined,
         ReplyToBody: quotedContent ?? undefined,
         ThreadStarterBody: threadContext.threadStarterBody,
         ThreadHistoryBody: threadContext.threadHistoryBody,
