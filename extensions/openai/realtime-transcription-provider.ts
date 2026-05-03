@@ -72,8 +72,16 @@ function createOpenAIRealtimeTranscriptionSession(
 ): RealtimeTranscriptionSession {
   let pendingTranscript = "";
 
-  const handleEvent = (event: RealtimeEvent) => {
+  const handleEvent = (
+    event: RealtimeEvent,
+    transport: RealtimeTranscriptionWebSocketTransport,
+  ) => {
     switch (event.type) {
+      case "session.updated":
+      case "transcription_session.updated":
+        transport.markReady();
+        return;
+
       case "conversation.item.input_audio_transcription.delta":
         if (event.delta) {
           pendingTranscript += event.delta;
@@ -95,7 +103,11 @@ function createOpenAIRealtimeTranscriptionSession(
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
-        config.onError?.(new Error(detail));
+        const error = new Error(detail);
+        config.onError?.(error);
+        if (!transport.isReady()) {
+          transport.failConnect(error);
+        }
         return;
       }
 
@@ -121,7 +133,6 @@ function createOpenAIRealtimeTranscriptionSession(
       Authorization: `Bearer ${config.apiKey}`,
       "OpenAI-Beta": "realtime=v1",
     },
-    readyOnOpen: true,
     connectTimeoutMs: OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS,
     maxReconnectAttempts: OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS,
     reconnectDelayMs: OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS,
@@ -137,17 +148,24 @@ function createOpenAIRealtimeTranscriptionSession(
       transport.sendJson({
         type: "transcription_session.update",
         session: {
-          input_audio_format: "g711_ulaw",
-          input_audio_transcription: {
-            model: config.model,
-            ...(config.language ? { language: config.language } : {}),
-            ...(config.prompt ? { prompt: config.prompt } : {}),
-          },
-          turn_detection: {
-            type: "server_vad",
-            threshold: config.vadThreshold,
-            prefix_padding_ms: 300,
-            silence_duration_ms: config.silenceDurationMs,
+          type: "transcription",
+          audio: {
+            input: {
+              format: {
+                type: "audio/pcmu",
+              },
+              transcription: {
+                model: config.model,
+                ...(config.language ? { language: config.language } : {}),
+                ...(config.prompt ? { prompt: config.prompt } : {}),
+              },
+              turn_detection: {
+                type: "server_vad",
+                threshold: config.vadThreshold,
+                prefix_padding_ms: 300,
+                silence_duration_ms: config.silenceDurationMs,
+              },
+            },
           },
         },
       });
