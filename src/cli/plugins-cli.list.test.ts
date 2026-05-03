@@ -112,6 +112,32 @@ describe("plugins cli list", () => {
     expect(output).toContain("openclaw plugins registry --refresh");
   });
 
+  it("does not report healthy config-selected plugin source shadowing as doctor issue", async () => {
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [
+        createPluginRecord({
+          id: "discord",
+          origin: "config",
+          source: "/tmp/openclaw-upstream/extensions/discord/index.ts",
+          status: "loaded",
+        }),
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "discord",
+          source: "/tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; global plugin will be overridden by config plugin (/tmp/openclaw-upstream/extensions/discord/index.ts)",
+        },
+      ],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    expect(runtimeLogs).toContain("No plugin issues detected.");
+  });
+
   it("reports persisted plugin registry state without refreshing", async () => {
     inspectPluginRegistry.mockResolvedValue({
       state: "stale",

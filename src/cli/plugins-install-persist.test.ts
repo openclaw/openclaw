@@ -183,6 +183,49 @@ describe("persistPluginInstall", () => {
     expect(runtimeLogs.join("\n")).toContain("openclaw plugins doctor");
   });
 
+  it("does not warn when the config-selected source is inside the npm install path", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "config",
+          source: "/tmp/openclaw/npm/node_modules/@openclaw/discord/dist/index.js",
+          status: "loaded",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "discord",
+      install: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/discord",
+      },
+    });
+
+    expect(runtimeLogs.join("\n")).not.toContain("is not the active source");
+  });
+
   it("invalidates runtime cache even when registry refresh fails", async () => {
     const { persistPluginInstall } = await import("./plugins-install-persist.js");
     const baseConfig = {
