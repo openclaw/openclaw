@@ -1,0 +1,2 @@
+{"schema":"tier2-merge-log/v1","note":"Append-only forensics log for Tier 2 merge activity. Each entry is one merge event."}
+{"batch":1,"upstream_commit_range":"38be6eb68e..98177b3f1b","commit_count":6,"tier":"tier2","pre_merge_test_hash":"64adf32bd6","post_merge_test_status":"green","classifier_version":"v2.1","notes":"Retroactive log. Batch 1 was merged before forensics logger was wired. 6 Tier 2 commits, tests green.","timestamp":"2026-05-03T16:04:43.924Z","loggedBy":"emmi"}
