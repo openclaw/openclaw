@@ -195,6 +195,7 @@ export function resolveProviderSystemPromptContribution(params: {
     config: params.context.config ?? params.config,
     providerId: params.context.provider ?? params.provider,
     modelId: params.context.modelId,
+    trigger: params.context.trigger,
   });
   const providerOverlay =
     plugin?.resolvePromptOverlay?.({
@@ -861,7 +862,6 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
     applyAutoEnable: false,
     bundledProviderAllowlistCompat: false,
     bundledProviderVitestCompat: false,
-    installBundledRuntimeDeps: false,
   })?.resolveSyntheticAuth?.(params.context);
   if (runtimeResolved) {
     return runtimeResolved;
@@ -876,7 +876,6 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
       applyAutoEnable: false,
       bundledProviderAllowlistCompat: false,
       bundledProviderVitestCompat: false,
-      installBundledRuntimeDeps: false,
     })?.resolveSyntheticAuth?.(params.context);
     if (runtimeProviderResolved) {
       return runtimeProviderResolved;

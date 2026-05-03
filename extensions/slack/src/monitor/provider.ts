@@ -85,6 +85,18 @@ async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
+export function formatSlackSocketReconnectMessage(params: {
+  event: string;
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  error?: unknown;
+}) {
+  const maxAttempts = params.maxAttempts > 0 ? String(params.maxAttempts) : "∞";
+  const suffix = params.error ? ` (${formatUnknownError(params.error)})` : "";
+  return `slack socket disconnected (${params.event}); reconnecting in ${Math.round(params.delayMs / 1000)}s (attempt ${params.attempt}/${maxAttempts})${suffix}`;
+}
+
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();
   if (!token) {
@@ -122,6 +134,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       cfg.messages?.groupChat?.historyLimit ??
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
+  const dmHistoryLimit = Math.max(0, account.config.dmHistoryLimit ?? 0);
 
   const sessionCfg = cfg.session;
   const sessionScope: SessionScope = sessionCfg?.scope ?? "per-sender";
@@ -266,6 +279,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     teamId,
     apiAppId,
     historyLimit,
+    dmHistoryLimit,
     sessionScope,
     mainKey,
     dmEnabled,
@@ -441,6 +455,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   try {
     if (slackMode === "socket") {
       let reconnectAttempts = 0;
+      let hasLoggedSocketConnected = false;
       while (!opts.abortSignal?.aborted) {
         try {
           const disconnect = await startSlackSocketAndWaitForDisconnect({
@@ -449,7 +464,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             onStarted: () => {
               reconnectAttempts = 0;
               publishSlackConnectedStatus(opts.setStatus);
-              runtime.log?.("slack socket mode connected");
+              if (!hasLoggedSocketConnected) {
+                hasLoggedSocketConnected = true;
+                runtime.log?.("slack socket mode connected");
+              }
             },
           });
           if (!disconnect) {
@@ -481,10 +499,16 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
 
           const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
-          runtime.error?.(
-            `slack socket disconnected (${disconnect.event}). retry ${reconnectAttempts}/${SLACK_SOCKET_RECONNECT_POLICY.maxAttempts || "∞"} in ${Math.round(delayMs / 1000)}s${
-              disconnect.error ? ` (${formatUnknownError(disconnect.error)})` : ""
-            }`,
+          runtime.log?.(
+            warn(
+              formatSlackSocketReconnectMessage({
+                event: disconnect.event,
+                attempt: reconnectAttempts,
+                maxAttempts: SLACK_SOCKET_RECONNECT_POLICY.maxAttempts,
+                delayMs,
+                error: disconnect.error,
+              }),
+            ),
           );
           await gracefulStop();
           try {

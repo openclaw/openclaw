@@ -27,6 +27,8 @@ import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
+import { resolveDiscordTargetChannelId } from "../send.shared.js";
+import { resolveDiscordChannelId } from "../targets.js";
 import {
   createDiscordAckReactionAdapter,
   createDiscordAckReactionContext,
@@ -81,6 +83,21 @@ type DiscordMessageProcessObserver = {
   onFinalReplyDelivered?: () => void;
   onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
 };
+
+type ToolStartPayload = {
+  name?: string;
+  phase?: string;
+  args?: Record<string, unknown>;
+};
+
+function readToolStringArg(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readToolBooleanArg(args: Record<string, unknown>, key: string): boolean {
+  return args[key] === true;
+}
 
 export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
@@ -176,9 +193,12 @@ export async function processDiscordMessage(
         shouldBypassMention,
       }),
     );
-  const shouldSendAckReaction = !sourceRepliesAreToolOnly && shouldAckReaction();
+  const shouldSendAckReaction = shouldAckReaction();
+  const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
   const statusReactionsEnabled =
-    shouldSendAckReaction && cfg.messages?.statusReactions?.enabled !== false;
+    shouldSendAckReaction &&
+    cfg.messages?.statusReactions?.enabled !== false &&
+    (!sourceRepliesAreToolOnly || statusReactionsExplicitlyEnabled);
   const feedbackRest = createDiscordRestClient({
     cfg,
     token,
@@ -200,7 +220,9 @@ export async function processDiscordMessage(
     messageId: message.id,
     reactionContext: ackReactionContext,
   });
-  const statusReactions = createStatusReactionController({
+  let statusReactionTarget = `${messageChannelId}/${message.id}`;
+  let statusReactionsActive = statusReactionsEnabled;
+  let statusReactions = createStatusReactionController({
     enabled: statusReactionsEnabled,
     adapter: discordAdapter,
     initialEmoji: ackReaction,
@@ -210,11 +232,99 @@ export async function processDiscordMessage(
       logAckFailure({
         log: logVerbose,
         channel: "discord",
-        target: `${messageChannelId}/${message.id}`,
+        target: statusReactionTarget,
         error: err,
       });
     },
   });
+  const resolveTrackedReactionChannelId = async (
+    args: Record<string, unknown>,
+  ): Promise<string> => {
+    const target =
+      readToolStringArg(args, "channelId") ??
+      readToolStringArg(args, "channel_id") ??
+      readToolStringArg(args, "to");
+    if (!target) {
+      return messageChannelId;
+    }
+    try {
+      return resolveDiscordChannelId(target);
+    } catch {
+      return (
+        await resolveDiscordTargetChannelId(target, {
+          cfg,
+          token,
+          accountId,
+        })
+      ).channelId;
+    }
+  };
+  const maybeBindStatusReactionsToToolReaction = async (payload: ToolStartPayload) => {
+    if (
+      sourceRepliesAreToolOnly ||
+      cfg.messages?.statusReactions?.enabled === false ||
+      payload.phase !== "start" ||
+      payload.name !== "message" ||
+      !payload.args
+    ) {
+      return;
+    }
+    const args = payload.args;
+    const action = readToolStringArg(args, "action")?.toLowerCase();
+    if (action !== "react") {
+      return;
+    }
+    const shouldTrack =
+      readToolBooleanArg(args, "trackToolCalls") || readToolBooleanArg(args, "track_tool_calls");
+    if (!shouldTrack) {
+      return;
+    }
+    const emoji = readToolStringArg(args, "emoji");
+    const remove = readToolBooleanArg(args, "remove");
+    if (!emoji || remove) {
+      return;
+    }
+    const trackedMessageId =
+      readToolStringArg(args, "messageId") ?? readToolStringArg(args, "message_id") ?? message.id;
+    let trackedChannelId: string;
+    try {
+      trackedChannelId = await resolveTrackedReactionChannelId(args);
+    } catch (err) {
+      logAckFailure({
+        log: logVerbose,
+        channel: "discord",
+        target: `${readToolStringArg(args, "to") ?? readToolStringArg(args, "channelId") ?? messageChannelId}/${trackedMessageId}`,
+        error: err,
+      });
+      return;
+    }
+    statusReactionTarget = `${trackedChannelId}/${trackedMessageId}`;
+    if (statusReactionsActive) {
+      void statusReactions.clear();
+    }
+    const trackedAdapter = createDiscordAckReactionAdapter({
+      channelId: trackedChannelId,
+      messageId: trackedMessageId,
+      reactionContext: ackReactionContext,
+    });
+    statusReactions = createStatusReactionController({
+      enabled: true,
+      adapter: trackedAdapter,
+      initialEmoji: emoji,
+      emojis: cfg.messages?.statusReactions?.emojis,
+      timing: cfg.messages?.statusReactions?.timing,
+      onError: (err) => {
+        logAckFailure({
+          log: logVerbose,
+          channel: "discord",
+          target: statusReactionTarget,
+          error: err,
+        });
+      },
+    });
+    statusReactionsActive = true;
+    void statusReactions.setQueued();
+  };
   queueInitialDiscordAckReaction({
     enabled: statusReactionsEnabled,
     shouldSendAckReaction,
@@ -320,6 +430,12 @@ export async function processDiscordMessage(
           return;
         }
         const draftStream = draftPreview.draftStream;
+        if (draftStream && draftPreview.isProgressMode && info.kind === "block") {
+          const reply = resolveSendableOutboundReplyParts(payload);
+          if (!reply.hasMedia && !payload.isError) {
+            return;
+          }
+        }
         if (draftStream && isFinal) {
           draftPreview.markFinalDeliveryHandled();
           const reply = resolveSendableOutboundReplyParts(payload);
@@ -455,6 +571,7 @@ export async function processDiscordMessage(
         }
         await replyPipeline.typingCallbacks?.onReplyStart();
         await statusReactions.setThinking();
+        await draftPreview.startProgressDraft();
       },
     });
 
@@ -507,8 +624,9 @@ export async function processDiscordMessage(
             limit: historyLimit,
           },
           onPreDispatchFailure: settleDispatchBeforeStart,
-          runDispatch: () =>
-            dispatchInboundMessage({
+          runDispatch: async () => {
+            await draftPreview.startProgressDraft();
+            return await dispatchInboundMessage({
               ctx: ctxPayload,
               cfg,
               dispatcher,
@@ -527,15 +645,14 @@ export async function processDiscordMessage(
                   ? (payload) => draftPreview.updateFromPartial(payload.text)
                   : undefined,
                 onAssistantMessageStart: draftPreview.draftStream
-                  ? draftPreview.handleAssistantMessageBoundary
+                  ? () => draftPreview.handleAssistantMessageBoundary()
                   : undefined,
                 onReasoningEnd: draftPreview.draftStream
-                  ? draftPreview.handleAssistantMessageBoundary
+                  ? () => draftPreview.handleAssistantMessageBoundary()
                   : undefined,
                 onModelSelected,
-                suppressDefaultToolProgressMessages: draftPreview.previewToolProgressEnabled
-                  ? true
-                  : undefined,
+                suppressDefaultToolProgressMessages:
+                  draftPreview.suppressDefaultToolProgressMessages ? true : undefined,
                 onReasoningStream: async () => {
                   await statusReactions.setThinking();
                 },
@@ -543,6 +660,7 @@ export async function processDiscordMessage(
                   if (isProcessAborted(abortSignal)) {
                     return;
                   }
+                  await maybeBindStatusReactionsToToolReaction(payload);
                   await statusReactions.setTool(payload.name);
                   draftPreview.pushToolProgress(
                     payload.name ? `tool: ${payload.name}` : "tool running",
@@ -601,7 +719,8 @@ export async function processDiscordMessage(
                   await statusReactions.setThinking();
                 },
               },
-            }),
+            });
+          },
         }),
       },
     });
@@ -629,7 +748,7 @@ export async function processDiscordMessage(
         markDispatchIdle();
       }
     }
-    if (statusReactionsEnabled) {
+    if (statusReactionsActive) {
       if (dispatchAborted) {
         if (removeAckAfterReply) {
           void statusReactions.clear();

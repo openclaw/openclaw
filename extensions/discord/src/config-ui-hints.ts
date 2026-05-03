@@ -31,11 +31,11 @@ export const discordChannelConfigUiHints = {
   },
   streaming: {
     label: "Discord Streaming Mode",
-    help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
+    help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are auto-mapped.',
   },
   "streaming.mode": {
     label: "Discord Streaming Mode",
-    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord.',
+    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress".',
   },
   "streaming.chunkMode": {
     label: "Discord Chunk Mode",
@@ -64,6 +64,22 @@ export const discordChannelConfigUiHints = {
   "streaming.preview.toolProgress": {
     label: "Discord Draft Tool Progress",
     help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
+  },
+  "streaming.progress.label": {
+    label: "Discord Progress Label",
+    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
+  },
+  "streaming.progress.labels": {
+    label: "Discord Progress Label Pool",
+    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
+  },
+  "streaming.progress.maxLines": {
+    label: "Discord Progress Max Lines",
+    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+  },
+  "streaming.progress.toolProgress": {
+    label: "Discord Progress Tool Lines",
+    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
   },
   "retry.attempts": {
     label: "Discord Retry Attempts",
@@ -113,13 +129,13 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Binding Max Age (hours)",
     help: "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
   },
-  "threadBindings.spawnSubagentSessions": {
-    label: "Discord Thread-Bound Subagent Spawn",
-    help: "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+  "threadBindings.spawnSessions": {
+    label: "Discord Thread-Bound Session Spawn",
+    help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-create and bind Discord threads (default: true). Set false to disable for this account/channel.",
   },
-  "threadBindings.spawnAcpSessions": {
-    label: "Discord Thread-Bound ACP Spawn",
-    help: "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
+  "threadBindings.defaultSpawnContext": {
+    label: "Discord Thread Spawn Context",
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
   "ui.components.accentColor": {
     label: "Discord Component Accent Color",
@@ -140,6 +156,14 @@ export const discordChannelConfigUiHints = {
   gatewayInfoTimeoutMs: {
     label: "Discord Gateway Metadata Timeout (ms)",
     help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
+  },
+  gatewayReadyTimeoutMs: {
+    label: "Discord Gateway READY Timeout (ms)",
+    help: "Startup wait for the Discord gateway READY event before restarting the socket. Default is 15000; OPENCLAW_DISCORD_READY_TIMEOUT_MS can override when config is unset.",
+  },
+  gatewayRuntimeReadyTimeoutMs: {
+    label: "Discord Gateway Runtime READY Timeout (ms)",
+    help: "Runtime reconnect wait for the Discord gateway READY event before force-stopping the lifecycle. Default is 30000; OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS can override when config is unset.",
   },
   "voice.enabled": {
     label: "Discord Voice Enabled",
@@ -224,6 +248,10 @@ export const discordChannelConfigUiHints = {
   allowBots: {
     label: "Discord Allow Bot Messages",
     help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+  },
+  mentionAliases: {
+    label: "Discord Mention Aliases",
+    help: "Map outbound @handle text to stable Discord user IDs before sending. Set per account via channels.discord.accounts.<id>.mentionAliases.",
   },
   token: {
     label: "Discord Bot Token",

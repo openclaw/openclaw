@@ -7,6 +7,7 @@ export type GoogleMeetJoinRequest = {
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetMode;
   message?: string;
+  timeoutMs?: number;
   dialInNumber?: string;
   pin?: string;
   dtmfSequence?: string;
@@ -23,7 +24,8 @@ type GoogleMeetSpeechBlockedReason =
   | GoogleMeetManualActionReason
   | "not-in-call"
   | "browser-unverified"
-  | "audio-bridge-unavailable";
+  | "audio-bridge-unavailable"
+  | "meet-microphone-muted";
 
 export type GoogleMeetChromeHealth = {
   inCall?: boolean;

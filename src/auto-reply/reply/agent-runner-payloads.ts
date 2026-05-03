@@ -2,6 +2,8 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -16,13 +18,12 @@ import {
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { applyReplyThreading, isRenderablePayload } from "./reply-payloads-base.js";
 
-let replyPayloadsDedupeRuntimePromise: Promise<
-  typeof import("./reply-payloads-dedupe.runtime.js")
-> | null = null;
+const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
+  () => import("./reply-payloads-dedupe.runtime.js"),
+);
 
 function loadReplyPayloadsDedupeRuntime() {
-  replyPayloadsDedupeRuntimePromise ??= import("./reply-payloads-dedupe.runtime.js");
-  return replyPayloadsDedupeRuntimePromise;
+  return replyPayloadsDedupeRuntimeLoader.load();
 }
 
 async function normalizeReplyPayloadMedia(params: {
@@ -91,6 +92,19 @@ function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
   return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
+function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
+  const text = payload.text;
+  if (!text) {
+    return payload;
+  }
+  const cleaned = stripLegacyBracketToolCallBlocks(text);
+  if (cleaned === text) {
+    return payload;
+  }
+  logVerbose("Stripped legacy tool-call block from heartbeat reply");
+  return { ...payload, text: cleaned };
+}
+
 export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;
@@ -116,7 +130,7 @@ export async function buildReplyPayloads(params: {
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads = params.isHeartbeat
-    ? params.payloads
+    ? params.payloads.map((payload) => sanitizeHeartbeatPayload(payload))
     : params.payloads.flatMap((payload) => {
         let text = payload.text;
 

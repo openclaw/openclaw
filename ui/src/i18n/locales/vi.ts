@@ -721,6 +721,16 @@ export const vi: TranslationMap = {
       dailyCsv: "CSV hằng ngày",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Bộ nhớ đệm mức sử dụng đang được xây dựng lại trong nền. Tổng số hiển thị có thể đã lỗi thời.",
+      title: "{status}: {pending} đang chờ, {stale} lỗi thời, {cached} đã lưu vào bộ nhớ đệm",
+      status: {
+        refreshing: "đang làm mới",
+        stale: "lỗi thời",
+        partial: "một phần",
+      },
+    },
     empty: {
       title: "Bắt đầu bằng một khoảng ngày",
       subtitle:

@@ -7,9 +7,7 @@ read_when:
 title: "Transcript hygiene"
 ---
 
-OpenClaw applies **provider-specific fixes** to transcripts before a run (building model context). Most of these are **in-memory** adjustments used to satisfy strict provider requirements. A separate session-file repair pass may also rewrite stored JSONL before the session is loaded, either by dropping malformed JSONL lines or by repairing persisted turns that are syntactically valid but known to be rejected by a
-provider during replay. When a repair occurs, the original file is backed up alongside
-the session file.
+OpenClaw applies **provider-specific fixes** to transcripts before a run (building model context). Most of these are **in-memory** adjustments used to satisfy strict provider requirements. A separate session-file repair pass may also rewrite stored JSONL before the session is loaded, but only for malformed lines or persisted turns that are invalid durable records. Delivered assistant replies are preserved on disk; provider-specific assistant-prefill stripping happens only while constructing outbound payloads. When a repair occurs, the original file is backed up alongside the session file.
 
 Scope includes:
 
@@ -176,6 +174,12 @@ inter-session user turns that only have provenance metadata.
 **OpenRouter Gemini**
 
 - Thought signature cleanup: strip non-base64 `thought_signature` values (keep base64).
+
+**OpenRouter Anthropic**
+
+- Trailing assistant prefill turns are stripped from verified OpenRouter
+  OpenAI-compatible Anthropic model payloads when reasoning is enabled, matching
+  direct Anthropic and Cloudflare Anthropic replay behavior.
 
 **Everything else**
 

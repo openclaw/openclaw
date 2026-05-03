@@ -17,7 +17,7 @@ type ToolProfilePolicy = {
   deny?: string[];
 };
 
-export type CoreToolSection = {
+type CoreToolSection = {
   id: string;
   label: string;
   tools: Array<{
@@ -331,7 +331,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   messaging: {
     allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp"],
   },
-  full: {},
+  full: {
+    allow: ["*"],
+  },
 };
 
 function buildCoreToolGroupMap() {

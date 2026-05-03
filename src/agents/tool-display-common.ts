@@ -5,7 +5,7 @@ import {
 import { resolveExecDetail } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
-export type ToolDisplayActionSpec = {
+type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
 };
@@ -17,7 +17,7 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-export type CoerceDisplayValueOptions = {
+type CoerceDisplayValueOptions = {
   includeFalse?: boolean;
   includeZero?: boolean;
   includeNonFinite?: boolean;

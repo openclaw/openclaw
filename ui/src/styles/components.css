@@ -2404,6 +2404,11 @@
   background: rgba(59, 130, 246, 0.1);
 }
 
+.data-table-badge--cron {
+  color: var(--success);
+  background: rgba(34, 197, 94, 0.1);
+}
+
 .data-table-badge--global {
   color: var(--warn);
   background: var(--warn-subtle);

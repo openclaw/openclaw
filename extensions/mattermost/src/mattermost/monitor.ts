@@ -281,6 +281,20 @@ type MattermostDraftPreviewState = {
   finalizedViaPreviewPost: boolean;
 };
 
+function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermostDraftStream> {
+  const noopAsync = async () => {};
+  return {
+    update: () => {},
+    flush: noopAsync,
+    postId: () => undefined,
+    clear: noopAsync,
+    discardPending: noopAsync,
+    seal: noopAsync,
+    stop: noopAsync,
+    forceNewMessage: () => {},
+  };
+}
+
 type MattermostDraftPreviewDeliverParams = {
   payload: ReplyPayload;
   info: { kind: "tool" | "block" | "final" };
@@ -1619,14 +1633,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           },
         });
-        const draftStream = createMattermostDraftStream({
-          client,
-          channelId,
-          rootId: effectiveReplyToId,
-          throttleMs: 1200,
-          log: logVerboseMessage,
-          warn: logVerboseMessage,
-        });
+        const draftPreviewEnabled = account.streamingMode !== "off";
+        const draftStream = draftPreviewEnabled
+          ? createMattermostDraftStream({
+              client,
+              channelId,
+              rootId: effectiveReplyToId,
+              throttleMs: 1200,
+              log: logVerboseMessage,
+              warn: logVerboseMessage,
+            })
+          : createDisabledMattermostDraftStream();
         let lastPartialText = "";
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
@@ -1815,7 +1832,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           disableBlockStreaming: true,
                           onModelSelected,
                           onPartialReply: (payload) => {
-                            updateDraftFromPartial(payload.text);
+                            if (account.streamingMode !== "progress") {
+                              updateDraftFromPartial(payload.text);
+                            }
                           },
                           onAssistantMessageStart: () => {
                             lastPartialText = "";

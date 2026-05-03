@@ -130,6 +130,7 @@ let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
 let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
+let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
 let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
 let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
@@ -242,7 +243,7 @@ describe("runPreparedReply media-only handling", () => {
     ({ routeReply } = await import("./route-reply.runtime.js"));
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
-    ({ buildGroupChatContext } = await import("./groups.js"));
+    ({ buildDirectChatContext, buildGroupChatContext } = await import("./groups.js"));
     ({ buildInboundUserContextPrefix } = await import("./inbound-meta.js"));
     ({ __testing: replyRunTesting, getActiveReplyRunCount } =
       await import("./reply-run-registry.js"));
@@ -329,6 +330,45 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+  });
+
+  it("passes message-tool-only delivery into direct chat prompt context", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "yo",
+          RawBody: "yo",
+          CommandBody: "yo",
+          ThreadHistoryBody: "Earlier direct message",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram-direct-test-id",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "yo",
+          BodyStripped: "yo",
+          ThreadHistoryBody: "Earlier direct message",
+          MediaPath: "/tmp/input.png",
+          Provider: "telegram",
+          ChatType: "direct",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram-direct-test-id",
+        },
+        opts: {
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(buildDirectChatContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionCtx: expect.objectContaining({
+          Provider: "telegram",
+          ChatType: "direct",
+        }),
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    );
   });
 
   it.each(["direct", "dm"] as const)(
@@ -857,6 +897,32 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
+  it("treats reset-triggered steer mode as interrupt when the session lane is empty", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "steer" });
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
+    vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
+
+    const result = await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+        isNewSession: true,
+        sessionId: "session-reset-new",
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+    expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.shouldSteer).toBe(false);
+    expect(call?.shouldFollowup).toBe(false);
+    expect(call?.resetTriggered).toBe(true);
+  });
   it("rechecks same-session ownership after async prep before registering a new reply operation", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
@@ -1067,6 +1133,43 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("System: [t] Initial event.");
     expect(call?.followupRun.prompt).not.toContain("System: [t] Post-compaction context.");
     expect(call?.followupRun.transcriptPrompt).not.toContain("System: [t] Initial event.");
+  });
+
+  it("threads reply context as explicit current-turn context without changing transcript text", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "what does this mean?",
+          RawBody: "what does this mean?",
+          CommandBody: "what does this mean?",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "what does this mean?",
+          BodyStripped: "what does this mean?",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          ReplyToSender: "Jake",
+          ReplyToBody: "quoted status body",
+          ReplyToIsQuote: true,
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.commandBody).toContain("what does this mean?");
+    expect(call?.transcriptCommandBody).toBe("what does this mean?");
+    expect(call?.followupRun.transcriptPrompt).toBe("what does this mean?");
+    expect(call?.followupRun.currentTurnContext).toEqual({
+      reply: {
+        senderLabel: "Jake",
+        body: "quoted status body",
+        isQuote: true,
+      },
+    });
   });
 
   it("keeps heartbeat prompts out of visible transcript prompt", async () => {
