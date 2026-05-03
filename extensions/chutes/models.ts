@@ -537,29 +537,24 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
   }
 
   try {
-    let guardedFetch = await fetchWithSsrFGuard({
-      url: `${CHUTES_BASE_URL}/models`,
-      init: {
-        signal: AbortSignal.timeout(10_000),
-        headers,
-      },
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
-      auditContext: "chutes-model-discovery",
-    });
-    let response = guardedFetch.response;
+    const fetchModels = async (requestHeaders?: Record<string, string>) => {
+      return fetchWithSsrFGuard({
+        url: `${CHUTES_BASE_URL}/models`,
+        init: requestHeaders ? { headers: requestHeaders } : undefined,
+        timeoutMs: 10_000,
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
+        auditContext: "chutes.model_discovery",
+      });
+    };
+
+    let result = await fetchModels(headers);
+    let response = result.response;
 
     if (response.status === 401 && trimmedKey) {
-      await guardedFetch.release();
+      await result.release();
       effectiveKey = "";
-      guardedFetch = await fetchWithSsrFGuard({
-        url: `${CHUTES_BASE_URL}/models`,
-        init: {
-          signal: AbortSignal.timeout(10_000),
-        },
-        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
-        auditContext: "chutes-model-discovery",
-      });
-      response = guardedFetch.response;
+      result = await fetchModels();
+      response = result.response;
     }
 
     try {
@@ -623,7 +618,7 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
         models.length > 0 ? models : CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
       );
     } finally {
-      await guardedFetch.release();
+      await result.release();
     }
   } catch (error) {
     log.warn(`Discovery failed: ${String(error)}, using static catalog`);
