@@ -81,6 +81,8 @@ const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
+const DEFAULT_MEMORY_WATCH_MAX_FILES = 2000;
+const MEMORY_WATCH_MAX_FILES_ENV = "OPENCLAW_MEMORY_WATCH_MAX_FILES";
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -130,6 +132,91 @@ function shouldIgnoreMemoryWatchPath(
     return true;
   }
   return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
+}
+
+function resolveMemoryWatchMaxFiles(env = process.env): number {
+  const raw = env[MEMORY_WATCH_MAX_FILES_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_MEMORY_WATCH_MAX_FILES;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_MEMORY_WATCH_MAX_FILES;
+  }
+  return parsed;
+}
+
+function isMemoryWatchCandidateFile(
+  watchPath: string,
+  multimodalSettings?: ResolvedMemorySearchConfig["multimodal"],
+): boolean {
+  return !shouldIgnoreMemoryWatchPath(watchPath, { isDirectory: () => false }, multimodalSettings);
+}
+
+function countWatchableMemoryFiles(
+  rootPath: string,
+  remainingBudget: number,
+  multimodalSettings?: ResolvedMemorySearchConfig["multimodal"],
+): { count: number; truncated: boolean } {
+  if (remainingBudget <= 0) {
+    return { count: 0, truncated: true };
+  }
+  const normalizedRoot = path.normalize(rootPath);
+  try {
+    const stat = fsSync.lstatSync(normalizedRoot);
+    if (stat.isSymbolicLink()) {
+      return { count: 0, truncated: false };
+    }
+    if (stat.isFile()) {
+      return {
+        count: isMemoryWatchCandidateFile(normalizedRoot, multimodalSettings) ? 1 : 0,
+        truncated: false,
+      };
+    }
+    if (!stat.isDirectory()) {
+      return { count: 0, truncated: false };
+    }
+  } catch {
+    return { count: 0, truncated: false };
+  }
+
+  const limit = remainingBudget + 1;
+  let count = 0;
+  const stack = [normalizedRoot];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    if (!dir || shouldIgnoreMemoryWatchPath(dir, { isDirectory: () => true }, multimodalSettings)) {
+      continue;
+    }
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = fsSync.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (
+          !shouldIgnoreMemoryWatchPath(entryPath, { isDirectory: () => true }, multimodalSettings)
+        ) {
+          stack.push(entryPath);
+        }
+        continue;
+      }
+      if (!entry.isFile() || !isMemoryWatchCandidateFile(entryPath, multimodalSettings)) {
+        continue;
+      }
+      count += 1;
+      if (count >= limit) {
+        return { count, truncated: true };
+      }
+    }
+  }
+  return { count, truncated: false };
 }
 
 export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
@@ -429,6 +516,23 @@ export abstract class MemoryManagerSyncOps {
         // Skip missing/unreadable additional paths.
       }
     }
+    const maxWatchFiles = resolveMemoryWatchMaxFiles();
+    let candidateFiles = 0;
+    for (const watchPath of watchPaths) {
+      const counted = countWatchableMemoryFiles(
+        watchPath,
+        maxWatchFiles - candidateFiles,
+        this.settings.multimodal,
+      );
+      candidateFiles += counted.count;
+      if (counted.truncated || candidateFiles > maxWatchFiles) {
+        log.warn(
+          `memory watcher skipped for agent "${this.agentId}" because watch path "${watchPath}" exceeds maxFiles=${maxWatchFiles}; relying on boot/manual/interval/search sync`,
+        );
+        return;
+      }
+    }
+
     this.watcher = resolveMemoryWatchFactory()(Array.from(watchPaths), {
       ignoreInitial: true,
       ignored: (watchPath, stats) =>

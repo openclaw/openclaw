@@ -182,6 +182,32 @@ describe("memory watcher config", () => {
     ).toBe(false);
   });
 
+  it("skips the memory watcher for large memory trees", async () => {
+    const previousMaxFiles = process.env.OPENCLAW_MEMORY_WATCH_MAX_FILES;
+    process.env.OPENCLAW_MEMORY_WATCH_MAX_FILES = "4";
+    try {
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const atomicDir = path.join(workspaceDir, "memory", "atomic", "facts");
+      await fs.mkdir(atomicDir, { recursive: true });
+      await Promise.all(
+        Array.from({ length: 5 }, (_, index) =>
+          fs.writeFile(path.join(atomicDir, `fact-${index}.md`), `fact ${index}`),
+        ),
+      );
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+
+      expect(watchMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousMaxFiles === undefined) {
+        Reflect.deleteProperty(process.env, "OPENCLAW_MEMORY_WATCH_MAX_FILES");
+      } else {
+        process.env.OPENCLAW_MEMORY_WATCH_MAX_FILES = previousMaxFiles;
+      }
+    }
+  });
+
   it("does not start watchers for one-shot CLI managers", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();

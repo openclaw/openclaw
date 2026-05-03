@@ -457,6 +457,104 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("skips qmd watcher for large memory collections", async () => {
+    const originalWatchMaxFiles = process.env.OPENCLAW_QMD_WATCH_MAX_FILES;
+    process.env.OPENCLAW_QMD_WATCH_MAX_FILES = "4";
+    try {
+      await Promise.all(
+        Array.from({ length: 5 }, async (_, index) => {
+          await fs.writeFile(path.join(workspaceDir, `note-${index}.md`), `# Note ${index}\n`);
+        }),
+      );
+      cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            memorySearch: {
+              provider: "openai",
+              model: "mock-embed",
+              store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+              sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: true },
+            },
+          },
+          list: [{ id: agentId, default: true, workspace: workspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 0, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          },
+        },
+      } as OpenClawConfig;
+
+      const { manager } = await createManager({ mode: "full" });
+
+      expect(watchMock).not.toHaveBeenCalled();
+      expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("qmd watcher skipped"));
+      expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("maxFiles=4"));
+
+      await manager.close();
+    } finally {
+      if (originalWatchMaxFiles === undefined) {
+        delete process.env.OPENCLAW_QMD_WATCH_MAX_FILES;
+      } else {
+        process.env.OPENCLAW_QMD_WATCH_MAX_FILES = originalWatchMaxFiles;
+      }
+    }
+  });
+
+  it("skips qmd watcher for large non-glob directory collections", async () => {
+    const originalWatchMaxFiles = process.env.OPENCLAW_QMD_WATCH_MAX_FILES;
+    process.env.OPENCLAW_QMD_WATCH_MAX_FILES = "4";
+    try {
+      const nestedDir = path.join(workspaceDir, "atomic", "facts");
+      await fs.mkdir(nestedDir, { recursive: true });
+      await Promise.all(
+        Array.from({ length: 5 }, async (_, index) => {
+          await fs.writeFile(path.join(nestedDir, `fact-${index}.md`), `# Fact ${index}\n`);
+        }),
+      );
+      cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            memorySearch: {
+              provider: "openai",
+              model: "mock-embed",
+              store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+              sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: true },
+            },
+          },
+          list: [{ id: agentId, default: true, workspace: workspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 0, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: ".", name: "workspace" }],
+          },
+        },
+      } as OpenClawConfig;
+
+      const { manager } = await createManager({ mode: "full" });
+
+      expect(watchMock).not.toHaveBeenCalled();
+      expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("qmd watcher skipped"));
+      expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("maxFiles=4"));
+
+      await manager.close();
+    } finally {
+      if (originalWatchMaxFiles === undefined) {
+        delete process.env.OPENCLAW_QMD_WATCH_MAX_FILES;
+      } else {
+        process.env.OPENCLAW_QMD_WATCH_MAX_FILES = originalWatchMaxFiles;
+      }
+    }
+  });
+
   it("runs boot update in background by default", async () => {
     cfg = {
       ...cfg,
