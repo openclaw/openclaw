@@ -2,7 +2,7 @@ import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 type DiscordTokenSource = "env" | "config" | "none";
 
@@ -10,8 +10,12 @@ export type DiscordTokenResolution = BaseTokenResolution & {
   source: DiscordTokenSource;
 };
 
-export function normalizeDiscordToken(raw: unknown, path: string): string | undefined {
-  const trimmed = normalizeResolvedSecretInputString({ value: raw, path });
+export function normalizeDiscordToken(raw: unknown, _path: string): string | undefined {
+  // Use the gentle normalizer so that an unresolved SecretRef object (e.g. the channel
+  // startup path reading raw config before secrets are resolved into a runtime snapshot)
+  // returns undefined and lets the caller fall through to account/env fallbacks instead
+  // of throwing. The strict variant is still appropriate for runtime-snapshot consumers.
+  const trimmed = normalizeSecretInputString(raw);
   if (!trimmed) {
     return undefined;
   }

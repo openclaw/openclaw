@@ -71,6 +71,12 @@ describe("createDiscordRestClient", () => {
       },
     } as OpenClawConfig;
 
-    expect(() => createDiscordRestClient({ cfg, rest: fakeRest })).toThrow(/unresolved SecretRef/i);
+    // resolveDiscordToken now treats unresolved SecretRefs as "no usable config token here"
+    // and falls through. With no env fallback configured, createDiscordRestClient surfaces
+    // a user-actionable "bot token missing" error instead of the internal SecretRef contract
+    // error, which previously crashed channel startup before any actionable diagnostic.
+    expect(() => createDiscordRestClient({ cfg, rest: fakeRest })).toThrow(
+      /Discord bot token missing/i,
+    );
   });
 });
