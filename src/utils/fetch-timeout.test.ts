@@ -105,4 +105,25 @@ describe("buildTimeoutAbortSignal", () => {
 
     cleanup();
   });
+
+  it("refreshes its timeout when progress is observed", async () => {
+    const { signal, refresh, cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: 25,
+      operation: "unit-test",
+    });
+
+    await vi.advanceTimersByTimeAsync(20);
+    refresh();
+    await vi.advanceTimersByTimeAsync(24);
+
+    expect(signal?.aborted).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(signal?.aborted).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    cleanup();
+  });
 });

@@ -550,6 +550,26 @@ describe("overflow compaction in run loop", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
+  it("returns a timeout payload instead of a partial assistant fragment after stream timeout", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        assistantTexts: ["# Current Tasks\n\nLast updated:"],
+        lastAssistant: undefined,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
+    expect(
+      result.payloads?.some((payload) => (payload.text ?? "").includes("# Current Tasks")),
+    ).toBe(false);
+  });
+
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
