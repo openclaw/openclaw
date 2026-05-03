@@ -94,6 +94,7 @@ export function createWebOnMessageHandler(params: {
         kind: msg.chatType === "group" ? "group" : "direct",
         id: peerId,
       },
+      dmScopeOverride: "per-channel-peer",
     });
     const route =
       msg.chatType === "group" ? resolveWhatsAppGroupSessionRoute(baseRoute) : baseRoute;
