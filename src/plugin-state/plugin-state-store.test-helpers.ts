@@ -4,7 +4,7 @@ import { closePluginStateSqliteStore, probePluginStateStore } from "./plugin-sta
 
 export type PluginStateSeedEntry = {
   pluginId: string;
-  namespace: string;
+  namespace?: string;
   key: string;
   value: unknown;
   createdAt?: number;
@@ -50,7 +50,7 @@ export function seedPluginStateEntriesForTests(entries: PluginStateSeedEntry[]):
       }
       insertEntry.run({
         plugin_id: entry.pluginId,
-        namespace: entry.namespace,
+        namespace: entry.namespace ?? "default",
         entry_key: entry.key,
         value_json: valueJson,
         created_at: entry.createdAt ?? now + index,

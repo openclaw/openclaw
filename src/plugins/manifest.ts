@@ -411,12 +411,6 @@ export type PluginManifestContracts = {
   webSearchProviders?: string[];
   migrationProviders?: string[];
   tools?: string[];
-  /**
-   * Declares that this plugin uses the openKeyedStore API for restart-safe
-   * keyed state. Community plugins must declare this capability to access
-   * openKeyedStore. Bundled plugins have implicit access.
-   */
-  usesKeyedStore?: boolean;
 };
 
 export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
@@ -771,8 +765,6 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
   const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
   const tools = normalizeTrimmedStringList(value.tools);
-  const usesKeyedStore =
-    typeof value.usesKeyedStore === "boolean" ? value.usesKeyedStore : undefined;
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),
@@ -791,7 +783,6 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
     ...(migrationProviders.length > 0 ? { migrationProviders } : {}),
     ...(tools.length > 0 ? { tools } : {}),
-    ...(usesKeyedStore !== undefined ? { usesKeyedStore } : {}),
   } satisfies PluginManifestContracts;
 
   return Object.keys(contracts).length > 0 ? contracts : undefined;

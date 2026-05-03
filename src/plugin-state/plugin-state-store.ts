@@ -1,5 +1,7 @@
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   closePluginStateSqliteStore,
+  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   pluginStateClear,
   pluginStateConsume,
@@ -36,7 +38,10 @@ export {
 const NAMESPACE_PATTERN = /^[a-z0-9][a-z0-9._-]*$/iu;
 const MAX_NAMESPACE_BYTES = 128;
 const MAX_KEY_BYTES = 512;
+const MAX_PLUGIN_ID_BYTES = 256;
 const MAX_JSON_DEPTH = 64;
+const DEFAULT_PLUGIN_STATE_NAMESPACE = "default";
+const DEFAULT_PLUGIN_STATE_MAX_ENTRIES = 100;
 
 type StoreOptionSignature = {
   maxEntries: number;
@@ -85,11 +90,31 @@ function validateKey(value: string, operation: PluginStateStoreOperation = "regi
   return trimmed;
 }
 
-function validateMaxEntries(value: number): number {
-  if (!Number.isInteger(value) || value < 1) {
-    throw invalidInput("plugin state maxEntries must be an integer >= 1", "open");
+function validatePluginStatePluginId(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || isBlockedObjectKey(trimmed)) {
+    throw invalidInput("plugin state plugin id must not be empty or reserved", "open");
   }
-  return value;
+  assertMaxBytes("plugin id", trimmed, MAX_PLUGIN_ID_BYTES, "open");
+  if (trimmed.startsWith("core:")) {
+    throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
+  }
+  return trimmed;
+}
+
+function validateMaxEntries(value: number | undefined): number {
+  const resolved = value ?? DEFAULT_PLUGIN_STATE_MAX_ENTRIES;
+  if (
+    !Number.isInteger(resolved) ||
+    resolved < 1 ||
+    resolved > MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN
+  ) {
+    throw invalidInput(
+      `plugin state maxEntries must be an integer from 1 to ${MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN}`,
+      "open",
+    );
+  }
+  return resolved;
 }
 
 function validateOptionalTtlMs(
@@ -202,7 +227,7 @@ function assertConsistentOptions(
     existing.defaultTtlMs !== signature.defaultTtlMs
   ) {
     throw invalidInput(
-      `plugin state namespace ${namespace} for ${pluginId} was reopened with incompatible options`,
+      `plugin state store for ${pluginId} was reopened with incompatible options`,
       "open",
     );
   }
@@ -210,9 +235,9 @@ function assertConsistentOptions(
 
 function createKeyedStoreForPluginId<T>(
   pluginId: string,
-  options: OpenKeyedStoreOptions,
+  options: OpenKeyedStoreOptions = {},
 ): PluginStateKeyedStore<T> {
-  const namespace = validateNamespace(options.namespace);
+  const namespace = validateNamespace(DEFAULT_PLUGIN_STATE_NAMESPACE);
   const maxEntries = validateMaxEntries(options.maxEntries);
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
   assertConsistentOptions(pluginId, namespace, { maxEntries, defaultTtlMs });
@@ -256,12 +281,9 @@ function createKeyedStoreForPluginId<T>(
 
 export function createPluginStateKeyedStore<T>(
   pluginId: string,
-  options: OpenKeyedStoreOptions,
+  options: OpenKeyedStoreOptions = {},
 ): PluginStateKeyedStore<T> {
-  if (pluginId.startsWith("core:")) {
-    throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
-  }
-  return createKeyedStoreForPluginId<T>(pluginId, options);
+  return createKeyedStoreForPluginId<T>(validatePluginStatePluginId(pluginId), options);
 }
 
 export function createCorePluginStateKeyedStore<T>(

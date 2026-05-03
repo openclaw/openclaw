@@ -38,7 +38,6 @@ describe("plugin state permission hardening", () => {
     try {
       await withOpenClawTestState({ label: "plugin-state-post-commit-chmod" }, async () => {
         const store = createPluginStateKeyedStore<{ value: number }>("fixture-plugin", {
-          namespace: "post-commit",
           maxEntries: 10,
         });
         await store.register("first", { value: 1 });

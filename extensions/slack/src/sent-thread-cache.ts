@@ -10,7 +10,6 @@ import { getOptionalSlackRuntime } from "./runtime.js";
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_ENTRIES = 5000;
 const PERSISTENT_MAX_ENTRIES = 1000;
-const PERSISTENT_NAMESPACE = "slack.thread-participation";
 
 type SlackThreadParticipationRecord = {
   agentId?: string;
@@ -72,7 +71,6 @@ function getPersistentThreadParticipationStore(): SlackThreadParticipationStore 
   }
   try {
     persistentStore = runtime.state.openKeyedStore<SlackThreadParticipationRecord>({
-      namespace: PERSISTENT_NAMESPACE,
       maxEntries: PERSISTENT_MAX_ENTRIES,
       defaultTtlMs: TTL_MS,
     });

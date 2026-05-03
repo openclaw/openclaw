@@ -178,35 +178,31 @@ describe("discord component registry", () => {
   });
 
   it("persists component and modal entries when runtime state is available", async () => {
-    const componentRegister = vi.fn().mockResolvedValue(undefined);
-    const modalRegister = vi.fn().mockResolvedValue(undefined);
-    const componentLookup = vi.fn().mockResolvedValue({
-      version: 1,
-      entry: { id: "btn_persisted", kind: "button", label: "Persisted" },
+    const register = vi.fn().mockResolvedValue(undefined);
+    const lookup = vi.fn(async (key: string) => {
+      if (key === "component:btn_persisted") {
+        return {
+          version: 1,
+          entry: { id: "btn_persisted", kind: "button", label: "Persisted" },
+        };
+      }
+      if (key === "modal:mdl_persisted") {
+        return {
+          version: 1,
+          entry: { id: "mdl_persisted", title: "Persisted", fields: [] },
+        };
+      }
+      return undefined;
     });
-    const modalLookup = vi.fn().mockResolvedValue({
-      version: 1,
-      entry: { id: "mdl_persisted", title: "Persisted", fields: [] },
-    });
-    const componentStore = {
-      register: componentRegister,
-      lookup: componentLookup,
+    const store = {
+      register,
+      lookup,
       consume: vi.fn(),
       delete: vi.fn(),
       entries: vi.fn(),
       clear: vi.fn(),
     };
-    const modalStore = {
-      register: modalRegister,
-      lookup: modalLookup,
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    };
-    const openKeyedStore = vi.fn((opts: { namespace: string }) =>
-      opts.namespace === "discord.components" ? componentStore : modalStore,
-    );
+    const openKeyedStore = vi.fn(() => store);
     const { setDiscordRuntime } = await import("./runtime.js");
     setDiscordRuntime({
       state: { openKeyedStore },
@@ -219,14 +215,14 @@ describe("discord component registry", () => {
       ttlMs: 1000,
     });
 
-    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
-    expect(componentRegister).toHaveBeenCalledWith(
-      "btn_1",
+    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(2));
+    expect(register).toHaveBeenCalledWith(
+      "component:btn_1",
       { version: 1, entry: expect.objectContaining({ id: "btn_1" }) },
       { ttlMs: 1000 },
     );
-    expect(modalRegister).toHaveBeenCalledWith(
-      "mdl_1",
+    expect(register).toHaveBeenCalledWith(
+      "modal:mdl_1",
       { version: 1, entry: expect.objectContaining({ id: "mdl_1" }) },
       { ttlMs: 1000 },
     );
@@ -238,14 +234,14 @@ describe("discord component registry", () => {
     await expect(
       resolveDiscordModalEntryWithPersistence({ id: "mdl_persisted", consume: false }),
     ).resolves.toMatchObject({ id: "mdl_persisted" });
-    expect(componentLookup).toHaveBeenCalledWith("btn_persisted");
-    expect(modalLookup).toHaveBeenCalledWith("mdl_persisted");
+    expect(lookup).toHaveBeenCalledWith("component:btn_persisted");
+    expect(lookup).toHaveBeenCalledWith("modal:mdl_persisted");
     expect(openKeyedStore).toHaveBeenCalledTimes(4);
   });
 
   it("deletes sibling persistent component entries when a group entry is consumed", async () => {
-    const componentDelete = vi.fn().mockResolvedValue(true);
-    const componentStore = {
+    const deleteEntry = vi.fn().mockResolvedValue(true);
+    const store = {
       register: vi.fn(),
       lookup: vi.fn(),
       consume: vi.fn().mockResolvedValue({
@@ -258,17 +254,9 @@ describe("discord component registry", () => {
           consumptionGroupEntryIds: ["btn_confirm", "btn_cancel"],
         },
       }),
-      delete: componentDelete,
+      delete: deleteEntry,
     };
-    const modalStore = {
-      register: vi.fn(),
-      lookup: vi.fn(),
-      consume: vi.fn(),
-      delete: vi.fn(),
-    };
-    const openKeyedStore = vi.fn((opts: { namespace: string }) =>
-      opts.namespace === "discord.components" ? componentStore : modalStore,
-    );
+    const openKeyedStore = vi.fn(() => store);
     const { setDiscordRuntime } = await import("./runtime.js");
     setDiscordRuntime({
       state: { openKeyedStore },
@@ -282,8 +270,8 @@ describe("discord component registry", () => {
       id: "btn_confirm",
     });
 
-    await vi.waitFor(() => expect(componentDelete).toHaveBeenCalledWith("btn_cancel"));
-    expect(componentDelete).toHaveBeenCalledWith("btn_confirm");
+    await vi.waitFor(() => expect(deleteEntry).toHaveBeenCalledWith("component:btn_cancel"));
+    expect(deleteEntry).toHaveBeenCalledWith("component:btn_confirm");
   });
 
   it("falls back to the in-memory registry when persistent state cannot open", async () => {

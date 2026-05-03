@@ -10,3 +10,8 @@ export * from "../plugins/lazy-service-module.js";
 export * from "../plugins/types.js";
 export { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+export type {
+  OpenKeyedStoreOptions,
+  PluginStateEntry,
+  PluginStateKeyedStore,
+} from "../plugin-state/plugin-state-store.types.js";

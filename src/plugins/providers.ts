@@ -8,7 +8,11 @@ import {
   passesManifestOwnerBasePolicy,
 } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import type {
+  PluginManifestContractListKey,
+  PluginManifestRecord,
+  PluginManifestRegistry,
+} from "./manifest-registry.js";
 import {
   loadPluginRegistrySnapshot,
   normalizePluginsConfigWithRegistry,
@@ -185,7 +189,7 @@ export function resolveExternalAuthProfileProviderPluginIds(params: {
 }
 
 function resolveRegistryManifestContractPluginIds(params: {
-  contract: string;
+  contract: PluginManifestContractListKey;
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
@@ -205,9 +209,7 @@ function resolveRegistryManifestContractPluginIds(params: {
       if (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) {
         return false;
       }
-      const contractValue =
-        plugin.contracts?.[params.contract as keyof NonNullable<typeof plugin.contracts>];
-      return Array.isArray(contractValue) && contractValue.length > 0;
+      return (plugin.contracts?.[params.contract]?.length ?? 0) > 0;
     })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));

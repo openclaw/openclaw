@@ -12,7 +12,6 @@ import {
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
-import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -23,13 +22,11 @@ describe("plugin state keyed store", () => {
   it("registers and looks up values across store instances", async () => {
     await withOpenClawTestState({ label: "plugin-state-roundtrip" }, async () => {
       const store = createPluginStateKeyedStore<{ count: number }>("discord", {
-        namespace: "components",
         maxEntries: 10,
       });
       await store.register("interaction:1", { count: 1 });
 
       const reopened = createPluginStateKeyedStore<{ count: number }>("discord", {
-        namespace: "components",
         maxEntries: 10,
       });
       await expect(reopened.lookup("interaction:1")).resolves.toEqual({ count: 1 });
@@ -40,7 +37,6 @@ describe("plugin state keyed store", () => {
     await withOpenClawTestState({ label: "plugin-state-upsert" }, async () => {
       vi.useFakeTimers();
       const store = createPluginStateKeyedStore<{ version: number }>("discord", {
-        namespace: "components",
         maxEntries: 10,
       });
       vi.setSystemTime(1000);
@@ -61,7 +57,6 @@ describe("plugin state keyed store", () => {
   it("returns undefined for missing lookups and consumes by deleting atomically", async () => {
     await withOpenClawTestState({ label: "plugin-state-consume" }, async () => {
       const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
-        namespace: "components",
         maxEntries: 10,
       });
 
@@ -73,20 +68,20 @@ describe("plugin state keyed store", () => {
     });
   });
 
-  it("deletes and clears only the targeted namespace", async () => {
+  it("deletes and clears only the owning plugin store", async () => {
     await withOpenClawTestState({ label: "plugin-state-clear" }, async () => {
-      const first = createPluginStateKeyedStore("discord", { namespace: "a", maxEntries: 10 });
-      const second = createPluginStateKeyedStore("discord", { namespace: "b", maxEntries: 10 });
-      await first.register("k1", { value: 1 });
-      await second.register("k2", { value: 2 });
+      const discord = createPluginStateKeyedStore("discord", { maxEntries: 10 });
+      const telegram = createPluginStateKeyedStore("telegram", { maxEntries: 10 });
+      await discord.register("k1", { value: 1 });
+      await telegram.register("k2", { value: 2 });
 
-      await expect(first.delete("k1")).resolves.toBe(true);
-      await expect(first.delete("k1")).resolves.toBe(false);
-      await first.register("k1", { value: 1 });
-      await first.clear();
+      await expect(discord.delete("k1")).resolves.toBe(true);
+      await expect(discord.delete("k1")).resolves.toBe(false);
+      await discord.register("k1", { value: 1 });
+      await discord.clear();
 
-      await expect(first.entries()).resolves.toEqual([]);
-      await expect(second.lookup("k2")).resolves.toEqual({ value: 2 });
+      await expect(discord.entries()).resolves.toEqual([]);
+      await expect(telegram.lookup("k2")).resolves.toEqual({ value: 2 });
     });
   });
 
@@ -95,7 +90,6 @@ describe("plugin state keyed store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(1000);
       const store = createPluginStateKeyedStore("discord", {
-        namespace: "ttl",
         maxEntries: 10,
         defaultTtlMs: 100,
       });
@@ -113,7 +107,7 @@ describe("plugin state keyed store", () => {
   it("evicts oldest live entries over maxEntries", async () => {
     await withOpenClawTestState({ label: "plugin-state-eviction" }, async () => {
       vi.useFakeTimers();
-      const store = createPluginStateKeyedStore("discord", { namespace: "evict", maxEntries: 2 });
+      const store = createPluginStateKeyedStore("discord", { maxEntries: 2 });
       vi.setSystemTime(1000);
       await store.register("a", 1);
       vi.setSystemTime(2000);
@@ -125,48 +119,18 @@ describe("plugin state keyed store", () => {
     });
   });
 
-  it("rejects when the per-plugin live row ceiling would be exceeded without evicting siblings", async () => {
+  it("rejects maxEntries above the plugin-wide live row ceiling", async () => {
     await withOpenClawTestState({ label: "plugin-state-plugin-limit" }, async () => {
-      seedPluginStateEntriesForTests([
-        ...Array.from({ length: 999 }, (_, entryIndex) => ({
-          pluginId: "discord",
-          namespace: "limit",
-          key: `k-${entryIndex}`,
-          value: { namespaceIndex: 0, entryIndex },
-        })),
-        {
-          pluginId: "discord",
-          namespace: "sibling",
-          key: "k-0",
-          value: { namespaceIndex: 1, entryIndex: 0 },
-        },
-      ]);
-
-      const limitStore = createPluginStateKeyedStore("discord", {
-        namespace: "limit",
-        maxEntries: 1_001,
-      });
-      const siblingStore = createPluginStateKeyedStore("discord", {
-        namespace: "sibling",
-        maxEntries: 10,
-      });
-
-      await expect(limitStore.register("overflow", { overflow: true })).rejects.toMatchObject({
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      });
-      await expect(siblingStore.lookup("k-0")).resolves.toEqual({
-        namespaceIndex: 1,
-        entryIndex: 0,
-      });
-      await expect(limitStore.lookup("overflow")).resolves.toBeUndefined();
+      expect(() => createPluginStateKeyedStore("discord", { maxEntries: 1_001 })).toThrow(
+        PluginStateStoreError,
+      );
     });
   });
 
-  it("segregates plugins sharing a namespace and key", async () => {
+  it("segregates plugins sharing a key", async () => {
     await withOpenClawTestState({ label: "plugin-state-segregation" }, async () => {
-      const discord = createPluginStateKeyedStore("discord", { namespace: "same", maxEntries: 10 });
+      const discord = createPluginStateKeyedStore("discord", { maxEntries: 10 });
       const telegram = createPluginStateKeyedStore("telegram", {
-        namespace: "same",
         maxEntries: 10,
       });
       await discord.register("k", { plugin: "discord" });
@@ -178,16 +142,20 @@ describe("plugin state keyed store", () => {
     });
   });
 
-  it("validates namespaces, keys, options, and JSON values before writes", async () => {
+  it("validates keys, options, and JSON values before writes", async () => {
     await withOpenClawTestState({ label: "plugin-state-validation" }, async () => {
-      expect(() =>
-        createPluginStateKeyedStore("discord", { namespace: "../bad", maxEntries: 10 }),
-      ).toThrow(PluginStateStoreError);
-      expect(() =>
-        createPluginStateKeyedStore("discord", { namespace: "bad-max", maxEntries: 0 }),
-      ).toThrow(PluginStateStoreError);
+      expect(() => createPluginStateKeyedStore("discord", { maxEntries: 0 })).toThrow(
+        PluginStateStoreError,
+      );
+      expect(() => createPluginStateKeyedStore("discord", { maxEntries: 1_001 })).toThrow(
+        PluginStateStoreError,
+      );
 
-      const store = createPluginStateKeyedStore("discord", { namespace: "valid", maxEntries: 10 });
+      const defaultStore = createPluginStateKeyedStore("default-plugin");
+      await defaultStore.register("default-options", { ok: true });
+      await expect(defaultStore.lookup("default-options")).resolves.toEqual({ ok: true });
+
+      const store = createPluginStateKeyedStore("discord", { maxEntries: 10 });
       await expect(store.register(" ", { ok: true })).rejects.toThrow(PluginStateStoreError);
       await expect(store.register("undefined", undefined)).rejects.toThrow(PluginStateStoreError);
       await expect(store.register("infinity", Number.POSITIVE_INFINITY)).rejects.toThrow(
@@ -217,11 +185,6 @@ describe("plugin state keyed store", () => {
         PluginStateStoreError,
       );
 
-      // Namespace byte-length limit (128 bytes)
-      expect(() =>
-        createPluginStateKeyedStore("discord", { namespace: "a".repeat(129), maxEntries: 10 }),
-      ).toThrow(PluginStateStoreError);
-
       // JSON depth limit (64 levels)
       let deep: unknown = { leaf: true };
       for (let i = 0; i < 65; i += 1) {
@@ -243,12 +206,12 @@ describe("plugin state keyed store", () => {
     });
   });
 
-  it("rejects reopening the same namespace with incompatible options", async () => {
+  it("rejects reopening the same plugin store with incompatible options", async () => {
     await withOpenClawTestState({ label: "plugin-state-option-consistency" }, async () => {
-      createPluginStateKeyedStore("discord", { namespace: "same", maxEntries: 10 });
-      expect(() =>
-        createPluginStateKeyedStore("discord", { namespace: "same", maxEntries: 11 }),
-      ).toThrow(PluginStateStoreError);
+      createPluginStateKeyedStore("discord", { maxEntries: 10 });
+      expect(() => createPluginStateKeyedStore("discord", { maxEntries: 11 })).toThrow(
+        PluginStateStoreError,
+      );
     });
   });
 
@@ -256,20 +219,22 @@ describe("plugin state keyed store", () => {
     await withOpenClawTestState({ label: "plugin-state-core" }, async () => {
       const store = createCorePluginStateKeyedStore<{ stopped: boolean }>({
         ownerId: "core:channel-intent",
-        namespace: "stopped",
         maxEntries: 10,
       });
       await store.register("telegram:personal", { stopped: true });
       await expect(store.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
-      expect(() =>
-        createPluginStateKeyedStore("core:not-a-plugin", { namespace: "bad", maxEntries: 10 }),
-      ).toThrow(PluginStateStoreError);
+      expect(() => createPluginStateKeyedStore("core:not-a-plugin", { maxEntries: 10 })).toThrow(
+        PluginStateStoreError,
+      );
+      expect(() => createPluginStateKeyedStore("__proto__", { maxEntries: 10 })).toThrow(
+        PluginStateStoreError,
+      );
     });
   });
 
   it("closes the cached DB handle and reopens cleanly", async () => {
     await withOpenClawTestState({ label: "plugin-state-close" }, async () => {
-      const store = createPluginStateKeyedStore("discord", { namespace: "close", maxEntries: 10 });
+      const store = createPluginStateKeyedStore("discord", { maxEntries: 10 });
       await store.register("k", { ok: true });
       closePluginStateSqliteStore();
       await expect(store.lookup("k")).resolves.toEqual({ ok: true });
@@ -278,7 +243,7 @@ describe("plugin state keyed store", () => {
 
   it.runIf(process.platform !== "win32")("hardens DB directory and file permissions", async () => {
     await withOpenClawTestState({ label: "plugin-state-permissions" }, async () => {
-      const store = createPluginStateKeyedStore("discord", { namespace: "perms", maxEntries: 10 });
+      const store = createPluginStateKeyedStore("discord", { maxEntries: 10 });
       await store.register("k", { ok: true });
 
       expect(statSync(resolvePluginStateDir()).mode & 0o777).toBe(0o700);
@@ -303,7 +268,7 @@ describe("plugin state keyed store", () => {
       db.exec("PRAGMA user_version = 2;");
       db.close();
 
-      const store = createPluginStateKeyedStore("discord", { namespace: "schema", maxEntries: 10 });
+      const store = createPluginStateKeyedStore("discord", { maxEntries: 10 });
       await expect(store.register("k", { ok: true })).rejects.toMatchObject({
         code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED",
       });

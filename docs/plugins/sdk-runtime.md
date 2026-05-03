@@ -411,7 +411,6 @@ Provider and channel execution paths must use the active runtime config snapshot
     ```typescript
     const stateDir = api.runtime.state.resolveStateDir(process.env);
     const store = api.runtime.state.openKeyedStore<MyRecord>({
-      namespace: "my-feature",
       maxEntries: 200,
       defaultTtlMs: 15 * 60_000,
     });
@@ -422,28 +421,9 @@ Provider and channel execution paths must use the active runtime config snapshot
     await store.clear();
     ```
 
-    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Limits: `maxEntries` per namespace, 1,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry.
+    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. The SDK does not accept an owner id or namespace, so one plugin cannot read, write, list, consume, or clear another plugin's state. Limits: default 100 entries, optional `maxEntries` up to 1,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry.
 
-    <Warning>
-    Community plugins must declare `"contracts": { "usesKeyedStore": true }` in their `openclaw.plugin.json` manifest to access this API. Bundled plugins have implicit access.
-
-    Community plugins are subject to stricter limits:
-    - Maximum 500 entries per namespace (vs 1,000 for bundled plugins)
-    - Same per-plugin total limit of 1,000 live rows
-    - Same 64KB JSON value size limit
-    </Warning>
-
-    **Example manifest declaration for community plugins:**
-
-    ```json
-    {
-      "id": "my-plugin",
-      "name": "My Plugin",
-      "contracts": {
-        "usesKeyedStore": true
-      }
-    }
-    ```
+    Omit `maxEntries` to use the default row budget.
 
   </Accordion>
   <Accordion title="api.runtime.tools">

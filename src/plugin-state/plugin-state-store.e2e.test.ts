@@ -26,7 +26,6 @@ describe("runtime smoke", () => {
   it("creates and exercises a keyed store directly", async () => {
     await withOpenClawTestState({ label: "e2e-smoke-load" }, async () => {
       const store = createPluginStateKeyedStore<{ ready: boolean }>("fixture-plugin", {
-        namespace: "boot",
         maxEntries: 10,
       });
       expect(store).toBeDefined();
@@ -39,7 +38,6 @@ describe("runtime smoke", () => {
   it("writes and reads a value", async () => {
     await withOpenClawTestState({ label: "e2e-smoke-rw" }, async () => {
       const store = createPluginStateKeyedStore<{ msg: string }>("fixture-plugin", {
-        namespace: "data",
         maxEntries: 10,
       });
       await store.register("greeting", { msg: "hello" });
@@ -50,7 +48,6 @@ describe("runtime smoke", () => {
   it("consumes a value exactly once", async () => {
     await withOpenClawTestState({ label: "e2e-smoke-consume" }, async () => {
       const store = createPluginStateKeyedStore<{ token: string }>("fixture-plugin", {
-        namespace: "tokens",
         maxEntries: 10,
       });
       await store.register("one-shot", { token: "abc123" });
@@ -73,7 +70,6 @@ describe("persistence", () => {
   it("survives close and reopen of the store", async () => {
     await withOpenClawTestState({ label: "e2e-persist" }, async () => {
       const storeA = createPluginStateKeyedStore<{ persisted: boolean }>("fixture-plugin", {
-        namespace: "durable",
         maxEntries: 10,
       });
       await storeA.register("key1", { persisted: true });
@@ -84,7 +80,6 @@ describe("persistence", () => {
       resetPluginStateStoreForTests();
 
       const storeB = createPluginStateKeyedStore<{ persisted: boolean }>("fixture-plugin", {
-        namespace: "durable",
         maxEntries: 10,
       });
       await expect(storeB.lookup("key1")).resolves.toEqual({ persisted: true });
@@ -103,7 +98,6 @@ describe("TTL", () => {
       vi.setSystemTime(10_000);
 
       const store = createPluginStateKeyedStore<{ v: number }>("fixture-plugin", {
-        namespace: "ttl-test",
         maxEntries: 10,
       });
       await store.register("short", { v: 1 }, { ttlMs: 500 });
@@ -136,14 +130,12 @@ describe("TTL", () => {
 // Isolation
 // ---------------------------------------------------------------------------
 describe("isolation", () => {
-  it("segregates plugins sharing namespace and key", async () => {
+  it("segregates plugins sharing a key", async () => {
     await withOpenClawTestState({ label: "e2e-isolation" }, async () => {
       const pluginA = createPluginStateKeyedStore<{ owner: string }>("plugin-a", {
-        namespace: "x",
         maxEntries: 10,
       });
       const pluginB = createPluginStateKeyedStore<{ owner: string }>("plugin-b", {
-        namespace: "x",
         maxEntries: 10,
       });
 
@@ -153,7 +145,7 @@ describe("isolation", () => {
       await expect(pluginA.lookup("same")).resolves.toEqual({ owner: "a" });
       await expect(pluginB.lookup("same")).resolves.toEqual({ owner: "b" });
 
-      // Clearing one plugin's namespace does not affect the other.
+      // Clearing one plugin's store does not affect the other.
       await pluginA.clear();
       await expect(pluginA.lookup("same")).resolves.toBeUndefined();
       await expect(pluginB.lookup("same")).resolves.toEqual({ owner: "b" });
@@ -168,7 +160,6 @@ describe("limits", () => {
   it("accepts a value at the 64 KB boundary", async () => {
     await withOpenClawTestState({ label: "e2e-limit-accept" }, async () => {
       const store = createPluginStateKeyedStore<string>("fixture-plugin", {
-        namespace: "size",
         maxEntries: 10,
       });
       // JSON.stringify wraps a string in quotes (+2 bytes).
@@ -182,7 +173,6 @@ describe("limits", () => {
   it("rejects a value one byte over 64 KB", async () => {
     await withOpenClawTestState({ label: "e2e-limit-reject" }, async () => {
       const store = createPluginStateKeyedStore<string>("fixture-plugin", {
-        namespace: "size",
         maxEntries: 10,
       });
       // 65 535 chars → 65 537 bytes of JSON → over limit.
@@ -193,41 +183,31 @@ describe("limits", () => {
     });
   });
 
-  it("enforces the per-plugin live-row cap", async () => {
+  it("evicts oldest entries at the plugin-wide live-row cap", async () => {
     await withOpenClawTestState({ label: "e2e-limit-plugin" }, async () => {
-      // Spread MAX_ENTRIES_PER_PLUGIN rows across several namespaces so
-      // namespace eviction never fires (each namespace has generous room).
-      const nsCount = 10;
-      const perNs = MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN / nsCount; // 100
       seedPluginStateEntriesForTests(
         Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN }, (_, index) => {
-          const ns = Math.floor(index / perNs);
-          const k = index % perNs;
           return {
             pluginId: "fixture-plugin",
-            namespace: `ns-${ns}`,
-            key: `k-${k}`,
-            value: { ns, k },
+            key: `k-${index}`,
+            value: { index },
           };
         }),
       );
       const store = createPluginStateKeyedStore("fixture-plugin", {
-        namespace: "ns-0",
-        maxEntries: perNs + 1,
+        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
       });
 
-      // One more row tips over the plugin-wide limit.
-      await expect(store.register("overflow", { boom: true })).rejects.toMatchObject({
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      });
+      await expect(store.register("overflow", { boom: true })).resolves.toBeUndefined();
+      await expect(store.lookup("k-0")).resolves.toBeUndefined();
+      await expect(store.lookup("overflow")).resolves.toEqual({ boom: true });
     });
   });
 
-  it("evicts oldest entries when namespace maxEntries is exceeded", async () => {
+  it("evicts oldest entries when maxEntries is exceeded", async () => {
     await withOpenClawTestState({ label: "e2e-limit-eviction" }, async () => {
       vi.useFakeTimers();
       const store = createPluginStateKeyedStore<number>("fixture-plugin", {
-        namespace: "capped",
         maxEntries: 3,
       });
 
@@ -262,7 +242,6 @@ describe("failure safety", () => {
       db.close();
 
       const store = createPluginStateKeyedStore("fixture-plugin", {
-        namespace: "schema",
         maxEntries: 10,
       });
       const error = await store.register("k", { ok: true }).catch((e: unknown) => e);
@@ -288,7 +267,6 @@ describe("failure safety", () => {
   it("close and reopen cycle is clean", async () => {
     await withOpenClawTestState({ label: "e2e-fail-reopen" }, async () => {
       const store = createPluginStateKeyedStore<{ v: number }>("fixture-plugin", {
-        namespace: "reopen",
         maxEntries: 10,
       });
       await store.register("k", { v: 1 });
