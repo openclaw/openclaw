@@ -53,6 +53,26 @@ type RegistryFile = {
   entries: RegistryEntryPayload[];
 };
 
+type LegacyRegistryKind = "containers" | "browsers";
+
+type LegacyRegistryTarget = {
+  kind: LegacyRegistryKind;
+  registryPath: string;
+  shardedDir: string;
+};
+
+export type LegacySandboxRegistryInspection = LegacyRegistryTarget & {
+  exists: boolean;
+  valid: boolean;
+  entries: number;
+};
+
+export type LegacySandboxRegistryMigrationResult = LegacyRegistryTarget & {
+  status: "missing" | "migrated" | "removed-empty" | "quarantined-invalid";
+  entries: number;
+  quarantinePath?: string;
+};
+
 const RegistryEntrySchema = z
   .object({
     containerName: z.string(),
@@ -103,7 +123,6 @@ async function readLegacyRegistryFile(registryPath: string): Promise<RegistryFil
 }
 
 export async function readRegistry(): Promise<SandboxRegistry> {
-  await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
   const entries = await readShardedEntries<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR);
   return {
     entries: entries.map((entry) => normalizeSandboxRegistryEntry(entry)),
@@ -197,7 +216,7 @@ async function readShardedEntries<T extends RegistryEntry>(dir: string): Promise
   );
 }
 
-async function quarantineLegacyRegistry(registryPath: string): Promise<void> {
+async function quarantineLegacyRegistry(registryPath: string): Promise<string> {
   const quarantinePath = `${registryPath}.invalid-${Date.now()}`;
   await fs.rename(registryPath, quarantinePath).catch(async (error) => {
     const code = (error as { code?: string } | null)?.code;
@@ -205,49 +224,107 @@ async function quarantineLegacyRegistry(registryPath: string): Promise<void> {
       await fs.rm(registryPath, { force: true });
     }
   });
+  return quarantinePath;
 }
 
-async function migrateMonolithicIfNeeded(registryPath: string, shardedDir: string): Promise<void> {
+async function migrateMonolithicIfNeeded(
+  target: LegacyRegistryTarget,
+): Promise<LegacySandboxRegistryMigrationResult> {
+  const { registryPath, shardedDir } = target;
   try {
     await fs.access(registryPath);
   } catch (error) {
     const code = (error as { code?: string } | null)?.code;
     if (code === "ENOENT") {
-      return;
+      return { ...target, status: "missing", entries: 0 };
     }
     throw error;
   }
 
-  await withRegistryLock(registryPath, async () => {
+  return await withRegistryLock(registryPath, async () => {
     const registry = await readLegacyRegistryFile(registryPath);
     if (!registry) {
-      await quarantineLegacyRegistry(registryPath);
-      return;
+      const quarantinePath = await quarantineLegacyRegistry(registryPath);
+      return { ...target, status: "quarantined-invalid", entries: 0, quarantinePath };
     }
     if (registry.entries.length === 0) {
       await fs.rm(registryPath, { force: true });
-      return;
+      return { ...target, status: "removed-empty", entries: 0 };
     }
     await fs.mkdir(shardedDir, { recursive: true });
     for (const entry of registry.entries) {
       await withEntryLock(shardedDir, entry.containerName, async () => {
-        await writeShardedEntry(shardedDir, entry);
+        const existing = await readShardedEntry(shardedDir, entry.containerName);
+        if (!existing) {
+          await writeShardedEntry(shardedDir, entry);
+        }
       });
     }
     await fs.rm(registryPath, { force: true });
+    return { ...target, status: "migrated", entries: registry.entries.length };
   });
+}
+
+function legacyRegistryTargets(): LegacyRegistryTarget[] {
+  return [
+    {
+      kind: "containers",
+      registryPath: SANDBOX_REGISTRY_PATH,
+      shardedDir: SANDBOX_CONTAINERS_DIR,
+    },
+    {
+      kind: "browsers",
+      registryPath: SANDBOX_BROWSER_REGISTRY_PATH,
+      shardedDir: SANDBOX_BROWSERS_DIR,
+    },
+  ];
+}
+
+export async function inspectLegacySandboxRegistryFiles(): Promise<
+  LegacySandboxRegistryInspection[]
+> {
+  const inspections: LegacySandboxRegistryInspection[] = [];
+  for (const target of legacyRegistryTargets()) {
+    try {
+      await fs.access(target.registryPath);
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code;
+      if (code === "ENOENT") {
+        inspections.push({ ...target, exists: false, valid: true, entries: 0 });
+        continue;
+      }
+      throw error;
+    }
+
+    const registry = await readLegacyRegistryFile(target.registryPath);
+    inspections.push({
+      ...target,
+      exists: true,
+      valid: Boolean(registry),
+      entries: registry?.entries.length ?? 0,
+    });
+  }
+  return inspections;
+}
+
+export async function migrateLegacySandboxRegistryFiles(): Promise<
+  LegacySandboxRegistryMigrationResult[]
+> {
+  const results: LegacySandboxRegistryMigrationResult[] = [];
+  for (const target of legacyRegistryTargets()) {
+    results.push(await migrateMonolithicIfNeeded(target));
+  }
+  return results;
 }
 
 export async function readRegistryEntry(
   containerName: string,
 ): Promise<SandboxRegistryEntry | null> {
-  await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
   const entry = await readShardedEntry<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR, containerName);
   return entry ? normalizeSandboxRegistryEntry(entry) : null;
 }
 
 export async function updateRegistry(entry: SandboxRegistryEntry) {
-  await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
   await withEntryLock(SANDBOX_CONTAINERS_DIR, entry.containerName, async () => {
     const existing = await readShardedEntry<SandboxRegistryEntry>(
       SANDBOX_CONTAINERS_DIR,
@@ -266,19 +343,16 @@ export async function updateRegistry(entry: SandboxRegistryEntry) {
 }
 
 export async function removeRegistryEntry(containerName: string) {
-  await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
   await withEntryLock(SANDBOX_CONTAINERS_DIR, containerName, async () => {
     await removeShardedEntry(SANDBOX_CONTAINERS_DIR, containerName);
   });
 }
 
 export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
-  await migrateMonolithicIfNeeded(SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_BROWSERS_DIR);
   return { entries: await readShardedEntries<SandboxBrowserRegistryEntry>(SANDBOX_BROWSERS_DIR) };
 }
 
 export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
-  await migrateMonolithicIfNeeded(SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_BROWSERS_DIR);
   await withEntryLock(SANDBOX_BROWSERS_DIR, entry.containerName, async () => {
     const existing = await readShardedEntry<SandboxBrowserRegistryEntry>(
       SANDBOX_BROWSERS_DIR,
@@ -294,7 +368,6 @@ export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) 
 }
 
 export async function removeBrowserRegistryEntry(containerName: string) {
-  await migrateMonolithicIfNeeded(SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_BROWSERS_DIR);
   await withEntryLock(SANDBOX_BROWSERS_DIR, containerName, async () => {
     await removeShardedEntry(SANDBOX_BROWSERS_DIR, containerName);
   });
