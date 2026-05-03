@@ -982,6 +982,7 @@ export async function runEmbeddedAttempt(
           }),
           contextMode: params.bootstrapContextMode,
           runKind: params.bootstrapContextRunKind,
+          channelId: params.currentChannelId ?? params.messageChannel ?? params.messageProvider,
         }),
     });
     prepStages.mark("bootstrap-context");

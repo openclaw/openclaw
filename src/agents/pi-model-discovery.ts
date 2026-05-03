@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
@@ -5,6 +6,7 @@ import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
@@ -12,6 +14,7 @@ import {
   normalizeProviderResolvedModelWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { isRecord } from "../utils.js";
+import { resolveAuthStatePath, resolveAuthStorePath } from "./auth-profiles/paths.js";
 import type { PiCredentialMap } from "./pi-auth-credentials.js";
 import {
   resolvePiCredentialsForDiscovery,
@@ -19,6 +22,7 @@ import {
   type DiscoverAuthStorageOptions,
 } from "./pi-auth-discovery.js";
 import { normalizeProviderId } from "./provider-id.js";
+import { stableStringify } from "./stable-stringify.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
 const PiModelRegistryClass = PiCodingAgent.ModelRegistry;
@@ -36,7 +40,81 @@ type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> 
 type DiscoverModelsOptions = {
   providerFilter?: string;
   normalizeModels?: boolean;
+  config?: OpenClawConfig;
 };
+
+type FileFingerprint = { mtimeMs: number | null; size: number | null };
+
+const PI_DISCOVERY_CACHE_LIMIT = 64;
+const piDiscoveryCache = new Map<string, PiModelRegistry>();
+
+function fileFingerprint(filePath: string): FileFingerprint {
+  try {
+    const stat = fs.statSync(filePath);
+    return { mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch {
+    return { mtimeMs: null, size: null };
+  }
+}
+
+function buildPiDiscoveryCacheKey(params: {
+  agentDir: string;
+  modelsJsonPath: string;
+  options?: DiscoverModelsOptions;
+}): string {
+  const provider = params.options?.providerFilter
+    ? normalizeProviderId(params.options.providerFilter)
+    : "";
+  const mainAuthPath = resolveAuthStorePath();
+  const agentAuthPath = resolveAuthStorePath(params.agentDir);
+  return stableStringify({
+    version: 2,
+    agentDir: path.resolve(params.agentDir),
+    provider,
+    normalizeModels: params.options?.normalizeModels !== false,
+    config: {
+      models: params.options?.config?.models ?? null,
+      plugins: params.options?.config?.plugins ?? null,
+    },
+    auth: {
+      main: fileFingerprint(mainAuthPath),
+      mainState: fileFingerprint(resolveAuthStatePath()),
+      agent: fileFingerprint(agentAuthPath),
+      agentState: fileFingerprint(resolveAuthStatePath(params.agentDir)),
+    },
+    modelsJson: fileFingerprint(params.modelsJsonPath),
+  });
+}
+
+function readCachedPiDiscovery(key: string): PiModelRegistry | undefined {
+  if (process.env.OPENCLAW_DISABLE_MODEL_DISCOVERY_CACHE === "1") {
+    return undefined;
+  }
+  const cached = piDiscoveryCache.get(key);
+  if (!cached) {
+    return undefined;
+  }
+  piDiscoveryCache.delete(key);
+  piDiscoveryCache.set(key, cached);
+  return cached;
+}
+
+function writeCachedPiDiscovery(key: string, registry: PiModelRegistry): void {
+  if (process.env.OPENCLAW_DISABLE_MODEL_DISCOVERY_CACHE === "1") {
+    return;
+  }
+  if (piDiscoveryCache.has(key)) {
+    piDiscoveryCache.delete(key);
+  }
+  piDiscoveryCache.set(key, registry);
+  while (piDiscoveryCache.size > PI_DISCOVERY_CACHE_LIMIT) {
+    const oldest = piDiscoveryCache.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    piDiscoveryCache.delete(oldest);
+  }
+}
 
 type InMemoryAuthStorageBackendLike = {
   withLock<T>(
@@ -236,12 +314,15 @@ export function discoverModels(
   agentDir: string,
   options?: DiscoverModelsOptions,
 ): PiModelRegistry {
-  return createOpenClawModelRegistry(
-    authStorage,
-    path.join(agentDir, "models.json"),
-    agentDir,
-    options,
-  );
+  const modelsJsonPath = path.join(agentDir, "models.json");
+  const cacheKey = buildPiDiscoveryCacheKey({ agentDir, modelsJsonPath, options });
+  const cached = readCachedPiDiscovery(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const registry = createOpenClawModelRegistry(authStorage, modelsJsonPath, agentDir, options);
+  writeCachedPiDiscovery(cacheKey, registry);
+  return registry;
 }
 
 export {

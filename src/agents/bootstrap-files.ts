@@ -2,9 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getInternalHookRegistryVersion } from "../hooks/internal-hooks.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
-import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
+import {
+  getOrLoadBootstrapFiles,
+  readCachedBootstrapContext,
+  writeCachedBootstrapContext,
+} from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -13,6 +18,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
+import { stableStringify } from "./stable-stringify.js";
 import {
   DEFAULT_HEARTBEAT_FILENAME,
   filterBootstrapFilesForSession,
@@ -226,7 +232,83 @@ function filterHeartbeatBootstrapFile(
   return files.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
 }
 
-export async function resolveBootstrapFilesForRun(params: {
+async function readWorkspaceMtimeSignature(workspaceDir: string): Promise<string> {
+  try {
+    const stat = await fs.stat(workspaceDir);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return "missing";
+  }
+}
+
+function buildBootstrapFilesSignature(files: WorkspaceBootstrapFile[]): string {
+  return stableStringify(
+    files.map((file) => ({
+      name: file.name,
+      path: file.path,
+      missing: file.missing === true,
+      contentLength: file.content?.length ?? 0,
+      content: file.content ?? "",
+    })),
+  );
+}
+
+async function buildBootstrapContextCacheKey(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  contextMode?: BootstrapContextMode;
+  runKind?: BootstrapContextRunKind;
+  channelId?: string;
+  rawFiles: WorkspaceBootstrapFile[];
+}): Promise<string> {
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey ?? params.sessionId,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  return stableStringify({
+    version: 1,
+    sessionKey: params.sessionKey ?? params.sessionId ?? "",
+    workspaceDir: path.resolve(params.workspaceDir),
+    workspaceMtime: await readWorkspaceMtimeSignature(params.workspaceDir),
+    contextMode: params.contextMode ?? "full",
+    runKind: params.runKind ?? "default",
+    agentId: sessionAgentId ?? params.agentId ?? "",
+    defaultAgentId: defaultAgentId ?? "",
+    channelId: params.channelId ?? "",
+    contextInjection: params.config?.agents?.defaults?.contextInjection ?? null,
+    bootstrapConfig: {
+      maxChars: params.config?.agents?.defaults?.bootstrapMaxChars ?? null,
+      totalMaxChars: params.config?.agents?.defaults?.bootstrapTotalMaxChars ?? null,
+      truncationWarning: params.config?.agents?.defaults?.bootstrapPromptTruncationWarning ?? null,
+    },
+    heartbeatGuidance: params.config?.agents?.defaults?.heartbeat ?? null,
+    maxChars: resolveBootstrapMaxChars(params.config),
+    totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+    rawFiles: buildBootstrapFilesSignature(params.rawFiles),
+    hookRegistryVersion: getInternalHookRegistryVersion(),
+    plugins: params.config?.plugins ?? null,
+  });
+}
+
+async function loadRawBootstrapFilesForRun(params: {
+  workspaceDir: string;
+  sessionKey?: string;
+  sessionId?: string;
+}): Promise<WorkspaceBootstrapFile[]> {
+  return params.sessionKey
+    ? await getOrLoadBootstrapFiles({
+        workspaceDir: params.workspaceDir,
+        sessionKey: params.sessionKey,
+      })
+    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+}
+
+async function resolveBootstrapFilesFromRaw(params: {
+  rawFiles: WorkspaceBootstrapFile[];
   workspaceDir: string;
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -238,14 +320,8 @@ export async function resolveBootstrapFilesForRun(params: {
 }): Promise<WorkspaceBootstrapFile[]> {
   const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
-  const rawFiles = params.sessionKey
-    ? await getOrLoadBootstrapFiles({
-        workspaceDir: params.workspaceDir,
-        sessionKey: params.sessionKey,
-      })
-    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
   const bootstrapFiles = applyContextModeFilter({
-    files: filterBootstrapFilesForSession(rawFiles, sessionKey),
+    files: filterBootstrapFilesForSession(params.rawFiles, sessionKey),
     contextMode: params.contextMode,
     runKind: params.runKind,
   });
@@ -265,6 +341,20 @@ export async function resolveBootstrapFilesForRun(params: {
   );
 }
 
+export async function resolveBootstrapFilesForRun(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  warn?: (message: string) => void;
+  contextMode?: BootstrapContextMode;
+  runKind?: BootstrapContextRunKind;
+}): Promise<WorkspaceBootstrapFile[]> {
+  const rawFiles = await loadRawBootstrapFilesForRun(params);
+  return resolveBootstrapFilesFromRaw({ ...params, rawFiles });
+}
+
 export async function resolveBootstrapContextForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -274,17 +364,27 @@ export async function resolveBootstrapContextForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  channelId?: string;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 }> {
-  const bootstrapFiles = await resolveBootstrapFilesForRun(params);
+  const rawFiles = await loadRawBootstrapFilesForRun(params);
+  const cacheKey = await buildBootstrapContextCacheKey({ ...params, rawFiles });
+  const cached = readCachedBootstrapContext(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const bootstrapFiles = await resolveBootstrapFilesFromRaw({ ...params, rawFiles });
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
     maxChars: resolveBootstrapMaxChars(params.config),
     totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
     warn: params.warn,
   });
-  return { bootstrapFiles, contextFiles };
+  const snapshot = { bootstrapFiles, contextFiles };
+  writeCachedBootstrapContext(cacheKey, snapshot);
+  return snapshot;
 }
 
 export { isWorkspaceBootstrapPending };

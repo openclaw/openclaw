@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { saveJsonFile } from "../../infra/json-file.js";
+import { stableStringify } from "../stable-stringify.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
@@ -156,12 +157,37 @@ function readAuthStoreMtimeMs(authPath: string): number | null {
   }
 }
 
-function readCachedAuthProfileStore(params: {
+function buildAuthStoreCacheKey(params: {
   authPath: string;
+  options?: LoadAuthProfileStoreOptions;
+}): string {
+  return stableStringify({
+    version: 2,
+    authPath: params.authPath,
+    config: params.options?.config
+      ? {
+          models: params.options.config.models ?? null,
+          plugins: params.options.config.plugins ?? null,
+        }
+      : null,
+    externalCli: params.options?.externalCli?.mode ?? null,
+    externalCliProviderIds: params.options?.externalCliProviderIds
+      ? Array.from(params.options.externalCliProviderIds).toSorted()
+      : null,
+    externalCliProfileIds: params.options?.externalCliProfileIds
+      ? Array.from(params.options.externalCliProfileIds).toSorted()
+      : null,
+    syncExternalCli: params.options?.syncExternalCli ?? null,
+    allowKeychainPrompt: params.options?.allowKeychainPrompt ?? null,
+  });
+}
+
+function readCachedAuthProfileStore(params: {
+  cacheKey: string;
   authMtimeMs: number | null;
   stateMtimeMs: number | null;
 }): AuthProfileStore | null {
-  const cached = loadedAuthStoreCache.get(params.authPath);
+  const cached = loadedAuthStoreCache.get(params.cacheKey);
   if (
     !cached ||
     cached.authMtimeMs !== params.authMtimeMs ||
@@ -176,12 +202,12 @@ function readCachedAuthProfileStore(params: {
 }
 
 function writeCachedAuthProfileStore(params: {
-  authPath: string;
+  cacheKey: string;
   authMtimeMs: number | null;
   stateMtimeMs: number | null;
   store: AuthProfileStore;
 }): void {
-  loadedAuthStoreCache.set(params.authPath, {
+  loadedAuthStoreCache.set(params.cacheKey, {
     authMtimeMs: params.authMtimeMs,
     stateMtimeMs: params.stateMtimeMs,
     syncedAtMs: Date.now(),
@@ -361,9 +387,10 @@ function loadAuthProfileStoreForAgent(
   const statePath = resolveAuthStatePath(agentDir);
   const authMtimeMs = readAuthStoreMtimeMs(authPath);
   const stateMtimeMs = readAuthStoreMtimeMs(statePath);
+  const cacheKey = buildAuthStoreCacheKey({ authPath, options });
   if (!readOnly) {
     const cached = readCachedAuthProfileStore({
-      authPath,
+      cacheKey,
       authMtimeMs,
       stateMtimeMs,
     });
@@ -375,7 +402,7 @@ function loadAuthProfileStoreForAgent(
   if (asStore) {
     if (!readOnly) {
       writeCachedAuthProfileStore({
-        authPath,
+        cacheKey,
         authMtimeMs: readAuthStoreMtimeMs(authPath),
         stateMtimeMs: readAuthStoreMtimeMs(statePath),
         store: asStore,
@@ -419,7 +446,7 @@ function loadAuthProfileStoreForAgent(
 
   if (!readOnly) {
     writeCachedAuthProfileStore({
-      authPath,
+      cacheKey,
       authMtimeMs: readAuthStoreMtimeMs(authPath),
       stateMtimeMs: readAuthStoreMtimeMs(statePath),
       store,
@@ -594,7 +621,7 @@ export function saveAuthProfileStore(
   saveJsonFile(authPath, payload);
   savePersistedAuthProfileState(localStore, agentDir);
   writeCachedAuthProfileStore({
-    authPath,
+    cacheKey: buildAuthStoreCacheKey({ authPath }),
     authMtimeMs: readAuthStoreMtimeMs(authPath),
     stateMtimeMs: readAuthStoreMtimeMs(statePath),
     store: localStore,
