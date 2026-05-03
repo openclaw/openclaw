@@ -38,10 +38,16 @@ export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
     agentId: params.route.agentId,
   });
   const envelopeOptions = params.resolveEnvelopeFormatOptions(params.cfg);
-  return (input: { channel: string; from: string; body: string; timestamp?: number }) => {
+  return (input: {
+    channel: string;
+    from: string;
+    body: string;
+    timestamp?: number;
+    sessionKey?: string;
+  }) => {
     const previousTimestamp = params.readSessionUpdatedAt({
       storePath,
-      sessionKey: params.route.sessionKey,
+      sessionKey: input.sessionKey ?? params.route.sessionKey,
     });
     const body = params.formatAgentEnvelope({
       channel: input.channel,

@@ -215,6 +215,7 @@ Notes:
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
 - Message actions expose `send` for text and `upload-file` for explicit attachment sends. `upload-file` accepts `media` / `filePath` / `path` plus optional `message`, `filename`, and thread targeting.
 - `typingIndicator` supports `none`, `message` (default), and `reaction` (reaction requires user OAuth).
+- `sessionThread` (default `false`): when `true`, bind each OpenClaw session to a single Google Chat thread. Starting a new thread starts a fresh conversation in the same space, with no context bleed from prior threads. When `false`, all messages in a space share one session (prior behavior).
 - Attachments are downloaded through the Chat API and stored in the media pipeline (size capped by `mediaMaxMb`).
 
 Secrets reference details: [Secrets Management](/gateway/secrets).
