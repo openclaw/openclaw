@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
+import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
 function migrateLegacyConfigForTest(raw: unknown): {
@@ -18,6 +19,132 @@ function migrateLegacyConfigForTest(raw: unknown): {
     ? { config: null, changes }
     : { config: next as OpenClawConfig, changes };
 }
+
+const LEGACY_ACP_STREAM_FIXTURE = {
+  acp: {
+    stream: {
+      maxTurnChars: 5000,
+      maxToolSummaryChars: 1000,
+      maxStatusChars: 400,
+      maxMetaEventsPerTurn: 6,
+      metaMode: "full",
+      showUsage: true,
+    },
+  },
+};
+
+describe("legacy acp.stream migrate", () => {
+  it("flags old acp.stream keys during raw validation", () => {
+    const result = validateConfigObjectRaw(LEGACY_ACP_STREAM_FIXTURE);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.issues.map((issue) => issue.path)).toEqual(
+      expect.arrayContaining([
+        "acp.stream.maxTurnChars",
+        "acp.stream.maxToolSummaryChars",
+        "acp.stream.maxStatusChars",
+        "acp.stream.maxMetaEventsPerTurn",
+        "acp.stream.metaMode",
+        "acp.stream.showUsage",
+      ]),
+    );
+  });
+
+  it("migrates old acp.stream keys to supported config", () => {
+    const result = migrateLegacyConfigForTest(LEGACY_ACP_STREAM_FIXTURE);
+
+    expect(result.config?.acp?.stream).toEqual({
+      maxOutputChars: 5000,
+      maxSessionUpdateChars: 1000,
+    });
+    expect(validateConfigObjectRaw(result.config).ok).toBe(true);
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        "Moved acp.stream.maxTurnChars → acp.stream.maxOutputChars.",
+        "Moved acp.stream.maxToolSummaryChars → acp.stream.maxSessionUpdateChars.",
+        "Removed acp.stream.maxStatusChars (no replacement).",
+        "Removed acp.stream.maxMetaEventsPerTurn (no replacement).",
+        "Removed acp.stream.metaMode (no replacement).",
+        "Removed acp.stream.showUsage (no replacement).",
+      ]),
+    );
+  });
+
+  it("does not overwrite new keys that are already set", () => {
+    const result = migrateLegacyConfigForTest({
+      acp: {
+        stream: {
+          maxTurnChars: 5000,
+          maxToolSummaryChars: 1000,
+          maxOutputChars: 9000,
+          maxSessionUpdateChars: 300,
+        },
+      },
+    });
+
+    expect(result.config?.acp?.stream).toEqual({
+      maxOutputChars: 9000,
+      maxSessionUpdateChars: 300,
+    });
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        "Removed acp.stream.maxTurnChars (acp.stream.maxOutputChars already set).",
+        "Removed acp.stream.maxToolSummaryChars (acp.stream.maxSessionUpdateChars already set).",
+      ]),
+    );
+  });
+
+  it("removes no-replacement legacy keys even when their values have wrong types", () => {
+    const result = migrateLegacyConfigForTest({
+      acp: {
+        stream: {
+          maxOutputChars: 9000,
+          maxSessionUpdateChars: 300,
+          maxStatusChars: "400",
+          maxMetaEventsPerTurn: "6",
+          metaMode: 1,
+          showUsage: "true",
+        },
+      },
+    });
+
+    expect(result.config?.acp?.stream).toEqual({
+      maxOutputChars: 9000,
+      maxSessionUpdateChars: 300,
+    });
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        "Removed acp.stream.maxStatusChars (no replacement).",
+        "Removed acp.stream.maxMetaEventsPerTurn (no replacement).",
+        "Removed acp.stream.metaMode (no replacement).",
+        "Removed acp.stream.showUsage (no replacement).",
+      ]),
+    );
+  });
+
+  it("removes invalid renamed legacy keys instead of leaving validation errors", () => {
+    const result = migrateLegacyConfigForTest({
+      acp: {
+        stream: {
+          maxTurnChars: "5000",
+          maxToolSummaryChars: "1000",
+        },
+      },
+    });
+
+    expect(result.config?.acp?.stream).toEqual({});
+    expect(validateConfigObjectRaw(result.config).ok).toBe(true);
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        "Removed acp.stream.maxTurnChars (legacy value was not a positive integer).",
+        "Removed acp.stream.maxToolSummaryChars (legacy value was not a positive integer).",
+      ]),
+    );
+  });
+});
 
 describe("legacy session maintenance migrate", () => {
   it("removes deprecated session.maintenance.rotateBytes", () => {

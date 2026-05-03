@@ -6,6 +6,7 @@ import { normalizeCompatibilityConfigValues } from "../commands/doctor-legacy-co
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+import { validateConfigObjectRaw } from "./validation.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
@@ -152,6 +153,38 @@ describe("config io paths", () => {
       },
     });
     expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+  });
+
+  it("migrates legacy acp.stream keys during runtime compat", () => {
+    const migrated = applyRuntimeLegacyConfigMigrations({
+      acp: {
+        stream: {
+          maxTurnChars: 5000,
+          maxToolSummaryChars: 1000,
+          maxStatusChars: "400",
+          maxMetaEventsPerTurn: 6,
+          metaMode: "full",
+          showUsage: true,
+        },
+      },
+    });
+
+    const next = migrated.next as OpenClawConfig | null;
+    expect(next?.acp?.stream).toEqual({
+      maxOutputChars: 5000,
+      maxSessionUpdateChars: 1000,
+    });
+    expect(validateConfigObjectRaw(next).ok).toBe(true);
+    expect(migrated.changes).toEqual(
+      expect.arrayContaining([
+        "Moved acp.stream.maxTurnChars → acp.stream.maxOutputChars.",
+        "Moved acp.stream.maxToolSummaryChars → acp.stream.maxSessionUpdateChars.",
+        "Removed acp.stream.maxStatusChars (no replacement).",
+        "Removed acp.stream.maxMetaEventsPerTurn (no replacement).",
+        "Removed acp.stream.metaMode (no replacement).",
+        "Removed acp.stream.showUsage (no replacement).",
+      ]),
+    );
   });
 
   it("moves WhatsApp shared access defaults into accounts.default during runtime compat", () => {
