@@ -18,6 +18,21 @@ export function resolvePairingCommandAuthState(
   params: PairingCommandAuthParams,
 ): PairingCommandAuthState {
   const isInternalGatewayCaller = isInternalGatewayPairingCaller(params);
+  if (isInternalGatewayCaller) {
+    const approvalCallerScopes = Array.isArray(params.gatewayClientScopes)
+      ? params.gatewayClientScopes
+      : [];
+    const isMissingPairingPrivilege =
+      !approvalCallerScopes.includes("operator.pairing") &&
+      !approvalCallerScopes.includes("operator.admin");
+
+    return {
+      isInternalGatewayCaller,
+      isMissingPairingPrivilege,
+      approvalCallerScopes,
+    };
+  }
+
   if (params.senderIsOwner === true) {
     return {
       isInternalGatewayCaller,
@@ -26,25 +41,10 @@ export function resolvePairingCommandAuthState(
     };
   }
 
-  if (!isInternalGatewayCaller) {
-    return {
-      isInternalGatewayCaller,
-      isMissingPairingPrivilege: true,
-      approvalCallerScopes: undefined,
-    };
-  }
-
-  const approvalCallerScopes = Array.isArray(params.gatewayClientScopes)
-    ? params.gatewayClientScopes
-    : [];
-  const isMissingPairingPrivilege =
-    !approvalCallerScopes.includes("operator.pairing") &&
-    !approvalCallerScopes.includes("operator.admin");
-
   return {
     isInternalGatewayCaller,
-    isMissingPairingPrivilege,
-    approvalCallerScopes,
+    isMissingPairingPrivilege: true,
+    approvalCallerScopes: undefined,
   };
 }
 

@@ -899,6 +899,25 @@ describe("device-pair /pair approve", () => {
     expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
   });
 
+  it("preserves gateway caller scopes for command-owner approvals", async () => {
+    mockPendingPairingList();
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce(makeApprovedPairingResult());
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "telegram",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: INTERNAL_PAIRING_SCOPES,
+        senderIsOwner: true,
+      }),
+    );
+
+    expectApproveCalledWithInternalPairingScopes();
+    expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
+  });
+
   it("fails closed for approvals when internal gateway scopes are absent", async () => {
     mockPendingPairingList();
 

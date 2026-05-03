@@ -64,4 +64,18 @@ describe("device-pair pairing command auth", () => {
       approvalCallerScopes: ["operator.admin"],
     });
   });
+
+  it("preserves gateway scopes for command owners with gateway scope context", () => {
+    expect(
+      resolvePairingCommandAuthState({
+        channel: "telegram",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        senderIsOwner: true,
+      }),
+    ).toEqual({
+      isInternalGatewayCaller: true,
+      isMissingPairingPrivilege: false,
+      approvalCallerScopes: ["operator.write", "operator.pairing"],
+    });
+  });
 });
