@@ -5,7 +5,7 @@ import {
   appendJsonl,
   assertDockerAvailable,
   assertHarnessRoot,
-  assertRequiredEnv,
+  assertRequiredCredentialEnv,
   buildRttResult,
   buildRunId,
   createHarnessEnv,
@@ -15,6 +15,7 @@ import {
   runHarness,
   validateOpenClawPackageSpec,
   writeJson,
+  type RttCredentialSource,
   type RttProviderMode,
 } from "./lib/rtt-harness.ts";
 
@@ -26,7 +27,7 @@ const DEFAULT_SAMPLE_TIMEOUT_MS = 30_000;
 
 function usage() {
   return [
-    "Usage: pnpm rtt <openclaw@spec> [--package-tgz PATH] [--provider mock-openai|live-frontier] [--runs N] [--samples N] [--sample-timeout-ms N] [--timeout-ms N] [--harness-root PATH] [--output PATH]",
+    "Usage: pnpm rtt <openclaw@spec> [--package-tgz PATH] [--provider mock-openai|live-frontier] [--credential-source env|convex] [--credential-role maintainer|ci] [--runs N] [--samples N] [--sample-timeout-ms N] [--timeout-ms N] [--harness-root PATH] [--output PATH]",
     "",
     "Examples:",
     "  pnpm rtt openclaw@main --package-tgz .artifacts/package/openclaw.tgz",
@@ -41,6 +42,13 @@ function parseProviderMode(value: string): RttProviderMode {
     return value;
   }
   throw new Error(`--provider must be mock-openai or live-frontier; got: ${value}`);
+}
+
+function parseCredentialSource(value: string): RttCredentialSource {
+  if (value === "env" || value === "convex") {
+    return value;
+  }
+  throw new Error(`--credential-source must be env or convex; got: ${value}`);
 }
 
 function parsePositiveInt(label: string, value: string) {
@@ -63,6 +71,8 @@ function resolveHome(input: string) {
 
 function parseArgs(argv: string[]) {
   let spec: string | undefined;
+  let credentialSource: RttCredentialSource = "env";
+  let credentialRole: string | undefined;
   let packageTgz: string | undefined;
   let providerMode = DEFAULT_PROVIDER_MODE;
   let runs = 1;
@@ -80,6 +90,18 @@ function parseArgs(argv: string[]) {
     }
     if (arg === "--provider") {
       providerMode = parseProviderMode(argv[++index] ?? "");
+      continue;
+    }
+    if (arg === "--credential-source") {
+      credentialSource = parseCredentialSource(argv[++index] ?? "");
+      continue;
+    }
+    if (arg === "--credential-role") {
+      const value = argv[++index]?.trim() ?? "";
+      if (!value) {
+        throw new Error("--credential-role requires a value.");
+      }
+      credentialRole = value;
       continue;
     }
     if (arg === "--package-tgz") {
@@ -137,6 +159,8 @@ function parseArgs(argv: string[]) {
     spec: validateOpenClawPackageSpec(spec),
     options: {
       packageTgz,
+      credentialRole,
+      credentialSource,
       providerMode,
       runs,
       samples,
@@ -164,6 +188,8 @@ async function runOne(params: {
   const startedAt = new Date();
   const env = createHarnessEnv({
     baseEnv: process.env,
+    credentialRole: params.options.credentialRole,
+    credentialSource: params.options.credentialSource,
     packageTgz: params.options.packageTgz,
     providerMode: params.options.providerMode,
     rawOutputDir,
@@ -176,7 +202,11 @@ async function runOne(params: {
   });
 
   process.stderr.write(`[rtt] run ${params.index + 1}/${params.options.runs}: ${params.spec}\n`);
-  const harnessExitCode = await runHarness({ env, harnessRoot: params.options.harnessRoot });
+  const harnessExitCode = await runHarness({
+    credentialSource: params.options.credentialSource,
+    env,
+    harnessRoot: params.options.harnessRoot,
+  });
   await readTelegramSummary(path.join(harnessRawDir, "telegram-qa-summary.json"));
   await fs.rm(rawDir, { recursive: true, force: true });
   await fs.mkdir(path.dirname(rawDir), { recursive: true });
@@ -215,8 +245,8 @@ async function runOne(params: {
 
 async function main() {
   const { spec, options } = parseArgs(process.argv.slice(2));
-  assertRequiredEnv(process.env);
-  await assertHarnessRoot(options.harnessRoot);
+  assertRequiredCredentialEnv(process.env, options.credentialSource);
+  await assertHarnessRoot(options.harnessRoot, options.credentialSource);
   await assertDockerAvailable();
   if (spec === "openclaw@main" && !options.packageTgz) {
     throw new Error("openclaw@main requires --package-tgz.");
@@ -245,6 +275,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
 export const __testing = {
   parseArgs,
+  parseCredentialSource,
   parseProviderMode,
   parsePositiveInt,
   resolveHome,
