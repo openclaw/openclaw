@@ -20,22 +20,25 @@ export async function loginWeb(
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const socketTiming = resolveWhatsAppSocketTiming(cfg);
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
+  // Route QR heading and ASCII art through the runtime so non-default
+  // runtimes (e.g. gateway-side) receive the output instead of having it
+  // written directly to process.stdout via console.log. Hoisted so the
+  // same handler reaches both the initial socket and any restart socket
+  // created by the 515 restart path in waitForWhatsAppLoginResult.
+  const onQr = (qr: string) => {
+    runtime.log("Scan this QR in WhatsApp (Linked Devices):");
+    void renderQrTerminal(qr, { small: true })
+      .then((art) => {
+        runtime.log(art.endsWith("\n") ? art.slice(0, -1) : art);
+      })
+      .catch((err) => {
+        runtime.error(`failed rendering WhatsApp QR: ${String(err)}`);
+      });
+  };
   let sock = await createWaSocket(false, verbose, {
     authDir: account.authDir,
     ...socketTiming,
-    onQr: (qr: string) => {
-      // Route QR heading and ASCII art through the runtime so non-default
-      // runtimes (e.g. gateway-side) receive the output instead of having it
-      // written directly to process.stdout via console.log.
-      runtime.log("Scan this QR in WhatsApp (Linked Devices):");
-      void renderQrTerminal(qr, { small: true })
-        .then((art) => {
-          runtime.log(art.endsWith("\n") ? art.slice(0, -1) : art);
-        })
-        .catch((err) => {
-          runtime.error(`failed rendering WhatsApp QR: ${String(err)}`);
-        });
-    },
+    onQr,
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
@@ -47,6 +50,7 @@ export async function loginWeb(
       runtime,
       waitForConnection,
       socketTiming,
+      onQr,
       onSocketReplaced: (replacementSock) => {
         sock = replacementSock;
       },
