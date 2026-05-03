@@ -106,6 +106,8 @@ type StartDiagnosticHeartbeatOptions = {
   emitMemorySample?: EmitDiagnosticMemorySample;
   sampleLiveness?: SampleDiagnosticLiveness;
   recoverStuckSession?: RecoverStuckSession;
+  /** Suppress liveness warnings for this many ms after heartbeat starts (mirrors channel-health-monitor startup grace). */
+  startupGraceMs?: number;
 };
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
@@ -741,6 +743,8 @@ export function startDiagnosticHeartbeat(
     return;
   }
   startDiagnosticLivenessSampler();
+  const livenessGraceUntil =
+    opts?.startupGraceMs != null && opts.startupGraceMs > 0 ? Date.now() + opts.startupGraceMs : 0;
   heartbeatInterval = setInterval(() => {
     let heartbeatConfig = config;
     if (!heartbeatConfig) {
@@ -754,7 +758,10 @@ export function startDiagnosticHeartbeat(
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot();
-    const livenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
+    const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
+    const livenessSample = inStartupGrace
+      ? null
+      : (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
     const shouldEmitLivenessEvent =
       livenessSample !== null && shouldEmitDiagnosticLivenessEvent(now);
     const shouldEmitLivenessWarning =
