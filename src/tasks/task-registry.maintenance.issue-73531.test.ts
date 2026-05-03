@@ -68,6 +68,7 @@ function installCountingRuntime(tasks: TaskRecord[]): { listCalls: () => number 
         ? { agentId, rest: rest.join(":") }
         : null;
     },
+    hasActiveTaskForChildSessionKey: () => false,
     deleteTaskRecordById: () => false,
     ensureTaskRegistryReady: () => {},
     getTaskById: (taskId: string) => tasks.find((task) => task.taskId === taskId),
