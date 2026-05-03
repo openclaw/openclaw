@@ -25,7 +25,9 @@ import {
 
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
-  limit: Type.Optional(Type.Number({ minimum: 1 })),
+  // chat.history enforces a server-side hard cap of 1000; clamp here so callers
+  // don't silently fail on larger values.
+  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 1000 })),
   includeTools: Type.Optional(Type.Boolean()),
 });
 
@@ -245,7 +247,7 @@ export function createSessionsHistoryTool(opts?: {
 
       const limit =
         typeof params.limit === "number" && Number.isFinite(params.limit)
-          ? Math.max(1, Math.floor(params.limit))
+          ? Math.min(1000, Math.max(1, Math.floor(params.limit)))
           : undefined;
       const includeTools = Boolean(params.includeTools);
       const result = await gatewayCall<{ messages: Array<unknown> }>({
