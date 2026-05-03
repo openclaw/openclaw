@@ -69,6 +69,43 @@ describe("signal sender identity", () => {
   });
 });
 
+describe("signal allowFrom normalization", () => {
+  it("preserves uuid sender ids for shared allowlist formatting", () => {
+    expect(
+      signalPlugin.config.formatAllowFrom?.({
+        cfg: {} as never,
+        accountId: "default",
+        allowFrom: [
+          " signal:uuid:ABCDEF12-3456-7890-ABCD-EF1234567890 ",
+          " +1 (555) 555-0123 ",
+          "*",
+        ],
+      }),
+    ).toEqual(["uuid:abcdef12-3456-7890-abcd-ef1234567890", "+15555550123", "*"]);
+  });
+
+  it("uses the same uuid normalization for DM policy auth", () => {
+    const resolveDmPolicy = signalPlugin.security?.resolveDmPolicy;
+    const dmPolicy = resolveDmPolicy?.({
+      cfg: { channels: { signal: {} } } as never,
+      accountId: "default",
+      account: {
+        accountId: "default",
+        config: {
+          allowFrom: ["uuid:ABCDEF12-3456-7890-ABCD-EF1234567890"],
+          dmPolicy: "allowlist",
+          groupPolicy: "allowlist",
+        },
+      } as never,
+    });
+
+    expect(dmPolicy?.normalizeEntry?.("signal:uuid:ABCDEF12-3456-7890-ABCD-EF1234567890")).toBe(
+      "uuid:abcdef12-3456-7890-abcd-ef1234567890",
+    );
+    expect(dmPolicy?.normalizeEntry?.("+1 (555) 555-0123")).toBe("+15555550123");
+  });
+});
+
 describe("probeSignal", () => {
   it("falls back to the direct probe helper when runtime is not initialized", async () => {
     clearSignalRuntime();

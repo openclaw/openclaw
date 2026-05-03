@@ -17,7 +17,9 @@ import {
   type ResolvedSignalAccount,
 } from "./accounts.js";
 import { SignalChannelConfigSchema } from "./config-schema.js";
+import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
+import { looksLikeUuid } from "./uuid.js";
 
 const SIGNAL_CHANNEL = "signal" as const;
 
@@ -29,6 +31,27 @@ export const signalSetupWizard = createSignalSetupWizardProxy(
   async () => (await loadSignalChannelRuntime()).signalSetupWizard,
 );
 
+function normalizeSignalAllowEntry(raw: string | number): string | undefined {
+  const entry = normalizeStringifiedOptionalString(raw);
+  if (!entry) {
+    return undefined;
+  }
+  if (entry === "*") {
+    return "*";
+  }
+
+  const normalized = normalizeSignalMessagingTarget(entry);
+  if (!normalized || normalized.startsWith("group:") || normalized.startsWith("username:")) {
+    return undefined;
+  }
+  if (looksLikeUuid(normalized)) {
+    return `uuid:${normalized}`;
+  }
+
+  const e164 = normalizeE164(normalized);
+  return e164.length > 1 ? e164 : undefined;
+}
+
 export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSignalAccount>({
   sectionKey: SIGNAL_CHANNEL,
   listAccountIds: (cfg) => listSignalAccountIds(cfg),
@@ -38,10 +61,8 @@ export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSign
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     allowFrom
-      .map((entry) => normalizeStringifiedOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry))
-      .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
-      .filter(Boolean),
+      .map((entry) => normalizeSignalAllowEntry(entry))
+      .filter((entry): entry is string => Boolean(entry)),
   resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
 });
 
@@ -56,7 +77,7 @@ export const signalSecurityAdapter = createRestrictSendersChannelSecurity<Resolv
   groupAllowFromPath: "channels.signal.groupAllowFrom",
   mentionGated: false,
   policyPathSuffix: "dmPolicy",
-  normalizeDmEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
+  normalizeDmEntry: (raw) => normalizeSignalAllowEntry(raw) ?? "",
 });
 
 export function createSignalPluginBase(params: {
