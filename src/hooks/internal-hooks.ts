@@ -300,7 +300,11 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
       await handler(event);
     } catch (err) {
       const message = formatErrorMessage(err);
-      log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
+      const stack = err instanceof Error ? err.stack : undefined;
+      log.error(`Hook error [${event.type}:${event.action}]: ${message}`, {
+        stack,
+        event: { type: event.type, action: event.action, sessionKey: event.sessionKey },
+      });
     }
   }
 }
