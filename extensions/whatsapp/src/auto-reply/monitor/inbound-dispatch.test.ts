@@ -816,7 +816,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(updateLastRoute).toHaveBeenCalledTimes(1);
   });
 
-  it("does not update main last route for isolated DM scope sessions", () => {
+  it("updates isolated DM last route for scoped session keys", () => {
     const updateLastRoute = vi.fn();
 
     updateWhatsAppMainLastRoute({
@@ -826,14 +826,23 @@ describe("whatsapp inbound dispatch", () => {
       dmRouteTarget: "+3000",
       pinnedMainDmRecipient: null,
       route: makeRoute({
-        sessionKey: "agent:main:whatsapp:dm:+1000:peer:+3000",
-        mainSessionKey: "agent:main:whatsapp:direct:+1000",
+        sessionKey: "agent:main:whatsapp:biz:direct:+3000",
+        mainSessionKey: "agent:main:main",
+        lastRoutePolicy: "session",
+        accountId: "biz",
       }),
       updateLastRoute,
       warn: () => {},
     });
 
-    expect(updateLastRoute).not.toHaveBeenCalled();
+    expect(updateLastRoute).toHaveBeenCalledTimes(1);
+    expect(updateLastRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:whatsapp:biz:direct:+3000",
+        accountId: "biz",
+        to: "+3000",
+      }),
+    );
   });
 
   it("does not update main last route for non-owner sender when main DM scope is pinned", () => {

@@ -181,4 +181,96 @@ describe("web auto-reply last-route", () => {
 
     await store.cleanup();
   });
+
+  it("uses account-aware session keys for different direct chat contacts", async () => {
+    const now = Date.now();
+    const store = await makeSessionStore({});
+
+    const { handler, backgroundTasks } = createLastRouteHarness(store.storePath);
+
+    await handler(
+      buildInboundMessage({
+        id: "m1",
+        from: "+15551112222",
+        conversationId: "+15551112222",
+        chatType: "direct",
+        chatId: "direct:+15551112222",
+        accountId: "biz",
+        timestamp: now,
+        senderE164: "+15551112222",
+      }),
+    );
+
+    await awaitBackgroundTasks(backgroundTasks);
+    const firstSessionKey = updateLastRouteInBackgroundMock.mock.calls[0]?.[0]?.sessionKey;
+
+    updateLastRouteInBackgroundMock.mockClear();
+
+    await handler(
+      buildInboundMessage({
+        id: "m2",
+        from: "+15553334444",
+        conversationId: "+15553334444",
+        chatType: "direct",
+        chatId: "direct:+15553334444",
+        accountId: "biz",
+        timestamp: now + 1,
+        senderE164: "+15553334444",
+      }),
+    );
+
+    await awaitBackgroundTasks(backgroundTasks);
+    const secondSessionKey = updateLastRouteInBackgroundMock.mock.calls[0]?.[0]?.sessionKey;
+
+    expect(firstSessionKey).toBe("agent:main:whatsapp:biz:direct:+15551112222");
+    expect(secondSessionKey).toBe("agent:main:whatsapp:biz:direct:+15553334444");
+
+    await store.cleanup();
+  });
+
+  it("keeps the same direct contact isolated across WhatsApp accounts", async () => {
+    const now = Date.now();
+    const store = await makeSessionStore({});
+
+    const { handler, backgroundTasks } = createLastRouteHarness(store.storePath);
+
+    await handler(
+      buildInboundMessage({
+        id: "m1",
+        from: "+15551112222",
+        conversationId: "+15551112222",
+        chatType: "direct",
+        chatId: "direct:+15551112222",
+        accountId: "personal",
+        timestamp: now,
+        senderE164: "+15551112222",
+      }),
+    );
+
+    await awaitBackgroundTasks(backgroundTasks);
+    const firstSessionKey = updateLastRouteInBackgroundMock.mock.calls[0]?.[0]?.sessionKey;
+
+    updateLastRouteInBackgroundMock.mockClear();
+
+    await handler(
+      buildInboundMessage({
+        id: "m2",
+        from: "+15551112222",
+        conversationId: "+15551112222",
+        chatType: "direct",
+        chatId: "direct:+15551112222",
+        accountId: "biz",
+        timestamp: now + 1,
+        senderE164: "+15551112222",
+      }),
+    );
+
+    await awaitBackgroundTasks(backgroundTasks);
+    const secondSessionKey = updateLastRouteInBackgroundMock.mock.calls[0]?.[0]?.sessionKey;
+
+    expect(firstSessionKey).toBe("agent:main:whatsapp:personal:direct:+15551112222");
+    expect(secondSessionKey).toBe("agent:main:whatsapp:biz:direct:+15551112222");
+
+    await store.cleanup();
+  });
 });

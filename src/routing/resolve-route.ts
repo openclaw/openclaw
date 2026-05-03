@@ -41,6 +41,11 @@ export type ResolveAgentRouteInput = {
   teamId?: string | null;
   /** Discord member role IDs — used for role-based agent routing. */
   memberRoleIds?: string[];
+  /**
+   * Override cfg.session.dmScope for this route resolution only.
+   * Channel plugins use this when their privacy contract needs stricter DM isolation.
+   */
+  dmScopeOverride?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 };
 
 export type ResolvedAgentRoute = {
@@ -620,7 +625,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const teamId = normalizeId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
-  const dmScope = input.cfg.session?.dmScope ?? "main";
+  const dmScope = input.dmScopeOverride ?? input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer

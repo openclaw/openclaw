@@ -138,6 +138,24 @@ describe("resolveAgentRoute", () => {
     });
   });
 
+  test("dmScopeOverride can force account-aware direct-message isolation", () => {
+    const route = resolveAgentRoute({
+      cfg: { session: { dmScope: "main" } },
+      channel: "whatsapp",
+      accountId: "biz",
+      peer: { kind: "direct", id: "+15551234567" },
+      dmScopeOverride: "per-account-channel-peer",
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      accountId: "biz",
+      sessionKey: "agent:main:whatsapp:biz:direct:+15551234567",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    });
+  });
+
   test("route binding session dmScope isolates selected direct peers without changing agent", () => {
     const cfg: OpenClawConfig = {
       session: { dmScope: "main" },

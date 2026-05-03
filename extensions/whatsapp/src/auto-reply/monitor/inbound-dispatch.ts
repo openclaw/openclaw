@@ -258,6 +258,25 @@ export function updateWhatsAppMainLastRoute(params: {
 
   if (
     params.dmRouteTarget &&
+    params.route.sessionKey !== params.route.mainSessionKey &&
+    inboundLastRouteSessionKey === params.route.sessionKey
+  ) {
+    params.updateLastRoute({
+      cfg: params.cfg,
+      backgroundTasks: params.backgroundTasks,
+      storeAgentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+      channel: "whatsapp",
+      to: params.dmRouteTarget,
+      accountId: params.route.accountId,
+      ctx: params.ctx,
+      warn: params.warn,
+    });
+    return;
+  }
+
+  if (
+    params.dmRouteTarget &&
     inboundLastRouteSessionKey === params.route.mainSessionKey &&
     params.pinnedMainDmRecipient
   ) {

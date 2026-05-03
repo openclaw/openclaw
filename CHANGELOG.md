@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Discord/status: honor explicit `messages.statusReactions.enabled: true` in tool-only guild channels so queued ack reactions can progress through thinking/done lifecycle reactions instead of stopping at the initial emoji. Thanks @Marvinthebored.
+- Channels/WhatsApp: isolate inbound direct-message sessions by account and contact (`agent:<agentId>:whatsapp:<accountId>:direct:<peerId>`) instead of collapsing all contacts into the agent main session, preventing shared transcripts and context across WhatsApp senders. Fixes #76263. Thanks @matirossi93 and @chinar-amrutkar.
 - Agents/models: forward model `maxTokens` as the default output-token limit for OpenAI-compatible Responses and Completions transports when no runtime override is provided, preventing provider defaults from silently truncating larger outputs. (#76645) Thanks @joeyfrasier.
 - Control UI/Skills: fix skill detail modal silently failing to open in all browsers by deferring `showModal()` until the dialog element is connected to the DOM; the Lit `ref` callback fired before connection causing a `DOMException: HTMLDialogElement.showModal: Dialog element is not connected` on every skill click. Thanks @nickmopen.
 - Gateway/update: run `doctor --non-interactive --fix` after Control UI global package updates before reporting success, so legacy config is migrated before the gateway restart. Thanks @stevenchouai.
