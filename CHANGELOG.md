@@ -193,6 +193,7 @@ Docs: https://docs.openclaw.ai
 - Agents/fallback: suppress duplicate current-turn user-message transcript writes after embedded fallback retries while still sending the retry prompt to the model. (#63696) Thanks @dashhuang.
 - Channels/Telegram: force a fresh final message when a visible non-preview bubble (tool/block/error) was delivered after the active answer preview, so multi-step assistant replies no longer end up with the final answer above intermediate output. Fixes #76529. Thanks @jack-stormentswe.
 - Channels/Telegram: require an observed Telegram send, edit, or fallback before treating a forum-topic final as delivered, so final replies generated in transcript no longer disappear from Telegram topics. Fixes #76554. (#76764) Thanks @bubucilo and @obviyus.
+- Agents/sandbox: include a `createArgsEpoch` constant in the sandbox and browser-sandbox config hashes so existing containers recreate when `buildSandboxCreateArgs` adds, removes, or changes container flags. Without the epoch, deployments such as `scope: "agent"` with `prune.maxAgeDays: 0` keep running their previously created container indefinitely and never pick up new flags. Pairs with #74083 to make the `--init`/tini reaper rollout reach long-running sandboxes. Refs #68691.
 
 ## 2026.5.2
 

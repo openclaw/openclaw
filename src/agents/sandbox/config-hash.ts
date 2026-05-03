@@ -7,6 +7,7 @@ type SandboxHashInput = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   mountFormatVersion: number;
+  createArgsEpoch: string;
 };
 
 type SandboxBrowserHashInput = {
@@ -26,6 +27,7 @@ type SandboxBrowserHashInput = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   mountFormatVersion: number;
+  createArgsEpoch: string;
 };
 
 function normalizeForHash(value: unknown): unknown {
