@@ -973,7 +973,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   };
 
-  const pushPreviewToolProgress = (line?: string) => {
+  const pushPreviewToolProgress = async (line?: string): Promise<void> => {
     if (!draftStream || !previewToolProgressEnabled || previewToolProgressSuppressed) {
       return;
     }
@@ -986,10 +986,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     if (previous === escaped) {
       return;
     }
-    // Transition narrative → bullets: rotate so the current narrative
-    // draft is preserved as a permanent Slack message, and a fresh draft
-    // begins to host the ephemeral bullet preview.
+    // Transition narrative → bullets: drain the narrative draft FIRST so
+    // any pending or in-flight chat.update completes against the current
+    // (narrative) message before we rotate ids. Without flush(),
+    // forceNewMessage() resets pendingText + lastSentText and an in-flight
+    // narrative send can land on what becomes the bullet preview slot —
+    // either dropping the agent text or causing it to be deleted later
+    // when we tear down the bullet preview.
+    //
+    // We CANNOT use clear() here either: clear() calls discardPending →
+    // stop() which permanently halts the draft loop. flush() drains
+    // pending + waits for inFlightPromise without stopping, so the next
+    // update() (the Working… bullets) starts a fresh permanent message.
     if (currentDraftKind === "narrative") {
+      await draftStream.flush();
       draftStream.forceNewMessage();
       previewToolProgressLines = [];
       appendRenderedText = "";
@@ -1077,6 +1087,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         //
         //   currentDraftKind === null        : nothing to do.
         if (currentDraftKind === "narrative") {
+          // Drain pending/in-flight narrative chat.update before rotating
+          // ids — same race as pushPreviewToolProgress: a pending narrative
+          // send can otherwise land on the next draft slot once
+          // forceNewMessage clears lastSentText.
+          await draftStream?.flush();
           draftStream?.forceNewMessage();
         } else if (currentDraftKind === "bullets") {
           // Use deleteBulletPreview — NOT draftStream.clear() — so the
@@ -1156,10 +1171,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   if (statusReactionsEnabled) {
                     await statusReactions.setTool(payload.name);
                   }
-                  pushPreviewToolProgress(payload.name ? `tool: ${payload.name}` : "tool running");
+                  await pushPreviewToolProgress(
+                    payload.name ? `tool: ${payload.name}` : "tool running",
+                  );
                 },
                 onItemEvent: async (payload) => {
-                  pushPreviewToolProgress(
+                  await pushPreviewToolProgress(
                     payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
                   );
                 },
@@ -1167,13 +1184,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   if (payload.phase !== "update") {
                     return;
                   }
-                  pushPreviewToolProgress(payload.explanation ?? payload.steps?.[0] ?? "planning");
+                  await pushPreviewToolProgress(
+                    payload.explanation ?? payload.steps?.[0] ?? "planning",
+                  );
                 },
                 onApprovalEvent: async (payload) => {
                   if (payload.phase !== "requested") {
                     return;
                   }
-                  pushPreviewToolProgress(
+                  await pushPreviewToolProgress(
                     payload.command ? `approval: ${payload.command}` : "approval requested",
                   );
                 },
@@ -1181,7 +1200,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   if (payload.phase !== "end") {
                     return;
                   }
-                  pushPreviewToolProgress(
+                  await pushPreviewToolProgress(
                     payload.name
                       ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
                       : payload.title,
@@ -1191,7 +1210,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   if (payload.phase !== "end") {
                     return;
                   }
-                  pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
+                  await pushPreviewToolProgress(
+                    payload.summary ?? payload.title ?? "patch applied",
+                  );
                 },
               },
             }),
