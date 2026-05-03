@@ -794,6 +794,7 @@ function validateConfigObjectWithPluginsBase(
   type RegistryInfo = {
     registry: PluginManifestRegistry;
     knownIds?: Set<string>;
+    knownChannelIds?: Set<string>;
     overriddenPluginIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
     channelSchemas?: Map<
@@ -906,6 +907,29 @@ function validateConfigObjectWithPluginsBase(
       info.knownIds = new Set(info.registry.plugins.map((record) => record.id));
     }
     return info.knownIds;
+  };
+
+  const ensureKnownChannelIds = (): Set<string> => {
+    const info = ensureRegistry();
+    if (!info.knownChannelIds) {
+      const ids = new Set<string>();
+      for (const channelId of CHANNEL_IDS) {
+        const normalized = normalizePluginId(channelId);
+        if (normalized) {
+          ids.add(normalized);
+        }
+      }
+      for (const plugin of info.registry.plugins) {
+        for (const channelId of plugin.channels) {
+          const normalized = normalizePluginId(channelId);
+          if (normalized) {
+            ids.add(normalized);
+          }
+        }
+      }
+      info.knownChannelIds = ids;
+    }
+    return info.knownChannelIds;
   };
 
   const ensureOverriddenPluginIds = (): Set<string> => {
@@ -1522,11 +1546,15 @@ function validateConfigObjectWithPluginsBase(
   }
 
   const allow = pluginsConfig?.allow ?? [];
+  const knownChannelIds = ensureKnownChannelIds();
   for (const pluginId of allow) {
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       continue;
     }
     if (!knownIds.has(pluginId)) {
+      if (knownChannelIds.has(normalizePluginId(pluginId))) {
+        continue;
+      }
       const commandAlias = resolveManifestCommandAliasOwnerInRegistry({
         command: pluginId,
         registry,
