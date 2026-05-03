@@ -76,7 +76,11 @@ function shouldPreloadMessagePlugins(action: string, opts: Record<string, unknow
   if (opts.dryRun === true || !TELEGRAM_GATEWAY_OWNED_CLI_ACTIONS.has(action)) {
     return true;
   }
-  const explicitChannel = resolveMessageSecretScope({ channel: opts.channel }).channel;
+  const explicitChannel = resolveMessageSecretScope({
+    channel: opts.channel,
+    target: opts.target,
+    targets: opts.targets,
+  }).channel;
   return explicitChannel !== "telegram";
 }
 

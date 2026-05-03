@@ -113,12 +113,28 @@ describe("runMessageAction", () => {
   });
 
   it("narrows plugin loading from a channel-prefixed target", async () => {
-    await runSendAction({ channel: undefined, target: "telegram:12345" });
+    await runSendAction({ channel: undefined, target: "discord:channel:12345" });
 
     expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
       scope: "configured-channels",
-      onlyChannelIds: ["telegram"],
+      onlyChannelIds: ["discord"],
     });
+  });
+
+  it("keeps target-prefixed Telegram sends from local plugin preload", async () => {
+    await runSendAction({ channel: undefined, target: "telegram:12345" });
+
+    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "send",
+        target: "telegram:12345",
+        message: "hi",
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(exitMock).toHaveBeenCalledWith(0);
   });
 
   it("keeps explicit Telegram sends on the normal command path without local plugin preload", async () => {
