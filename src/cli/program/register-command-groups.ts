@@ -81,7 +81,9 @@ export async function registerCommandGroups(
     // entry.register typically performs a dynamic import, so firing them
     // without awaiting would race against the caller's subsequent
     // program.parseAsync and leave commands unregistered when argv is parsed.
-    await Promise.all(entries.map((entry) => entry.register(program)));
+    // Wrap in async so synchronous register implementations still flow through
+    // Promise.all without tripping the await-thenable lint rule.
+    await Promise.all(entries.map(async (entry) => entry.register(program)));
     return;
   }
 
