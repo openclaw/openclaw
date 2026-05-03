@@ -194,21 +194,20 @@ async function assertExplicitProxyAllowed(
   if (!["http:", "https:"].includes(parsedProxyUrl.protocol)) {
     throw new Error("Explicit proxy URL must use http or https");
   }
+  const proxyPolicy: SsrFPolicy | undefined =
+    policy || dispatcherPolicy.allowPrivateProxy === true
+      ? {
+          ...policy,
+          // The proxy hostname is operator-configured, not user input. Target-scoped
+          // allowlists must not reject a configured proxy host before the request
+          // target gets checked against that same allowlist below.
+          hostnameAllowlist: undefined,
+          ...(dispatcherPolicy.allowPrivateProxy === true ? { allowPrivateNetwork: true } : {}),
+        }
+      : undefined;
   await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
     lookupFn,
-    policy:
-      dispatcherPolicy.allowPrivateProxy === true
-        ? {
-            // The proxy hostname is operator-configured, not user input.
-            // Clear the target-scoped hostnameAllowlist so configured proxies
-            // like localhost or internal hosts aren't rejected by an allowlist
-            // that was built for the target URL (for example api.example.test).
-            // Private-network IP checks still apply via allowPrivateNetwork.
-            ...policy,
-            allowPrivateNetwork: true,
-            hostnameAllowlist: undefined,
-          }
-        : policy,
+    policy: proxyPolicy,
   });
 }
 
