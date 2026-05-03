@@ -14,6 +14,7 @@ type ScrollHost = {
   chatUserNearBottom: boolean;
   chatHeaderControlsHidden: boolean;
   chatNewMessagesBelow: boolean;
+  chatIsProgrammaticScroll: boolean;
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
   topbarObserver: ResizeObserver | null;
@@ -75,11 +76,16 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
           typeof window.matchMedia !== "function" ||
           !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
       const scrollTop = target.scrollHeight;
+      host.chatIsProgrammaticScroll = true;
       if (typeof target.scrollTo === "function") {
         target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
       } else {
         target.scrollTop = scrollTop;
       }
+      // Clear the flag after the scroll event has fired (sync or next microtask).
+      requestAnimationFrame(() => {
+        host.chatIsProgrammaticScroll = false;
+      });
       host.chatUserNearBottom = true;
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;
@@ -98,7 +104,11 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         if (!shouldStickRetry) {
           return;
         }
+        host.chatIsProgrammaticScroll = true;
         latest.scrollTop = latest.scrollHeight;
+        requestAnimationFrame(() => {
+          host.chatIsProgrammaticScroll = false;
+        });
         host.chatUserNearBottom = true;
       }, retryDelay);
     });
@@ -130,6 +140,11 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
 export function handleChatScroll(host: ScrollHost, event: Event) {
   const container = event.currentTarget as HTMLElement | null;
   if (!container) {
+    return;
+  }
+  // Ignore scroll events that we ourselves triggered — they must not flip
+  // chatUserNearBottom to false while streaming content grows the page.
+  if (host.chatIsProgrammaticScroll) {
     return;
   }
   const scrollTop = Math.max(0, container.scrollTop);
@@ -168,6 +183,7 @@ export function resetChatScroll(host: ScrollHost) {
   host.chatLastScrollTop = 0;
   host.chatHeaderControlsHidden = false;
   host.chatNewMessagesBelow = false;
+  host.chatIsProgrammaticScroll = false;
 }
 
 export function exportLogs(lines: string[], label: string) {
