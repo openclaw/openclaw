@@ -165,6 +165,24 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("logs non-ok gateway summaries when payloads are empty", async () => {
+    await withTempStore(async () => {
+      callGateway.mockResolvedValue({
+        runId: "idem-1",
+        status: "timeout",
+        summary: "aborted",
+        result: {
+          payloads: [],
+          meta: { aborted: true },
+        },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith("aborted");
+    });
+  });
+
   it("passes model overrides through gateway requests", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
