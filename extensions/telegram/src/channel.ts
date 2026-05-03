@@ -61,6 +61,7 @@ import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
+import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
 import { resolveTelegramSessionConversation } from "./session-conversation.js";
@@ -219,6 +220,10 @@ async function sendTelegramOutbound(params: {
 }
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
+  resolveExecutionMode: (ctx) =>
+    getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.resolveExecutionMode?.(ctx) ??
+    telegramMessageActionsImpl.resolveExecutionMode?.(ctx) ??
+    "gateway",
   describeMessageTool: (ctx) =>
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.describeMessageTool?.(ctx) ??
     telegramMessageActionsImpl.describeMessageTool?.(ctx) ??
@@ -691,6 +696,7 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     messaging: {
+      targetPrefixes: ["telegram", "tg"],
       normalizeTarget: normalizeTelegramMessagingTarget,
       resolveInboundConversation: ({ to, conversationId, threadId }) =>
         resolveTelegramInboundConversation({ to, conversationId, threadId }),
@@ -892,13 +898,17 @@ export const telegramPlugin = createChatChannelPlugin({
         let telegramBotLabel = "";
         let unauthorizedTokenReason: string | null = null;
         try {
-          const probe = await resolveTelegramProbe()(token, 2500, {
-            accountId: account.accountId,
-            proxyUrl: account.config.proxy,
-            network: account.config.network,
-            apiRoot: account.config.apiRoot,
-            includeWebhookInfo: false,
-          });
+          const probe = await resolveTelegramProbe()(
+            token,
+            resolveTelegramStartupProbeTimeoutMs(account.config.timeoutSeconds),
+            {
+              accountId: account.accountId,
+              proxyUrl: account.config.proxy,
+              network: account.config.network,
+              apiRoot: account.config.apiRoot,
+              includeWebhookInfo: false,
+            },
+          );
           const username = probe.ok ? probe.bot?.username?.trim() : null;
           if (username) {
             telegramBotLabel = ` (@${username})`;

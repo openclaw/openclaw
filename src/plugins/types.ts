@@ -261,6 +261,7 @@ export type {
   WebSearchProviderPlugin,
   WebSearchProviderSetupContext,
   WebSearchProviderToolDefinition,
+  WebSearchProviderToolExecutionContext,
   WebSearchRuntimeMetadataContext,
 } from "./web-provider-types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -1963,6 +1964,8 @@ export type OpenClawPluginCommandDefinition = {
   };
   /** Description shown in /help and command menus */
   description: string;
+  /** Localized descriptions for native command surfaces that support them. */
+  descriptionLocalizations?: Record<string, string>;
   /** Optional system-prompt guidance for agents when this command is registered. */
   agentPromptGuidance?: readonly string[];
   /** Whether this command accepts arguments */
@@ -2217,6 +2220,7 @@ export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPlu
  *
  * - `full`: live runtime activation; long-lived side effects may start.
  * - `discovery`: read-only capability discovery; skip sockets/workers/clients.
+ * - `tool-discovery`: capability discovery for executable tools; skip channel runtime hydration.
  * - `setup-only`: lightweight channel setup entry only.
  * - `setup-runtime`: setup flow that also needs the runtime channel entry.
  * - `cli-metadata`: CLI command metadata collection.
@@ -2224,6 +2228,7 @@ export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPlu
 export type PluginRegistrationMode =
   | "full"
   | "discovery"
+  | "tool-discovery"
   | "setup-only"
   | "setup-runtime"
   | "cli-metadata";

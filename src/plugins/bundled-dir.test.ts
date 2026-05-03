@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import {
+  resolveBundledPluginsDir,
+  resolveSourceCheckoutDependencyDiagnostic,
+} from "./bundled-dir.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -22,6 +25,7 @@ function createOpenClawRoot(params: {
   hasDistRuntimeExtensions?: boolean;
   hasDistExtensions?: boolean;
   hasGitCheckout?: boolean;
+  hasPnpmWorkspace?: boolean;
 }) {
   const repoRoot = makeRepoRoot(params.prefix);
   if (params.hasExtensions) {
@@ -38,6 +42,13 @@ function createOpenClawRoot(params: {
   }
   if (params.hasGitCheckout) {
     fs.writeFileSync(path.join(repoRoot, ".git"), "gitdir: /tmp/fake.git\n", "utf8");
+  }
+  if (params.hasPnpmWorkspace) {
+    fs.writeFileSync(
+      path.join(repoRoot, "pnpm-workspace.yaml"),
+      "packages:\n  - .\n  - extensions/*\n",
+      "utf8",
+    );
   }
   fs.writeFileSync(
     path.join(repoRoot, "package.json"),
@@ -167,7 +178,7 @@ afterEach(() => {
 describe("resolveBundledPluginsDir", () => {
   it.each([
     [
-      "prefers the staged runtime bundled plugin tree from the package root",
+      "prefers the runtime bundled plugin tree from the package root",
       {
         prefix: "openclaw-bundled-dir-runtime-",
         hasDistRuntimeExtensions: true,
@@ -188,7 +199,7 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers built dist/extensions in a git checkout outside vitest",
+      "prefers built dist/extensions in a pnpm git checkout outside vitest",
       {
         prefix: "openclaw-bundled-dir-git-built-",
         hasExtensions: true,
@@ -196,9 +207,10 @@ describe("resolveBundledPluginsDir", () => {
         hasDistRuntimeExtensions: true,
         hasDistExtensions: true,
         hasGitCheckout: true,
+        hasPnpmWorkspace: true,
       },
       {
-        expectedRelativeDir: path.join("dist-runtime", "extensions"),
+        expectedRelativeDir: path.join("dist", "extensions"),
       },
     ],
     [
@@ -215,27 +227,29 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers source extensions during tsx-driven source execution",
+      "prefers built dist/extensions during tsx-driven pnpm source execution",
       {
-        prefix: "openclaw-bundled-dir-tsx-",
+        prefix: "openclaw-bundled-dir-tsx-built-",
         hasExtensions: true,
         hasSrc: true,
         hasDistRuntimeExtensions: true,
         hasDistExtensions: true,
         hasGitCheckout: true,
+        hasPnpmWorkspace: true,
       },
       {
-        expectedRelativeDir: "extensions",
+        expectedRelativeDir: path.join("dist", "extensions"),
         execArgv: ["--import", "tsx"],
       },
     ],
     [
-      "falls back to source extensions in a git checkout when built trees are missing",
+      "uses source extensions in a pnpm git checkout when built trees are missing",
       {
         prefix: "openclaw-bundled-dir-git-",
         hasExtensions: true,
         hasSrc: true,
         hasGitCheckout: true,
+        hasPnpmWorkspace: true,
       },
       {
         expectedRelativeDir: "extensions",
@@ -267,6 +281,7 @@ describe("resolveBundledPluginsDir", () => {
       hasDistRuntimeExtensions: true,
       hasDistExtensions: true,
       hasGitCheckout: true,
+      hasPnpmWorkspace: true,
     });
     fs.mkdirSync(path.join(repoRoot, "dist", "extensions", "discord"), { recursive: true });
     fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions", "discord"), {
@@ -278,6 +293,50 @@ describe("resolveBundledPluginsDir", () => {
       repoRoot,
       expectedRelativeDir: "extensions",
     });
+  });
+
+  it("keeps built bundled plugins for git-looking trees without pnpm workspace metadata", () => {
+    const repoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-git-no-pnpm-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasDistRuntimeExtensions: true,
+      hasDistExtensions: true,
+      hasGitCheckout: true,
+    });
+    seedBundledPluginTree(repoRoot, "extensions");
+    seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
+    seedBundledPluginTree(repoRoot, path.join("dist-runtime", "extensions"));
+
+    expectResolvedBundledDirFromRoot({
+      repoRoot,
+      expectedRelativeDir: path.join("dist-runtime", "extensions"),
+    });
+  });
+
+  it("reports missing pnpm workspace deps for source checkouts", () => {
+    const repoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-source-deps-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasGitCheckout: true,
+      hasPnpmWorkspace: true,
+    });
+    seedBundledPluginTree(repoRoot, "extensions", "twitch");
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    process.argv[1] = path.join(repoRoot, "openclaw.mjs");
+
+    expect(resolveSourceCheckoutDependencyDiagnostic()).toEqual({
+      source: repoRoot,
+      message: expect.stringContaining("run `pnpm install`"),
+    });
+
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    expect(resolveSourceCheckoutDependencyDiagnostic()).toBeNull();
+
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    fs.mkdirSync(path.join(repoRoot, "node_modules", ".pnpm"), { recursive: true });
+    expect(resolveSourceCheckoutDependencyDiagnostic()).toBeNull();
   });
 
   it("returns a stable empty bundled plugin directory when bundled plugins are disabled", () => {
@@ -297,6 +356,24 @@ describe("resolveBundledPluginsDir", () => {
     expect(bundledDir).toBeTruthy();
     expect(fs.existsSync(bundledDir ?? "")).toBe(true);
     expect(fs.readdirSync(bundledDir ?? "")).toEqual([]);
+  });
+
+  it("separates tilde override cache entries by OPENCLAW_HOME", () => {
+    const homeA = makeRepoRoot("openclaw-bundled-dir-home-a-");
+    const homeB = makeRepoRoot("openclaw-bundled-dir-home-b-");
+    seedBundledPluginTree(homeA, "bundled", "memory-core");
+    seedBundledPluginTree(homeB, "bundled", "discord");
+    const envBase = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled",
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      VITEST: "true",
+    } satisfies NodeJS.ProcessEnv;
+
+    const bundledA = resolveBundledPluginsDir({ ...envBase, OPENCLAW_HOME: homeA });
+    const bundledB = resolveBundledPluginsDir({ ...envBase, OPENCLAW_HOME: homeB });
+
+    expect(fs.realpathSync(bundledA ?? "")).toBe(fs.realpathSync(path.join(homeA, "bundled")));
+    expect(fs.realpathSync(bundledB ?? "")).toBe(fs.realpathSync(path.join(homeB, "bundled")));
   });
 
   it("ignores an existing override under an argv1-derived fake package root", () => {

@@ -361,9 +361,8 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "src/memory-host-sdk/host/embedding-defaults.ts",
-    ["src/memory-host-sdk/host/embeddings.test.ts"],
+    ["packages/memory-host-sdk/src/host/embeddings.test.ts"],
   ],
-  ["src/memory-host-sdk/host/embeddings.ts", ["src/memory-host-sdk/host/embeddings.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [
@@ -404,7 +403,7 @@ const IMPORT_SPECIFIER_PATTERN =
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
-export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "180000";
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "300000";
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
@@ -512,13 +511,7 @@ function toScopedIncludePattern(arg, cwd) {
 }
 
 function isSkippedImportGraphDirectory(name) {
-  return (
-    name === ".git" ||
-    name === "dist" ||
-    name === "node_modules" ||
-    name === "vendor" ||
-    name.startsWith(".openclaw-runtime-deps")
-  );
+  return name === ".git" || name === "dist" || name === "node_modules" || name === "vendor";
 }
 
 function listImportGraphFiles(cwd, directory, files = []) {
@@ -639,6 +632,23 @@ function resolveVitestConfigTargetKind(relative) {
 
 function isVitestConfigTargetForKind(kind, targetArg, cwd) {
   return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
+}
+
+function isUnitUiTestTarget(relative) {
+  if (!relative.endsWith(".test.ts")) {
+    return false;
+  }
+  return (
+    relative === "ui/src/ui/app-chat.test.ts" ||
+    relative.startsWith("ui/src/ui/chat/") ||
+    relative === "ui/src/ui/views/agents-utils.test.ts" ||
+    relative === "ui/src/ui/views/channels.test.ts" ||
+    relative === "ui/src/ui/views/chat.test.ts" ||
+    relative === "ui/src/ui/views/dreaming.test.ts" ||
+    relative === "ui/src/ui/views/usage-render-details.test.ts" ||
+    relative === "ui/src/ui/controllers/agents.test.ts" ||
+    relative === "ui/src/ui/controllers/chat.test.ts"
+  );
 }
 
 function resolveChannelContractTargetKind(relative) {
@@ -1044,6 +1054,9 @@ function classifyTarget(arg, cwd) {
     return "plugin";
   }
   if (relative.startsWith("ui/src/")) {
+    if (isUnitUiTestTarget(relative)) {
+      return "unitUi";
+    }
     return "ui";
   }
   if (relative.startsWith("src/utils/")) {

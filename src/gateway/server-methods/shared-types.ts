@@ -13,6 +13,7 @@ import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -91,6 +92,7 @@ export type GatewayRequestContext = {
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
+  getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   startChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,

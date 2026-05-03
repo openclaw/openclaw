@@ -25,7 +25,10 @@ import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
+const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
+const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 30_000;
+const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 
 type PendingRequest = {
   method: string;
@@ -46,7 +49,17 @@ export class CodexAppServerRpcError extends Error {
   }
 }
 
-export type CodexServerRequestHandler = (
+export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message === "codex app-server client is closed" ||
+    error.message.startsWith("codex app-server exited:")
+  );
+}
+
+type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
@@ -64,26 +77,33 @@ export class CodexAppServerClient {
   private nextId = 1;
   private initialized = false;
   private closed = false;
+  private closeError: Error | undefined;
+  private stderrTail = "";
+  private pendingParse:
+    | {
+        text: string;
+        lineCount: number;
+        firstError: unknown;
+      }
+    | undefined;
 
   private constructor(child: CodexAppServerTransport) {
     this.child = child;
     this.lines = createInterface({ input: child.stdout });
     this.lines.on("line", (line) => this.handleLine(line));
     child.stderr.on("data", (chunk: Buffer | string) => {
-      const text = chunk.toString("utf8").trim();
-      if (text) {
-        embeddedAgentLog.debug(`codex app-server stderr: ${text}`);
+      const text = chunk.toString("utf8");
+      this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
+      const trimmed = text.trim();
+      if (trimmed) {
+        embeddedAgentLog.debug(`codex app-server stderr: ${trimmed}`);
       }
     });
     child.once("error", (error) =>
       this.closeWithError(error instanceof Error ? error : new Error(String(error))),
     );
     child.once("exit", (code, signal) => {
-      this.closeWithError(
-        new Error(
-          `codex app-server exited: code=${formatExitValue(code)} signal=${formatExitValue(signal)}`,
-        ),
-      );
+      this.closeWithError(buildCodexAppServerExitError(code, signal, this.stderrTail));
     });
     // Guard against unhandled EPIPE / write-after-close errors on the stdin
     // stream. When the child process terminates abruptly the pipe can break
@@ -152,7 +172,7 @@ export class CodexAppServerClient {
   ): Promise<T> {
     options ??= {};
     if (this.closed) {
-      return Promise.reject(new Error("codex app-server client is closed"));
+      return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
     }
     if (options.signal?.aborted) {
       return Promise.reject(new Error(`${method} aborted`));
@@ -262,7 +282,12 @@ export class CodexAppServerClient {
   }
 
   private handleLine(line: string): void {
-    const trimmed = line.trim();
+    const rawLine = line.endsWith("\r") ? line.slice(0, -1) : line;
+    if (this.pendingParse) {
+      this.handlePendingParseLine(rawLine);
+      return;
+    }
+    const trimmed = rawLine.trim();
     if (!trimmed) {
       return;
     }
@@ -270,12 +295,43 @@ export class CodexAppServerClient {
     try {
       parsed = JSON.parse(trimmed);
     } catch (error) {
-      embeddedAgentLog.warn("failed to parse codex app-server message", {
-        error,
-        linePreview: redactCodexAppServerLinePreview(trimmed),
-      });
+      if (shouldBufferCodexAppServerParseFailure(trimmed, error)) {
+        this.pendingParse = { text: trimmed, lineCount: 1, firstError: error };
+        return;
+      }
+      logCodexAppServerParseFailure(trimmed, error, 1);
       return;
     }
+    this.handleParsedMessage(parsed);
+  }
+
+  private handlePendingParseLine(line: string): void {
+    const pending = this.pendingParse;
+    if (!pending) {
+      return;
+    }
+    const candidate = `${pending.text}\\n${line}`;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch (error) {
+      const lineCount = pending.lineCount + 1;
+      if (
+        candidate.length <= CODEX_APP_SERVER_PARSE_BUFFER_MAX &&
+        lineCount <= CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES
+      ) {
+        this.pendingParse = { text: candidate, lineCount, firstError: pending.firstError };
+        return;
+      }
+      this.pendingParse = undefined;
+      logCodexAppServerParseFailure(candidate, error, lineCount);
+      return;
+    }
+    this.pendingParse = undefined;
+    this.handleParsedMessage(parsed);
+  }
+
+  private handleParsedMessage(parsed: unknown): void {
     if (!parsed || typeof parsed !== "object") {
       return;
     }
@@ -396,6 +452,7 @@ export class CodexAppServerClient {
       return false;
     }
     this.closed = true;
+    this.closeError = error;
     this.lines.close();
     this.rejectPendingRequests(error);
     return true;
@@ -413,7 +470,7 @@ export class CodexAppServerClient {
   }
 }
 
-export function defaultServerRequestResponse(
+function defaultServerRequestResponse(
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
 ): JsonValue {
   if (request.method === "item/tool/call") {
@@ -541,10 +598,53 @@ function redactCodexAppServerLinePreview(value: string): string {
     .replace(
       /("(?:api_?key|authorization|token|access_token|refresh_token)"\s*:\s*")([^"]+)(")/gi,
       "$1<redacted>$3",
+    )
+    .replace(
+      /\b([a-z0-9_]*(?:api_?key|authorization|access_token|refresh_token|token))(\s*=\s*)(["']?)[^\s"']+(\3)/gi,
+      "$1$2$3<redacted>$4",
     );
   return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
     ? `${redacted.slice(0, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
     : redacted;
+}
+
+function appendBoundedTail(current: string, next: string, maxLength: number): string {
+  const combined = `${current}${next}`;
+  return combined.length > maxLength ? combined.slice(combined.length - maxLength) : combined;
+}
+
+function buildCodexAppServerExitError(code: unknown, signal: unknown, stderrTail: string): Error {
+  const stderrPreview = redactCodexAppServerLinePreview(stderrTail);
+  const suffix = stderrPreview ? ` stderr=${JSON.stringify(stderrPreview)}` : "";
+  return new Error(
+    `codex app-server exited: code=${formatExitValue(code)} signal=${formatExitValue(
+      signal,
+    )}${suffix}`,
+  );
+}
+
+function shouldBufferCodexAppServerParseFailure(value: string, error: unknown): boolean {
+  if (!value.startsWith("{") && !value.startsWith("[")) {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Unterminated string") || message.includes("Unexpected end of JSON input")
+  );
+}
+
+function logCodexAppServerParseFailure(value: string, error: unknown, fragmentCount: number): void {
+  const linePreview = redactCodexAppServerLinePreview(value);
+  const suffix = fragmentCount > 1 ? ` fragments=${fragmentCount}` : "";
+  embeddedAgentLog.warn("failed to parse codex app-server message", {
+    error,
+    errorMessage: error instanceof Error ? error.message : String(error),
+    fragmentCount,
+    linePreview,
+    consoleMessage: `failed to parse codex app-server message${suffix}: preview=${JSON.stringify(
+      linePreview,
+    )}`,
+  });
 }
 
 const CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = new Set([

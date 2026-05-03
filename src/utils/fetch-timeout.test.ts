@@ -37,6 +37,33 @@ describe("buildTimeoutAbortSignal", () => {
         timeoutMs: 25,
         operation: "unit-test",
         url: "https://example.com/v1/responses",
+        consoleMessage:
+          "fetch timeout after 25ms (elapsed 25ms) operation=unit-test url=https://example.com/v1/responses",
+      }),
+    );
+
+    cleanup();
+  });
+
+  it("annotates timeout logs when the timer fires late", async () => {
+    vi.setSystemTime(0);
+    const { cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: 25,
+      operation: "unit-test",
+      url: "https://example.com/v1/responses",
+    });
+
+    vi.setSystemTime(2_000);
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(warn).toHaveBeenCalledWith(
+      "fetch timeout reached; aborting operation",
+      expect.objectContaining({
+        timerDelayMs: 2000,
+        eventLoopDelayHint: "timer delayed 2000ms, likely event-loop starvation",
+        consoleMessage: expect.stringContaining(
+          "timer delayed 2000ms, likely event-loop starvation",
+        ),
       }),
     );
 

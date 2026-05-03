@@ -194,6 +194,7 @@ function buildRepairSummaryParts(params: {
 
 export async function repairSessionFileIfNeeded(params: {
   sessionFile: string;
+  debug?: (message: string) => void;
   warn?: (message: string) => void;
 }): Promise<RepairReport> {
   const sessionFile = params.sessionFile.trim();
@@ -321,7 +322,7 @@ export async function repairSessionFileIfNeeded(params: {
     };
   }
 
-  params.warn?.(
+  params.debug?.(
     `session file repaired: ${buildRepairSummaryParts({
       droppedLines,
       rewrittenAssistantMessages,

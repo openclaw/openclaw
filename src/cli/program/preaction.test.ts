@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { loggingState } from "../../logging/state.js";
 import { setCommandJsonMode } from "./json-mode.js";
 
-const MATRIX_REPO_INSTALL_SPEC = repoInstallSpec("matrix");
+const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
@@ -245,7 +245,6 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
-      installBundledRuntimeDeps: true,
     });
   });
 
@@ -262,7 +261,6 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
-      installBundledRuntimeDeps: true,
     });
   });
 
@@ -301,10 +299,10 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("only allows invalid config for explicit Matrix reinstall requests", async () => {
+  it("only allows invalid config for explicit Discord reinstall requests", async () => {
     await runPreAction({
-      parseArgv: ["plugins", "install", "@openclaw/matrix"],
-      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/matrix"],
+      parseArgv: ["plugins", "install", "@openclaw/discord"],
+      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/discord"],
     });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
@@ -326,8 +324,8 @@ describe("registerPreActionHooks", () => {
 
     vi.clearAllMocks();
     await runPreAction({
-      parseArgv: ["plugins", "install", MATRIX_REPO_INSTALL_SPEC],
-      processArgv: ["node", "openclaw", "plugins", "install", MATRIX_REPO_INSTALL_SPEC],
+      parseArgv: ["plugins", "install", DISCORD_REPO_INSTALL_SPEC],
+      processArgv: ["node", "openclaw", "plugins", "install", DISCORD_REPO_INSTALL_SPEC],
     });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
@@ -338,13 +336,13 @@ describe("registerPreActionHooks", () => {
 
     vi.clearAllMocks();
     await runPreAction({
-      parseArgv: ["plugins", "install", "@openclaw/matrix", "--marketplace", "local/repo"],
+      parseArgv: ["plugins", "install", "@openclaw/discord", "--marketplace", "local/repo"],
       processArgv: [
         "node",
         "openclaw",
         "plugins",
         "install",
-        "@openclaw/matrix",
+        "@openclaw/discord",
         "--marketplace",
         "local/repo",
       ],

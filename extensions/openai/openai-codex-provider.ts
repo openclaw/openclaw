@@ -43,6 +43,7 @@ import {
   findCatalogTemplate,
   matchesExactOrPrefix,
 } from "./shared.js";
+import { resolveOpenAICodexThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
@@ -99,15 +100,6 @@ const OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
 ] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
-const OPENAI_CODEX_XHIGH_MODEL_IDS = [
-  OPENAI_CODEX_GPT_55_MODEL_ID,
-  OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MODEL_ID,
-  OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_53_MODEL_ID,
-  "gpt-5.2-codex",
-  "gpt-5.1-codex",
-] as const;
 const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_55_MODEL_ID,
   OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
@@ -386,16 +378,15 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
       onProgress: (message) => spin.update(message),
       onVerification: async ({ verificationUrl, userCode, expiresInMs }) => {
         const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
-        const codeLine = ctx.isRemote
-          ? "Code: [shown on the local device only]"
-          : `Code: ${userCode}`;
+        // The prompter note is the user-facing TTY surface, so remote/headless
+        // users need the code there; keep the persistent runtime log URL-only.
         await ctx.prompter.note(
           [
             ctx.isRemote
               ? "Open this URL in your LOCAL browser and enter the code below."
               : "Open this URL in your browser and enter the code below.",
             `URL: ${verificationUrl}`,
-            codeLine,
+            `Code: ${userCode}`,
             `Code expires in ${expiresInMinutes} minutes. Never share it.`,
           ].join("\n"),
           "OpenAI Codex device code",
@@ -507,18 +498,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveThinkingProfile: ({ modelId }) => ({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        ...(matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS)
-          ? [{ id: "xhigh" as const }]
-          : []),
-      ],
-    }),
+    resolveThinkingProfile: ({ modelId }) => resolveOpenAICodexThinkingProfile(modelId),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
     preferRuntimeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {

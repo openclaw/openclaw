@@ -117,16 +117,8 @@ export function isSlackStreamingEnabled(params: {
 
 export function shouldEnableSlackPreviewStreaming(params: {
   mode: "off" | "partial" | "block" | "progress";
-  isDirectMessage: boolean;
-  threadTs?: string;
 }): boolean {
-  if (params.mode === "off") {
-    return false;
-  }
-  if (!params.isDirectMessage) {
-    return true;
-  }
-  return Boolean(params.threadTs);
+  return params.mode !== "off";
 }
 
 export function shouldInitializeSlackDraftStream(params: {
@@ -306,7 +298,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
   const statusReactionsEnabled =
-    !sourceRepliesAreToolOnly &&
     Boolean(prepared.ackReactionPromise) &&
     Boolean(reactionMessageTs) &&
     cfg.messages?.statusReactions?.enabled !== false;
@@ -380,59 +371,57 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       isSlackInteractiveRepliesEnabled({ cfg, accountId: route.accountId })
         ? compileSlackInteractiveReplies(payload)
         : payload,
-    typing: sourceRepliesAreToolOnly
-      ? undefined
-      : {
-          start: async () => {
-            didSetStatus = true;
-            await ctx.setSlackThreadStatus({
-              channelId: message.channel,
-              threadTs: statusThreadTs,
-              status: "is typing...",
-            });
-            if (typingReaction && message.ts) {
-              await reactSlackMessage(message.channel, message.ts, typingReaction, {
-                token: ctx.botToken,
-                client: ctx.app.client,
-              }).catch(() => {});
-            }
-          },
-          stop: async () => {
-            if (!didSetStatus) {
-              return;
-            }
-            didSetStatus = false;
-            await ctx.setSlackThreadStatus({
-              channelId: message.channel,
-              threadTs: statusThreadTs,
-              status: "",
-            });
-            if (typingReaction && message.ts) {
-              await removeSlackReaction(message.channel, message.ts, typingReaction, {
-                token: ctx.botToken,
-                client: ctx.app.client,
-              }).catch(() => {});
-            }
-          },
-          onStartError: (err) => {
-            logTypingFailure({
-              log: (message) => runtime.error?.(danger(message)),
-              channel: "slack",
-              action: "start",
-              target: typingTarget,
-              error: err,
-            });
-          },
-          onStopError: (err) => {
-            logTypingFailure({
-              log: (message) => runtime.error?.(danger(message)),
-              channel: "slack",
-              action: "stop",
-              target: typingTarget,
-              error: err,
-            });
-          },
-        },
+    typing: {
+      start: async () => {
+        didSetStatus = true;
+        await ctx.setSlackThreadStatus({
+          channelId: message.channel,
+          threadTs: statusThreadTs,
+          status: "is typing...",
+        });
+        if (typingReaction && message.ts) {
+          await reactSlackMessage(message.channel, message.ts, typingReaction, {
+            token: ctx.botToken,
+            client: ctx.app.client,
+          }).catch(() => {});
+        }
+      },
+      stop: async () => {
+        if (!didSetStatus) {
+          return;
+        }
+        didSetStatus = false;
+        await ctx.setSlackThreadStatus({
+          channelId: message.channel,
+          threadTs: statusThreadTs,
+          status: "",
+        });
+        if (typingReaction && message.ts) {
+          await removeSlackReaction(message.channel, message.ts, typingReaction, {
+            token: ctx.botToken,
+            client: ctx.app.client,
+          }).catch(() => {});
+        }
+      },
+      onStartError: (err) => {
+        logTypingFailure({
+          log: (message) => runtime.error?.(danger(message)),
+          channel: "slack",
+          action: "start",
+          target: typingTarget,
+          error: err,
+        });
+      },
+      onStopError: (err) => {
+        logTypingFailure({
+          log: (message) => runtime.error?.(danger(message)),
+          channel: "slack",
+          action: "stop",
+          target: typingTarget,
+          error: err,
+        });
+      },
+    },
   });
 
   const slackStreaming = resolveSlackStreamingConfig({
@@ -449,8 +438,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     !sourceRepliesAreToolOnly &&
     shouldEnableSlackPreviewStreaming({
       mode: slackStreaming.mode,
-      isDirectMessage: prepared.isDirectMessage,
-      threadTs: streamThreadHint,
     });
   const streamingEnabled =
     !sourceRepliesAreToolOnly &&
@@ -1137,12 +1124,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           await sleep(statusReactionTiming.errorHoldMs);
           if (anyReplyDelivered) {
             await statusReactions.clear();
-            return;
           }
-          await statusReactions.restoreInitial();
         })();
-      } else {
-        void statusReactions.restoreInitial();
       }
     } else if (anyReplyDelivered) {
       await statusReactions.setDone();
@@ -1170,7 +1153,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // or draft stream). Falls back to statusThreadTs for edge cases.
   const participationThreadTs = usedReplyThreadTs ?? statusThreadTs;
   if (anyReplyDelivered && participationThreadTs) {
-    recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs);
+    recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
+      agentId: route.agentId,
+    });
   }
 
   if (!anyReplyDelivered) {

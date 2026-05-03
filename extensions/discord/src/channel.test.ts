@@ -119,6 +119,26 @@ describe("discordPlugin outbound", () => {
     expect(discordPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
   });
 
+  it("routes read and search actions through the gateway", () => {
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
+      "gateway",
+    );
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "search" as never })).toBe(
+      "gateway",
+    );
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "send" as never })).toBe(
+      "local",
+    );
+  });
+
+  it("adds Discord mention formatting to agent prompt hints", () => {
+    const hints = discordPlugin.agentPrompt?.messageToolHints?.({} as never) ?? [];
+
+    expect(hints).toContain(
+      "- Discord mentions: use canonical outbound syntax: users `<@USER_ID>`, channels `<#CHANNEL_ID>`, and roles `<@&ROLE_ID>`. Do not use the legacy `<@!USER_ID>` nickname form.",
+    );
+  });
+
   it("preserves normalized explicit Discord targets for delivery routing", () => {
     const parseExplicitTarget = discordPlugin.messaging?.parseExplicitTarget;
     if (!parseExplicitTarget) {
@@ -166,6 +186,33 @@ describe("discordPlugin outbound", () => {
 
     expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
     expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
+  });
+
+  it("inherits Discord gateway READY timeout settings per account", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "discord-token",
+          gatewayReadyTimeoutMs: 90_000,
+          gatewayRuntimeReadyTimeoutMs: 120_000,
+          accounts: {
+            work: {
+              token: "discord-token-work",
+              gatewayReadyTimeoutMs: 60_000,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveAccount(cfg).config).toMatchObject({
+      gatewayReadyTimeoutMs: 90_000,
+      gatewayRuntimeReadyTimeoutMs: 120_000,
+    });
+    expect(resolveAccount(cfg, "work").config).toMatchObject({
+      gatewayReadyTimeoutMs: 60_000,
+      gatewayRuntimeReadyTimeoutMs: 120_000,
+    });
   });
 
   it("forwards full media send context to sendMessageDiscord", async () => {

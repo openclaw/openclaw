@@ -144,9 +144,14 @@ it manually.
     `openclaw doctor` runs as the final safe-update check.
   </Step>
   <Step title="Sync plugins">
-    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm. Updates npm-installed plugins.
+    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm. Updates tracked plugin installs.
   </Step>
 </Steps>
+
+On the beta update channel, tracked npm and ClawHub plugin installs that follow
+the default/latest line try a plugin `@beta` release first. If the plugin has no
+beta release, OpenClaw falls back to the recorded default/latest spec. Exact
+versions and explicit tags are not rewritten.
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying that you trust the new artifact.
@@ -155,7 +160,7 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 <Note>
 Post-update plugin sync failures fail the update result and stop restart follow-up work. Fix the plugin install or update error, then rerun `openclaw update`.
 
-When the updated Gateway starts, enabled bundled plugin runtime dependencies are staged before plugin activation. Package-manager `update.run` restarts bypass the normal idle deferral and restart cooldown after the package tree has been swapped, so the old process cannot keep lazy-loading removed chunks. Service-manager restarts still drain runtime-dependency staging before closing the Gateway.
+When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts bypass the normal idle deferral and restart cooldown after the package tree has been swapped, so the old process cannot keep lazy-loading removed chunks.
 
 If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
 </Note>

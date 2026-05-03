@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 
 export const BOUNDARY_CHECKS = [
+  ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
   ["lint:tmp:no-random-messaging", "pnpm", ["run", "lint:tmp:no-random-messaging"]],
   ["lint:tmp:channel-agnostic-boundaries", "pnpm", ["run", "lint:tmp:channel-agnostic-boundaries"]],

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import path from "node:path";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -27,25 +27,37 @@ import {
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
   registerNativeHookRelay,
+  resolveBootstrapContextForRun,
   setActiveEmbeddedRun,
   supportsModelTools,
   runAgentCleanupStep,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
+  type EmbeddedContextFile,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import {
   createCodexAppServerClientFactoryTestHooks,
   defaultCodexAppServerClientFactory,
 } from "./client-factory.js";
-import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
+import {
+  isCodexAppServerApprovalRequest,
+  isCodexAppServerConnectionClosedError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  type CodexPluginConfig,
+} from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import { applyCodexDynamicToolProfile } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -69,7 +81,8 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
-import { clearSharedCodexAppServerClient } from "./shared-client.js";
+import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import {
   buildDeveloperInstructions,
   buildTurnStartParams,
@@ -86,10 +99,21 @@ import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
+const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
+const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
+const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
+  ["soul.md", 10],
+  ["identity.md", 20],
+  ["user.md", 30],
+  ["tools.md", 40],
+  ["bootstrap.md", 50],
+  ["memory.md", 60],
+  ["heartbeat.md", 70],
+]);
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
@@ -319,7 +343,8 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
+  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
@@ -369,6 +394,7 @@ export async function runCodexAppServerAttempt(
     sandbox,
     runAbortController,
     sessionAgentId,
+    pluginConfig,
     onYieldDetected: () => {
       yieldDetected = true;
     },
@@ -384,9 +410,7 @@ export async function runCodexAppServerAttempt(
     },
   });
   const hadSessionFile = await fileExists(params.sessionFile);
-  const sessionManager = SessionManager.open(params.sessionFile);
-  let historyMessages =
-    readMirroredSessionHistoryMessages(params.sessionFile, sessionManager) ?? [];
+  let historyMessages = (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? [];
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
@@ -404,7 +428,6 @@ export async function runCodexAppServerAttempt(
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       sessionFile: params.sessionFile,
-      sessionManager,
       runtimeContext: buildHarnessContextEngineRuntimeContext({
         attempt: runtimeParams,
         workspaceDir: effectiveWorkspace,
@@ -412,9 +435,11 @@ export async function runCodexAppServerAttempt(
         tokenBudget: params.contextTokenBudget,
       }),
       runMaintenance: runHarnessContextEngineMaintenance,
+      config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
     });
-    historyMessages = readMirroredSessionHistoryMessages(params.sessionFile) ?? historyMessages;
+    historyMessages =
+      (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
   }
   const baseDeveloperInstructions = buildDeveloperInstructions(params);
   let promptText = params.prompt;
@@ -460,6 +485,13 @@ export async function runCodexAppServerAttempt(
     messages: historyMessages,
     ctx: hookContext,
   });
+  const workspaceBootstrapInstructions = await buildCodexWorkspaceBootstrapInstructions({
+    params,
+    resolvedWorkspace,
+    effectiveWorkspace,
+    sessionKey: sandboxSessionKey,
+    sessionAgentId,
+  });
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveWorkspace,
@@ -471,6 +503,7 @@ export async function runCodexAppServerAttempt(
   let thread: CodexAppServerThreadBinding;
   let trajectoryEndRecorded = false;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
+  let startupClientForCleanup: CodexAppServerClient | undefined;
   try {
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -493,37 +526,96 @@ export async function runCodexAppServerAttempt(
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
+    const threadConfig = mergeCodexConfigInstructions(
+      nativeHookRelayConfig,
+      workspaceBootstrapInstructions,
+    );
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
       signal: runAbortController.signal,
       operation: async () => {
-        const startupClient = await clientFactory(appServer.start, startupAuthProfileId, agentDir);
-        await ensureCodexComputerUse({
-          client: startupClient,
-          pluginConfig: options.pluginConfig,
-          timeoutMs: appServer.requestTimeoutMs,
-          signal: runAbortController.signal,
-        });
-        const startupThread = await startOrResumeThread({
-          client: startupClient,
-          params,
-          cwd: effectiveWorkspace,
-          dynamicTools: toolBridge.specs,
-          appServer,
-          developerInstructions: promptBuild.developerInstructions,
-          config: nativeHookRelayConfig,
-        });
-        return { client: startupClient, thread: startupThread };
+        let attemptedClient: CodexAppServerClient | undefined;
+        const startupAttempt = async () => {
+          const startupClient = await clientFactory(
+            appServer.start,
+            startupAuthProfileId,
+            agentDir,
+          );
+          attemptedClient = startupClient;
+          startupClientForCleanup = startupClient;
+          await ensureCodexComputerUse({
+            client: startupClient,
+            pluginConfig: options.pluginConfig,
+            timeoutMs: appServer.requestTimeoutMs,
+            signal: runAbortController.signal,
+          });
+          const startupThread = await startOrResumeThread({
+            client: startupClient,
+            params,
+            cwd: effectiveWorkspace,
+            dynamicTools: toolBridge.specs,
+            appServer,
+            developerInstructions: promptBuild.developerInstructions,
+            config: threadConfig,
+          });
+          return { client: startupClient, thread: startupThread };
+        };
+        for (
+          let attempt = 1;
+          attempt <= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS;
+          attempt += 1
+        ) {
+          try {
+            return await startupAttempt();
+          } catch (error) {
+            if (
+              runAbortController.signal.aborted ||
+              !isCodexAppServerConnectionClosedError(error)
+            ) {
+              throw error;
+            }
+            const failedClient = attemptedClient;
+            const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(failedClient);
+            if (startupClientForCleanup === failedClient) {
+              startupClientForCleanup = undefined;
+            }
+            attemptedClient = undefined;
+            if (attempt >= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS) {
+              embeddedAgentLog.warn(
+                "codex app-server connection closed during startup; retries exhausted",
+                {
+                  attempt,
+                  maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
+                  clearedSharedClient,
+                  error: formatErrorMessage(error),
+                },
+              );
+              throw error;
+            }
+            embeddedAgentLog.warn(
+              "codex app-server connection closed during startup; restarting app-server and retrying",
+              {
+                attempt,
+                nextAttempt: attempt + 1,
+                maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
+                clearedSharedClient,
+                error: formatErrorMessage(error),
+              },
+            );
+          }
+        }
+        throw new Error("codex app-server startup retry loop exited unexpectedly");
       },
     }));
+    startupClientForCleanup = undefined;
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "thread_ready", threadId: thread.threadId },
     });
   } catch (error) {
     nativeHookRelay?.unregister();
-    clearSharedCodexAppServerClient();
+    clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
@@ -693,6 +785,13 @@ export async function runCodexAppServerAttempt(
   const touchTurnCompletionActivity = (reason: string, options?: { arm?: boolean }) => {
     turnCompletionLastActivityAt = Date.now();
     turnCompletionLastActivityReason = reason;
+    emitTrustedDiagnosticEvent({
+      type: "run.progress",
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      reason: `codex_app_server:${reason}`,
+    });
     if (options?.arm) {
       turnCompletionIdleWatchArmed = true;
     }
@@ -1074,7 +1173,7 @@ export async function runCodexAppServerAttempt(
     }
     if (activeContextEngine) {
       const finalMessages =
-        readMirroredSessionHistoryMessages(params.sessionFile) ??
+        (await readMirroredSessionHistoryMessages(params.sessionFile)) ??
         historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
@@ -1096,7 +1195,7 @@ export async function runCodexAppServerAttempt(
           promptCache: result.promptCache,
         }),
         runMaintenance: runHarnessContextEngineMaintenance,
-        sessionManager,
+        config: params.config,
         warn: (message) => embeddedAgentLog.warn(message),
       });
     }
@@ -1317,6 +1416,7 @@ type DynamicToolBuildParams = {
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
   runAbortController: AbortController;
   sessionAgentId: string | undefined;
+  pluginConfig: CodexPluginConfig;
   onYieldDetected: () => void;
 };
 
@@ -1372,6 +1472,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
       workspaceDir: input.effectiveWorkspace,
     }),
+    suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
@@ -1381,6 +1482,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
+    enableHeartbeatTool: params.trigger === "heartbeat",
+    forceHeartbeatTool: params.trigger === "heartbeat",
     onYield: (message) => {
       input.onYieldDetected();
       emitCodexAppServerEvent(params, {
@@ -1390,7 +1493,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
-  const visionFilteredTools = filterToolsForVisionInputs(allTools, {
+  const profiledTools = applyCodexDynamicToolProfile(allTools, input.pluginConfig);
+  const visionFilteredTools = filterToolsForVisionInputs(profiledTools, {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
@@ -1505,19 +1609,139 @@ function readString(record: JsonObject, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function readMirroredSessionHistoryMessages(
+async function readMirroredSessionHistoryMessages(
   sessionFile: string,
-  sessionManager?: SessionManager,
-): AgentMessage[] | undefined {
-  try {
-    return (sessionManager ?? SessionManager.open(sessionFile)).buildSessionContext().messages;
-  } catch (error) {
+): Promise<AgentMessage[] | undefined> {
+  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
+  if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      error,
       sessionFile,
     });
+  }
+  return messages;
+}
+
+async function buildCodexWorkspaceBootstrapInstructions(params: {
+  params: EmbeddedRunAttemptParams;
+  resolvedWorkspace: string;
+  effectiveWorkspace: string;
+  sessionKey: string;
+  sessionAgentId: string;
+}): Promise<string | undefined> {
+  try {
+    const { contextFiles } = await resolveBootstrapContextForRun({
+      workspaceDir: params.resolvedWorkspace,
+      config: params.params.config,
+      sessionKey: params.sessionKey,
+      sessionId: params.params.sessionId,
+      agentId: params.params.agentId ?? params.sessionAgentId,
+      warn: (message) => embeddedAgentLog.warn(message),
+      contextMode: params.params.bootstrapContextMode,
+      runKind: params.params.bootstrapContextRunKind,
+    });
+    return renderCodexWorkspaceBootstrapInstructions(
+      contextFiles.map((file) =>
+        remapCodexContextFilePath({
+          file,
+          sourceWorkspaceDir: params.resolvedWorkspace,
+          targetWorkspaceDir: params.effectiveWorkspace,
+        }),
+      ),
+    );
+  } catch (error) {
+    embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
     return undefined;
   }
+}
+
+function renderCodexWorkspaceBootstrapInstructions(
+  contextFiles: EmbeddedContextFile[],
+): string | undefined {
+  const files = contextFiles
+    .filter((file) => {
+      const baseName = getCodexContextFileBasename(file.path);
+      return baseName && !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName);
+    })
+    .toSorted(compareCodexContextFiles);
+  if (files.length === 0) {
+    return undefined;
+  }
+  const hasSoulFile = files.some((file) => getCodexContextFileBasename(file.path) === "soul.md");
+  const lines = [
+    "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.",
+    "",
+    "# Project Context",
+    "",
+    "The following project context files have been loaded:",
+  ];
+  if (hasSoulFile) {
+    lines.push(
+      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+    );
+  }
+  lines.push("");
+  for (const file of files) {
+    lines.push(`## ${file.path}`, "", file.content, "");
+  }
+  return lines.join("\n").trim();
+}
+
+function mergeCodexConfigInstructions(
+  config: JsonObject | undefined,
+  instructions: string | undefined,
+): JsonObject | undefined {
+  if (!instructions?.trim()) {
+    return config;
+  }
+  const merged: JsonObject = { ...config };
+  const existingInstructions =
+    typeof merged.instructions === "string" ? merged.instructions.trim() : undefined;
+  merged.instructions = joinPresentSections(existingInstructions, instructions);
+  return merged;
+}
+
+function remapCodexContextFilePath(params: {
+  file: EmbeddedContextFile;
+  sourceWorkspaceDir: string;
+  targetWorkspaceDir: string;
+}): EmbeddedContextFile {
+  const relativePath = path.relative(params.sourceWorkspaceDir, params.file.path);
+  if (
+    !relativePath ||
+    relativePath.startsWith("..") ||
+    path.isAbsolute(relativePath) ||
+    params.sourceWorkspaceDir === params.targetWorkspaceDir
+  ) {
+    return params.file;
+  }
+  return {
+    ...params.file,
+    path: path.join(params.targetWorkspaceDir, relativePath),
+  };
+}
+
+function compareCodexContextFiles(left: EmbeddedContextFile, right: EmbeddedContextFile): number {
+  const leftPath = normalizeCodexContextFilePath(left.path);
+  const rightPath = normalizeCodexContextFilePath(right.path);
+  const leftBase = getCodexContextFileBasename(left.path);
+  const rightBase = getCodexContextFileBasename(right.path);
+  const leftOrder = CODEX_BOOTSTRAP_CONTEXT_ORDER.get(leftBase) ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = CODEX_BOOTSTRAP_CONTEXT_ORDER.get(rightBase) ?? Number.MAX_SAFE_INTEGER;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+  if (leftBase !== rightBase) {
+    return leftBase.localeCompare(rightBase);
+  }
+  return leftPath.localeCompare(rightPath);
+}
+
+function normalizeCodexContextFilePath(filePath: string): string {
+  return filePath.trim().replaceAll("\\", "/").toLowerCase();
+}
+
+function getCodexContextFileBasename(filePath: string): string {
+  return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
 }
 
 async function mirrorTranscriptBestEffort(params: {
@@ -1535,6 +1759,7 @@ async function mirrorTranscriptBestEffort(params: {
       sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
       idempotencyScope: `codex-app-server:${params.threadId}:${params.turnId}`,
+      config: params.params.config,
     });
   } catch (error) {
     embeddedAgentLog.warn("failed to mirror codex app-server transcript", { error });
@@ -1584,6 +1809,7 @@ export const __testing = {
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
+  applyCodexDynamicToolProfile,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {
