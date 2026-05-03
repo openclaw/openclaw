@@ -524,7 +524,7 @@ describe("CLI attempt execution", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli", fallback: "none" },
+            agentRuntime: { id: "claude-cli" },
           },
         },
       } as OpenClawConfig,
@@ -579,7 +579,7 @@ describe("CLI attempt execution", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex-cli", fallback: "none" },
+            agentRuntime: { id: "codex-cli" },
           },
         },
       } as OpenClawConfig,
@@ -636,7 +636,7 @@ describe("CLI attempt execution", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli", fallback: "none" },
+            agentRuntime: { id: "claude-cli" },
           },
         },
       } as OpenClawConfig,
@@ -821,7 +821,7 @@ describe("embedded attempt harness pinning", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         },
       } as OpenClawConfig,
@@ -886,7 +886,7 @@ describe("embedded attempt harness pinning", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         },
       } as OpenClawConfig,
@@ -982,7 +982,7 @@ describe("embedded attempt harness pinning", () => {
       cfg: {
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli", fallback: "none" },
+            agentRuntime: { id: "claude-cli" },
           },
         },
       } as OpenClawConfig,
