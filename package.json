@@ -1741,6 +1741,7 @@
       "hono": "4.12.14",
       "@hono/node-server": "1.19.14",
       "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+      "@whiskeysockets/baileys@7.0.0-rc.9>libsignal": "2.0.1",
       "axios": "1.15.0",
       "follow-redirects": "1.16.0",
       "defu": "6.1.5",
