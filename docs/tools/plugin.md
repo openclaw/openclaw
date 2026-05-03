@@ -161,6 +161,9 @@ Native plugin npm packages must declare `openclaw.extensions` in `package.json`.
 Each entry must stay inside the package directory and resolve to a readable
 runtime file, or to a TypeScript source file with an inferred built JavaScript
 peer such as `src/index.ts` to `dist/index.js`.
+Packaged installs must ship that JavaScript runtime output. The TypeScript
+source fallback is for source checkouts and local development paths, not for
+npm packages installed into OpenClaw's managed plugin root.
 
 Use `openclaw.runtimeExtensions` when published runtime files do not live at the
 same paths as the source entries. When present, `runtimeExtensions` must contain
