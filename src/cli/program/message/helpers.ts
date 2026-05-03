@@ -23,6 +23,7 @@ export type MessageCliHelpers = {
 
 const GATEWAY_STOP_TIMEOUT_MS = 2500;
 const ACTIONS_WITHOUT_STOP_HOOKS = new Set(["read"]);
+const ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD = new Set(["broadcast"]);
 const CHANNEL_MESSAGE_ACTION_NAME_SET = new Set<string>(CHANNEL_MESSAGE_ACTION_NAMES);
 
 type MessagePluginLoadOptions = { scope: PluginRegistryScope; onlyChannelIds?: string[] };
@@ -94,7 +95,11 @@ function resolveMessagePluginPreloadPlan(
   const loadOptions = scopedChannel
     ? { scope: "configured-channels" as const, onlyChannelIds: [scopedChannel] }
     : { scope: "configured-channels" as const };
-  if (opts.dryRun === true || !isGatewayOwnedMessageAction(action, scopedChannel)) {
+  if (
+    opts.dryRun === true ||
+    ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD.has(action) ||
+    !isGatewayOwnedMessageAction(action, scopedChannel)
+  ) {
     return { preload: true, loadOptions };
   }
   return { preload: false };

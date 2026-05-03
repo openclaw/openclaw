@@ -155,6 +155,31 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
+  it("keeps broadcast on the local preload path for same-channel prefixed targets", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("broadcast", {
+        targets: ["telegram:1", "telegram:2"],
+        message: "hi",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["telegram"],
+    });
+    expect(messageCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "broadcast",
+        targets: ["telegram:1", "telegram:2"],
+        message: "hi",
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("keeps unknown actions on the local preload path", async () => {
     mockChannelExecutionModes({ discord: "gateway" });
     const runMessageAction = createRunMessageAction();
