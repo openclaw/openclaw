@@ -311,6 +311,42 @@ describe("configured plugin install release step", () => {
     });
   });
 
+  it("repairs missing configured installs even when a prior update doctor touched config", async () => {
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: ['Installed missing configured plugin "discord".'],
+      warnings: [],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+      },
+      currentVersion: "2026.5.3-beta.1",
+      touchedVersion: "2026.5.3-beta.1",
+      env: {},
+    });
+
+    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["discord"],
+        channelIds: [],
+        env: {},
+      }),
+    );
+    expect(result).toEqual({
+      changes: ['Installed missing configured plugin "discord".'],
+      warnings: [],
+      completed: true,
+      touchedConfig: false,
+    });
+  });
+
   it("does not touch config when install repair warns", async () => {
     mocks.detectPluginAutoEnableCandidates.mockReturnValue([
       { pluginId: "matrix", kind: "channel-configured", channelId: "matrix" },
