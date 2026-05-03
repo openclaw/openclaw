@@ -907,7 +907,7 @@ export const dispatchTelegramMessage = async ({
                     const _hasMedia = reply.hasMedia;
 
                     const flushBufferedFinalAnswer = async () => {
-                      const buffered = reasoningStepState.takeBufferedFinalAnswer();
+                      const buffered = reasoningStepState.takeBufferedFinalAnswer(abortFenceGeneration);
                       if (!buffered) {
                         return;
                       }
@@ -935,6 +935,7 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.bufferFinalAnswer({
                           payload,
                           text: segment.text,
+                          bufferedGeneration: abortFenceGeneration,
                         });
                         continue;
                       }
