@@ -1484,6 +1484,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent sessions-directory disk budget (for example `500mb`). Use this to cap session storage per agent; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup.",
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
+  "session.maintenance.contextFallbackGuard":
+    "Defensive guard that runs when a configured context-engine plugin fails to resolve and the gateway falls back to the default `legacy` engine. Surfaces the real failure mode (engine disabled / not registered / contract violation) instead of letting the next session load stall the gateway with an oversized transcript.",
+  "session.maintenance.contextFallbackGuard.sizeBytes":
+    "Per-transcript size threshold (for example `1mb`, `512kb`). Transcripts larger than this trigger the configured action when the gateway falls back from a configured context engine to the default. Default `1mb`; smaller models may need a tighter threshold.",
+  "session.maintenance.contextFallbackGuard.action":
+    "Action applied per oversized transcript: `warn` logs and continues, `archive` rotates the jsonl out of the live path so the next load starts fresh (recoverable), `block` refuses to fall back and forces operator action, `auto` archives when the agent state dir contains a known context-engine sqlite store and warns otherwise. Default `auto`.",
   cron: "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",

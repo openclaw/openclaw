@@ -89,6 +89,19 @@ export const SessionSchema = z
         resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number()]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),
+        /**
+         * Defensive guard that runs when a configured context-engine plugin
+         * fails to resolve (unregistered, factory throw, contract violation)
+         * and the gateway falls back to the default `legacy` engine. See
+         * #76940.
+         */
+        contextFallbackGuard: z
+          .object({
+            sizeBytes: z.union([z.string(), z.number()]).optional(),
+            action: z.enum(["warn", "archive", "block", "auto"]).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((val, ctx) => {
@@ -127,6 +140,20 @@ export const SessionSchema = z
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ["maxDiskBytes"],
+              message: "invalid size (use b, kb, mb, gb, tb)",
+            });
+          }
+        }
+        if (val.contextFallbackGuard?.sizeBytes !== undefined) {
+          try {
+            parseByteSize(
+              normalizeStringifiedOptionalString(val.contextFallbackGuard.sizeBytes) ?? "",
+              { defaultUnit: "b" },
+            );
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["contextFallbackGuard", "sizeBytes"],
               message: "invalid size (use b, kb, mb, gb, tb)",
             });
           }

@@ -882,6 +882,7 @@ export async function runEmbeddedPiAgent(
       const contextEngine = await resolveContextEngine(params.config, {
         agentDir,
         workspaceDir: resolvedWorkspace,
+        agentId: params.agentId,
       });
       startupStages.mark("context-engine");
       try {

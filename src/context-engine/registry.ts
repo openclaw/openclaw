@@ -2,6 +2,10 @@ import type { OpenClawConfig } from "../config/types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import {
+  applyContextEngineFallbackGuard,
+  fallbackGuardOutcomeIsBlocking,
+} from "./fallback-guard.js";
 import type { ContextEngine } from "./types.js";
 
 /**
@@ -479,6 +483,13 @@ function describeResolvedContextEngineContractError(
 export type ResolveContextEngineOptions = {
   agentDir?: string;
   workspaceDir?: string;
+  /**
+   * Agent id used by the {@link applyContextEngineFallbackGuard} session-size
+   * guard to locate this agent's transcript dir. Forwarded but not part of the
+   * factory context — engines that need it should already be receiving it via
+   * their own runtime wiring.
+   */
+  agentId?: string;
 };
 
 /**
@@ -516,6 +527,37 @@ export async function resolveContextEngine(
     workspaceDir: options?.workspaceDir,
   };
 
+  // Defensive guard (#76940): inspect the agent's session transcripts before
+  // falling back to legacy. If a configured engine fails to resolve and a
+  // session jsonl is large enough that legacy compaction will stall the
+  // gateway on first load, take action per
+  // session.maintenance.contextFallbackGuard policy. Wrapped in a helper
+  // closure so each fallback site is one line and the block-action path
+  // throws consistently from one place.
+  const fallbackToDefault = (reason: string): Promise<ContextEngine> => {
+    const guardOutcome = applyContextEngineFallbackGuard({
+      config,
+      agentDir: options?.agentDir,
+      agentId: options?.agentId,
+      failedEngineId: engineId,
+      fallbackReason: reason,
+    });
+    if (fallbackGuardOutcomeIsBlocking(guardOutcome)) {
+      const blocked = guardOutcome.triggered
+        .filter((entry) => entry.appliedAction === "block")
+        .map((entry) => entry.path);
+      throw new Error(
+        `[context-engine] fallback to default engine "${defaultEngineId}" blocked by ` +
+          `session-size guard (session.maintenance.contextFallbackGuard.action="block"): ` +
+          `${blocked.length} session transcript(s) exceed threshold ` +
+          `(${(guardOutcome.resolvedSizeBytes / 1_048_576).toFixed(2)}MiB). ` +
+          `Repair the configured "${engineId}" engine or rotate the offending ` +
+          `transcripts before retrying.`,
+      );
+    }
+    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
+  };
+
   const entry = getContextEngineRegistryState().engines.get(engineId);
   if (!entry) {
     if (isDefaultEngine) {
@@ -528,7 +570,7 @@ export async function resolveContextEngine(
       `[context-engine] Context engine "${sanitizeForLog(engineId)}" is not registered; ` +
         `falling back to default engine "${defaultEngineId}".`,
     );
-    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
+    return fallbackToDefault(`engine "${engineId}" is not registered`);
   }
 
   let engine: ContextEngine;
@@ -543,7 +585,7 @@ export async function resolveContextEngine(
         `${sanitizeForLog(factoryError instanceof Error ? factoryError.message : String(factoryError))}; ` +
         `falling back to default engine "${defaultEngineId}".`,
     );
-    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
+    return fallbackToDefault(`engine "${engineId}" factory threw during resolution`);
   }
 
   let contractError: string | null;
@@ -558,7 +600,7 @@ export async function resolveContextEngine(
         `${sanitizeForLog(validationError instanceof Error ? validationError.message : String(validationError))}; ` +
         `falling back to default engine "${defaultEngineId}".`,
     );
-    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
+    return fallbackToDefault(`engine "${engineId}" contract validation threw`);
   }
   if (contractError) {
     if (isDefaultEngine) {
@@ -568,7 +610,7 @@ export async function resolveContextEngine(
     console.error(
       `[context-engine] ${sanitizeForLog(contractError)}; falling back to default engine "${defaultEngineId}".`,
     );
-    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
+    return fallbackToDefault(`engine "${engineId}" failed contract validation`);
   }
 
   return wrapContextEngineWithSessionKeyCompat(engine);

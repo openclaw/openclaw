@@ -240,6 +240,38 @@ export type SessionMaintenanceConfig = {
    * Default: 80% of maxDiskBytes.
    */
   highWaterBytes?: number | string;
+  /**
+   * Defensive guard that runs when a configured context-engine plugin fails
+   * to resolve and the gateway falls back to the default `legacy` engine.
+   * Walks the affected agent's transcript directory; if a session jsonl
+   * exceeds {@link SessionContextFallbackGuardConfig.sizeBytes}, applies the
+   * configured action. See #76940 for background.
+   */
+  contextFallbackGuard?: SessionContextFallbackGuardConfig;
+};
+
+/** Action to take when a session transcript exceeds the fallback-guard threshold. */
+export type SessionContextFallbackGuardAction = "warn" | "archive" | "block" | "auto";
+
+export type SessionContextFallbackGuardConfig = {
+  /**
+   * Per-transcript size threshold (e.g. "1mb", "512kb"). Default: "1mb".
+   * Transcripts larger than this trigger the configured action when the
+   * gateway falls back from a configured context engine to the default.
+   */
+  sizeBytes?: number | string;
+  /**
+   * Action to apply per-transcript. Default: "auto".
+   *
+   *   - "warn":    log a structured, actionable warning naming the file + size
+   *   - "archive": rename the jsonl out of the live path so the next session
+   *                load starts fresh (recoverable via existing archive flows)
+   *   - "block":   throw, refusing to start until an operator takes action
+   *   - "auto":    archive if the agent state dir contains a known context-
+   *                engine sqlite store (engine has the source of truth);
+   *                warn otherwise (legacy engine — jsonl IS the record)
+   */
+  action?: SessionContextFallbackGuardAction;
 };
 
 export type LoggingConfig = {

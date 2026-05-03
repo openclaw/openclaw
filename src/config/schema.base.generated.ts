@@ -20982,6 +20982,35 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
               },
+              contextFallbackGuard: {
+                type: "object",
+                properties: {
+                  sizeBytes: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "number",
+                      },
+                    ],
+                    title: "Fallback Guard Size Threshold",
+                    description:
+                      "Per-transcript size threshold (for example `1mb`, `512kb`). Transcripts larger than this trigger the configured action when the gateway falls back from a configured context engine to the default. Default `1mb`; smaller models may need a tighter threshold.",
+                  },
+                  action: {
+                    type: "string",
+                    enum: ["warn", "archive", "block", "auto"],
+                    title: "Fallback Guard Action",
+                    description:
+                      "Action applied per oversized transcript: `warn` logs and continues, `archive` rotates the jsonl out of the live path so the next load starts fresh (recoverable), `block` refuses to fall back and forces operator action, `auto` archives when the agent state dir contains a known context-engine sqlite store and warns otherwise. Default `auto`.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Context-engine Fallback Guard",
+                description:
+                  "Defensive guard that runs when a configured context-engine plugin fails to resolve and the gateway falls back to the default `legacy` engine. Surfaces the real failure mode (engine disabled / not registered / contract violation) instead of letting the next session load stall the gateway with an oversized transcript.",
+              },
             },
             additionalProperties: false,
             title: "Session Maintenance",
@@ -28051,6 +28080,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Session Disk High-water Target",
       help: "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
       tags: ["storage"],
+    },
+    "session.maintenance.contextFallbackGuard": {
+      label: "Context-engine Fallback Guard",
+      help: "Defensive guard that runs when a configured context-engine plugin fails to resolve and the gateway falls back to the default `legacy` engine. Surfaces the real failure mode (engine disabled / not registered / contract violation) instead of letting the next session load stall the gateway with an oversized transcript.",
+      tags: ["reliability", "storage"],
+    },
+    "session.maintenance.contextFallbackGuard.sizeBytes": {
+      label: "Fallback Guard Size Threshold",
+      help: "Per-transcript size threshold (for example `1mb`, `512kb`). Transcripts larger than this trigger the configured action when the gateway falls back from a configured context engine to the default. Default `1mb`; smaller models may need a tighter threshold.",
+      tags: ["reliability", "storage"],
+    },
+    "session.maintenance.contextFallbackGuard.action": {
+      label: "Fallback Guard Action",
+      help: "Action applied per oversized transcript: `warn` logs and continues, `archive` rotates the jsonl out of the live path so the next load starts fresh (recoverable), `block` refuses to fall back and forces operator action, `auto` archives when the agent state dir contains a known context-engine sqlite store and warns otherwise. Default `auto`.",
+      tags: ["reliability", "storage"],
     },
     "cron.enabled": {
       label: "Cron Enabled",

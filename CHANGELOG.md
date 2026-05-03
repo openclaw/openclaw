@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Sessions/context-engine: add `session.maintenance.contextFallbackGuard` defensive guard that runs when a configured context-engine plugin (e.g. lossless-claw) fails to resolve and the gateway falls back to the default `legacy` engine. Walks the affected agent's transcript directory and, for any session jsonl exceeding `sizeBytes` (default `1mb`), applies the configured `action`: `warn`, `archive`, `block`, or `auto` (archive when an engine sqlite store is present, warn otherwise). Surfaces the real failure mode instead of letting next-load context overflow stall the gateway. Fixes #76940.
 - Channels/streaming: normalize whitespace and case for `streaming.progress.label: "auto"` so progress draft labels keep using the built-in label pool instead of rendering a literal `auto` title. Thanks @vincentkoc.
 - Gateway/install: prefer supported system Node over nvm/fnm/volta/asdf/mise when regenerating managed gateway services, so `gateway install --force` no longer recreates service definitions that doctor immediately flags as version-manager-backed. Fixes #76339. Thanks @brokemac79.
 - Gateway/usage: serve `usage.cost` and `sessions.usage` from a durable transcript aggregate cache with lock-safe background refreshes and localized stale-cache status, so large usage views avoid repeated full scans. (#76650) Thanks @Marvinthebored.
