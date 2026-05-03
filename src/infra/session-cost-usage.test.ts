@@ -10,6 +10,7 @@ import {
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
   loadSessionCostSummary,
+  loadSessionCostSummaryFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
   refreshCostUsageCache,
@@ -280,6 +281,111 @@ describe("session cost usage", () => {
       expect(summary.cacheStatus?.status).toBe("fresh");
       expect(afterCache.files[sessionFile]?.parsedRecords).toBe(2);
       expect(afterCache.files[sessionFile]?.countedRecords).toBe(2);
+    });
+  });
+
+  it("invalidates durable aggregate cache when pricing config changes", async () => {
+    const root = await makeSessionCostRoot("cost-cache-pricing");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-pricing.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      transcriptText("sess-cache-pricing", {
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 1000,
+            output: 1000,
+            totalTokens: 2000,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const configFor = (input: number, output: number) =>
+      ({
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.4", cost: { input, output, cacheRead: 0, cacheWrite: 0 } }],
+            },
+          },
+        },
+      }) as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ config: configFor(1, 1) });
+
+      const stale = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        config: configFor(2, 2),
+        requestRefresh: false,
+      });
+      expect(stale.totals.totalCost).toBe(0);
+      expect(stale.cacheStatus?.status).toBe("stale");
+
+      await refreshCostUsageCache({ config: configFor(2, 2) });
+      const refreshed = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        config: configFor(2, 2),
+        requestRefresh: false,
+      });
+      expect(refreshed.totals.totalCost).toBeCloseTo(0.004, 5);
+      expect(refreshed.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
+  it("preserves sessions usage range semantics when cached summaries span the range", async () => {
+    const root = await makeSessionCostRoot("cost-cache-session-range");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-range.jsonl");
+    const entry = (timestamp: string, totalTokens: number) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        usage: {
+          input: totalTokens,
+          output: 0,
+          totalTokens,
+          cost: { total: totalTokens / 1000 },
+        },
+      },
+    });
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify(entry("2026-02-04T12:00:00.000Z", 10)),
+        JSON.stringify(entry("2026-02-05T12:00:00.000Z", 20)),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+      const summary = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-range",
+        sessionFile,
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+
+      expect(summary.cacheStatus.status).toBe("fresh");
+      expect(summary.summary?.totalTokens).toBe(20);
+      expect(summary.summary?.dailyBreakdown).toEqual([
+        { date: "2026-02-05", tokens: 20, cost: 0.02 },
+      ]);
     });
   });
 

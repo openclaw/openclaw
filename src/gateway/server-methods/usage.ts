@@ -668,19 +668,15 @@ export const usageHandlers: GatewayRequestHandlers = {
       const agentId = parseAgentSessionKey(merged.key)?.agentId;
       const cachedUsage = await loadSessionCostSummaryFromCache({
         sessionId: merged.sessionId,
+        sessionEntry: merged.storeEntry,
         sessionFile: merged.sessionFile,
         config,
         agentId,
+        startMs,
+        endMs,
       });
       cacheStatus = mergeUsageCacheStatus(cacheStatus, cachedUsage.cacheStatus);
-      const usage =
-        cachedUsage.summary &&
-        (cachedUsage.summary.lastActivity === undefined ||
-          cachedUsage.summary.lastActivity >= startMs) &&
-        (cachedUsage.summary.firstActivity === undefined ||
-          cachedUsage.summary.firstActivity <= endMs)
-          ? cachedUsage.summary
-          : null;
+      const usage = cachedUsage.summary;
 
       if (usage) {
         aggregateTotals.input += usage.input;
