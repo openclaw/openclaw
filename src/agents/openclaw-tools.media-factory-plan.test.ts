@@ -247,6 +247,35 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("skips tools that the resolved denylist blocks", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "image-owner",
+        contracts: { imageGenerationProviders: ["image-owner"] },
+        setupProviders: [{ id: "image-owner", envVars: ["IMAGE_OWNER_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["anthropic"] },
+        setupProviders: [{ id: "anthropic", envVars: ["ANTHROPIC_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["image-owner", "anthropic"]),
+        toolDenylist: ["image_generate", "pdf"],
+      }),
+    ).toEqual({
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
+    });
+  });
+
   it("keeps auth-backed providers on the factory path", () => {
     const config: OpenClawConfig = {};
     installSnapshot(config, [
