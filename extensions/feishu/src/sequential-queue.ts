@@ -79,6 +79,8 @@ async function boundedRun(
   try {
     await Promise.race([task(), timeoutPromise]);
   } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
   }
 }
