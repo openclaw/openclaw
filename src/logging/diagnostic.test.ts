@@ -587,7 +587,7 @@ describe("stuck session diagnostics threshold", () => {
     const events: string[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
     const sampleLiveness = vi.fn(() => ({
-      reasons: ["event_loop_delay"] as const,
+      reasons: ["event_loop_delay"],
       intervalMs: 30_000,
       eventLoopDelayP99Ms: 1_500,
       eventLoopDelayMaxMs: 2_000,
