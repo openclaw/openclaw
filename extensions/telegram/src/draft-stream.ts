@@ -5,13 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-lifecycle";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
-import {
-  extractTelegramRetryAfterSec,
-  isRecoverableTelegramNetworkError,
-  isSafeToRetrySendError,
-  isTelegramClientRejection,
-  isTelegramRateLimitError,
-} from "./network-errors.js";
+import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
@@ -96,8 +90,6 @@ export function createTelegramDraftStream(params: {
       : threadParams;
 
   const streamState = { stopped: false, final: false };
-  let backoffRetryTimer: ReturnType<typeof setTimeout> | undefined;
-  let deferredFlush: (() => void) | undefined;
   let messageSendAttempted = false;
   let streamMessageId: number | undefined;
   let streamVisibleSinceMs: number | undefined;
@@ -244,42 +236,6 @@ export function createTelegramDraftStream(params: {
       }
       return sent;
     } catch (err) {
-      if (isTelegramRateLimitError(err)) {
-        const retryAfterSec = extractTelegramRetryAfterSec(err) ?? 5;
-        lastSentText = "";
-        lastSentParseMode = undefined;
-        params.warn?.(
-          `telegram stream preview rate limited; backing off ${retryAfterSec}s`,
-        );
-        if (backoffRetryTimer) clearTimeout(backoffRetryTimer);
-        backoffRetryTimer = setTimeout(() => {
-          backoffRetryTimer = undefined;
-          deferredFlush?.();
-        }, retryAfterSec * 1000);
-        return false;
-      }
-      if (typeof streamMessageId === "number") {
-        if (isRecoverableTelegramNetworkError(err, { allowMessageMatch: true })) {
-          lastSentText = "";
-          lastSentParseMode = undefined;
-          params.warn?.(
-            `telegram stream preview transient network error (will retry edit): ${formatErrorMessage(err)}`,
-          );
-          return false;
-        }
-      } else if (isSafeToRetrySendError(err)) {
-        params.warn?.(
-          `telegram stream preview pre-connect error (will retry send): ${formatErrorMessage(err)}`,
-        );
-        if (backoffRetryTimer) clearTimeout(backoffRetryTimer);
-        backoffRetryTimer = setTimeout(() => {
-          backoffRetryTimer = undefined;
-          lastSentText = "";
-          lastSentParseMode = undefined;
-          deferredFlush?.();
-        }, 1000);
-        return false;
-      }
       streamState.stopped = true;
       params.warn?.(`telegram stream preview failed: ${formatErrorMessage(err)}`);
       return false;
@@ -291,7 +247,6 @@ export function createTelegramDraftStream(params: {
     state: streamState,
     sendOrEditStreamMessage,
   });
-  deferredFlush = () => void loop.flush();
 
   const clear = async () => {
     const messageId = await takeMessageIdAfterStop({
@@ -313,10 +268,6 @@ export function createTelegramDraftStream(params: {
   };
 
   const discard = async () => {
-    if (backoffRetryTimer) {
-      clearTimeout(backoffRetryTimer);
-      backoffRetryTimer = undefined;
-    }
     await stopForClear();
   };
 
