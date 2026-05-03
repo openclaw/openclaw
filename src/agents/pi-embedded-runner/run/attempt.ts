@@ -58,7 +58,7 @@ import {
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
   buildBootstrapInjectionStats,
-  prependBootstrapPromptWarning,
+  appendBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
@@ -179,7 +179,7 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
-import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import {
@@ -336,6 +336,7 @@ import {
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
+  buildCurrentTurnPromptContextSuffix,
   buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
@@ -697,7 +698,7 @@ function collectAttemptExplicitToolAllowlistSources(params: {
     { label: "group tools.allow", allow: groupPolicy?.allow },
     { label: "sandbox tools.allow", allow: params.sandboxToolPolicy?.allow },
     { label: "subagent tools.allow", allow: subagentPolicy?.allow },
-    { label: "runtime toolsAllow", allow: params.toolsAllow },
+    { label: "runtime toolsAllow", allow: params.toolsAllow, enforceWhenToolsDisabled: true },
   ]);
 }
 
@@ -1432,6 +1433,10 @@ export async function runEmbeddedAttempt(
             ? "aborted"
             : undefined,
         allowedToolNames,
+        suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
+        onUserMessagePersisted: (message) => {
+          params.onUserMessagePersisted?.(message);
+        },
       });
       trackSessionManagerAccess(params.sessionFile);
 
@@ -2214,7 +2219,7 @@ export async function runEmbeddedAttempt(
           );
           const truncated = limitHistoryTurns(
             heartbeatFiltered,
-            getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
           );
           // Re-run tool_use/tool_result pairing repair after truncation, since
           // limitHistoryTurns can orphan tool_result blocks by removing the
@@ -2585,7 +2590,7 @@ export async function runEmbeddedAttempt(
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
-        let effectivePrompt = prependBootstrapPromptWarning(
+        let effectivePrompt = appendBootstrapPromptWarning(
           params.prompt,
           bootstrapPromptWarning.lines,
           {
@@ -2787,6 +2792,10 @@ export async function runEmbeddedAttempt(
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
           });
+          const currentTurnPromptContextSuffix = promptSubmission.runtimeOnly
+            ? ""
+            : buildCurrentTurnPromptContextSuffix(params.currentTurnContext);
+          const promptForModel = promptSubmission.prompt + currentTurnPromptContextSuffix;
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
             const runtimeSystemPrompt = composeSystemPromptWithHookContext({
@@ -2818,13 +2827,13 @@ export async function runEmbeddedAttempt(
           });
 
           cacheTrace?.recordStage("prompt:images", {
-            prompt: promptSubmission.prompt,
+            prompt: promptForModel,
             messages: activeSession.messages,
             note: `images: prompt=${imageResult.images.length}`,
           });
           trajectoryRecorder?.recordEvent("context.compiled", {
             systemPrompt: systemPromptText,
-            prompt: promptSubmission.prompt,
+            prompt: promptForModel,
             messages: activeSession.messages,
             tools: toTrajectoryToolDefinitions(effectiveTools),
             imagesCount: imageResult.images.length,
@@ -2836,7 +2845,7 @@ export async function runEmbeddedAttempt(
           const promptSkipReason = skipPromptSubmission
             ? null
             : resolvePromptSubmissionSkipReason({
-                prompt: promptSubmission.prompt,
+                prompt: promptForModel,
                 messages: activeSession.messages,
                 runtimeOnly: promptSubmission.runtimeOnly,
                 imageCount: imageResult.images.length,
@@ -2853,7 +2862,7 @@ export async function runEmbeddedAttempt(
             }
             trajectoryRecorder?.recordEvent("prompt.skipped", {
               reason: promptSkipReason,
-              prompt: promptSubmission.prompt,
+              prompt: promptForModel,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
             });
@@ -3020,9 +3029,9 @@ export async function runEmbeddedAttempt(
             if (normalizedReplayMessages !== activeSession.messages) {
               activeSession.agent.state.messages = normalizedReplayMessages;
             }
-            finalPromptText = promptSubmission.prompt;
+            finalPromptText = promptForModel;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
-              prompt: promptSubmission.prompt,
+              prompt: promptForModel,
               systemPrompt: systemPromptText,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
@@ -3031,10 +3040,10 @@ export async function runEmbeddedAttempt(
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
               messages: btwSnapshotMessages,
-              inFlightPrompt: promptSubmission.prompt,
+              inFlightPrompt: promptForModel,
             });
             if (promptSubmission.runtimeOnly) {
-              await abortable(activeSession.prompt(promptSubmission.prompt));
+              await abortable(activeSession.prompt(promptForModel));
             } else {
               const runtimeContext = promptSubmission.runtimeContext?.trim();
               const runtimeSystemPrompt = runtimeContext
@@ -3056,10 +3065,10 @@ export async function runEmbeddedAttempt(
                 // This avoids potential issues with models that don't expect the images parameter
                 if (imageResult.images.length > 0) {
                   await abortable(
-                    activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
+                    activeSession.prompt(promptForModel, { images: imageResult.images }),
                   );
                 } else {
-                  await abortable(activeSession.prompt(promptSubmission.prompt));
+                  await abortable(activeSession.prompt(promptForModel));
                 }
               } finally {
                 if (runtimeSystemPrompt) {

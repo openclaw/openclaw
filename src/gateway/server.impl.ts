@@ -42,7 +42,6 @@ import {
   clearCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
-import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import {
   pinActivePluginChannelRegistry,
@@ -68,7 +67,7 @@ import {
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
-import { buildGatewayCronService } from "./server-cron.js";
+import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
@@ -81,6 +80,7 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import {
   activateGatewayScheduledServices,
+  startGatewayCronWithLogging,
   startGatewayRuntimeServices,
 } from "./server-runtime-services.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -835,7 +835,7 @@ export async function startGatewayServer(
   runtimeState = createGatewayServerLiveState({
     hooksConfig: initialHooksConfig,
     hookClientIpConfig: initialHookClientIpConfig,
-    cronState: buildGatewayCronService({
+    cronState: createLazyGatewayCronState({
       cfg: cfgAtStart,
       deps,
       broadcast,
@@ -958,16 +958,11 @@ export async function startGatewayServer(
           runtimeState.skillsRefreshTimer = timer;
         },
         getRuntimeConfig,
+        startupTrace,
       }),
     );
     runtimeState.bonjourStop = earlyRuntime.bonjourStop;
     runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
-    if (earlyRuntime.maintenance) {
-      runtimeState.tickInterval = earlyRuntime.maintenance.tickInterval;
-      runtimeState.healthInterval = earlyRuntime.maintenance.healthInterval;
-      runtimeState.dedupeCleanup = earlyRuntime.maintenance.dedupeCleanup;
-      runtimeState.mediaCleanup = earlyRuntime.maintenance.mediaCleanup;
-    }
 
     Object.assign(
       runtimeState,
@@ -1306,6 +1301,7 @@ export async function startGatewayServer(
         deps,
         sessionDeliveryRecoveryMaxEnqueuedAt,
         cron: runtimeState.cronState.cron,
+        startCron: false,
         logCron,
         log,
         pluginLookUpTable,
@@ -1353,6 +1349,7 @@ export async function startGatewayServer(
                 baseMethods,
                 startupPluginIds,
                 pluginLookUpTable,
+                startupTrace,
               }),
         onStartupPluginsLoading: () => {
           startupPendingReason = "startup-sidecars";
@@ -1423,6 +1420,19 @@ export async function startGatewayServer(
     await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err) => {
       log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });
+    if (!minimalTestGateway) {
+      const maintenance = await earlyRuntime.startMaintenance();
+      if (maintenance) {
+        runtimeState.tickInterval = maintenance.tickInterval;
+        runtimeState.healthInterval = maintenance.healthInterval;
+        runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
+        runtimeState.mediaCleanup = maintenance.mediaCleanup;
+      }
+      startGatewayCronWithLogging({
+        cron: runtimeState.cronState.cron,
+        logCron,
+      });
+    }
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
@@ -1434,6 +1444,7 @@ export async function startGatewayServer(
     close: async (opts) => {
       try {
         // Run gateway_stop plugin hook before shutdown
+        const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
         await runGlobalGatewayStopSafely({
           event: { reason: opts?.reason ?? "gateway stopping" },
           ctx: { port },

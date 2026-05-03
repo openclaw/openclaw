@@ -271,7 +271,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
-  it("leaves invalid legacy secretref-env markers for validation to reject", () => {
+  it("leaves invalid legacy secretref-env markers unchanged", () => {
     const res = normalizeCompatibilityConfigValues({
       messages: {
         groupChat: {

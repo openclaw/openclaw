@@ -12,30 +12,30 @@ OpenClaw CI runs on every push to `main` and every pull request. The `preflight`
 
 ## Pipeline overview
 
-| Job                              | Purpose                                                                                                             | When it runs                       |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `preflight`                      | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest                             | Always on non-draft pushes and PRs |
-| `security-scm-fast`              | Private key detection and workflow audit via `zizmor`                                                               | Always on non-draft pushes and PRs |
-| `security-dependency-audit`      | Dependency-free production lockfile audit against npm advisories                                                    | Always on non-draft pushes and PRs |
-| `security-fast`                  | Required aggregate for the fast security jobs                                                                       | Always on non-draft pushes and PRs |
-| `check-dependencies`             | Production Knip dependency-only pass plus the unused-file allowlist guard                                           | Node-relevant changes              |
-| `build-artifacts`                | Build `dist/`, Control UI, built-artifact checks, and reusable downstream artifacts                                 | Node-relevant changes              |
-| `checks-fast-core`               | Fast Linux correctness lanes such as bundled/plugin-contract/protocol checks                                        | Node-relevant changes              |
-| `checks-fast-contracts-channels` | Sharded channel contract checks with a stable aggregate check result                                                | Node-relevant changes              |
-| `checks-node-core-test`          | Core Node test shards, excluding channel, bundled, contract, and extension lanes                                    | Node-relevant changes              |
-| `check`                          | Sharded main local gate equivalent: prod types, lint, guards, test types, and strict smoke                          | Node-relevant changes              |
-| `check-additional`               | Architecture, boundary, prompt snapshot drift, extension-surface guards, package-boundary, and gateway-watch shards | Node-relevant changes              |
-| `build-smoke`                    | Built-CLI smoke tests and startup-memory smoke                                                                      | Node-relevant changes              |
-| `checks`                         | Verifier for built-artifact channel tests                                                                           | Node-relevant changes              |
-| `checks-node-compat-node22`      | Node 22 compatibility build and smoke lane                                                                          | Manual CI dispatch for releases    |
-| `check-docs`                     | Docs formatting, lint, and broken-link checks                                                                       | Docs changed                       |
-| `skills-python`                  | Ruff + pytest for Python-backed skills                                                                              | Python-skill-relevant changes      |
-| `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions                                | Windows-relevant changes           |
-| `macos-node`                     | macOS TypeScript test lane using the shared built artifacts                                                         | macOS-relevant changes             |
-| `macos-swift`                    | Swift lint, build, and tests for the macOS app                                                                      | macOS-relevant changes             |
-| `android`                        | Android unit tests for both flavors plus one debug APK build                                                        | Android-relevant changes           |
-| `test-performance-agent`         | Daily Codex slow-test optimization after trusted activity                                                           | Main CI success or manual dispatch |
-| `openclaw-performance`           | Daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.4 live lanes           | Scheduled and manual dispatch      |
+| Job                              | Purpose                                                                                                   | When it runs                       |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `preflight`                      | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest                   | Always on non-draft pushes and PRs |
+| `security-scm-fast`              | Private key detection and workflow audit via `zizmor`                                                     | Always on non-draft pushes and PRs |
+| `security-dependency-audit`      | Dependency-free production lockfile audit against npm advisories                                          | Always on non-draft pushes and PRs |
+| `security-fast`                  | Required aggregate for the fast security jobs                                                             | Always on non-draft pushes and PRs |
+| `check-dependencies`             | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes              |
+| `build-artifacts`                | Build `dist/`, Control UI, built-artifact checks, and reusable downstream artifacts                       | Node-relevant changes              |
+| `checks-fast-core`               | Fast Linux correctness lanes such as bundled/plugin-contract/protocol checks                              | Node-relevant changes              |
+| `checks-fast-contracts-channels` | Sharded channel contract checks with a stable aggregate check result                                      | Node-relevant changes              |
+| `checks-node-core-test`          | Core Node test shards, excluding channel, bundled, contract, and extension lanes                          | Node-relevant changes              |
+| `check`                          | Sharded main local gate equivalent: prod types, lint, guards, test types, and strict smoke                | Node-relevant changes              |
+| `check-additional`               | Architecture, sharded boundary/prompt drift, extension guards, package boundary, and gateway watch        | Node-relevant changes              |
+| `build-smoke`                    | Built-CLI smoke tests and startup-memory smoke                                                            | Node-relevant changes              |
+| `checks`                         | Verifier for built-artifact channel tests                                                                 | Node-relevant changes              |
+| `checks-node-compat-node22`      | Node 22 compatibility build and smoke lane                                                                | Manual CI dispatch for releases    |
+| `check-docs`                     | Docs formatting, lint, and broken-link checks                                                             | Docs changed                       |
+| `skills-python`                  | Ruff + pytest for Python-backed skills                                                                    | Python-skill-relevant changes      |
+| `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions                      | Windows-relevant changes           |
+| `macos-node`                     | macOS TypeScript test lane using the shared built artifacts                                               | macOS-relevant changes             |
+| `macos-swift`                    | Swift lint, build, and tests for the macOS app                                                            | macOS-relevant changes             |
+| `android`                        | Android unit tests for both flavors plus one debug APK build                                              | Android-relevant changes           |
+| `test-performance-agent`         | Daily Codex slow-test optimization after trusted activity                                                 | Main CI success or manual dispatch |
+| `openclaw-performance`           | Daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.4 live lanes | Scheduled and manual dispatch      |
 
 ## Fail-fast order
 
@@ -54,7 +54,7 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 - **CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits** use a fast Node-only manifest path: `preflight`, security, and a single `checks-fast-core` task. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the change is limited to the routing or helper surfaces the fast task exercises directly.
 - **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes.
 
-The slowest Node test families are split or balanced so each job stays small without over-reserving runners: channel contracts run as three weighted shards, small core unit lanes are paired, auto-reply runs as four balanced workers (with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards), and agentic gateway/plugin configs are spread across the existing source-only agentic Node jobs instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard shard runs its small independent guards concurrently inside one job, including `pnpm prompt:snapshots:check` so Codex runtime happy-path prompt drift is pinned to the PR that caused it. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
+The slowest Node test families are split or balanced so each job stays small without over-reserving runners: channel contracts run as three weighted shards, core unit fast/support lanes run separately, core runtime infra is split between state and process/config shards, auto-reply runs as balanced workers (with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards), and agentic gateway/server configs are split across chat/auth/model/http-plugin/runtime/startup lanes instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard list is striped across four matrix shards, each running selected independent guards concurrently and printing per-check timings, including `pnpm prompt:snapshots:check` so Codex runtime happy-path prompt drift is pinned to the PR that caused it. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 
@@ -135,7 +135,10 @@ pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.jso
 ```bash
 gh workflow run openclaw-performance.yml --ref main -f profile=diagnostic -f repeat=3
 gh workflow run openclaw-performance.yml --ref main -f profile=smoke -f repeat=1 -f deep_profile=true -f live_gpt54=true
+gh workflow run openclaw-performance.yml --ref main -f target_ref=v2026.5.2 -f profile=diagnostic -f repeat=3
 ```
+
+Manual dispatch normally benchmarks the workflow ref. Set `target_ref` to benchmark a release tag or another branch with the current workflow implementation. Published report paths and latest pointers are keyed by the tested ref, and each `index.md` records the tested ref/SHA, workflow ref/SHA, Kova ref, profile, lane auth mode, model, repeat count, and scenario filters.
 
 The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at the pinned `kova_ref` input, then runs three lanes:
 
@@ -145,7 +148,7 @@ The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at
 
 The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; repeated mock-OpenAI `channel-chat-baseline` hello loops; and CLI startup commands against the booted gateway. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
 
-Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured, the workflow also commits `report.json`, `report.md`, bundles, `index.md`, and source-probe artifacts into `openclaw/clawgrit-reports` under `openclaw-performance/<ref>/<run-id>-<attempt>/<lane>/`. The current branch pointer is written as `openclaw-performance/<ref>/latest-<lane>.json`.
+Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured, the workflow also commits `report.json`, `report.md`, bundles, `index.md`, and source-probe artifacts into `openclaw/clawgrit-reports` under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`. The current tested-ref pointer is written as `openclaw-performance/<tested-ref>/latest-<lane>.json`.
 
 ## Full Release Validation
 

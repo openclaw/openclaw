@@ -320,6 +320,37 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
   });
 
+  it("routes root hygiene config changes to tooling instead of all lanes", () => {
+    const result = detectChangedLanes([
+      ".dockerignore",
+      ".jscpd.json",
+      ".npmignore",
+      ".pre-commit-config.yaml",
+      ".swiftformat",
+      ".swiftlint.yml",
+      "Makefile",
+      "config/knip.config.ts",
+      "config/markdownlint-cli2.jsonc",
+      "config/shellcheckrc",
+      "config/swiftformat",
+      "config/swiftlint.yml",
+      "deploy/fly.private.toml",
+      "docker-setup.sh",
+      "openclaw.podman.env",
+      "setup-podman.sh",
+      "skills/pyproject.toml",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
   it("routes VS Code workspace settings to tooling instead of all lanes", () => {
     const result = detectChangedLanes([".vscode/settings.json", ".vscode/extensions.json"]);
     const plan = createChangedCheckPlan(result);
@@ -755,6 +786,32 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
+  it("routes legacy Swabble deletions as app surface during the app move", () => {
+    const result = detectChangedLanes(["Swabble/Sources/SwabbleKit/WakeWordGate.swift"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      apps: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
+  it("routes legacy root asset deletions as tooling during root cleanup", () => {
+    const result = detectChangedLanes([
+      "assets/avatar-placeholder.svg",
+      "assets/chrome-extension/icons/icon128.png",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
   it("keeps shared Vitest wiring changes out of check test execution", () => {
