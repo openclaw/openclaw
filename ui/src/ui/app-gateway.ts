@@ -156,6 +156,21 @@ function isTerminalChatState(
   return state === "final" || state === "aborted" || state === "error";
 }
 
+function isChatTurnSessionChangedPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as { phase?: unknown; reason?: unknown };
+  return (
+    record.phase === "start" ||
+    record.phase === "message" ||
+    record.phase === "end" ||
+    record.phase === "error" ||
+    record.reason === "send" ||
+    record.reason === "steer"
+  );
+}
+
 type ConnectGatewayOptions = {
   reason?: "initial" | "seq-gap";
 };
@@ -741,6 +756,9 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "sessions.changed") {
     applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    if (isChatTurnSessionChangedPayload(evt.payload)) {
+      return;
+    }
     void loadSessions(host as unknown as SessionsState);
     return;
   }

@@ -1,6 +1,6 @@
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -85,20 +85,20 @@ function listBundledPluginConfigSecretTargetRegistryEntries(
 }
 
 function listChannelSecretTargetRegistryEntries(
-  bundledPlugins: readonly PluginManifestRecord[],
+  channelPlugins: readonly PluginManifestRecord[],
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
-  for (const record of bundledPlugins) {
+  for (const record of channelPlugins) {
     const channelIds = record.channels;
     if (channelIds.length === 0) {
       continue;
     }
     try {
-      const contractApi = loadBundledChannelSecretContractApi(record.id);
+      const contractApi = loadChannelSecretContractApiForRecord(record);
       entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
     } catch {
-      // Ignore bundled channels that do not expose a usable secret contract artifact.
+      // Ignore channels that do not expose a usable secret contract artifact.
     }
   }
   return entries;
@@ -441,6 +441,25 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
 
 let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
 
+function loadSecretTargetRegistryFromPluginMetadata(params: {
+  env: NodeJS.ProcessEnv;
+  preferPersisted?: boolean;
+}): SecretTargetRegistryEntry[] {
+  const plugins = loadPluginMetadataSnapshot({
+    config: {},
+    env: params.env,
+    ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
+  }).plugins;
+  const bundledPlugins = plugins.filter((record) => record.origin === "bundled");
+  const channelPlugins = plugins.filter((record) => record.channels.length > 0);
+  return [
+    ...CORE_SECRET_TARGET_REGISTRY,
+    ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
+    ...listBundledPluginConfigSecretTargetRegistryEntries(bundledPlugins),
+    ...listChannelSecretTargetRegistryEntries(channelPlugins),
+  ];
+}
+
 export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return CORE_SECRET_TARGET_REGISTRY;
 }
@@ -449,15 +468,18 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   if (cachedSecretTargetRegistry) {
     return cachedSecretTargetRegistry;
   }
-  const bundledPlugins = loadPluginMetadataSnapshot({
-    config: {},
+  cachedSecretTargetRegistry = loadSecretTargetRegistryFromPluginMetadata({
     env: process.env,
-  }).plugins.filter((record) => record.origin === "bundled");
-  cachedSecretTargetRegistry = [
-    ...CORE_SECRET_TARGET_REGISTRY,
-    ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
-    ...listBundledPluginConfigSecretTargetRegistryEntries(bundledPlugins),
-    ...listChannelSecretTargetRegistryEntries(bundledPlugins),
-  ];
+  });
   return cachedSecretTargetRegistry;
+}
+
+export function getSourceSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+  return loadSecretTargetRegistryFromPluginMetadata({
+    env: {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
+    },
+    preferPersisted: false,
+  });
 }

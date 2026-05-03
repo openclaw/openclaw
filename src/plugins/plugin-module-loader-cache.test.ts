@@ -371,7 +371,7 @@ describe("getCachedPluginModuleLoader", () => {
         p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader } = await importFreshModule<
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
       typeof import("./plugin-module-loader-cache.js")
     >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-fastpath");
 
@@ -393,6 +393,13 @@ describe("getCachedPluginModuleLoader", () => {
     expect(nativeStub).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js", {
       allowWindows: true,
     });
+    expect(getPluginModuleLoaderStats()).toMatchObject({
+      calls: 1,
+      nativeHits: 1,
+      nativeMisses: 0,
+      sourceTransformFallbacks: 0,
+      sourceTransformForced: 0,
+    });
   });
 
   it("falls back to source transform when the native-require helper declines", async () => {
@@ -403,7 +410,7 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
-    const { getCachedPluginModuleLoader } = await importFreshModule<
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
       typeof import("./plugin-module-loader-cache.js")
     >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-fallback");
 
@@ -418,6 +425,14 @@ describe("getCachedPluginModuleLoader", () => {
     const result = loader("/repo/dist/extensions/demo/api.js") as { fromSourceTransform: boolean };
     expect(result.fromSourceTransform).toBe(true);
     expect(fromSourceTransformer).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
+    expect(getPluginModuleLoaderStats()).toMatchObject({
+      calls: 1,
+      nativeHits: 0,
+      nativeMisses: 1,
+      sourceTransformFallbacks: 1,
+      sourceTransformForced: 0,
+      topSourceTransformTargets: [{ target: "/repo/dist/extensions/demo/api.js", count: 1 }],
+    });
   });
 
   it("normalizes Windows absolute paths before creating and calling the source transformer", async () => {
@@ -462,7 +477,7 @@ describe("getCachedPluginModuleLoader", () => {
       isJavaScriptModulePath: () => true,
       tryNativeRequireJavaScriptModule: nativeStub,
     }));
-    const { getCachedPluginModuleLoader } = await importFreshModule<
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
       typeof import("./plugin-module-loader-cache.js")
     >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-opt-out");
 
@@ -482,6 +497,14 @@ describe("getCachedPluginModuleLoader", () => {
     // so its alias rewrites still apply; native require must not be consulted.
     expect(nativeStub).not.toHaveBeenCalled();
     expect(fromSourceTransformer).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
+    expect(getPluginModuleLoaderStats()).toMatchObject({
+      calls: 1,
+      nativeHits: 0,
+      nativeMisses: 0,
+      sourceTransformFallbacks: 0,
+      sourceTransformForced: 1,
+      topSourceTransformTargets: [{ target: "/repo/dist/extensions/demo/api.js", count: 1 }],
+    });
   });
 
   it("normalizes Windows absolute paths when native loading is disabled", async () => {

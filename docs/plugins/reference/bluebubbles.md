@@ -12,7 +12,7 @@ Adds the BlueBubbles channel surface for sending and receiving OpenClaw messages
 ## Distribution
 
 - Package: `@openclaw/bluebubbles`
-- Install route: ClawHub + npm
+- Install route: npm; ClawHub
 
 ## Surface
 

@@ -2372,6 +2372,16 @@ export function renderApp(state: AppViewState) {
               onAttachmentsChange: (next) => (state.chatAttachments = next),
               onSend: () => state.handleSendChat(),
               onCompact: () => state.handleSendChat("/compact", { restoreDraft: true }),
+              onOpenSessionCheckpoints: () => {
+                state.sessionsExpandedCheckpointKey = state.sessionKey;
+                state.setTab("sessions" as import("./navigation.ts").Tab);
+                void loadSessions(state, {
+                  activeMinutes: 0,
+                  limit: 0,
+                  includeGlobal: true,
+                  includeUnknown: true,
+                });
+              },
               onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
               canAbort: hasAbortableSessionRun(state),
               onAbort: () => void state.handleAbortChat(),

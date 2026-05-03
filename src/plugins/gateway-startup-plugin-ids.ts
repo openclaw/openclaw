@@ -14,6 +14,10 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
+import {
+  collectConfiguredSpeechProviderIds,
+  normalizeConfiguredSpeechProviderIdForStartup,
+} from "./gateway-startup-speech-providers.js";
 import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
@@ -32,6 +36,8 @@ export type GatewayStartupPluginPlan = {
   configuredDeferredChannelPluginIds: readonly string[];
   pluginIds: readonly string[];
 };
+
+type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegistry>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -95,13 +101,41 @@ function resolveMemorySlotStartupPluginId(params: {
   return normalizePluginId(configuredSlot);
 }
 
+function resolveContextEngineSlotStartupPluginId(params: {
+  activationSourceConfig: OpenClawConfig;
+  activationSourcePlugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  normalizePluginId: (pluginId: string) => string;
+}): string | undefined {
+  const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
+  const configuredSlot = activationSourceConfig.plugins?.slots?.contextEngine?.trim();
+  if (!configuredSlot) {
+    return undefined;
+  }
+  const normalized = normalizePluginId(configuredSlot);
+  // "legacy" is the built-in default engine — no plugin startup needed.
+  if (normalized === "legacy") {
+    return undefined;
+  }
+  if (activationSourcePlugins.deny.includes(normalized)) {
+    return undefined;
+  }
+  if (activationSourcePlugins.entries[normalized]?.enabled === false) {
+    return undefined;
+  }
+  return normalized;
+}
+
 function shouldConsiderForGatewayStartup(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
   startupDreamingPluginIds: ReadonlySet<string>;
   memorySlotStartupPluginId?: string;
+  contextEngineSlotStartupPluginId?: string;
 }): boolean {
   if (params.manifest?.activation?.onStartup === true) {
+    return true;
+  }
+  if (params.contextEngineSlotStartupPluginId === params.plugin.pluginId) {
     return true;
   }
   if (!isGatewayStartupMemoryPlugin(params.plugin)) {
@@ -161,6 +195,64 @@ function hasConfiguredActivationPath(params: {
   );
 }
 
+function manifestOwnsConfiguredSpeechProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredSpeechProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (params.configuredSpeechProviderIds.size === 0) {
+    return false;
+  }
+  return (params.manifest?.contracts?.speechProviders ?? []).some((providerId) => {
+    const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
+    return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
+  });
+}
+
+function canStartConfiguredSpeechProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredSpeechProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredSpeechProvider({
+      manifest: params.manifest,
+      configuredSpeechProviderIds: params.configuredSpeechProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  if (params.plugin.origin === "bundled") {
+    return true;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: params.plugin.enabledByDefault,
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled && activationState.explicitlyEnabled;
+}
+
 function canStartConfiguredRootPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
@@ -190,6 +282,76 @@ function canStartConfiguredRootPlugin(params: {
     return false;
   }
   return true;
+}
+
+function hasExplicitHookPolicyConfig(
+  entry: NormalizedPluginsConfig["entries"][string] | undefined,
+): boolean {
+  return (
+    entry?.hooks?.allowConversationAccess === true || entry?.hooks?.allowPromptInjection === true
+  );
+}
+
+function hasHookRuntimeStartupIntent(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  activationSourcePlugins: NormalizedPluginsConfig;
+}): boolean {
+  if (params.manifest?.activation?.onCapabilities?.includes("hook")) {
+    return true;
+  }
+  return hasExplicitHookPolicyConfig(
+    params.activationSourcePlugins.entries[params.plugin.pluginId],
+  );
+}
+
+function canStartExplicitHookPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSource: {
+    plugins: NormalizedPluginsConfig;
+    rootConfig?: OpenClawConfig;
+  };
+  activationSourcePlugins: NormalizedPluginsConfig;
+}): boolean {
+  const hasHookPolicyIntent = hasExplicitHookPolicyConfig(
+    params.activationSourcePlugins.entries[params.plugin.pluginId],
+  );
+  if (
+    !hasHookRuntimeStartupIntent({
+      plugin: params.plugin,
+      manifest: params.manifest,
+      activationSourcePlugins: params.activationSourcePlugins,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSourcePlugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSourcePlugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: params.plugin.enabledByDefault,
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled && (activationState.explicitlyEnabled || hasHookPolicyIntent);
 }
 
 function canStartConfiguredChannelPlugin(params: {
@@ -341,12 +503,19 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
+  const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
+  const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
+    manifestRegistry: params.manifestRegistry,
+  });
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
-    normalizePluginId: createPluginRegistryIdNormalizer(params.index, {
-      manifestRegistry: params.manifestRegistry,
-    }),
+    normalizePluginId,
+  });
+  const contextEngineSlotStartupPluginId = resolveContextEngineSlotStartupPluginId({
+    activationSourceConfig,
+    activationSourcePlugins,
+    normalizePluginId,
   });
   const pluginIds = params.index.plugins
     .filter((plugin) => {
@@ -391,11 +560,36 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         return true;
       }
       if (
+        canStartConfiguredSpeechProviderPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          configuredSpeechProviderIds,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartExplicitHookPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          activationSourcePlugins,
+        })
+      ) {
+        return true;
+      }
+      if (
         !shouldConsiderForGatewayStartup({
           plugin,
           manifest,
           startupDreamingPluginIds,
           memorySlotStartupPluginId,
+          contextEngineSlotStartupPluginId,
         })
       ) {
         return false;

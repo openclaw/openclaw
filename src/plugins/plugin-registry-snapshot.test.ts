@@ -96,7 +96,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("keeps persisted package plugins when metadata still matches", () => {
+  it("keeps persisted package plugins when file hashes match", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");
     const stateDir = path.join(tempRoot, "state");

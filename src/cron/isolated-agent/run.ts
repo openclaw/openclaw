@@ -561,6 +561,7 @@ async function prepareCronRunContext(params: {
     sessionEntry: cronSession.sessionEntry,
     payload: input.job.payload,
     isGmailHook,
+    agentId,
   });
   if (!resolvedModelSelection.ok) {
     return {

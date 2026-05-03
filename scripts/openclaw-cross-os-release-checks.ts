@@ -777,9 +777,19 @@ async function runUpgradeLane(params) {
       timeoutMs: updateTimeoutMs(),
       check: false,
     });
-    verifyPackagedUpgradeUpdateResult(updateResult, {
-      candidateVersion: params.build.candidateVersion,
-    });
+    if (isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform)) {
+      logLanePhase(lane, "update-fallback-install");
+      await installPackageSpec({
+        lane,
+        env,
+        packageSpec: params.candidateUrl,
+        logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
+      });
+    } else {
+      verifyPackagedUpgradeUpdateResult(updateResult, {
+        candidateVersion: params.build.candidateVersion,
+      });
+    }
 
     logLanePhase(lane, "update-status");
     await runOpenClaw({
@@ -1318,6 +1328,23 @@ export function verifyPackagedUpgradeUpdateResult(result, _options) {
     `Packaged upgrade failed (${result.exitCode}): ${trimForSummary(
       `${result.stdout}\n${result.stderr}`,
     )}`,
+  );
+}
+
+export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+  result,
+  platform = process.platform,
+) {
+  if (platform !== "win32" || result.exitCode === 0) {
+    return false;
+  }
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  return (
+    /\bglobal install swap\b/iu.test(output) &&
+    /\bEPERM\b/iu.test(output) &&
+    /\bunlink\b/iu.test(output) &&
+    /[/\\]\.openclaw-\d+-\d+[/\\]/u.test(output) &&
+    /\.node['"]?/iu.test(output)
   );
 }
 

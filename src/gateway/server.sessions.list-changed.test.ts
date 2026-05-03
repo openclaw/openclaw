@@ -12,7 +12,7 @@ import {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-test("sessions.list surfaces transcript usage and model fallbacks from the transcript", async () => {
+test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
   const { dir } = await createSessionStoreDir();
   testState.agentConfig = {
     models: {
@@ -92,10 +92,10 @@ test("sessions.list surfaces transcript usage and model fallbacks from the trans
   );
   expect(parent?.childSessions).toEqual(["agent:main:dashboard:child"]);
   expect(child?.parentSessionKey).toBe("agent:main:main");
-  expect(child?.totalTokens).toBe(3_000);
-  expect(child?.totalTokensFresh).toBe(true);
-  expect(child?.contextTokens).toBe(1_048_576);
-  expect(child?.estimatedCostUsd).toBe(0.0042);
+  expect(child?.totalTokens).toBeUndefined();
+  expect(child?.totalTokensFresh).toBe(false);
+  expect(child?.contextTokens).toBeUndefined();
+  expect(child?.estimatedCostUsd).toBeUndefined();
   expect(child?.modelProvider).toBe("anthropic");
   expect(child?.model).toBe("claude-sonnet-4-6");
 
@@ -146,10 +146,14 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   expect(respond).toHaveBeenCalledWith(
     true,
     expect.objectContaining({
+      defaults: expect.objectContaining({
+        thinkingDefault: "medium",
+      }),
       sessions: expect.arrayContaining([
         expect.objectContaining({
           key: "agent:main:main",
-          thinkingDefault: "medium",
+          thinkingDefault: undefined,
+          thinkingOptions: ["off", "minimal", "low", "medium", "high"],
         }),
       ]),
     }),

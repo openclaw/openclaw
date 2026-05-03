@@ -590,7 +590,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex", fallback: "none" },
+                agentRuntime: { id: "codex" },
               },
             },
           },

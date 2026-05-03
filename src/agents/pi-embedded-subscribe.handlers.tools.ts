@@ -361,30 +361,6 @@ async function collectEmittedToolOutputMediaUrls(
   return filterToolResultMediaUrls(toolName, mediaUrls, result);
 }
 
-const COMPACT_PROVIDER_INVENTORY_TOOLS = new Set(["image_generate", "video_generate"]);
-
-function hasProviderInventoryDetails(result: unknown): boolean {
-  if (!result || typeof result !== "object") {
-    return false;
-  }
-  const details = readToolResultDetailsRecord(result);
-  return Array.isArray(details?.providers);
-}
-
-function shouldEmitCompactToolOutput(params: {
-  toolName: string;
-  result: unknown;
-  outputText?: string;
-}): boolean {
-  if (!COMPACT_PROVIDER_INVENTORY_TOOLS.has(params.toolName)) {
-    return false;
-  }
-  if (!hasProviderInventoryDetails(params.result)) {
-    return false;
-  }
-  return Boolean(params.outputText?.trim());
-}
-
 function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
@@ -560,8 +536,7 @@ async function emitToolResultOutput(params: {
       isToolError,
       hasDeliverableStructuredMedia: hasStructuredMedia && mediaUrls.length > 0,
       builtinToolNames: ctx.builtinToolNames,
-    }) &&
-    (ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText }));
+    }) && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
     if (outputText) {
       ctx.emitToolOutput(rawToolName, meta, outputText, result);
@@ -674,7 +649,12 @@ export function handleToolExecutionStart(
     // Best-effort typing signal; do not block tool summaries on slow emitters.
     void ctx.params.onAgentEvent?.({
       stream: "tool",
-      data: { phase: "start", name: toolName, toolCallId },
+      data: {
+        phase: "start",
+        name: toolName,
+        toolCallId,
+        args: sanitizeToolArgs(args) as Record<string, unknown>,
+      },
     });
 
     if (isExecToolName(toolName)) {

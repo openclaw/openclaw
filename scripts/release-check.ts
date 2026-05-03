@@ -329,7 +329,7 @@ function runPackedBundledPluginPostinstall(packageRoot: string): void {
   });
 }
 
-function writePackedBundledPluginActivationConfig(homeDir: string): void {
+export function writePackedBundledPluginActivationConfig(homeDir: string): void {
   const configPath = join(homeDir, ".openclaw", "openclaw.json");
   mkdirSync(join(homeDir, ".openclaw"), { recursive: true });
   writeFileSync(
@@ -342,7 +342,7 @@ function writePackedBundledPluginActivationConfig(homeDir: string): void {
           },
         },
         channels: {
-          feishu: {
+          matrix: {
             enabled: true,
           },
         },
@@ -358,7 +358,7 @@ function writePackedBundledPluginActivationConfig(homeDir: string): void {
         plugins: {
           enabled: true,
           entries: {
-            feishu: {
+            matrix: {
               enabled: true,
             },
           },

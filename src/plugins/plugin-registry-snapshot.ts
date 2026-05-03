@@ -137,12 +137,7 @@ function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
         plugin.manifestPath,
         plugin.manifestFile,
       );
-      if (manifestSignatureMatches === false) {
-        const manifestHash = hashExistingFile(plugin.manifestPath);
-        if (manifestHash && manifestHash !== plugin.manifestHash) {
-          return true;
-        }
-      } else {
+      if (manifestSignatureMatches !== true) {
         const manifestHash = hashExistingFile(plugin.manifestPath);
         if (manifestHash && manifestHash !== plugin.manifestHash) {
           return true;

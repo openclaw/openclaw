@@ -1,7 +1,7 @@
 import {
   jsonResult,
   resolveMemorySearchConfig,
-  resolveSessionAgentId,
+  resolveSessionAgentIds,
   type MemoryPluginRuntime,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -23,6 +23,7 @@ type RuntimeProviderModule = typeof import("./src/runtime-provider.js");
 type MemoryToolOptions = {
   config?: OpenClawConfig;
   getConfig?: () => OpenClawConfig | undefined;
+  agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
 };
@@ -49,9 +50,10 @@ function hasMemoryToolContext(options: MemoryToolOptions): boolean {
   if (!cfg) {
     return false;
   }
-  const agentId = resolveSessionAgentId({
+  const { sessionAgentId: agentId } = resolveSessionAgentIds({
     sessionKey: options.agentSessionKey,
     config: cfg,
+    agentId: options.agentId,
   });
   return Boolean(resolveMemorySearchConfig(cfg, agentId));
 }
@@ -145,6 +147,7 @@ function resolveMemoryToolOptions(ctx: OpenClawPluginToolContext): MemoryToolOpt
   return {
     config: getConfig(),
     getConfig,
+    agentId: ctx.agentId,
     agentSessionKey: ctx.sessionKey,
     sandboxed: ctx.sandboxed,
   };
