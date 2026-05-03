@@ -118,9 +118,6 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     try {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
-      if (context.getEventLoopHealth) {
-        snap.eventLoop = context.getEventLoopHealth();
-      }
       respond(true, snap, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
