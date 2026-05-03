@@ -1343,7 +1343,7 @@ export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
     /\bglobal install swap\b/iu.test(output) &&
     /\bEPERM\b/iu.test(output) &&
     /\bunlink\b/iu.test(output) &&
-    /[\\\/]\.openclaw-\d+-\d+[\\\/]/u.test(output) &&
+    /[/\\]\.openclaw-\d+-\d+[/\\]/u.test(output) &&
     /\.node['"]?/iu.test(output)
   );
 }
