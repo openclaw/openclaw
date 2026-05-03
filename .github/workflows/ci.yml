@@ -1961,7 +1961,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: apps/macos/.build
-          key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'Swabble/Package.swift', 'Swabble/Sources/**') }}
+          key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
           restore-keys: |
             ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-
 
@@ -1971,13 +1971,13 @@ jobs:
           set -euo pipefail
           # Exact source-hash cache hits already match these inputs; checkout
           # mtimes are the only reason SwiftPM rebuilds cached products.
-          find apps/macos/Sources apps/macos/Tests apps/shared/OpenClawKit/Sources Swabble/Sources apps/macos/.build/checkouts \
+          find apps/macos/Sources apps/macos/Tests apps/shared/OpenClawKit/Sources apps/swabble/Sources apps/macos/.build/checkouts \
             -type f -exec touch -t 200001010000 {} +
           touch -t 200001010000 \
             apps/macos/Package.swift \
             apps/macos/Package.resolved \
             apps/shared/OpenClawKit/Package.swift \
-            Swabble/Package.swift
+            apps/swabble/Package.swift
 
       - name: Show toolchain
         run: |

@@ -21,25 +21,6 @@ function isLegacySecretRefEnvMarker(value: unknown): value is string {
   return typeof value === "string" && value.trim().startsWith(LEGACY_SECRETREF_ENV_MARKER_PREFIX);
 }
 
-function containsLegacySecretRefEnvMarker(value: unknown, seen = new WeakSet<object>()): boolean {
-  if (isLegacySecretRefEnvMarker(value)) {
-    return true;
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  if (seen.has(value)) {
-    return false;
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.some((entry) => containsLegacySecretRefEnvMarker(entry, seen));
-  }
-  return Object.values(value as Record<string, unknown>).some((entry) =>
-    containsLegacySecretRefEnvMarker(entry, seen),
-  );
-}
-
 function toCandidate(
   target: DiscoveredConfigSecretTarget,
   defaults: NonNullable<OpenClawConfig["secrets"]>["defaults"] | undefined,
@@ -58,9 +39,6 @@ function toCandidate(
 export function collectLegacySecretRefEnvMarkerCandidates(
   config: OpenClawConfig,
 ): LegacySecretRefEnvMarkerCandidate[] {
-  if (!containsLegacySecretRefEnvMarker(config)) {
-    return [];
-  }
   const defaults = config.secrets?.defaults;
   return discoverConfigSecretTargets(config)
     .map((target) => toCandidate(target, defaults))
