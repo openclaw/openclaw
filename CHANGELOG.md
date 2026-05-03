@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord: raise the auto-thread title generation timeout from 10s to 60s and the title token budget from 512 to 4096 to fit reasoning-model thinking latency and output, so reasoning-model titles no longer silently fall back to the default channel-derived name. Refs #64172. Thanks @hanamizuki.
 - Channels/secrets: resolve SecretRef-backed channel credentials through external plugin secret contracts after the plugin split, covering runtime startup, target discovery, webhook auth, disabled-account enumeration, and late-bound web_search config. Fixes #76371. (#76449) Thanks @joshavant and @neeravmakwana.
 - Docker/Gateway: pass Docker setup `.env` values into gateway and CLI containers and preserve exec SecretRef `passEnv` keys in managed service plans, so 1Password Connect-backed Discord tokens keep resolving after doctor or plugin repair. Thanks @vincentkoc.
 - Control UI/WebChat: explain compaction boundaries in chat history and link directly to session checkpoint controls so pre-compaction turns no longer look silently lost after refresh. Fixes #76415. Thanks @BunsDev.
