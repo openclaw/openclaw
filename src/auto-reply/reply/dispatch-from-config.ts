@@ -1167,13 +1167,22 @@ export async function dispatchReplyFromConfig(
       if (shouldSendToolSummaries) {
         return payload;
       }
-      const execApproval =
+      const cd =
         payload.channelData &&
         typeof payload.channelData === "object" &&
         !Array.isArray(payload.channelData)
-          ? payload.channelData.execApproval
+          ? payload.channelData
           : undefined;
+      const execApproval = cd?.execApproval;
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
+        return payload;
+      }
+      const execApprovalUnavailable = cd?.execApprovalUnavailable;
+      if (
+        execApprovalUnavailable &&
+        typeof execApprovalUnavailable === "object" &&
+        !Array.isArray(execApprovalUnavailable)
+      ) {
         return payload;
       }
       // Group/native flows intentionally suppress tool summary text, but media-only
