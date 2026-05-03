@@ -19,7 +19,7 @@ export type CommandCarrierHit = {
 
 export type CarriedShellBuiltinHit = { kind: "eval" } | { kind: "source"; command: string };
 
-const MAX_INLINE_EVAL_CARRIER_DEPTH = 4;
+const MAX_ENV_SPLIT_PAYLOAD_DEPTH = 32;
 
 const COMMAND_EXECUTING_OPTIONS = new Set(["-p"]);
 const COMMAND_QUERY_OPTIONS = new Set(["-v", "-V"]);
@@ -35,6 +35,7 @@ const ENV_OPTIONS_WITH_VALUE = new Set([
   "--split-string",
   "--unset",
 ]);
+const ENV_SPLIT_STRING_OPTIONS = new Set(["-S", "--split-string"]);
 const ENV_STANDALONE_OPTIONS = new Set(["-0", "-i", "--ignore-environment", "--null"]);
 const SUDO_OPTIONS_WITH_VALUE = new Set([
   "-C",
@@ -103,46 +104,97 @@ function optionName(token: string): string {
 type ParsedCarrierOption = {
   name: string;
   hasInlineValue: boolean;
+  inlineValue?: string;
 };
 
 function parseCarrierOptionToken(
   token: string,
+  standaloneOptions: ReadonlySet<string>,
   optionsWithValue: ReadonlySet<string>,
-): ParsedCarrierOption {
+  nonExecutingOptions: ReadonlySet<string> = new Set(),
+): ParsedCarrierOption[] | null {
   if (token.startsWith("--")) {
-    return { name: optionName(token), hasInlineValue: token.includes("=") };
+    const name = optionName(token);
+    if (
+      standaloneOptions.has(name) ||
+      optionsWithValue.has(name) ||
+      nonExecutingOptions.has(name)
+    ) {
+      const valueDelimiter = token.indexOf("=");
+      return [
+        {
+          name,
+          hasInlineValue: valueDelimiter >= 0,
+          inlineValue: valueDelimiter >= 0 ? token.slice(valueDelimiter + 1) : undefined,
+        },
+      ];
+    }
+    return null;
   }
-  const shortName = token.slice(0, 2);
-  if (/^-[A-Za-z]/u.test(shortName) && token.length > 2 && optionsWithValue.has(shortName)) {
-    return { name: shortName, hasInlineValue: true };
+
+  if (!/^-[A-Za-z0-9]/u.test(token)) {
+    return null;
   }
-  return { name: token, hasInlineValue: false };
+
+  const options: ParsedCarrierOption[] = [];
+  for (let index = 1; index < token.length; index += 1) {
+    const name = `-${token[index] ?? ""}`;
+    if (optionsWithValue.has(name)) {
+      options.push({
+        name,
+        hasInlineValue: index < token.length - 1,
+        inlineValue: index < token.length - 1 ? token.slice(index + 1) : undefined,
+      });
+      return options;
+    }
+    if (standaloneOptions.has(name) || nonExecutingOptions.has(name)) {
+      options.push({ name, hasInlineValue: false });
+      continue;
+    }
+    return null;
+  }
+  return options.length > 0 ? options : null;
 }
 
 function knownCarrierOptionConsumesNextValue(
-  option: ParsedCarrierOption,
-  standaloneOptions: ReadonlySet<string>,
+  options: readonly ParsedCarrierOption[],
   optionsWithValue: ReadonlySet<string>,
+  nonExecutingOptions: ReadonlySet<string> = new Set(),
 ): boolean | null {
-  if (standaloneOptions.has(option.name)) {
-    return false;
+  let consumesNextValue = false;
+  for (const option of options) {
+    if (nonExecutingOptions.has(option.name)) {
+      return null;
+    }
+    if (optionsWithValue.has(option.name)) {
+      consumesNextValue = !option.hasInlineValue;
+    }
   }
-  if (optionsWithValue.has(option.name)) {
-    return !option.hasInlineValue;
-  }
-  return null;
+  return consumesNextValue;
 }
 
-function resolveEnvSplitPayload(payload: string, depth: number): string[] | null {
+function findParsedCarrierOption(
+  options: readonly ParsedCarrierOption[],
+  names: ReadonlySet<string>,
+): ParsedCarrierOption | undefined {
+  return options.find((option) => names.has(option.name));
+}
+
+function resolveEnvSplitPayload(
+  payload: string,
+  trailingArgv: string[],
+  depth: number,
+): string[] | null {
   const innerArgv = splitShellArgs(payload);
   if (!innerArgv || innerArgv.length === 0) {
     return null;
   }
-  return resolveEnvCarriedArgv(["env", ...innerArgv], depth + 1) ?? innerArgv;
+  const carriedArgv = [...innerArgv, ...trailingArgv];
+  return resolveEnvCarriedArgv(["env", ...carriedArgv], depth + 1) ?? carriedArgv;
 }
 
 function resolveEnvCarriedArgv(argv: string[], depth = 0): string[] | null {
-  if (depth > MAX_INLINE_EVAL_CARRIER_DEPTH || normalizeExecutableToken(argv[0] ?? "") !== "env") {
+  if (depth > MAX_ENV_SPLIT_PAYLOAD_DEPTH || normalizeExecutableToken(argv[0] ?? "") !== "env") {
     return null;
   }
   for (let index = 1; index < argv.length; index += 1) {
@@ -156,25 +208,20 @@ function resolveEnvCarriedArgv(argv: string[], depth = 0): string[] | null {
     if (token === "--") {
       return argv.slice(index + 1);
     }
-    if (token === "-S" || token === "--split-string") {
-      const payload = argv[index + 1];
-      return typeof payload === "string" ? resolveEnvSplitPayload(payload, depth) : null;
-    }
-    if (token.startsWith("--split-string=")) {
-      return resolveEnvSplitPayload(token.slice("--split-string=".length), depth);
-    }
-    if (token.startsWith("-S") && token.length > 2) {
-      return resolveEnvSplitPayload(token.slice(2), depth);
-    }
     if (token.startsWith("-")) {
-      const consumeNextValue = knownCarrierOptionConsumesNextValue(
-        parseCarrierOptionToken(token, ENV_OPTIONS_WITH_VALUE),
-        ENV_STANDALONE_OPTIONS,
-        ENV_OPTIONS_WITH_VALUE,
-      );
-      if (consumeNextValue === null) {
+      const option = parseCarrierOptionToken(token, ENV_STANDALONE_OPTIONS, ENV_OPTIONS_WITH_VALUE);
+      if (!option) {
         return null;
       }
+      const splitStringOption = findParsedCarrierOption(option, ENV_SPLIT_STRING_OPTIONS);
+      if (splitStringOption) {
+        const payloadIndex = splitStringOption.inlineValue === undefined ? index + 1 : index;
+        const payload = splitStringOption.inlineValue ?? argv[payloadIndex];
+        return typeof payload === "string"
+          ? resolveEnvSplitPayload(payload, argv.slice(payloadIndex + 1), depth)
+          : null;
+      }
+      const consumeNextValue = knownCarrierOptionConsumesNextValue(option, ENV_OPTIONS_WITH_VALUE);
       if (consumeNextValue) {
         index += 1;
       }
@@ -234,14 +281,19 @@ function resolveSudoLikeCarriedArgv(argv: string[]): string[] | null {
     if (!token.startsWith("-")) {
       return argv.slice(index);
     }
-    const option = parseCarrierOptionToken(token, optionsWithValue);
-    if (executable === "sudo" && SUDO_NON_EXEC_OPTIONS.has(option.name)) {
+    const option = parseCarrierOptionToken(
+      token,
+      standaloneOptions,
+      optionsWithValue,
+      executable === "sudo" ? SUDO_NON_EXEC_OPTIONS : undefined,
+    );
+    if (!option) {
       return null;
     }
     const consumeNextValue = knownCarrierOptionConsumesNextValue(
       option,
-      standaloneOptions,
       optionsWithValue,
+      executable === "sudo" ? SUDO_NON_EXEC_OPTIONS : undefined,
     );
     if (consumeNextValue === null) {
       return null;
@@ -259,9 +311,6 @@ export function resolveCarrierCommandArgv(
   depth = 0,
   options?: { includeExec?: boolean },
 ): string[] | null {
-  if (depth > MAX_INLINE_EVAL_CARRIER_DEPTH) {
-    return null;
-  }
   const executable = normalizeExecutableToken(argv[0] ?? "");
   switch (executable) {
     case "env":
@@ -291,14 +340,11 @@ function resolveExecCarriedArgv(argv: string[]): string[] | null {
     if (!token.startsWith("-")) {
       return argv.slice(index);
     }
-    const consumeNextValue = knownCarrierOptionConsumesNextValue(
-      parseCarrierOptionToken(token, EXEC_OPTIONS_WITH_VALUE),
-      EXEC_STANDALONE_OPTIONS,
-      EXEC_OPTIONS_WITH_VALUE,
-    );
-    if (consumeNextValue === null) {
+    const option = parseCarrierOptionToken(token, EXEC_STANDALONE_OPTIONS, EXEC_OPTIONS_WITH_VALUE);
+    if (!option) {
       return null;
     }
+    const consumeNextValue = knownCarrierOptionConsumesNextValue(option, EXEC_OPTIONS_WITH_VALUE);
     if (consumeNextValue) {
       index += 1;
     }
@@ -307,24 +353,31 @@ function resolveExecCarriedArgv(argv: string[]): string[] | null {
   return null;
 }
 
-export function buildCommandPayloadCandidates(argv: string[], depth = 0): string[] {
-  if (depth > MAX_INLINE_EVAL_CARRIER_DEPTH) {
+function commandArgvKey(argv: readonly string[]): string {
+  return argv.join("\0");
+}
+
+export function buildCommandPayloadCandidates(
+  argv: string[],
+  seenArgv = new Set<string>(),
+): string[] {
+  const key = commandArgvKey(argv);
+  if (seenArgv.has(key)) {
     return argv.length > 0 ? [argv.join(" ")] : [];
   }
+  seenArgv.add(key);
   const assignmentStrippedArgv = stripLeadingEnvAssignments(argv);
-  const carriedArgv = resolveCarrierCommandArgv(assignmentStrippedArgv, depth, {
+  const carriedArgv = resolveCarrierCommandArgv(assignmentStrippedArgv, 0, {
     includeExec: true,
   });
   const executableArgv = carriedArgv ?? assignmentStrippedArgv;
-  const carriedCandidates = carriedArgv
-    ? buildCommandPayloadCandidates(carriedArgv, depth + 1)
-    : [];
+  const carriedCandidates = carriedArgv ? buildCommandPayloadCandidates(carriedArgv, seenArgv) : [];
   const shellWrapperPayload = extractShellWrapperInlineCommand(executableArgv);
   const shellWrapperCandidates = shellWrapperPayload
     ? (() => {
         const innerArgv = splitShellArgs(shellWrapperPayload);
         return innerArgv
-          ? buildCommandPayloadCandidates(innerArgv, depth + 1)
+          ? buildCommandPayloadCandidates(innerArgv, seenArgv)
           : [shellWrapperPayload];
       })()
     : [];
@@ -347,34 +400,55 @@ function uniqueCommandPayloadCandidates(candidates: string[]): string[] {
   return [...new Set(candidates.filter((candidate) => candidate.trim().length > 0))];
 }
 
-export function detectCarrierInlineEvalArgv(
+function detectCarrierInlineEvalArgvInternal(
   argv: string[],
-  depth = 0,
+  seenArgv: Set<string>,
 ): InterpreterInlineEvalHit | null {
-  if (depth > MAX_INLINE_EVAL_CARRIER_DEPTH) {
+  const key = commandArgvKey(argv);
+  if (seenArgv.has(key)) {
     return null;
   }
+  seenArgv.add(key);
+
   const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(argv);
   if (dispatchUnwrap.kind === "unwrapped") {
-    return detectInlineEvalArgv(dispatchUnwrap.argv, depth + 1);
+    return detectInlineEvalArgvInternal(dispatchUnwrap.argv, seenArgv);
   }
 
   const executable = normalizeExecutableToken(argv[0] ?? "");
   if (!COMMAND_CARRIER_EXECUTABLES.has(executable)) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(argv, depth);
-  return carriedArgv ? detectInlineEvalArgv(carriedArgv, depth + 1) : null;
+  const carriedArgv = resolveCarrierCommandArgv(argv);
+  if (!carriedArgv) {
+    return null;
+  }
+  return (
+    detectInterpreterInlineEvalArgv(carriedArgv) ??
+    detectCarrierInlineEvalArgvInternal(carriedArgv, seenArgv)
+  );
 }
 
-export function detectInlineEvalArgv(
+export function detectCarrierInlineEvalArgv(argv: string[]): InterpreterInlineEvalHit | null {
+  return detectCarrierInlineEvalArgvInternal(argv, new Set());
+}
+
+function detectInlineEvalArgvInternal(
   argv: string[] | undefined | null,
-  depth = 0,
+  seenArgv: Set<string>,
 ): InterpreterInlineEvalHit | null {
   if (!Array.isArray(argv)) {
     return null;
   }
-  return detectInterpreterInlineEvalArgv(argv) ?? detectCarrierInlineEvalArgv(argv, depth);
+  return (
+    detectInterpreterInlineEvalArgv(argv) ?? detectCarrierInlineEvalArgvInternal(argv, seenArgv)
+  );
+}
+
+export function detectInlineEvalArgv(
+  argv: string[] | undefined | null,
+): InterpreterInlineEvalHit | null {
+  return detectInlineEvalArgvInternal(argv, new Set());
 }
 
 export function detectInlineEvalInSegments(

@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
@@ -144,13 +145,19 @@ function scanWrapperInvocation(
 
 export function unwrapEnvInvocation(argv: string[]): string[] | null {
   const parsed = parseEnvInvocationPrelude(argv);
-  return parsed ? argv.slice(parsed.commandIndex) : null;
+  return parsed ? (parsed.splitArgv ?? argv.slice(parsed.commandIndex)) : null;
 }
 
 type ParsedEnvInvocationPrelude = {
   assignmentKeys: string[];
   commandIndex: number;
+  splitArgv?: string[];
 };
+
+function splitEnvSplitStringPayload(payload: string, trailingArgv: string[]): string[] | null {
+  const splitArgv = splitShellArgs(payload);
+  return splitArgv && splitArgv.length > 0 ? [...splitArgv, ...trailingArgv] : null;
+}
 
 function parseEnvInvocationPrelude(argv: string[]): ParsedEnvInvocationPrelude | null {
   let idx = 1;
@@ -184,6 +191,31 @@ function parseEnvInvocationPrelude(argv: string[]): ParsedEnvInvocationPrelude |
     }
     const lower = normalizeLowercaseStringOrEmpty(token);
     const [flag] = lower.split("=", 2);
+    if (flag === "-s" || flag === "--split-string") {
+      const payload = lower.includes("=") ? token.slice(token.indexOf("=") + 1) : argv[idx + 1];
+      if (typeof payload !== "string") {
+        return null;
+      }
+      const trailingIndex = lower.includes("=") ? idx + 1 : idx + 2;
+      const splitArgv = splitEnvSplitStringPayload(payload, argv.slice(trailingIndex));
+      return splitArgv
+        ? {
+            assignmentKeys,
+            commandIndex: trailingIndex,
+            splitArgv,
+          }
+        : null;
+    }
+    if (lower.startsWith("-s") && lower.length > 2) {
+      const splitArgv = splitEnvSplitStringPayload(token.slice(2), argv.slice(idx + 1));
+      return splitArgv
+        ? {
+            assignmentKeys,
+            commandIndex: idx + 1,
+            splitArgv,
+          }
+        : null;
+    }
     if (ENV_FLAG_OPTIONS.has(flag)) {
       idx += 1;
       continue;
