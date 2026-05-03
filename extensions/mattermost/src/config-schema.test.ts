@@ -10,6 +10,25 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts SecretRef interaction secret on account", () => {
+    const result = MattermostConfigSchema.safeParse({
+      accounts: {
+        main: {
+          botToken: { source: "env", provider: "default", id: "MATTERMOST_BOT_TOKEN_MAIN" },
+          baseUrl: "https://chat.example.com",
+          interactions: {
+            secret: {
+              source: "env",
+              provider: "default",
+              id: "MATTERMOST_INTERACTION_SECRET_MAIN",
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts SecretRef botToken on account", () => {
     const result = MattermostConfigSchema.safeParse({
       accounts: {

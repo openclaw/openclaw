@@ -84,6 +84,8 @@ export type MattermostAccountConfig = {
   interactions?: {
     /** External base URL used for Mattermost interaction callbacks. */
     callbackBaseUrl?: string;
+    /** Secret used to sign Mattermost interactive button callbacks. */
+    secret?: SecretInput;
     /**
      * IP/CIDR allowlist for callback request sources when Mattermost reaches the gateway
      * over a non-loopback path. Keep this narrow to the Mattermost server or trusted ingress.

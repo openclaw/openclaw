@@ -8,6 +8,7 @@ import {
   buildButtonAttachments,
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
+  ensureInteractionSecret,
   generateInteractionToken,
   getInteractionCallbackUrl,
   getInteractionSecret,
@@ -20,29 +21,31 @@ import {
 
 // ── HMAC token management ────────────────────────────────────────────
 
-describe("setInteractionSecret / getInteractionSecret", () => {
+describe("setInteractionSecret / ensureInteractionSecret / getInteractionSecret", () => {
   beforeEach(() => {
-    setInteractionSecret("test-bot-token");
+    setInteractionSecret("default-secret");
   });
 
-  it("derives a deterministic secret from the bot token", () => {
-    setInteractionSecret("token-a");
-    const secretA = getInteractionSecret();
-    setInteractionSecret("token-a");
-    const secretA2 = getInteractionSecret();
+  it("stores an explicit default secret", () => {
+    expect(getInteractionSecret()).toBe("default-secret");
+  });
+
+  it("uses an explicit per-account secret verbatim", () => {
+    setInteractionSecret("acct-configured", "configured-secret");
+    expect(getInteractionSecret("acct-configured")).toBe("configured-secret");
+  });
+
+  it("reuses the same generated secret for an account within the process", () => {
+    const secretA = ensureInteractionSecret("acct-generated");
+    const secretA2 = ensureInteractionSecret("acct-generated");
     expect(secretA).toBe(secretA2);
+    expect(secretA).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("produces different secrets for different tokens", () => {
-    setInteractionSecret("token-a");
-    const secretA = getInteractionSecret();
-    setInteractionSecret("token-b");
-    const secretB = getInteractionSecret();
-    expect(secretA).not.toBe(secretB);
-  });
-
-  it("returns a hex string", () => {
-    expect(getInteractionSecret()).toMatch(/^[0-9a-f]+$/);
+  it("uses a configured secret when ensuring an account secret", () => {
+    const ensured = ensureInteractionSecret("acct-ensured", "configured-secret");
+    expect(ensured).toBe("configured-secret");
+    expect(getInteractionSecret("acct-ensured")).toBe("configured-secret");
   });
 });
 
@@ -50,7 +53,7 @@ describe("setInteractionSecret / getInteractionSecret", () => {
 
 describe("generateInteractionToken / verifyInteractionToken", () => {
   beforeEach(() => {
-    setInteractionSecret("test-bot-token");
+    setInteractionSecret("test-interaction-secret");
   });
 
   it("generates a hex token", () => {

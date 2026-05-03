@@ -26,6 +26,7 @@ export type ResolvedMattermostAccount = {
   name?: string;
   botToken?: string;
   baseUrl?: string;
+  interactionSecret?: string;
   botTokenSource: MattermostTokenSource;
   baseUrlSource: MattermostBaseUrlSource;
   config: MattermostAccountConfig;
@@ -99,6 +100,12 @@ export function resolveMattermostAccount(params: {
         path: `channels.mattermost.accounts.${accountId}.botToken`,
       });
   const configUrl = merged.baseUrl?.trim();
+  const configInteractionSecret = params.allowUnresolvedSecretRef
+    ? normalizeSecretInputString(merged.interactions?.secret)
+    : normalizeResolvedSecretInputString({
+        value: merged.interactions?.secret,
+        path: `channels.mattermost.accounts.${accountId}.interactions.secret`,
+      });
   const botToken = configToken || envToken;
   const baseUrl = normalizeMattermostBaseUrl(configUrl || envUrl);
   const requireMention = resolveMattermostRequireMention(merged);
@@ -112,6 +119,7 @@ export function resolveMattermostAccount(params: {
     name: normalizeOptionalString(merged.name),
     botToken,
     baseUrl,
+    interactionSecret: configInteractionSecret,
     botTokenSource,
     baseUrlSource,
     config: merged,

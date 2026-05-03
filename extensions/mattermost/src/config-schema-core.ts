@@ -110,6 +110,7 @@ const MattermostAccountSchemaBase = z
     interactions: z
       .object({
         callbackBaseUrl: z.string().optional(),
+        secret: buildSecretInputSchema().optional(),
         allowedSourceIps: z.array(z.string()).optional(),
       })
       .optional(),
