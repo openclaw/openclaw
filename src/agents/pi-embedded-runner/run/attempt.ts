@@ -179,7 +179,7 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
-import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import {
@@ -2214,7 +2214,7 @@ export async function runEmbeddedAttempt(
           );
           const truncated = limitHistoryTurns(
             heartbeatFiltered,
-            getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
           );
           // Re-run tool_use/tool_result pairing repair after truncation, since
           // limitHistoryTurns can orphan tool_result blocks by removing the
