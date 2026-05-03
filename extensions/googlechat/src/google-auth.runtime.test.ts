@@ -8,8 +8,9 @@ const mocks = vi.hoisted(() => ({
     hostnameAllowlist: hosts,
   })),
   fetchWithSsrFGuard: vi.fn(),
-  gaxiosCtor: vi.fn(function MockGaxios(this: { defaults: Record<string, unknown> }, defaults) {
+  gaxiosCtor: vi.fn(function MockGaxios(this: { defaults: Record<string, unknown>; interceptors: { request: Set<unknown>; response: Set<unknown> } }, defaults) {
     this.defaults = defaults as Record<string, unknown>;
+    this.interceptors = { request: new Set(), response: new Set() };
   }),
 }));
 
@@ -434,6 +435,43 @@ describe("googlechat google auth runtime", () => {
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
+  });
+
+  it("registers a request interceptor that normalizes plain-object headers to Headers instances (#76742)", async () => {
+    const transport = await getGoogleAuthTransport();
+    const interceptors = (transport as unknown as { interceptors: { request: Set<{ resolved: (config: unknown) => Promise<unknown> }> } }).interceptors.request;
+    expect(interceptors.size).toBeGreaterThanOrEqual(1);
+
+    // Simulate what gaxios `extend(true, {}, config)` can produce when the
+    // bundled deep-clone downgrades a `Headers` instance to a plain object.
+    const plainObjectHeaders = { "x-goog-api-client": "gl-node/24.14.1" };
+    const config = { headers: plainObjectHeaders, url: "https://example.com" };
+
+    // Run through all registered interceptors in order.
+    let processed: Record<string, unknown> = config;
+    for (const interceptor of interceptors) {
+      processed = (await interceptor.resolved(processed)) as Record<string, unknown>;
+    }
+
+    expect(processed.headers).toBeInstanceOf(Headers);
+    expect((processed.headers as Headers).has("x-goog-api-client")).toBe(true);
+    expect((processed.headers as Headers).get("x-goog-api-client")).toBe("gl-node/24.14.1");
+  });
+
+  it("headers interceptor leaves proper Headers instances untouched (#76742)", async () => {
+    const transport = await getGoogleAuthTransport();
+    const interceptors = (transport as unknown as { interceptors: { request: Set<{ resolved: (config: unknown) => Promise<unknown> }> } }).interceptors.request;
+
+    const nativeHeaders = new Headers({ accept: "application/json" });
+    const config = { headers: nativeHeaders, url: "https://example.com" };
+
+    let processed: Record<string, unknown> = config;
+    for (const interceptor of interceptors) {
+      processed = (await interceptor.resolved(processed)) as Record<string, unknown>;
+    }
+
+    // Should be the exact same instance — no unnecessary re-wrapping.
+    expect(processed.headers).toBe(nativeHeaders);
   });
 
   it("does not disclose raw credential paths or OS errors when file reads fail", async () => {

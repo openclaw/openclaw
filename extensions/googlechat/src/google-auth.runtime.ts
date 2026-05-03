@@ -504,9 +504,27 @@ export async function getGoogleAuthTransport(): Promise<GoogleAuthTransport> {
     googleAuthTransportPromise = (async () => {
       try {
         const { Gaxios } = await loadGoogleAuthRuntime();
-        return new Gaxios({
+        const transport = new Gaxios({
           fetchImplementation: createGoogleAuthFetch(),
         });
+        // google-auth-library's AuthClient registers a request interceptor
+        // that calls `config.headers.has()` / `.set()` expecting a native
+        // `Headers` instance.  When the bundled build's deep-clone utility
+        // (`extend`) copies the prepared config, `Headers` can be downgraded
+        // to a plain object whose prototype methods are lost.  Normalizing
+        // headers here — before the AuthClient interceptor fires — prevents
+        // the "config.headers.has is not a function" regression (#76742).
+        transport.interceptors.request.add({
+          resolved: async (config) => {
+            if (config.headers != null && !(config.headers instanceof Headers)) {
+              config.headers = new Headers(
+                config.headers as unknown as HeadersInit,
+              );
+            }
+            return config;
+          },
+        });
+        return transport;
       } catch (error) {
         googleAuthTransportPromise = null;
         throw error;
