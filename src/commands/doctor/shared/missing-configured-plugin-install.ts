@@ -495,9 +495,13 @@ async function repairMissingPluginInstalls(params: {
   }
 
   const missingPluginIds = new Set(
-    [...params.pluginIds].filter(
-      (pluginId) => !knownIds.has(pluginId) && !Object.hasOwn(nextRecords, pluginId),
-    ),
+    [...params.pluginIds].filter((pluginId) => {
+      const hasRecord = Object.hasOwn(nextRecords, pluginId);
+      return (
+        (!knownIds.has(pluginId) && !hasRecord) ||
+        (hasRecord && isInstalledRecordMissingOnDisk(nextRecords[pluginId], env))
+      );
+    }),
   );
   for (const candidate of collectDownloadableInstallCandidates({
     cfg: params.cfg,
@@ -507,7 +511,13 @@ async function repairMissingPluginInstalls(params: {
     configuredChannelIds: params.channelIds,
     blockedPluginIds: params.blockedPluginIds,
   })) {
-    if (knownIds.has(candidate.pluginId) || Object.hasOwn(nextRecords, candidate.pluginId)) {
+    const hasUsableRecord =
+      Object.hasOwn(nextRecords, candidate.pluginId) &&
+      !isInstalledRecordMissingOnDisk(nextRecords[candidate.pluginId], env);
+    if (knownIds.has(candidate.pluginId) && hasUsableRecord) {
+      continue;
+    }
+    if (hasUsableRecord) {
       continue;
     }
     const installed = await installCandidate({ candidate, records: nextRecords });
