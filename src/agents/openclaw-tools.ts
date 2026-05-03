@@ -22,7 +22,7 @@ import {
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
-import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -83,31 +83,15 @@ function hasExplicitImageModelConfig(config: OpenClawConfig | undefined): boolea
   return hasToolModelConfig(coerceImageModelConfig(config));
 }
 
-function isToolAllowedByFactoryAllowlist(toolName: string, allowlist?: string[]): boolean {
-  if (!allowlist || allowlist.length === 0) {
-    return true;
-  }
-  const expanded = new Set(expandToolGroups(allowlist));
-  return expanded.has("*") || expanded.has(normalizeToolName(toolName));
-}
-
-function isToolDeniedByFactoryDenylist(toolName: string, denylist?: string[]): boolean {
-  if (!denylist || denylist.length === 0) {
-    return false;
-  }
-  const expanded = new Set(expandToolGroups(denylist));
-  return expanded.has("*") || expanded.has(normalizeToolName(toolName));
-}
-
 function isToolAllowedByFactoryPolicy(params: {
   toolName: string;
   allowlist?: string[];
   denylist?: string[];
 }): boolean {
-  if (isToolDeniedByFactoryDenylist(params.toolName, params.denylist)) {
-    return false;
-  }
-  return isToolAllowedByFactoryAllowlist(params.toolName, params.allowlist);
+  return isToolAllowedByPolicyName(params.toolName, {
+    allow: params.allowlist,
+    deny: params.denylist,
+  });
 }
 
 function resolveImageToolFactoryAvailable(params: {
