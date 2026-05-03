@@ -398,7 +398,16 @@ export function resolveMemoryDreamingConfig(params: {
       DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING,
     ),
     ...(() => {
-      const stagger = normalizeOptionalPositiveInt(dreaming?.staggerMs);
+      const rawStagger = dreaming?.staggerMs;
+      const stagger =
+        typeof rawStagger === "number" && Number.isFinite(rawStagger) && rawStagger >= 0
+          ? Math.floor(rawStagger)
+          : typeof rawStagger === "string"
+            ? (() => {
+                const num = Number(rawStagger);
+                return Number.isFinite(num) && num >= 0 ? Math.floor(num) : undefined;
+              })()
+            : undefined;
       return stagger !== undefined ? { staggerMs: stagger } : {};
     })(),
     storage: {

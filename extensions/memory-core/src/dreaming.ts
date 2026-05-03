@@ -286,11 +286,12 @@ function buildManagedDreamingPatch(
   const scheduleTz = normalizeTrimmedString(job.schedule?.tz);
   const scheduleStaggerMs =
     typeof job.schedule?.staggerMs === "number" ? job.schedule.staggerMs : undefined;
+  const desiredStaggerMs = desired.schedule.staggerMs;
   if (
     scheduleKind !== "cron" ||
     !compareOptionalStrings(scheduleExpr, desired.schedule.expr) ||
     !compareOptionalStrings(scheduleTz, desired.schedule.tz) ||
-    scheduleStaggerMs !== desired.schedule.staggerMs
+    (desiredStaggerMs !== undefined && scheduleStaggerMs !== desiredStaggerMs)
   ) {
     patch.schedule = desired.schedule;
   }
