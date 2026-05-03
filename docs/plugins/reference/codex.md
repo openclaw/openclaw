@@ -12,7 +12,7 @@ Codex app-server harness and Codex-managed GPT model catalog.
 ## Distribution
 
 - Package: `@openclaw/codex`
-- Install route: ClawHub + npm
+- Install route: npm; ClawHub
 
 ## Surface
 

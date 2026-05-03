@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
@@ -94,5 +95,43 @@ describe("managed npm root", () => {
         },
       }),
     ).toBe("2026.5.2");
+  });
+
+  it("removes one managed dependency without dropping unrelated metadata", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "@openclaw/discord": "2026.5.2",
+            "@openclaw/voice-call": "2026.5.2",
+          },
+          devDependencies: {
+            fixture: "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await removeManagedNpmRootDependency({
+      npmRoot,
+      packageName: "@openclaw/voice-call",
+    });
+
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        "@openclaw/discord": "2026.5.2",
+      },
+      devDependencies: {
+        fixture: "1.0.0",
+      },
+    });
   });
 });
