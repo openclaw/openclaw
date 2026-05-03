@@ -1556,8 +1556,11 @@ describe("runGatewayUpdate", () => {
           "utf-8",
         );
         await writeBundledRuntimeSidecars(pkgRoot);
-        await writePackageDistInventory(pkgRoot);
-        await fs.rm(path.join(pkgRoot, MATRIX_HELPER_API), { force: true });
+        const inventory = await writePackageDistInventory(pkgRoot);
+        expect(inventory).toContain(MATRIX_HELPER_API);
+        const matrixHelperApiPath = path.join(pkgRoot, MATRIX_HELPER_API);
+        await expect(pathExists(matrixHelperApiPath)).resolves.toBe(true);
+        await fs.rm(matrixHelperApiPath);
       },
     });
 
