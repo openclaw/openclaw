@@ -2327,15 +2327,17 @@ describe("active-memory plugin", () => {
       await new Promise<never>(() => {});
     });
 
-    const startedAt = Date.now();
     const result = await hooks.before_prompt_build(
       { prompt: "what food do i usually order? zero hit", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
-    const wallClockMs = Date.now() - startedAt;
 
     expect(result).toBeUndefined();
-    expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS);
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("done status=empty"))).toBe(true);
+    expect(infoLines.some((line: string) => line.includes("done status=timeout"))).toBe(false);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
       expect.stringContaining("🧩 Active Memory: status=empty"),
       expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
@@ -2415,15 +2417,17 @@ describe("active-memory plugin", () => {
       await new Promise<never>(() => {});
     });
 
-    const startedAt = Date.now();
     const result = await hooks.before_prompt_build(
       { prompt: "what food do i usually order? unavailable", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
-    const wallClockMs = Date.now() - startedAt;
 
     expect(result).toBeUndefined();
-    expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS);
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(infoLines.some((line: string) => line.includes("done status=empty"))).toBe(true);
+    expect(infoLines.some((line: string) => line.includes("done status=timeout"))).toBe(false);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
       expect.stringContaining("🧩 Active Memory: status=empty"),
       expect.stringContaining(
