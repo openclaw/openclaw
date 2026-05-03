@@ -72,7 +72,10 @@ type GlobalAgentConnectConfiguration = Record<string, unknown> & {
   host: string;
   tls: Record<string, unknown>;
 };
-type GlobalAgentCreateConnection = (configuration: unknown, callback: unknown) => unknown;
+type GlobalAgentCreateConnection = typeof https.globalAgent.createConnection;
+type GlobalAgentCreateConnectionConfiguration = Parameters<GlobalAgentCreateConnection>[0];
+type GlobalAgentCreateConnectionCallback = Parameters<GlobalAgentCreateConnection>[1];
+type GlobalAgentCreateConnectionResult = ReturnType<GlobalAgentCreateConnection>;
 type GlobalAgentHttpsAgent = {
   createConnection: GlobalAgentCreateConnection;
 };
@@ -258,7 +261,9 @@ function isGlobalAgentHttpsAgent(value: unknown): value is GlobalAgentHttpsAgent
   return typeof value["createConnection"] === "function";
 }
 
-function withTlsTargetHost(configuration: unknown): unknown {
+function withTlsTargetHost(
+  configuration: GlobalAgentCreateConnectionConfiguration,
+): GlobalAgentCreateConnectionConfiguration {
   if (!isGlobalAgentConnectConfiguration(configuration)) {
     return configuration;
   }
@@ -277,7 +282,7 @@ function withTlsTargetHost(configuration: unknown): unknown {
   return {
     ...configuration,
     tls: tlsOptions,
-  };
+  } as GlobalAgentCreateConnectionConfiguration;
 }
 
 function patchGlobalAgentHttpsConnectTlsTargetHost(): void {
@@ -286,13 +291,13 @@ function patchGlobalAgentHttpsConnectTlsTargetHost(): void {
     return;
   }
 
-  const createConnection = agent.createConnection;
+  const createConnection = agent.createConnection.bind(agent);
   agent.createConnection = function createConnectionWithTlsTargetHost(
     this: unknown,
-    configuration: unknown,
-    callback: unknown,
-  ): unknown {
-    return createConnection.call(this, withTlsTargetHost(configuration), callback);
+    configuration: GlobalAgentCreateConnectionConfiguration,
+    callback?: GlobalAgentCreateConnectionCallback,
+  ): GlobalAgentCreateConnectionResult {
+    return createConnection(withTlsTargetHost(configuration), callback);
   };
   patchedGlobalAgentHttpsAgents.add(agent);
 }
