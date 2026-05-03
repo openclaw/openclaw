@@ -62,6 +62,29 @@ describe("createDiscordPluginBase", () => {
     );
     expect(plugin.config.isEnabled?.(workAccount, cfg)).toBe(true);
   });
+
+  it("does not treat unavailable SecretRef tokens as runtime configured", async () => {
+    const plugin = createDiscordPluginBase({ setup: {} as never });
+    const cfg = {
+      channels: {
+        discord: {
+          token: {
+            source: "env",
+            provider: "default",
+            id: "DISCORD_BOT_TOKEN",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = plugin.config.resolveAccount(cfg, "default");
+
+    expect(await plugin.config.isConfigured?.(account, cfg)).toBe(false);
+    expect(plugin.config.describeAccount?.(account, cfg)).toMatchObject({
+      configured: true,
+      tokenStatus: "configured_unavailable",
+    });
+  });
 });
 
 describe("discordConfigAdapter", () => {

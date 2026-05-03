@@ -22,6 +22,7 @@ export type ResolvedDiscordAccount = {
   name?: string;
   token: string;
   tokenSource: "env" | "config" | "none";
+  tokenStatus: "available" | "configured_unavailable" | "missing";
   config: DiscordAccountConfig;
 };
 
@@ -114,6 +115,7 @@ export function resolveDiscordAccount(params: {
     name: normalizeOptionalString(merged.name),
     token: tokenResolution.token,
     tokenSource: tokenResolution.source,
+    tokenStatus: tokenResolution.tokenStatus,
     config: merged,
   };
 }

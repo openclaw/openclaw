@@ -149,13 +149,14 @@ export function createDiscordPluginBase(params: {
         typeof env?.DISCORD_BOT_TOKEN === "string" && env.DISCORD_BOT_TOKEN.trim().length > 0,
       isEnabled: (account, cfg) => isDiscordAccountEnabledForRuntime(account, cfg),
       disabledReason: (account, cfg) => resolveDiscordAccountDisabledReason(account, cfg),
-      isConfigured: (account) => Boolean(account.token?.trim()),
+      isConfigured: (account) => account.tokenStatus === "available",
       describeAccount: (account) =>
         describeAccountSnapshot({
           account,
-          configured: Boolean(account.token?.trim()),
+          configured: account.tokenStatus !== "missing",
           extra: {
             tokenSource: account.tokenSource,
+            tokenStatus: account.tokenStatus,
           },
         }),
     },

@@ -91,7 +91,7 @@ describe("resolveDiscordToken", () => {
     expect(res.source).toBe("config");
   });
 
-  it("throws when token is an unresolved SecretRef object", () => {
+  it("marks unresolved SecretRef token as configured unavailable", () => {
     const cfg = {
       channels: {
         discord: {
@@ -100,8 +100,27 @@ describe("resolveDiscordToken", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(() => resolveDiscordToken(cfg)).toThrow(
-      /channels\.discord\.token: unresolved SecretRef/i,
-    );
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("config");
+    expect(res.tokenStatus).toBe("configured_unavailable");
+  });
+
+  it("marks explicit blank account token as missing without falling back", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "base-token",
+          accounts: {
+            work: { token: "" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveDiscordToken(cfg, { accountId: "work" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+    expect(res.tokenStatus).toBe("missing");
   });
 });

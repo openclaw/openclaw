@@ -58,7 +58,7 @@ describe("createDiscordRestClient", () => {
     expect(result.account.config.retry).toMatchObject({ attempts: 7 });
   });
 
-  it("still throws when no explicit token is provided and config token is unresolved", () => {
+  it("throws a missing token error when no explicit token is provided and config token is unresolved", () => {
     const cfg = {
       channels: {
         discord: {
@@ -71,6 +71,8 @@ describe("createDiscordRestClient", () => {
       },
     } as OpenClawConfig;
 
-    expect(() => createDiscordRestClient({ cfg, rest: fakeRest })).toThrow(/unresolved SecretRef/i);
+    expect(() => createDiscordRestClient({ cfg, rest: fakeRest })).toThrow(
+      /Discord bot token missing/,
+    );
   });
 });

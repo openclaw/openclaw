@@ -92,6 +92,7 @@ function resolveAccountWithoutToken(params: {
     name: normalizeOptionalString(merged.name),
     token: "",
     tokenSource: "none",
+    tokenStatus: "missing",
     config: merged,
   };
 }
