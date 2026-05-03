@@ -260,6 +260,8 @@ describe("whatsapp setup wizard", () => {
         authDir: "/tmp/work",
         isLegacyAuthDir: false,
         groupPolicy: "open",
+        replyToOfflineMessages: false,
+        offlineMessageMaxAgeSeconds: 300,
       },
     });
 
@@ -292,6 +294,8 @@ describe("whatsapp setup wizard", () => {
         authDir: "/tmp/work",
         isLegacyAuthDir: false,
         groupPolicy: "open",
+        replyToOfflineMessages: false,
+        offlineMessageMaxAgeSeconds: 300,
       },
     });
 
