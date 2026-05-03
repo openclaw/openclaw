@@ -450,7 +450,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       agentId: "main",
       purpose: "status",
     });
-    expect(manager.probeVectorAvailability).toHaveBeenCalled();
+    expect(manager.probeVectorAvailability).not.toHaveBeenCalled();
     expect(manager.status).toHaveBeenCalled();
     expect(manager.close).toHaveBeenCalled();
     expect(result).toEqual({

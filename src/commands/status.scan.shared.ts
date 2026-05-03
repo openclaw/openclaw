@@ -335,9 +335,6 @@ async function resolveMemoryManagerStatusSnapshot(
     return null;
   }
   try {
-    try {
-      await manager.probeVectorAvailability();
-    } catch {}
     const status = manager.status();
     return { agentId, ...status };
   } finally {
