@@ -170,12 +170,16 @@ function compareStableSemver(a: string, b: string): number {
   return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
 }
 
-async function resolveTrustedOfficialStableNpmResolution(params: {
+type TrustedOfficialPrereleaseResolution =
+  | { kind: "stable"; resolution: NpmSpecResolution }
+  | { kind: "allow-prerelease-only" };
+
+async function resolveTrustedOfficialPrereleaseResolution(params: {
   spec: ParsedRegistryNpmSpec;
   resolvedPrereleaseVersion: string;
   timeoutMs: number;
   logger: PluginInstallLogger;
-}): Promise<NpmSpecResolution | null> {
+}): Promise<TrustedOfficialPrereleaseResolution | null> {
   if (!params.spec.name.startsWith("@openclaw/")) {
     return null;
   }
@@ -199,12 +203,20 @@ async function resolveTrustedOfficialStableNpmResolution(params: {
   } catch {
     return null;
   }
-  const stableVersion = (Array.isArray(parsed) ? parsed : [parsed])
-    .filter((value): value is string => typeof value === "string")
-    .filter((value) => isExactSemverVersion(value) && !isPrereleaseSemverVersion(value))
+  const semverVersions = (Array.isArray(parsed) ? parsed : [parsed]).filter(
+    (value): value is string => typeof value === "string" && isExactSemverVersion(value),
+  );
+  const stableVersion = semverVersions
+    .filter((value) => !isPrereleaseSemverVersion(value))
     .sort(compareStableSemver)
     .at(-1);
   if (!stableVersion) {
+    if (semverVersions.length > 0 && semverVersions.every(isPrereleaseSemverVersion)) {
+      params.logger.warn?.(
+        `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; allowing it because this trusted official OpenClaw package has no stable npm versions yet.`,
+      );
+      return { kind: "allow-prerelease-only" };
+    }
     return null;
   }
 
@@ -219,7 +231,7 @@ async function resolveTrustedOfficialStableNpmResolution(params: {
   params.logger.warn?.(
     `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${stableSpec} for this trusted official OpenClaw install.`,
   );
-  return metadataResult.metadata;
+  return { kind: "stable", resolution: metadataResult.metadata };
 }
 
 function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
@@ -1245,18 +1257,20 @@ export async function installPluginFromNpmSpec(
       resolvedVersion: npmResolution.version,
     })
   ) {
-    const stableResolution = params.trustedSourceLinkedOfficialInstall
-      ? await resolveTrustedOfficialStableNpmResolution({
+    const trustedResolution = params.trustedSourceLinkedOfficialInstall
+      ? await resolveTrustedOfficialPrereleaseResolution({
           spec: parsedSpec,
           resolvedPrereleaseVersion: npmResolution.version,
           timeoutMs,
           logger,
         })
       : null;
-    if (stableResolution) {
-      Object.assign(npmResolution, stableResolution, {
+    if (trustedResolution?.kind === "stable") {
+      Object.assign(npmResolution, trustedResolution.resolution, {
         resolvedAt: npmResolution.resolvedAt,
       });
+    } else if (trustedResolution?.kind === "allow-prerelease-only") {
+      // Keep the original prerelease resolution. The package has no stable line yet.
     } else {
       return {
         ok: false,
