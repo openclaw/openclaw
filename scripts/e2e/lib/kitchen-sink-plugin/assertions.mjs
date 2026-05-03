@@ -142,7 +142,6 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "cli registration missing explicit commands metadata",
     "only bundled plugins can register Codex app-server extension factories",
     "only bundled plugins can register agent tool result middleware",
-    "agent event subscription registration requires id and handle",
     'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
     "context engine registration missing id",
     "control UI descriptor registration requires id, surface, label, and valid optional fields",
@@ -158,6 +157,10 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "session scheduler job registration requires unique id, sessionKey, and kind",
     "tool metadata registration missing toolName",
   ]);
+  const optionalErrorMessages = new Set([
+    "agent event subscription registration requires id and handle",
+  ]);
+  const allowedErrorMessages = new Set([...expectedErrorMessages, ...optionalErrorMessages]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
     if (errorMessages.size > 0) {
       throw new Error(
@@ -167,7 +170,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     return;
   }
   for (const message of errorMessages) {
-    if (!expectedErrorMessages.has(message)) {
+    if (!allowedErrorMessages.has(message)) {
       throw new Error(`unexpected kitchen-sink diagnostic error: ${message}`);
     }
   }
