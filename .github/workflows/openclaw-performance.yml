@@ -36,7 +36,7 @@ on:
         default: false
         type: boolean
       kova_ref:
-        description: Kova Git ref to install
+        description: openclaw/Kova Git ref to install
         required: false
         default: 51947110f5cacb6ab2c0947594ea9628031c9fcf
         type: string
@@ -51,6 +51,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   OCM_VERSION: v0.2.15
+  KOVA_REPOSITORY: openclaw/Kova
   PERFORMANCE_MODEL_ID: gpt-5.4
 
 jobs:
@@ -157,7 +158,7 @@ jobs:
           mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")"
           curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh \
             | bash -s -- --version "$OCM_VERSION" --prefix "$HOME/.local" --force
-          git clone --filter=blob:none https://github.com/shakkernerd/Kova.git "$KOVA_SRC"
+          git clone --filter=blob:none "https://github.com/${KOVA_REPOSITORY}.git" "$KOVA_SRC"
           git -C "$KOVA_SRC" checkout "$KOVA_REF"
           cat > "$HOME/.local/bin/kova" <<EOF
           #!/usr/bin/env bash

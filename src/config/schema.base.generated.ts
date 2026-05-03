@@ -19056,7 +19056,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 enum: ["automatic", "message_tool"],
                 title: "Group Visible Replies",
                 description:
-                  'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+                  'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
               },
             },
             additionalProperties: false,
@@ -28529,7 +28529,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.groupChat.visibleReplies": {
       label: "Group Visible Replies",
-      help: 'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+      help: 'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
       tags: ["advanced"],
     },
     "messages.queue": {

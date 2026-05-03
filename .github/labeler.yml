@@ -195,7 +195,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
-          - "docs.acp.md"
 
 "cli":
   - changed-files:
@@ -222,6 +221,7 @@
           - "setup-podman.sh"
           - ".dockerignore"
           - "scripts/docker/setup.sh"
+          - "scripts/docker/sandbox/Dockerfile*"
           - "scripts/podman/setup.sh"
           - "scripts/**/*docker*"
           - "scripts/**/Dockerfile*"

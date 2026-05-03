@@ -341,15 +341,12 @@ export function registerLogsCli(program: Command) {
         if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {
           followRetryAttempt += 1;
           const backoffMs = computeBackoff(FOLLOW_BACKOFF_POLICY, followRetryAttempt);
-          if (
-            !errorLine(
-              colorize(
-                rich,
-                theme.warn,
-                `[logs] gateway disconnected, reconnecting in ${Math.round(backoffMs / 1_000)}s...`,
-              ),
-            )
-          ) {
+          const message = `[logs] gateway disconnected, reconnecting in ${Math.round(backoffMs / 1_000)}s...`;
+          if (jsonMode) {
+            if (!emitJsonLine({ type: "notice", message }, true)) {
+              return;
+            }
+          } else if (!errorLine(colorize(rich, theme.warn, message))) {
             return;
           }
           await delay(backoffMs);
@@ -365,6 +362,16 @@ export function registerLogsCli(program: Command) {
         );
         process.exit(1);
         return;
+      }
+      if (followRetryAttempt > 0) {
+        const message = "[logs] gateway reconnected";
+        if (jsonMode) {
+          if (!emitJsonLine({ type: "notice", message }, true)) {
+            return;
+          }
+        } else if (!errorLine(colorize(rich, theme.muted, message))) {
+          return;
+        }
       }
       followRetryAttempt = 0;
       const lines = Array.isArray(payload.lines) ? payload.lines : [];
