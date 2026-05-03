@@ -1605,9 +1605,23 @@ export function createConfigIO(
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
+      let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+      const loadValidationPluginMetadataSnapshot = (config: OpenClawConfig) => {
+        if (pluginMetadataSnapshot) {
+          return pluginMetadataSnapshot;
+        }
+        const defaultAgentId = resolveDefaultAgentId(config);
+        pluginMetadataSnapshot = loadPluginMetadataSnapshot({
+          config,
+          workspaceDir: resolveAgentWorkspaceDir(config, defaultAgentId),
+          env: deps.env,
+        });
+        return pluginMetadataSnapshot;
+      };
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, {
         env: deps.env,
         pluginValidation: overrides.pluginValidation,
+        loadPluginMetadataSnapshot: loadValidationPluginMetadataSnapshot,
         sourceRaw: effectiveParsed,
       });
       if (!validated.ok) {
@@ -1643,7 +1657,9 @@ export function createConfigIO(
         deps.logger.warn(`Config warnings:\n${details}`);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
-      const cfg = materializeRuntimeConfig(validated.config, "load");
+      const cfg = materializeRuntimeConfig(validated.config, "load", {
+        manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
+      });
       observeLoadConfigSnapshot({
         ...createConfigFileSnapshot({
           path: configPath,
@@ -1855,7 +1871,9 @@ export function createConfigIO(
 
       warnIfConfigFromFuture(validated.config, deps.logger);
       const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
-        materializeRuntimeConfig(validated.config, "snapshot"),
+        materializeRuntimeConfig(validated.config, "snapshot", {
+          manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
+        }),
       );
       return await deps.measure("config.snapshot.read.observe", () =>
         finalizeReadConfigSnapshotInternalResult(deps, {
@@ -1980,7 +1998,9 @@ export function createConfigIO(
       return result.snapshot.config;
     }
     return finalizeLoadedRuntimeConfig(
-      materializeRuntimeConfig(result.snapshot.sourceConfig, "load"),
+      materializeRuntimeConfig(result.snapshot.sourceConfig, "load", {
+        manifestRegistry: result.pluginMetadataSnapshot?.manifestRegistry,
+      }),
     );
   }
 
