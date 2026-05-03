@@ -54,10 +54,6 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import {
-  getInspectableTaskRegistrySummary,
-  stopTaskRegistryMaintenance,
-} from "../tasks/task-registry.maintenance.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import {
@@ -381,6 +377,23 @@ function createGatewayStartupTrace() {
   };
 }
 
+function collectProcessMemoryUsageMb(): ReadonlyArray<readonly [string, number]> {
+  const usage = process.memoryUsage();
+  const toMb = (bytes: number) => bytes / 1024 / 1024;
+  return [
+    ["rssMb", toMb(usage.rss)],
+    ["heapTotalMb", toMb(usage.heapTotal)],
+    ["heapUsedMb", toMb(usage.heapUsed)],
+    ["externalMb", toMb(usage.external)],
+    ["arrayBuffersMb", toMb(usage.arrayBuffers)],
+  ];
+}
+
+async function stopTaskRegistryMaintenanceOnDemand(): Promise<void> {
+  const { stopTaskRegistryMaintenance } = await import("../tasks/task-registry.maintenance.js");
+  stopTaskRegistryMaintenance();
+}
+
 type AuthRateLimitConfig = Parameters<typeof createAuthRateLimiter>[0];
 
 function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | undefined): {
@@ -555,12 +568,13 @@ export async function startGatewayServer(
     startDiagnosticHeartbeat(undefined, { getConfig: getRuntimeConfig });
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
+  let getActiveTaskCount = () => 0;
   setPreRestartDeferralCheck(
     () =>
       getTotalQueueSize() +
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
-      getInspectableTaskRegistrySummary().active,
+      getActiveTaskCount(),
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
@@ -890,7 +904,7 @@ export async function startGatewayServer(
         cron: runtimeState.cronState.cron,
         heartbeatRunner: runtimeState.heartbeatRunner,
         updateCheckStop: runtimeState.stopGatewayUpdateCheck,
-        stopTaskRegistryMaintenance,
+        stopTaskRegistryMaintenance: stopTaskRegistryMaintenanceOnDemand,
         nodePresenceTimers,
         broadcast,
         tickInterval: runtimeState.tickInterval,
@@ -962,6 +976,7 @@ export async function startGatewayServer(
       }),
     );
     runtimeState.bonjourStop = earlyRuntime.bonjourStop;
+    getActiveTaskCount = earlyRuntime.getActiveTaskCount;
     runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
 
     Object.assign(
@@ -1372,6 +1387,7 @@ export async function startGatewayServer(
         deferSidecars: opts.deferStartupSidecars === true,
       }),
     ));
+    startupTrace.detail("memory.ready", collectProcessMemoryUsageMb());
     startupTrace.mark("ready");
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
@@ -1433,6 +1449,7 @@ export async function startGatewayServer(
         logCron,
       });
     }
+    startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
   } catch (err) {
     await closeOnStartupFailure();
     throw err;

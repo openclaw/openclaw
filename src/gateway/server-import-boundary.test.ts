@@ -27,6 +27,9 @@ describe("gateway startup import boundaries", () => {
       'createCanvasHostHandler } from "../canvas-host/server.js"',
     );
     expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
+    expect(serverImpl).not.toContain('from "../tasks/task-registry.js"');
+    expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
+    expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
     expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
   });
