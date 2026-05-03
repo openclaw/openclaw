@@ -1672,3 +1672,91 @@ describe("archiveSessionTranscripts", () => {
     expect(fs.existsSync(transcriptPath)).toBe(false);
   });
 });
+
+describe("oversized transcript line guards", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-fs-oversized-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("readRecentSessionMessagesAsync replaces oversized JSONL lines with placeholders", async () => {
+    const sessionId = "test-oversized-recent";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "x".repeat(300 * 1024);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "start" } }),
+      JSON.stringify({ message: { role: "assistant", content: oversizedContent } }),
+      JSON.stringify({ message: { role: "user", content: "after oversized" } }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain(oversizedContent);
+    expect(serialized).toContain("[chat.history omitted: message too large]");
+    expect(serialized).toContain("after oversized");
+  });
+
+  test("readRecentSessionUsageFromTranscriptAsync skips oversized lines", async () => {
+    const sessionId = "test-oversized-usage";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "y".repeat(300 * 1024);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: oversizedContent,
+          usage: { input: 9999, output: 9999 },
+          provider: "oversized-provider",
+          model: "oversized-model",
+        },
+      }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: "normal",
+          usage: { input: 100, output: 50 },
+          provider: "test-provider",
+          model: "test-model",
+        },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+
+    const usage = await readRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      512 * 1024,
+    );
+
+    expect(usage).not.toBeNull();
+    expect(usage?.modelProvider).not.toBe("oversized-provider");
+    expect(usage?.modelProvider).toBe("test-provider");
+  });
+
+  test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {
+    const sessionId = "test-async-title-bounded";
+    writeTranscript(
+      tmpDir,
+      sessionId,
+      buildBasicSessionTranscript(sessionId, "User says hi", "Bot says hello"),
+    );
+
+    const syncResult = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    const asyncResult = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
+
+    expect(asyncResult).toEqual(syncResult);
+    expect(asyncResult.firstUserMessage).toBe("User says hi");
+    expect(asyncResult.lastMessagePreview).toBe("Bot says hello");
+  });
+});
