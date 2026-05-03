@@ -143,6 +143,7 @@ plugins.
 | `api.registerAgentEventSubscription(...)`                                | Sanitized event subscriptions for workflow state and monitors                                                                     |
 | `api.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)` | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
 | `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup                                                             |
+| `api.sendSessionAttachment(...)`                                         | Bundled-only host-mediated file attachment delivery to the active session route                                                   |
 
 The contracts intentionally split authority:
 
