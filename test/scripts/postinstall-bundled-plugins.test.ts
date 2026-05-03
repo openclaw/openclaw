@@ -448,6 +448,43 @@ describe("bundled plugin postinstall", () => {
     );
   });
 
+  it("prunes global plugin-runtime symlinks before deleting their legacy targets", async () => {
+    const prefix = await createTempDirAsync("openclaw-packaged-prefix-");
+    const home = await createTempDirAsync("openclaw-packaged-home-");
+    const packageRoot = path.join(prefix, "lib", "node_modules", "openclaw");
+    const nodeModulesRoot = path.dirname(packageRoot);
+    const legacyRuntimeRoot = path.join(home, ".openclaw", "plugin-runtime-deps");
+    const legacyTarget = path.join(
+      legacyRuntimeRoot,
+      "openclaw-2026.4.29-slack",
+      "node_modules",
+      "@slack",
+      "web-api",
+    );
+    const slackScope = path.join(nodeModulesRoot, "@slack");
+    const slackLink = path.join(slackScope, "web-api");
+
+    await fs.mkdir(legacyTarget, { recursive: true });
+    await fs.writeFile(path.join(legacyTarget, "package.json"), "{}\n");
+    await fs.mkdir(slackScope, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.symlink(legacyTarget, slackLink, "dir");
+
+    const log = { log: vi.fn(), warn: vi.fn() };
+    pruneLegacyPluginRuntimeDepsState({
+      env: { HOME: home },
+      packageRoot,
+      log,
+    });
+
+    await expect(fs.lstat(slackLink)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(legacyRuntimeRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.log).toHaveBeenCalledWith(
+      expect.stringContaining("[postinstall] pruned legacy plugin runtime deps symlinks:"),
+    );
+  });
+
   it("keeps legacy plugin runtime deps cleanup non-fatal", () => {
     const warn = vi.fn();
 
