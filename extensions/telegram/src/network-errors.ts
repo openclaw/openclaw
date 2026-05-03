@@ -227,6 +227,37 @@ export function isTelegramRateLimitError(err: unknown): boolean {
   );
 }
 
+export function extractTelegramRetryAfterSec(err: unknown): number | undefined {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const retryAfter =
+      "parameters" in candidate && candidate.parameters && typeof candidate.parameters === "object"
+        ? (candidate.parameters as { retry_after?: unknown }).retry_after
+        : "response" in candidate &&
+            candidate.response &&
+            typeof candidate.response === "object" &&
+            "parameters" in candidate.response
+          ? (
+              candidate.response as {
+                parameters?: { retry_after?: unknown };
+              }
+            ).parameters?.retry_after
+          : "error" in candidate &&
+              candidate.error &&
+              typeof candidate.error === "object" &&
+              "parameters" in candidate.error
+            ? (candidate.error as { parameters?: { retry_after?: unknown } }).parameters
+                ?.retry_after
+            : undefined;
+    if (typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0) {
+      return retryAfter;
+    }
+  }
+  return undefined;
+}
+
 /** Returns true for HTTP 4xx client errors (Telegram explicitly rejected, not applied). */
 export function isTelegramClientRejection(err: unknown): boolean {
   return hasTelegramErrorCode(err, (code) => code >= 400 && code < 500);
