@@ -136,11 +136,10 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
     return mergeAuthProfileStores(mainStore, requestedStore);
   }
   if (requestedStore) {
-    const persistedMainStore = loadAuthProfileStoreForAgent(undefined, {
-      readOnly: true,
+    const cachedOrPersistedMainStore = loadAuthProfileStoreForAgent(undefined, {
       syncExternalCli: false,
     });
-    return mergeAuthProfileStores(persistedMainStore, requestedStore);
+    return mergeAuthProfileStores(cachedOrPersistedMainStore, requestedStore);
   }
   if (mainStore) {
     return mainStore;
@@ -244,6 +243,9 @@ function shouldKeepProfileInLocalStore(params: {
 }): boolean {
   if (params.credential.type !== "oauth") {
     return true;
+  }
+  if ((params.credential as Record<string, unknown>).managedBy === "codex-cli") {
+    return false;
   }
   if (isVaultBackedOAuthProfile(params.profileId, params.credential)) {
     return false;
@@ -455,7 +457,7 @@ export function loadAuthProfileStoreForRuntime(
 }
 
 export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
-  return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
+  return loadAuthProfileStoreForRuntime(agentDir, { allowKeychainPrompt: false });
 }
 
 export function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string): AuthProfileStore {
@@ -557,6 +559,39 @@ export function resolvePersistedAuthProfileOwnerAgentDir(params: {
   return mainStore?.profiles[params.profileId] ? undefined : params.agentDir;
 }
 
+export function resolveRuntimeAuthProfileOwnerAgentDir(params: {
+  agentDir?: string;
+  profileId: string;
+}): string | undefined {
+  if (!params.agentDir) {
+    return undefined;
+  }
+  const requestedPath = resolveAuthStorePath(params.agentDir);
+  const mainPath = resolveAuthStorePath();
+  if (requestedPath === mainPath) {
+    return undefined;
+  }
+
+  const mainRuntimeProfile = ensureAuthProfileStore(undefined, {
+    allowKeychainPrompt: false,
+  }).profiles[params.profileId];
+  if (!mainRuntimeProfile) {
+    return resolvePersistedAuthProfileOwnerAgentDir(params);
+  }
+
+  const localPersisted = loadPersistedAuthProfileStore(params.agentDir)?.profiles[params.profileId];
+  if (!localPersisted) {
+    return undefined;
+  }
+
+  return shouldUseMainOwnerForLocalOAuthCredential({
+    local: localPersisted,
+    main: mainRuntimeProfile,
+  })
+    ? undefined
+    : resolvePersistedAuthProfileOwnerAgentDir(params);
+}
+
 export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {
   const options: LoadAuthProfileStoreOptions = { syncExternalCli: false };
   const store = loadAuthProfileStoreForAgent(agentDir, options);
@@ -566,9 +601,8 @@ export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthPro
     return store;
   }
 
-  const mainStore = loadAuthProfileStoreForAgent(undefined, {
-    readOnly: true,
-    syncExternalCli: false,
+  const mainStore = ensureAuthProfileStore(undefined, {
+    allowKeychainPrompt: false,
   });
   return mergeAuthProfileStores(mainStore, store);
 }
@@ -594,6 +628,12 @@ export function saveAuthProfileStore(
   const authPath = resolveAuthStorePath(agentDir);
   const statePath = resolveAuthStatePath(agentDir);
   const localStore = buildLocalAuthProfileStoreForSave({ store, agentDir, options });
+  const runtimeStore = cloneAuthProfileStore(store);
+  const cachedStore = buildCachedRuntimeAuthProfileStore({
+    agentDir,
+    localStore,
+    runtimeStore,
+  });
   const payload = buildPersistedAuthProfileSecretsStore(localStore);
   saveJsonFile(authPath, payload);
   savePersistedAuthProfileState(localStore, agentDir);
@@ -614,9 +654,38 @@ export function saveAuthProfileStore(
     authPath,
     authMtimeMs: readAuthStoreMtimeMs(authPath),
     stateMtimeMs: readAuthStoreMtimeMs(statePath),
-    store: localStore,
+    store: cachedStore,
   });
-  if (hasRuntimeAuthProfileStoreSnapshot(agentDir)) {
-    setRuntimeAuthProfileStoreSnapshot(localStore, agentDir);
+  setRuntimeAuthProfileStoreSnapshot(cachedStore, agentDir);
+}
+
+function buildCachedRuntimeAuthProfileStore(params: {
+  agentDir?: string;
+  localStore: AuthProfileStore;
+  runtimeStore: AuthProfileStore;
+}): AuthProfileStore {
+  if (!params.agentDir || resolveAuthStorePath(params.agentDir) === resolveAuthStorePath()) {
+    return params.runtimeStore;
   }
+  const cachedStore = cloneAuthProfileStore(params.runtimeStore);
+  const mainRuntimeStore = ensureAuthProfileStore(undefined, {
+    allowKeychainPrompt: false,
+  });
+  for (const profileId of Object.keys(cachedStore.profiles)) {
+    if (profileId in params.localStore.profiles) {
+      continue;
+    }
+    if (profileId in mainRuntimeStore.profiles) {
+      delete cachedStore.profiles[profileId];
+      continue;
+    }
+    const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+      agentDir: params.agentDir,
+      profileId,
+    });
+    if (ownerAgentDir !== params.agentDir) {
+      delete cachedStore.profiles[profileId];
+    }
+  }
+  return cachedStore;
 }

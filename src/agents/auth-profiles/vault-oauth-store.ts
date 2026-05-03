@@ -313,7 +313,8 @@ function resolveProfileId(data: VaultKvData, existingStore?: AuthProfileStore): 
       if (
         cred.type === "oauth" &&
         cred.provider === VAULT_BACKED_PROVIDER &&
-        cred.accountId === accountId
+        cred.accountId === accountId &&
+        (cred as Record<string, unknown>).managedBy !== "codex-cli"
       ) {
         return profileId;
       }
@@ -339,6 +340,9 @@ export function isVaultBackedOAuthProfile(
     return false;
   }
   if (credential.provider !== VAULT_BACKED_PROVIDER) {
+    return false;
+  }
+  if ((credential as Record<string, unknown>).managedBy === "codex-cli") {
     return false;
   }
   return true;

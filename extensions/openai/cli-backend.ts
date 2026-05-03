@@ -1,3 +1,7 @@
+import {
+  prepareIsolatedCodexRuntimeHome,
+  OPENAI_CODEX_DEFAULT_PROFILE_ID,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
@@ -9,6 +13,8 @@ const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
 export function buildOpenAICodexCliBackend(): CliBackendPlugin {
   return {
     id: "codex-cli",
+    defaultAuthProfileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+    authEpochMode: "profile-only",
     liveTest: {
       defaultModelRef: CODEX_CLI_DEFAULT_MODEL_REF,
       defaultImageProbe: true,
@@ -64,5 +70,11 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       },
       serialize: true,
     },
+    prepareExecution: async ({ agentDir, authProfileId }) =>
+      prepareIsolatedCodexRuntimeHome({
+        agentDir,
+        authProfileId,
+        writeAuthJson: true,
+      }),
   };
 }

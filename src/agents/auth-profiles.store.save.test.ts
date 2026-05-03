@@ -135,6 +135,35 @@ describe("saveAuthProfileStore", () => {
     }
   });
 
+  it("does not persist codex-cli oauth imports to auth-profiles.json", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-codex-cli-"));
+    try {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai-codex:codex-cli": {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "cli-access-token",
+              refresh: "cli-refresh-token",
+              expires: Date.now() + 60_000,
+              managedBy: "codex-cli",
+            } as AuthProfileStore["profiles"][string],
+          },
+        },
+        agentDir,
+      );
+
+      const parsed = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(parsed.profiles["openai-codex:codex-cli"]).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("writes runtime scheduling state to auth-state.json only", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-"));
     try {

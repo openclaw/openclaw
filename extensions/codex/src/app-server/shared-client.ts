@@ -1,3 +1,4 @@
+import { prepareIsolatedCodexRuntimeHome } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/provider-auth";
 import {
   applyCodexAppServerAuthProfile,
@@ -63,9 +64,26 @@ export async function getSharedCodexAppServerClient(options?: {
   const sharedPromise =
     state.promise ??
     (state.promise = (async () => {
-      const client = CodexAppServerClient.start(startOptions);
+      const preparedRuntimeHome =
+        startOptions.transport === "stdio"
+          ? await prepareIsolatedCodexRuntimeHome({
+              agentDir,
+              authProfileId: options?.authProfileId,
+              writeAuthJson: false,
+            })
+          : undefined;
+      const client = CodexAppServerClient.start(
+        preparedRuntimeHome
+          ? withCodexAppServerEnv(startOptions, preparedRuntimeHome.env)
+          : startOptions,
+      );
       state.client = client;
       client.addCloseHandler(clearSharedClientIfCurrent);
+      if (preparedRuntimeHome) {
+        client.addCloseHandler(() => {
+          void preparedRuntimeHome.cleanup().catch(() => undefined);
+        });
+      }
       try {
         await client.initialize();
         await applyCodexAppServerAuthProfile({
@@ -119,7 +137,24 @@ export async function createIsolatedCodexAppServerClient(options?: {
     authProfileId,
     config: options?.config,
   });
-  const client = CodexAppServerClient.start(startOptions);
+  const preparedRuntimeHome =
+    startOptions.transport === "stdio"
+      ? await prepareIsolatedCodexRuntimeHome({
+          agentDir,
+          authProfileId: options?.authProfileId,
+          writeAuthJson: false,
+        })
+      : undefined;
+  const client = CodexAppServerClient.start(
+    preparedRuntimeHome
+      ? withCodexAppServerEnv(startOptions, preparedRuntimeHome.env)
+      : startOptions,
+  );
+  if (preparedRuntimeHome) {
+    client.addCloseHandler(() => {
+      void preparedRuntimeHome.cleanup().catch(() => undefined);
+    });
+  }
   const initialize = client.initialize();
   try {
     await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
@@ -191,4 +226,17 @@ function clearSharedClientIfCurrent(client: CodexAppServerClient): void {
   state.client = undefined;
   state.promise = undefined;
   state.key = undefined;
+}
+
+function withCodexAppServerEnv(
+  startOptions: CodexAppServerStartOptions,
+  env: Record<string, string>,
+): CodexAppServerStartOptions {
+  return {
+    ...startOptions,
+    env: {
+      ...(startOptions.env ?? {}),
+      ...env,
+    },
+  };
 }

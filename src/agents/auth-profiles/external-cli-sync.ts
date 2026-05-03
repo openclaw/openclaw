@@ -56,6 +56,19 @@ type ExternalCliSyncProvider = {
   bootstrapOnly?: boolean;
 };
 
+function markExternalCliCredential(
+  providerConfig: ExternalCliSyncProvider,
+  credential: OAuthCredential,
+): OAuthCredential {
+  if (providerConfig.provider !== "openai-codex") {
+    return credential;
+  }
+  return {
+    ...credential,
+    managedBy: "codex-cli",
+  } as OAuthCredential;
+}
+
 function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -235,12 +248,13 @@ export function resolveExternalCliAuthProfiles(
     if (!isExternalCliProviderInScope({ providerConfig, store, options })) {
       continue;
     }
-    const creds = providerConfig.readCredentials({
+    const imported = providerConfig.readCredentials({
       allowKeychainPrompt: options?.allowKeychainPrompt,
     });
-    if (!creds) {
+    if (!imported) {
       continue;
     }
+    const creds = markExternalCliCredential(providerConfig, imported);
     const existing = store.profiles[providerConfig.profileId];
     const existingOAuth =
       existing?.type === "oauth" && existing.provider === providerConfig.provider

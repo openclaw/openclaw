@@ -7,7 +7,7 @@ import {
   resolveProviderIdForAuth,
   resolveApiKeyForProfile,
   resolveOpenClawAgentDir,
-  resolvePersistedAuthProfileOwnerAgentDir,
+  resolveRuntimeAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
   type AuthProfileCredential,
   type OAuthCredential,
@@ -20,7 +20,6 @@ import type { LoginAccountParams } from "./protocol-generated/typescript/v2/Logi
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
-const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
@@ -199,6 +198,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   forceOAuthRefresh?: boolean;
   config?: AuthProfileOrderConfig;
 }): Promise<LoginAccountParams | undefined> {
+  const requestedProfileId = params.authProfileId?.trim() || undefined;
   const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
   const profileId = resolveCodexAppServerAuthProfileId({
     authProfileId: params.authProfileId,
@@ -210,6 +210,9 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   }
   const credential = store.profiles[profileId];
   if (!credential) {
+    if (!requestedProfileId) {
+      return undefined;
+    }
     throw new Error(`Codex app-server auth profile "${profileId}" was not found.`);
   }
   if (!isCodexAppServerAuthProvider(credential.provider, params.config)) {
@@ -288,7 +291,7 @@ async function resolveOAuthCredentialForCodexAppServer(
   credential: OAuthCredential,
   params: { agentDir: string; forceRefresh: boolean; config?: AuthProfileOrderConfig },
 ): Promise<OAuthCredential> {
-  const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+  const ownerAgentDir = resolveRuntimeAuthProfileOwnerAgentDir({
     agentDir: params.agentDir,
     profileId,
   });

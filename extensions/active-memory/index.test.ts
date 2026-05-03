@@ -2409,7 +2409,7 @@ describe("active-memory plugin", () => {
     ).toBe(true);
   });
 
-  it("does not spend the model timeout budget on active-memory subagent setup", async () => {
+  it("keeps the subagent timeout budget separate from the preprompt hook timeout", async () => {
     const CONFIGURED_TIMEOUT_MS = 10;
     __testing.setMinimumTimeoutMsForTests(1);
     api.pluginConfig = {

@@ -10,6 +10,12 @@ const mocks = vi.hoisted(() => ({
     (params?: { authProfileId?: string }) => params?.authProfileId,
   ),
   resolveManagedCodexAppServerStartOptions: vi.fn(async (startOptions) => startOptions),
+  prepareIsolatedCodexRuntimeHome: vi.fn(async () => ({
+    codexHome: "/tmp/openclaw-codex-home",
+    env: { CODEX_HOME: "/tmp/openclaw-codex-home" },
+    clearEnv: ["CODEX_HOME", "CODEX_API_KEY", "OPENAI_API_KEY"],
+    cleanup: vi.fn(async () => undefined),
+  })),
   embeddedAgentLog: { debug: vi.fn(), warn: vi.fn() },
   resolveOpenClawAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
 }));
@@ -27,6 +33,10 @@ vi.mock("./managed-binary.js", () => ({
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   embeddedAgentLog: mocks.embeddedAgentLog,
   OPENCLAW_VERSION: "test",
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  prepareIsolatedCodexRuntimeHome: mocks.prepareIsolatedCodexRuntimeHome,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
@@ -76,6 +86,7 @@ describe("shared Codex app-server client", () => {
       (params?: { authProfileId?: string }) => params?.authProfileId,
     );
     mocks.resolveManagedCodexAppServerStartOptions.mockClear();
+    mocks.prepareIsolatedCodexRuntimeHome.mockClear();
     mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(
       async (startOptions) => startOptions,
     );
@@ -245,8 +256,31 @@ describe("shared Codex app-server client", () => {
       expect.objectContaining({
         command: "/cache/openclaw/codex",
         commandSource: "resolved-managed",
+        env: expect.objectContaining({
+          CODEX_HOME: "/tmp/openclaw-codex-home",
+        }),
       }),
     );
+  });
+
+  it("cleans up the isolated Codex home when the shared client closes", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const prepared = {
+      codexHome: "/tmp/openclaw-codex-home",
+      env: { CODEX_HOME: "/tmp/openclaw-codex-home" },
+      clearEnv: ["CODEX_HOME", "CODEX_API_KEY", "OPENAI_API_KEY"],
+      cleanup: vi.fn(async () => undefined),
+    };
+    mocks.prepareIsolatedCodexRuntimeHome.mockResolvedValueOnce(prepared);
+
+    const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
+    await sendEmptyModelList(harness);
+    await expect(listPromise).resolves.toEqual({ models: [] });
+
+    clearSharedCodexAppServerClient();
+    await vi.waitFor(() => expect(prepared.cleanup).toHaveBeenCalledTimes(1));
   });
 
   it("restarts the shared client when the bridged auth token changes", async () => {

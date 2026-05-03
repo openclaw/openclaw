@@ -280,6 +280,9 @@ beforeEach(() => {
       id: "codex-cli",
       bundleMcp: true,
       bundleMcpMode: "codex-config-overrides",
+      defaultAuthProfileId: "openai-codex:default",
+      authEpochMode: "profile-only",
+      prepareExecution: async () => null,
       config: {
         command: "codex",
         args: [
@@ -963,9 +966,9 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("codex-config-overrides");
-    expect(resolved?.defaultAuthProfileId).toBeUndefined();
-    expect(resolved?.authEpochMode).toBeUndefined();
-    expect(resolved?.prepareExecution).toBeUndefined();
+    expect(resolved?.defaultAuthProfileId).toBe("openai-codex:default");
+    expect(resolved?.authEpochMode).toBe("profile-only");
+    expect(typeof resolved?.prepareExecution).toBe("function");
     expect(resolved?.config.systemPromptFileConfigArg).toBe("-c");
     expect(resolved?.config.systemPromptFileConfigKey).toBe("model_instructions_file");
     expect(resolved?.config.systemPromptWhen).toBe("first");
