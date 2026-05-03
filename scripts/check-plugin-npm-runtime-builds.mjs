@@ -5,31 +5,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   buildPluginNpmRuntime,
+  listPluginNpmRuntimeBuildOutputs,
+  listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "./lib/plugin-npm-runtime-build.mjs";
-
-function readJsonFile(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
-function isPublishablePluginPackage(packageJson) {
-  return packageJson.openclaw?.release?.publishToNpm === true;
-}
-
-function listPublishablePluginPackageDirs(repoRoot) {
-  const extensionsRoot = path.join(repoRoot, "extensions");
-  return fs
-    .readdirSync(extensionsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join("extensions", entry.name))
-    .filter((packageDir) => {
-      const packageJsonPath = path.join(repoRoot, packageDir, "package.json");
-      return (
-        fs.existsSync(packageJsonPath) && isPublishablePluginPackage(readJsonFile(packageJsonPath))
-      );
-    })
-    .toSorted((left, right) => left.localeCompare(right));
-}
 
 function parseArgs(argv) {
   const packageDirs = [];
@@ -51,18 +30,12 @@ function parseArgs(argv) {
   return { packageDirs };
 }
 
-function listMissingRuntimeOutputs(plan) {
-  return Object.keys(plan.entry)
-    .map((entryKey) => path.join(plan.outDir, `${entryKey}.js`))
-    .filter((filePath) => !fs.existsSync(filePath));
-}
-
 export async function checkPluginNpmRuntimeBuilds(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDirs =
     params.packageDirs?.length > 0
       ? params.packageDirs
-      : listPublishablePluginPackageDirs(repoRoot);
+      : listPublishablePluginPackageDirs({ repoRoot });
   const rows = [];
   for (const packageDir of packageDirs) {
     const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir });
@@ -74,13 +47,12 @@ export async function checkPluginNpmRuntimeBuilds(params = {}) {
       packageDir,
       logLevel: params.logLevel ?? "warn",
     });
-    const missing = listMissingRuntimeOutputs(result);
+    const missing = listPluginNpmRuntimeBuildOutputs(result).filter(
+      (runtimePath) =>
+        !fs.existsSync(path.join(result.packageDir, runtimePath.replace(/^\.\//u, ""))),
+    );
     if (missing.length > 0) {
-      throw new Error(
-        `${packageDir} missing built runtime outputs: ${missing
-          .map((filePath) => path.relative(repoRoot, filePath))
-          .join(", ")}`,
-      );
+      throw new Error(`${packageDir} missing built runtime outputs: ${missing.join(", ")}`);
     }
     rows.push({
       pluginDir: result.pluginDir,

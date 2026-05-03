@@ -16,6 +16,10 @@ function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+export function isPublishablePluginPackage(packageJson) {
+  return packageJson.openclaw?.release?.publishToNpm === true;
+}
+
 function normalizePackageEntry(value) {
   return typeof value === "string" ? value.trim().replaceAll("\\", "/") : "";
 }
@@ -64,6 +68,54 @@ function resolvePackageDir(repoRoot, packageDir) {
   return path.isAbsolute(packageDir) ? packageDir : path.resolve(repoRoot, packageDir);
 }
 
+function packageRelativePathExists(packageDir, relativePath) {
+  return fs.existsSync(path.join(packageDir, relativePath));
+}
+
+export function listPublishablePluginPackageDirs(params = {}) {
+  const repoRoot = path.resolve(params.repoRoot ?? ".");
+  const extensionsRoot = path.join(repoRoot, "extensions");
+  return fs
+    .readdirSync(extensionsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join("extensions", entry.name))
+    .filter((packageDir) => {
+      const packageJsonPath = path.join(repoRoot, packageDir, "package.json");
+      return (
+        fs.existsSync(packageJsonPath) && isPublishablePluginPackage(readJsonFile(packageJsonPath))
+      );
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listPluginNpmRuntimeBuildOutputs(plan) {
+  return Object.keys(plan.entry)
+    .map((entryKey) => `./dist/${entryKey}.js`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolvePluginNpmRuntimePackageFiles(plan) {
+  const merged = new Set(
+    Array.isArray(plan.packageJson.files)
+      ? plan.packageJson.files.filter((entry) => typeof entry === "string")
+      : [],
+  );
+  merged.add("dist/**");
+  if (packageRelativePathExists(plan.packageDir, "openclaw.plugin.json")) {
+    merged.add("openclaw.plugin.json");
+  }
+  if (packageRelativePathExists(plan.packageDir, "README.md")) {
+    merged.add("README.md");
+  }
+  if (packageRelativePathExists(plan.packageDir, "SKILL.md")) {
+    merged.add("SKILL.md");
+  }
+  if (packageRelativePathExists(plan.packageDir, "skills")) {
+    merged.add("skills/**");
+  }
+  return [...merged];
+}
+
 export function resolvePluginNpmRuntimeBuildPlan(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -72,7 +124,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
     return null;
   }
   const packageJson = readJsonFile(packageJsonPath);
-  if (packageJson.openclaw?.release?.publishToNpm !== true) {
+  if (!isPublishablePluginPackage(packageJson)) {
     return null;
   }
 
@@ -96,7 +148,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
     ]),
   );
 
-  return {
+  const plan = {
     repoRoot,
     packageDir,
     pluginDir,
@@ -114,6 +166,11 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
     runtimeSetupEntry: normalizePackageEntry(packageJson.openclaw?.setupEntry)
       ? toPackageRuntimeEntry(packageJson.openclaw.setupEntry)
       : undefined,
+  };
+  return {
+    ...plan,
+    runtimeBuildOutputs: listPluginNpmRuntimeBuildOutputs(plan),
+    packageFiles: resolvePluginNpmRuntimePackageFiles(plan),
   };
 }
 
