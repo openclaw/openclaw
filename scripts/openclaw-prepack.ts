@@ -85,7 +85,7 @@ function ensurePreparedArtifacts(): void {
   }
 
   console.error(
-    "prepack: requires an existing build and Control UI bundle. Run `pnpm build && pnpm ui:build` before packing or publishing.",
+    "prepack: requires existing build artifacts. Run `pnpm build` before packing or publishing.",
   );
   process.exit(1);
 }
@@ -112,7 +112,6 @@ async function writeDistInventory(): Promise<void> {
 async function main(): Promise<void> {
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   run(pnpmCommand, ["build"]);
-  run(pnpmCommand, ["ui:build"]);
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();

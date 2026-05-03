@@ -73,6 +73,7 @@ let resolveControlUiRepoRoot: typeof import("./control-ui-assets.js").resolveCon
 let resolveControlUiDistIndexPath: typeof import("./control-ui-assets.js").resolveControlUiDistIndexPath;
 let resolveControlUiDistIndexHealth: typeof import("./control-ui-assets.js").resolveControlUiDistIndexHealth;
 let isPackageProvenControlUiRootSync: typeof import("./control-ui-assets.js").isPackageProvenControlUiRootSync;
+let resolveControlUiRepoRootFromDistRoot: typeof import("./control-ui-assets.js").resolveControlUiRepoRootFromDistRoot;
 let resolveControlUiRootOverrideSync: typeof import("./control-ui-assets.js").resolveControlUiRootOverrideSync;
 let resolveControlUiRootSync: typeof import("./control-ui-assets.js").resolveControlUiRootSync;
 let openclawRoot: typeof import("./openclaw-root.js");
@@ -84,6 +85,7 @@ describe("control UI assets helpers (fs-mocked)", () => {
       resolveControlUiDistIndexPath,
       resolveControlUiDistIndexHealth,
       isPackageProvenControlUiRootSync,
+      resolveControlUiRepoRootFromDistRoot,
       resolveControlUiRootOverrideSync,
       resolveControlUiRootSync,
     } = await import("./control-ui-assets.js"));
@@ -111,6 +113,30 @@ describe("control UI assets helpers (fs-mocked)", () => {
 
     const argv1 = path.join(root, "dist", "index.js");
     expect(resolveControlUiRepoRoot(argv1)).toBe(root);
+  });
+
+  it("resolves repo root from symlinked argv1", () => {
+    const root = abs("fixtures/ui-symlink");
+    const wrapperArgv1 = abs("fixtures/bin/openclaw");
+    const realEntrypoint = path.join(root, "openclaw.mjs");
+
+    setFile(path.join(root, "package.json"), "{}\n");
+    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
+    state.realpaths.set(wrapperArgv1, realEntrypoint);
+
+    expect(resolveControlUiRepoRoot(wrapperArgv1)).toBe(root);
+  });
+
+  it("resolves repo root from default dist control-ui root", () => {
+    const root = abs("fixtures/ui-root-from-dist");
+    const uiRoot = path.join(root, "dist", "control-ui");
+
+    setFile(path.join(root, "package.json"), "{}\n");
+    setFile(path.join(root, "scripts", "ui.js"), "export {};\n");
+    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
+
+    expect(resolveControlUiRepoRootFromDistRoot(uiRoot)).toBe(root);
+    expect(resolveControlUiRepoRootFromDistRoot(path.join(root, "other", "control-ui"))).toBeNull();
   });
 
   it("resolves dist control-ui index path for dist argv1", async () => {

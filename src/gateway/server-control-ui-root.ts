@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   ensureControlUiAssetsBuilt,
   isPackageProvenControlUiRootSync,
+  resolveControlUiRepoRootFromDistRoot,
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
@@ -15,8 +16,18 @@ export async function resolveGatewayControlUiRootState(params: {
   log: { warn: (message: string) => void };
 }): Promise<ControlUiRootState | undefined> {
   if (params.controlUiRootOverride) {
-    const resolvedOverride = resolveControlUiRootOverrideSync(params.controlUiRootOverride);
     const resolvedOverridePath = path.resolve(params.controlUiRootOverride);
+    let resolvedOverride = resolveControlUiRootOverrideSync(resolvedOverridePath);
+    if (!resolvedOverride) {
+      const repoRoot = resolveControlUiRepoRootFromDistRoot(resolvedOverridePath);
+      if (repoRoot) {
+        const ensureResult = await ensureControlUiAssetsBuilt(params.gatewayRuntime, { repoRoot });
+        if (!ensureResult.ok && ensureResult.message) {
+          params.log.warn(`gateway: ${ensureResult.message}`);
+        }
+        resolvedOverride = resolveControlUiRootOverrideSync(resolvedOverridePath);
+      }
+    }
     if (!resolvedOverride) {
       params.log.warn(`gateway: controlUi.root not found at ${resolvedOverridePath}`);
     }

@@ -41,32 +41,61 @@ export function resolveControlUiRepoRoot(
   if (!argv1) {
     return null;
   }
-  const normalized = path.resolve(argv1);
-  const parts = normalized.split(path.sep);
-  const srcIndex = parts.lastIndexOf("src");
-  if (srcIndex !== -1) {
-    const root = parts.slice(0, srcIndex).join(path.sep);
-    if (controlUiFsRuntime.existsSync(path.join(root, "ui", "vite.config.ts"))) {
-      return root;
+  const normalizedCandidates = [path.resolve(argv1)];
+  try {
+    const realpathArgv1 = controlUiFsRuntime.realpathSync(path.resolve(argv1));
+    if (realpathArgv1 !== normalizedCandidates[0]) {
+      normalizedCandidates.unshift(realpathArgv1);
     }
+  } catch {
+    // Keep path-based lookup for missing/non-realpath argv1 values.
   }
 
-  let dir = path.dirname(normalized);
-  for (let i = 0; i < 8; i++) {
-    if (
-      controlUiFsRuntime.existsSync(path.join(dir, "package.json")) &&
-      controlUiFsRuntime.existsSync(path.join(dir, "ui", "vite.config.ts"))
-    ) {
-      return dir;
+  for (const normalized of normalizedCandidates) {
+    const parts = normalized.split(path.sep);
+    const srcIndex = parts.lastIndexOf("src");
+    if (srcIndex !== -1) {
+      const root = parts.slice(0, srcIndex).join(path.sep);
+      if (controlUiFsRuntime.existsSync(path.join(root, "ui", "vite.config.ts"))) {
+        return root;
+      }
     }
-    const parent = path.dirname(dir);
-    if (parent === dir) {
-      break;
+
+    let dir = path.dirname(normalized);
+    for (let i = 0; i < 8; i++) {
+      if (
+        controlUiFsRuntime.existsSync(path.join(dir, "package.json")) &&
+        controlUiFsRuntime.existsSync(path.join(dir, "ui", "vite.config.ts"))
+      ) {
+        return dir;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) {
+        break;
+      }
+      dir = parent;
     }
-    dir = parent;
   }
 
   return null;
+}
+
+export function resolveControlUiRepoRootFromDistRoot(controlUiRoot: string): string | null {
+  const resolvedRoot = path.resolve(controlUiRoot);
+  const distDir = path.dirname(resolvedRoot);
+  if (path.basename(resolvedRoot) !== "control-ui" || path.basename(distDir) !== "dist") {
+    return null;
+  }
+
+  const repoRoot = path.dirname(distDir);
+  if (
+    !controlUiFsRuntime.existsSync(path.join(repoRoot, "package.json")) ||
+    !controlUiFsRuntime.existsSync(path.join(repoRoot, "scripts", "ui.js")) ||
+    !controlUiFsRuntime.existsSync(path.join(repoRoot, "ui", "vite.config.ts"))
+  ) {
+    return null;
+  }
+  return repoRoot;
 }
 
 export async function resolveControlUiDistIndexPath(
@@ -291,15 +320,17 @@ function summarizeCommandOutput(text: string): string | undefined {
 
 export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
-  opts?: { timeoutMs?: number },
+  opts?: { timeoutMs?: number; repoRoot?: string; argv1?: string },
 ): Promise<EnsureControlUiAssetsResult> {
-  const health = await resolveControlUiDistIndexHealth({ argv1: process.argv[1] });
+  const repoRoot = opts?.repoRoot ?? resolveControlUiRepoRoot(opts?.argv1 ?? process.argv[1]);
+  const health = opts?.repoRoot
+    ? await resolveControlUiDistIndexHealth({ root: opts.repoRoot })
+    : await resolveControlUiDistIndexHealth({ argv1: opts?.argv1 ?? process.argv[1] });
   const indexFromDist = health.indexPath;
   if (health.exists) {
     return { ok: true, built: false };
   }
 
-  const repoRoot = resolveControlUiRepoRoot(process.argv[1]);
   if (!repoRoot) {
     const hint = indexFromDist
       ? `Missing Control UI assets at ${indexFromDist}`

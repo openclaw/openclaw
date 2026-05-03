@@ -62,6 +62,7 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
   },
+  { label: "ui:build", kind: "pnpm", pnpmArgs: ["ui:build"] },
 ];
 
 export const BUILD_ALL_PROFILES = {

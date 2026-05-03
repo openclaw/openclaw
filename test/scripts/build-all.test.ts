@@ -80,6 +80,7 @@ describe("resolveBuildAllSteps", () => {
   it("keeps the full profile aligned with the declared steps", () => {
     expect(resolveBuildAllSteps("full")).toEqual(BUILD_ALL_STEPS);
     expect(BUILD_ALL_PROFILES.full).toEqual(BUILD_ALL_STEPS.map((step) => step.label));
+    expect(BUILD_ALL_PROFILES.full.at(-1)).toBe("ui:build");
   });
 
   it("uses a runtime-only profile for ci artifacts", () => {
