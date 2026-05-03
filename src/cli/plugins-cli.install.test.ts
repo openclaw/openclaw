@@ -709,10 +709,12 @@ describe("plugins cli install", () => {
 
   it("passes official external catalog integrity to npm installs", async () => {
     const cfg = createEmptyPluginConfig();
-    const enabledCfg = createEnabledPluginConfig("wecom");
+    const enabledCfg = createEnabledPluginConfig("wecom-openclaw-plugin");
     loadConfig.mockReturnValue(cfg);
     findBundledPluginSourceMock.mockReturnValue(undefined);
-    installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("wecom"));
+    installPluginFromNpmSpec.mockResolvedValue(
+      createNpmPluginInstallResult("wecom-openclaw-plugin"),
+    );
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
     applyExclusiveSlotSelection.mockReturnValue({
       config: enabledCfg,
@@ -724,7 +726,7 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         spec: "@wecom/wecom-openclaw-plugin@2026.4.23",
-        expectedPluginId: "wecom",
+        expectedPluginId: "wecom-openclaw-plugin",
         expectedIntegrity:
           "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
         trustedSourceLinkedOfficialInstall: true,

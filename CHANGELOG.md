@@ -20,6 +20,12 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/onboarding: trust optional official plugin and web-search installs selected from the official catalog so npm security scanning treats them like other source-linked official install paths. Thanks @vincentkoc.
+- Microsoft Teams: persist sent-message markers across Gateway restarts so follow-up replies to recent bot messages keep resolving the original conversation instead of dropping out after restart, with marker TTLs preserved on best-effort recovery. (#75585) Thanks @amknight.
+- Matrix: persist pending approval reaction targets across Gateway restarts so room approvers can still approve or deny outstanding prompts after OpenClaw comes back online. (#75586) Thanks @amknight.
+- Channels/onboarding: map third-party official WeCom and Yuanbao catalog entries to their published plugin ids so npm installs pass expected-plugin validation. Thanks @vincentkoc.
+- Plugin SDK: restore the Mattermost and Matrix compatibility subpaths used by the pinned Yuanbao channel package so external installs can module-load after npm install. Thanks @vincentkoc.
+- CLI/plugins: keep `plugins enable` and `plugins disable` from creating unconfigured channel config sections, so channel plugins with required setup fields no longer fail validation during lifecycle probes. Thanks @vincentkoc.
 - Agents/sessions: keep delayed `sessions_send` A2A replies alive after soft wait-window timeouts, while preserving terminal run timeouts and avoiding stale target replies in requester sessions. Fixes #76443. Thanks @ryswork1993 and @vincentkoc.
 - CLI/sessions: keep intentional empty agent replies silent after tool-delivered channel output, instead of surfacing a misleading "No reply from agent." fallback. Thanks @vincentkoc.
 - Config/doctor: cap `.clobbered.*` forensic snapshots per config path and serialize snapshot writes so repeated `doctor --fix` recovery loops cannot flood the config directory. Fixes #76454; carries forward #65649. Thanks @JUSTICEESSIELP, @rsnow, and @vincentkoc.
@@ -36,10 +42,13 @@ Docs: https://docs.openclaw.ai
 - Gateway/sessions: keep async `sessions.list` title and preview hydration bounded to transcript head/tail reads so Control UI polling cannot full-scan large session transcripts every refresh. Thanks @vincentkoc.
 - Gateway/sessions: keep agent runtime metadata on lightweight `sessions.list` rows so model-only session patches do not make Control UI lose runtime identity. Thanks @vincentkoc.
 - Gateway/sessions: keep bulk `sessions.list` rows lightweight by skipping per-row transcript usage fallback, display model inference, and plugin projection, avoiding event-loop stalls in large session stores. Thanks @Marvinthebored and @vincentkoc.
+- Gateway/models: keep read-only `models.list` fallbacks on persisted/current metadata and configured rows while using static auth checks, so missing `models.json` files no longer runtime-load provider discovery or stall gateway after restart. Fixes #76382; refs #76360 and #75707. Thanks @trojy13, @RayWoo, @AnathemaOfficial, and @vincentkoc.
+- Gateway/models: keep agent image attachment capability checks on the full catalog while preserving the read-only `models.list` path, so image sends are not rejected after static catalog fallback.
 - CLI/plugins: reject missing plugin ids before config writes in `plugins enable` and `plugins disable` so a typo no longer persists a stale config entry. (#73554) Thanks @ai-hpc.
 - Agents/sessions: preserve delivered trailing assistant replies during session-file repair so Telegram/WebChat history is not rewritten to drop already-delivered responses. Fixes #76329. Thanks @obviyus.
 - Gateway/chat history: preserve oversized transcript turns as explicit omitted-message placeholders while avoiding large JSONL parse stalls. Thanks @Marvinthebored and @vincentkoc.
 - Gateway/models: keep read-only model-list responses on registry-compatible fallbacks and metadata defaults, so empty or minimal persisted model files do not hide built-ins or custom model capabilities. Thanks @Marvinthebored.
+- CLI/doctor: load the configured memory-slot plugin when resolving memory diagnostics so bundled `memory-core` no longer triggers a false “no active memory plugin” warning on standalone `doctor` / `status` runs. Fixes #76367. Thanks @neeravmakwana.
 - Gateway: preserve stack diagnostics when `chat.send` or agent attachment parsing/staging fails, improving image-send failure triage. Refs #63432. (#75135) Thanks @keen0206.
 - Heartbeats/Codex: stop sending the legacy `HEARTBEAT_OK` prompt instruction when heartbeat turns have the structured `heartbeat_respond` tool, while keeping the text sentinel for legacy automatic heartbeat replies. Thanks @pashpashpash.
 - Agent runtimes: fail explicit plugin runtime selections honestly when the requested harness is unavailable instead of silently falling back to the embedded PI runtime. Thanks @pashpashpash.
@@ -55,6 +64,7 @@ Docs: https://docs.openclaw.ai
 - Cron: preserve manual `cron.run` IDs in `cron.runs` history so manual run acknowledgements can be correlated with finished run records. Fixes #76276.
 - CLI/devices: request `operator.admin` for `openclaw devices approve <requestId>` only when the exact pending device request would mint or inherit admin-scoped operator access, while keeping lower-scope approvals on the pairing scope.
 - Memory/embedding: broaden the embedding reindex retry classifier to include transient socket-layer errors (`fetch failed`, `ECONNRESET`, `socket hang up`, `UND_ERR_*`, `closed`) so memory reindex survives provider network hiccups instead of aborting mid-run. Related #56815, #44166. (#76311) Thanks @buyitsydney.
+- Memory/sessions: keep rotated and deleted session transcripts (`.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`) searchable end-to-end by indexing their real content in `buildSessionEntry` instead of short-circuiting to empty entries, and by mapping archive hit paths back to their live transcript stem during `memory_search` visibility filtering so hits are no longer dropped at the guard. `.jsonl.bak.<iso>` backups and compaction checkpoints remain opaque. Refs #56131. Thanks @buyitsydney.
 - Memory/search: keep sqlite-vec optional in packaged installs and point missing-extension recovery at the valid `agents.defaults.memorySearch.store.vector.extensionPath` setting. Thanks @willemsej and @vincentkoc.
 - Gateway: keep directly requested plugin tools invokable under restrictive tool profiles while preserving explicit deny lists and the HTTP safety deny list, preventing catalog/invoke mismatches that surface as "Tool not available". Thanks @BunsDev.
 - Gateway/update: allow beta binaries to refresh gateway services when the config was last written by the matching stable release version, avoiding false newer-config downgrade blocks during beta channel updates.
@@ -105,6 +115,7 @@ Docs: https://docs.openclaw.ai
 - Parallels/Windows update smoke: escape the stale post-swap import regex in the generated PowerShell script so expected `ERR_MODULE_NOT_FOUND` update handoffs continue to post-update health checks. (#75315)
 - Slack: allow draft preview streaming in top-level DMs when `replyToMode` is `off` while keeping Slack native streaming and assistant thread status gated on reply threads. Fixes #56480. (#56544) Thanks @HangGlidersRule.
 - Control UI/chat: remove the delete-confirm popover outside-click listener on every dismiss path, so Cancel, Delete, outside clicks, and same-button toggles no longer leave stale document listeners behind. Refs #75590 and #69982. Thanks @Ricardo-M-L.
+- Memory-core: treat exhausted file watcher limits as non-fatal for builtin memory auto-sync while preserving fatal handling for unrelated disk-full errors. (#73357) Thanks @solodmd.
 
 ## 2026.5.2
 
