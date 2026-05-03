@@ -3213,6 +3213,44 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
+  // #76529: when a visible non-final message is delivered after the answer
+  // preview is already on screen, finalizing the preview by edit puts the
+  // final answer above the intermediate output. Force a fresh send instead.
+  it("sends a fresh final after a visible block bubble pushes the preview up (#76529)", async () => {
+    // Preview was already on screen before the block bubble was sent.
+    const draftStream = createTestDraftStream({
+      messageId: 999,
+      visibleSinceMs: Date.now() - 1_000,
+    });
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    editMessageTelegram.mockResolvedValue({ ok: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Checked maxDBdays..." });
+        await dispatcherOptions.deliver(
+          { text: "Changed maxDBdays from 91 → 14" },
+          { kind: "block" },
+        );
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    // Block + fresh final both went through deliverReplies; preview was not
+    // edited in place and the stale preview was cleared.
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Done" })],
+      }),
+    );
+    expect(draftStream.clear).toHaveBeenCalled();
+  });
+
   it("cleans up preview even when fallback delivery throws (double failure)", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);

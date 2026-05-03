@@ -729,6 +729,7 @@ export const dispatchTelegramMessage = async ({
       }
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
+    let lastVisibleNonPreviewDeliveryAtMs: number | undefined;
     const sendPayload = async (payload: ReplyPayload) => {
       if (isDispatchSuperseded()) {
         return false;
@@ -742,6 +743,7 @@ export const dispatchTelegramMessage = async ({
       });
       if (result.delivered) {
         deliveryState.markDelivered();
+        lastVisibleNonPreviewDeliveryAtMs = Date.now();
       }
       return result.delivered;
     };
@@ -794,6 +796,7 @@ export const dispatchTelegramMessage = async ({
       markDelivered: () => {
         deliveryState.markDelivered();
       },
+      getLastVisibleNonPreviewDeliveryAtMs: () => lastVisibleNonPreviewDeliveryAtMs,
     });
 
     if (isDmTopic) {
