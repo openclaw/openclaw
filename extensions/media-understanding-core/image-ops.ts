@@ -1,5 +1,8 @@
+import { createRequire } from "node:module";
 import type { ImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import type sharpImport from "sharp";
+
+const _sharpRequire = createRequire(import.meta.url);
 
 type SharpFactory = typeof sharpImport;
 
@@ -21,43 +24,24 @@ type MediaUnderstandingImageOpsOptions = {
   maxInputPixels: number;
 };
 
-const SHARP_MODULE = "sharp";
-
 let sharpFactoryPromise: Promise<SharpFactory> | null = null;
-
-function normalizeSharpFactory(mod: unknown): SharpFactory {
-  const candidates = [
-    (mod as { default?: unknown }).default,
-    ((mod as { default?: { default?: unknown } }).default ?? {})?.default,
-    mod,
-  ];
-  const sharp = candidates.find(
-    (candidate): candidate is SharpFactory => typeof candidate === "function",
-  );
-  if (!sharp) {
-    throw new Error("Optional dependency sharp did not expose an image processor");
-  }
-  return sharp;
-}
 
 async function loadSharp(maxInputPixels: number): Promise<SharpFactory> {
   if (!sharpFactoryPromise) {
-    sharpFactoryPromise = import(SHARP_MODULE)
-      .then((mod) => {
-        const sharp = normalizeSharpFactory(mod);
-        return ((buffer, options) =>
-          sharp(buffer, {
-            ...options,
-            failOnError: false,
-            limitInputPixels: maxInputPixels,
-          })) as SharpFactory;
-      })
-      .catch((err) => {
-        sharpFactoryPromise = null;
-        throw new Error("Optional dependency sharp is required for image attachment processing", {
-          cause: err,
-        });
+    sharpFactoryPromise = Promise.resolve().then(() => {
+      const sharp = _sharpRequire("sharp") as SharpFactory;
+      return ((buffer, options) =>
+        sharp(buffer, {
+          ...options,
+          failOnError: false,
+          limitInputPixels: maxInputPixels,
+        })) as SharpFactory;
+    }).catch((err) => {
+      sharpFactoryPromise = null;
+      throw new Error("Optional dependency sharp is required for image attachment processing", {
+        cause: err,
       });
+    });
   }
   return await sharpFactoryPromise;
 }
