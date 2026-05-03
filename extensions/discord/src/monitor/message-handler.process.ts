@@ -82,6 +82,21 @@ type DiscordMessageProcessObserver = {
   onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
 };
 
+type ToolStartPayload = {
+  name?: string;
+  phase?: string;
+  args?: Record<string, unknown>;
+};
+
+function readToolStringArg(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readToolBooleanArg(args: Record<string, unknown>, key: string): boolean {
+  return args[key] === true;
+}
+
 export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
@@ -203,7 +218,9 @@ export async function processDiscordMessage(
     messageId: message.id,
     reactionContext: ackReactionContext,
   });
-  const statusReactions = createStatusReactionController({
+  let statusReactionTarget = `${messageChannelId}/${message.id}`;
+  let statusReactionsActive = statusReactionsEnabled;
+  let statusReactions = createStatusReactionController({
     enabled: statusReactionsEnabled,
     adapter: discordAdapter,
     initialEmoji: ackReaction,
@@ -213,11 +230,67 @@ export async function processDiscordMessage(
       logAckFailure({
         log: logVerbose,
         channel: "discord",
-        target: `${messageChannelId}/${message.id}`,
+        target: statusReactionTarget,
         error: err,
       });
     },
   });
+  const maybeBindStatusReactionsToToolReaction = (payload: ToolStartPayload) => {
+    if (
+      sourceRepliesAreToolOnly ||
+      cfg.messages?.statusReactions?.enabled === false ||
+      payload.phase !== "start" ||
+      payload.name !== "message" ||
+      !payload.args
+    ) {
+      return;
+    }
+    const args = payload.args;
+    const action = readToolStringArg(args, "action")?.toLowerCase();
+    if (action !== "react") {
+      return;
+    }
+    const shouldTrack =
+      readToolBooleanArg(args, "trackToolCalls") || readToolBooleanArg(args, "track_tool_calls");
+    if (!shouldTrack) {
+      return;
+    }
+    const emoji = readToolStringArg(args, "emoji");
+    const remove = readToolBooleanArg(args, "remove");
+    if (!emoji || remove) {
+      return;
+    }
+    const trackedMessageId =
+      readToolStringArg(args, "messageId") ?? readToolStringArg(args, "message_id") ?? message.id;
+    const trackedChannelId =
+      readToolStringArg(args, "channelId") ?? readToolStringArg(args, "to") ?? messageChannelId;
+    statusReactionTarget = `${trackedChannelId}/${trackedMessageId}`;
+    if (statusReactionsActive) {
+      void statusReactions.clear();
+    }
+    const trackedAdapter = createDiscordAckReactionAdapter({
+      channelId: trackedChannelId,
+      messageId: trackedMessageId,
+      reactionContext: ackReactionContext,
+    });
+    statusReactions = createStatusReactionController({
+      enabled: true,
+      adapter: trackedAdapter,
+      initialEmoji: emoji,
+      emojis: cfg.messages?.statusReactions?.emojis,
+      timing: cfg.messages?.statusReactions?.timing,
+      onError: (err) => {
+        logAckFailure({
+          log: logVerbose,
+          channel: "discord",
+          target: statusReactionTarget,
+          error: err,
+        });
+      },
+    });
+    statusReactionsActive = true;
+    void statusReactions.setQueued();
+  };
   queueInitialDiscordAckReaction({
     enabled: statusReactionsEnabled,
     shouldSendAckReaction,
@@ -546,6 +619,7 @@ export async function processDiscordMessage(
                   if (isProcessAborted(abortSignal)) {
                     return;
                   }
+                  maybeBindStatusReactionsToToolReaction(payload);
                   await statusReactions.setTool(payload.name);
                   draftPreview.pushToolProgress(
                     payload.name ? `tool: ${payload.name}` : "tool running",
@@ -632,7 +706,7 @@ export async function processDiscordMessage(
         markDispatchIdle();
       }
     }
-    if (statusReactionsEnabled) {
+    if (statusReactionsActive) {
       if (dispatchAborted) {
         if (removeAckAfterReply) {
           void statusReactions.clear();
