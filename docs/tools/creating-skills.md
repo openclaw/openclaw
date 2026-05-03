@@ -112,6 +112,28 @@ The YAML frontmatter supports these fields:
 | Bundled (shipped with OpenClaw) | Low        | Global                |
 | `skills.load.extraDirs`         | Lowest     | Custom shared folders |
 
+## Advanced features
+
+Once your basic skill works, these features help you build production-quality
+skills:
+
+- **Conditional activation** — Use `requires.bins`, `requires.env`, or
+  `requires.config` to gate your skill so it only loads when dependencies
+  are available. See [Skills reference — Gating](/tools/skills#gating).
+- **API key and env injection** — Skills can receive secrets via
+  `skills.entries.<name>.apiKey` and `skills.entries.<name>.env` in your
+  config. See [Skills reference — Config/env wiring](/tools/skills#config-wiring).
+- **Invocation control** — Set `user-invocable: false` to hide a skill from
+  slash commands, or `disable-model-invocation: true` to exclude it from the
+  model prompt. See [Skills reference — Frontmatter](/tools/skills#frontmatter).
+- **Multi-command skills** — Use `command-dispatch: tool` with `command-tool`
+  to bypass the model and dispatch slash commands directly to a tool. See
+  [Skills reference — Frontmatter](/tools/skills#frontmatter).
+- **Template variables** — Use `{baseDir}` in your SKILL.md to reference
+  the skill directory portably. See [Skills reference](/tools/skills).
+- **Publish to ClawHub** — Share your skill with the community:
+  `clawhub publish <skill-dir>`. See [ClawHub](/tools/clawhub).
+
 ## Related
 
 - [Skills reference](/tools/skills) — loading, precedence, and gating rules
