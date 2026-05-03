@@ -8,7 +8,10 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { markDiagnosticEmbeddedRunStarted } from "./diagnostic-run-activity.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+} from "./diagnostic-run-activity.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionStateCountForTest,
@@ -92,6 +95,70 @@ describe("diagnostic session state pruning", () => {
     expect(bySessionId).toBe(keyed);
     expect(bySessionId.sessionKey).toBe("agent:main:demo-channel:channel:c1");
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+  });
+
+  it("canonicalizes sessionId-only state when the sessionKey becomes known", () => {
+    const sessionKey = "agent:main:demo-channel:channel:c1";
+    const pending = getDiagnosticSessionState({ sessionId: "s1" });
+    pending.queueDepth = 1;
+
+    const keyed = getDiagnosticSessionState({ sessionId: "s1", sessionKey });
+
+    expect(keyed).toBe(pending);
+    expect(keyed.queueDepth).toBe(1);
+    expect(diagnosticSessionStates.has("s1")).toBe(false);
+    expect(diagnosticSessionStates.get(sessionKey)).toBe(keyed);
+    expect(getDiagnosticSessionState({ sessionKey })).toBe(keyed);
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+  });
+
+  it("merges split sessionId and sessionKey state without leaving stale queued work", () => {
+    const sessionKey = "agent:main:demo-channel:channel:c1";
+    const keyed = getDiagnosticSessionState({ sessionKey });
+    keyed.queueDepth = 1;
+    keyed.lastActivity = 1;
+    const bySessionId = getDiagnosticSessionState({ sessionId: "s1" });
+    bySessionId.queueDepth = 1;
+    bySessionId.state = "processing";
+    bySessionId.lastActivity = 2;
+
+    const merged = getDiagnosticSessionState({ sessionId: "s1", sessionKey });
+
+    expect(merged).toBe(keyed);
+    expect(merged.queueDepth).toBe(2);
+    expect(merged.state).toBe("processing");
+    expect(diagnosticSessionStates.has("s1")).toBe(false);
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+
+    logSessionStateChange({ sessionId: "s1", sessionKey, state: "idle", reason: "run_completed" });
+    logSessionStateChange({ sessionKey, state: "idle", reason: "message_completed" });
+
+    expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(0);
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+  });
+});
+
+describe("diagnostic session activity aliases", () => {
+  beforeEach(() => {
+    resetDiagnosticStateForTest();
+  });
+
+  afterEach(() => {
+    resetDiagnosticStateForTest();
+  });
+
+  it("registers the sessionKey alias when activity first arrives with only a sessionId", () => {
+    const sessionKey = "agent:main:demo-channel:channel:c1";
+
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey });
+
+    expect(getDiagnosticSessionActivitySnapshot({ sessionKey }).activeWorkKind).toBe(
+      "embedded_run",
+    );
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1" }).activeWorkKind).toBe(
+      "embedded_run",
+    );
   });
 });
 
