@@ -1,5 +1,9 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
@@ -36,6 +40,10 @@ export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
 const MEDIA_UNDERSTANDING_CORE_PLUGIN_ID = "media-understanding-core";
 const MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT = "image-ops.js";
+const DEFAULT_IMAGE_WORKER_TIMEOUT_MS = 30_000;
+const DEFAULT_IMAGE_WORKER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+const IMAGE_WORKER_MAX_STDOUT_BYTES = 256 * 1024;
+const IMAGE_WORKER_MAX_STDERR_BYTES = 256 * 1024;
 
 export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
   return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
@@ -86,8 +94,358 @@ const mediaAttachmentImageOpsLoader = createLazyPromiseLoader(async () => {
   return ops;
 });
 
-async function loadMediaAttachmentImageOps(): Promise<MediaAttachmentImageOps> {
+async function loadInProcessMediaAttachmentImageOps(): Promise<MediaAttachmentImageOps> {
   return await mediaAttachmentImageOpsLoader.load();
+}
+
+function parseBooleanEnv(value: string | undefined): boolean | null {
+  switch (value?.trim().toLowerCase()) {
+    case "1":
+    case "true":
+    case "yes":
+    case "on":
+      return true;
+    case "0":
+    case "false":
+    case "no":
+    case "off":
+      return false;
+    default:
+      return null;
+  }
+}
+
+export function resolveImageOpsWorkerTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number.parseInt(env.OPENCLAW_IMAGE_WORKER_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_IMAGE_WORKER_TIMEOUT_MS;
+}
+
+export function resolveImageOpsWorkerMaxOutputBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number.parseInt(env.OPENCLAW_IMAGE_WORKER_MAX_OUTPUT_BYTES ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_IMAGE_WORKER_MAX_OUTPUT_BYTES;
+}
+
+function shouldUseImageOpsWorker(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (prefersSips()) {
+    return false;
+  }
+  return parseBooleanEnv(env.OPENCLAW_IMAGE_WORKER) !== false;
+}
+
+function resolvePackageRootForImageOpsWorker(): string | null {
+  return resolveOpenClawPackageRootSync({
+    cwd: path.dirname(fileURLToPath(import.meta.url)),
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+  });
+}
+
+function resolveImageOpsWorkerPath(env: NodeJS.ProcessEnv = process.env): string {
+  const explicitPath = env.OPENCLAW_IMAGE_OPS_WORKER_PATH?.trim();
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  const packageRoot = resolvePackageRootForImageOpsWorker();
+  if (packageRoot) {
+    const distWorkerPath = path.join(packageRoot, "dist", "media", "image-ops-worker.js");
+    if (existsSync(distWorkerPath)) {
+      return distWorkerPath;
+    }
+    const sourceWorkerPath = path.join(packageRoot, "src", "media", "image-ops-worker.ts");
+    if (existsSync(sourceWorkerPath)) {
+      return sourceWorkerPath;
+    }
+    return distWorkerPath;
+  }
+
+  return fileURLToPath(new URL("./image-ops-worker.js", import.meta.url));
+}
+
+function buildImageOpsWorkerArgv(workerPath: string): string[] {
+  if (path.extname(workerPath).toLowerCase() === ".ts") {
+    return [process.execPath, "--import", "tsx", workerPath];
+  }
+  return [process.execPath, workerPath];
+}
+
+type ImageOpsWorkerRequest =
+  | {
+      operation: "getImageMetadata" | "normalizeExifOrientation" | "convertHeicToJpeg";
+      inputPath: string;
+      outputPath?: string;
+      maxInputPixels: number;
+    }
+  | {
+      operation: "resizeToJpeg";
+      inputPath: string;
+      outputPath: string;
+      maxInputPixels: number;
+      maxSide: number;
+      quality: number;
+      withoutEnlargement?: boolean;
+    }
+  | {
+      operation: "hasAlphaChannel";
+      inputPath: string;
+      maxInputPixels: number;
+    }
+  | {
+      operation: "resizeToPng";
+      inputPath: string;
+      outputPath: string;
+      maxInputPixels: number;
+      maxSide: number;
+      compressionLevel?: number;
+      withoutEnlargement?: boolean;
+    };
+
+type ImageOpsWorkerSuccessResponse = { ok: true; metadata?: ImageMetadata | null; value?: boolean };
+type ImageOpsWorkerFailureResponse = { ok: false; error?: string };
+type ImageOpsWorkerResponse = ImageOpsWorkerSuccessResponse | ImageOpsWorkerFailureResponse;
+
+function appendLimitedChunk(params: {
+  chunks: Buffer[];
+  chunk: Buffer;
+  maxBytes: number;
+  streamName: string;
+  kill: () => void;
+}): boolean {
+  const currentBytes = params.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  if (currentBytes + params.chunk.length > params.maxBytes) {
+    params.kill();
+    throw new Error(`Image worker ${params.streamName} exceeded output limit`);
+  }
+  params.chunks.push(params.chunk);
+  return true;
+}
+
+async function invokeImageOpsWorker(
+  request: ImageOpsWorkerRequest,
+): Promise<ImageOpsWorkerSuccessResponse> {
+  const workerPath = resolveImageOpsWorkerPath();
+  const argv = buildImageOpsWorkerArgv(workerPath);
+  const input = JSON.stringify(request);
+  const timeoutMs = resolveImageOpsWorkerTimeoutMs();
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(argv[0] ?? process.execPath, argv.slice(1), {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let settled = false;
+    let timedOut = false;
+
+    const killChild = () => {
+      if (!settled) {
+        child.kill("SIGKILL");
+      }
+    };
+
+    const finishReject = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killChild();
+    }, timeoutMs);
+
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(input);
+
+    child.stdout?.on("data", (chunk) => {
+      try {
+        appendLimitedChunk({
+          chunks: stdoutChunks,
+          chunk: Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+          maxBytes: IMAGE_WORKER_MAX_STDOUT_BYTES,
+          streamName: "stdout",
+          kill: killChild,
+        });
+      } catch (error) {
+        finishReject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+
+    child.stderr?.on("data", (chunk) => {
+      try {
+        appendLimitedChunk({
+          chunks: stderrChunks,
+          chunk: Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+          maxBytes: IMAGE_WORKER_MAX_STDERR_BYTES,
+          streamName: "stderr",
+          kill: killChild,
+        });
+      } catch (error) {
+        finishReject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+
+    child.on("error", (error) => {
+      finishReject(error);
+    });
+
+    child.on("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8").trim();
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+      if (timedOut) {
+        reject(new Error(`Image worker timed out after ${timeoutMs}ms`));
+        return;
+      }
+      let response: ImageOpsWorkerResponse | null = null;
+      if (stdout) {
+        try {
+          response = JSON.parse(stdout) as ImageOpsWorkerResponse;
+        } catch {
+          // The status check below reports the raw output as context.
+        }
+      }
+      if (code !== 0 || signal) {
+        reject(
+          new Error(
+            response?.ok === false && response.error
+              ? response.error
+              : `Image worker failed with ${signal ?? `exit code ${code}`}${stderr ? `: ${stderr}` : ""}`,
+          ),
+        );
+        return;
+      }
+      if (!response) {
+        reject(new Error(`Image worker did not return valid JSON${stdout ? `: ${stdout}` : ""}`));
+        return;
+      }
+      if (!response.ok) {
+        reject(new Error(response.error ?? "Image worker failed"));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+async function runImageOpsWorkerWithBuffer<T>(params: {
+  buffer: Buffer;
+  buildRequest: (paths: { inputPath: string; outputPath: string }) => ImageOpsWorkerRequest;
+  readResult: (
+    paths: { outputPath: string },
+    response: ImageOpsWorkerSuccessResponse,
+  ) => Promise<T>;
+}): Promise<T> {
+  return await withTempDir(async (dir) => {
+    const inputPath = path.join(dir, "input.img");
+    const outputPath = path.join(dir, "output.img");
+    await fs.writeFile(inputPath, params.buffer);
+    const response = await invokeImageOpsWorker(params.buildRequest({ inputPath, outputPath }));
+    return await params.readResult({ outputPath }, response);
+  });
+}
+
+async function readImageOpsWorkerOutputFile(outputPath: string): Promise<Buffer> {
+  const stat = await fs.stat(outputPath);
+  const maxOutputBytes = resolveImageOpsWorkerMaxOutputBytes();
+  if (stat.size > maxOutputBytes) {
+    throw new Error(`Image worker output exceeded ${maxOutputBytes} bytes`);
+  }
+  return await fs.readFile(outputPath);
+}
+
+const workerBackedMediaAttachmentImageOps: MediaAttachmentImageOps = {
+  async getImageMetadata(buffer) {
+    return await runImageOpsWorkerWithBuffer({
+      buffer,
+      buildRequest: ({ inputPath }) => ({
+        operation: "getImageMetadata",
+        inputPath,
+        maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
+      }),
+      readResult: async (_paths, response) => response.metadata ?? null,
+    });
+  },
+  async normalizeExifOrientation(buffer) {
+    return await runImageOpsWorkerWithBuffer({
+      buffer,
+      buildRequest: ({ inputPath, outputPath }) => ({
+        operation: "normalizeExifOrientation",
+        inputPath,
+        outputPath,
+        maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
+      }),
+      readResult: async ({ outputPath }) => await readImageOpsWorkerOutputFile(outputPath),
+    });
+  },
+  async resizeToJpeg(params) {
+    return await runImageOpsWorkerWithBuffer({
+      buffer: params.buffer,
+      buildRequest: ({ inputPath, outputPath }) => ({
+        operation: "resizeToJpeg",
+        inputPath,
+        outputPath,
+        maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
+        maxSide: params.maxSide,
+        quality: params.quality,
+        withoutEnlargement: params.withoutEnlargement,
+      }),
+      readResult: async ({ outputPath }) => await readImageOpsWorkerOutputFile(outputPath),
+    });
+  },
+  async convertHeicToJpeg(buffer) {
+    return await runImageOpsWorkerWithBuffer({
+      buffer,
+      buildRequest: ({ inputPath, outputPath }) => ({
+        operation: "convertHeicToJpeg",
+        inputPath,
+        outputPath,
+        maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
+      }),
+      readResult: async ({ outputPath }) => await readImageOpsWorkerOutputFile(outputPath),
+    });
+  },
+  async hasAlphaChannel(buffer) {
+    return await runImageOpsWorkerWithBuffer({
+      buffer,
+      buildRequest: ({ inputPath }) => ({
+        operation: "hasAlphaChannel",
+        inputPath,
+        maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
+      }),
+      readResult: async (_paths, response) => response.value === true,
+    });
+  },
+  async resizeToPng(params) {
+    return await runImageOpsWorkerWithBuffer({
+      buffer: params.buffer,
+      buildRequest: ({ inputPath, outputPath }) => ({
+        operation: "resizeToPng",
+        inputPath,
+        outputPath,
+        maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
+        maxSide: params.maxSide,
+        compressionLevel: params.compressionLevel,
+        withoutEnlargement: params.withoutEnlargement,
+      }),
+      readResult: async ({ outputPath }) => await readImageOpsWorkerOutputFile(outputPath),
+    });
+  },
+};
+
+async function loadMediaAttachmentImageOps(): Promise<MediaAttachmentImageOps> {
+  if (shouldUseImageOpsWorker()) {
+    return workerBackedMediaAttachmentImageOps;
+  }
+  return await loadInProcessMediaAttachmentImageOps();
 }
 
 function isPositiveImageDimension(value: number): boolean {
