@@ -565,14 +565,119 @@ describe("plugin session extension SessionEntry projection", () => {
           const stored = loadSessionStore(storePath, { skipCache: true });
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toBeUndefined();
-          expect(entry.pluginExtensionSlotKeys).toEqual({
+          expect(entry.pluginExtensionSlotKeys).toBeUndefined();
+          expect(entry.pluginExtensions).toEqual({
             "restart-promoted-plugin": {
+              workflow: { state: "waiting" },
+            },
+          });
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears only stale promoted SessionEntry slots on mixed plugin restart", async () => {
+    const previousFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: previousFixture.registry,
+      config: previousFixture.config,
+      record: createPluginRecord({ id: "restart-mixed-plugin", name: "Restart" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "promoted workflow",
+          sessionEntrySlotKey: "approvalSnapshot",
+        });
+        api.registerSessionExtension({
+          namespace: "legacy",
+          description: "legacy promoted workflow",
+          sessionEntrySlotKey: "legacyApprovalSnapshot",
+        });
+      },
+    });
+    const nextFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: nextFixture.registry,
+      config: nextFixture.config,
+      record: createPluginRecord({ id: "restart-mixed-plugin", name: "Restart" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "promoted workflow",
+          sessionEntrySlotKey: "approvalSnapshot",
+        });
+        api.registerSessionExtension({
+          namespace: "legacy",
+          description: "legacy workflow",
+        });
+      },
+    });
+    setActivePluginRegistry(previousFixture.registry.registry);
+
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-restart-mixed-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const tempConfig = { session: { store: storePath } };
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: tempConfig,
+        run: async () => {
+          await updateSessionStore(storePath, (store) => {
+            store["agent:main:main"] = {
+              sessionId: "session-id",
+              updatedAt: Date.now(),
+            } as unknown as SessionEntry;
+          });
+          await expect(
+            patchPluginSessionExtension({
+              cfg: tempConfig as never,
+              sessionKey: "agent:main:main",
+              pluginId: "restart-mixed-plugin",
+              namespace: "workflow",
+              value: { state: "waiting" },
+            }),
+          ).resolves.toMatchObject({ ok: true });
+          await expect(
+            patchPluginSessionExtension({
+              cfg: tempConfig as never,
+              sessionKey: "agent:main:main",
+              pluginId: "restart-mixed-plugin",
+              namespace: "legacy",
+              value: { state: "legacy" },
+            }),
+          ).resolves.toMatchObject({ ok: true });
+
+          await expect(
+            cleanupReplacedPluginHostRegistry({
+              cfg: tempConfig as never,
+              previousRegistry: previousFixture.registry.registry,
+              nextRegistry: nextFixture.registry.registry,
+            }),
+          ).resolves.toMatchObject({ failures: [] });
+
+          const stored = loadSessionStore(storePath, { skipCache: true });
+          const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+          expect(entry.approvalSnapshot).toEqual({ state: "waiting" });
+          expect(entry.legacyApprovalSnapshot).toBeUndefined();
+          expect(entry.pluginExtensionSlotKeys).toEqual({
+            "restart-mixed-plugin": {
               workflow: "approvalSnapshot",
             },
           });
           expect(entry.pluginExtensions).toEqual({
-            "restart-promoted-plugin": {
+            "restart-mixed-plugin": {
               workflow: { state: "waiting" },
+              legacy: { state: "legacy" },
             },
           });
         },

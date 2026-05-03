@@ -70,11 +70,47 @@ function clearPromotedSessionEntrySlots(
   entry: SessionEntry,
   pluginId?: string,
   sessionEntrySlotKeys?: ReadonlySet<string>,
+  options: { includeStoredSlotKeys?: boolean; pruneSlotOwnership?: boolean } = {},
 ): void {
-  const slotKeys = collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
+  const slotKeys =
+    options.includeStoredSlotKeys === false && sessionEntrySlotKeys
+      ? new Set(sessionEntrySlotKeys)
+      : collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
   const entryRecord = entry as Record<string, unknown>;
   for (const slotKey of slotKeys) {
     delete entryRecord[slotKey];
+  }
+  if (!options.pruneSlotOwnership || !entry.pluginExtensionSlotKeys) {
+    return;
+  }
+  const pruneRecord = (record: Record<string, string>): void => {
+    for (const [namespace, slotKey] of Object.entries(record)) {
+      const normalized = normalizeSessionEntrySlotKey(slotKey);
+      if (normalized.ok && slotKeys.has(normalized.key)) {
+        delete record[namespace];
+      }
+    }
+  };
+  if (pluginId) {
+    const record = entry.pluginExtensionSlotKeys[pluginId];
+    if (record) {
+      pruneRecord(record);
+      if (Object.keys(record).length === 0) {
+        delete entry.pluginExtensionSlotKeys[pluginId];
+      }
+    }
+  } else {
+    for (const record of Object.values(entry.pluginExtensionSlotKeys)) {
+      pruneRecord(record);
+    }
+    for (const [ownerPluginId, record] of Object.entries(entry.pluginExtensionSlotKeys)) {
+      if (Object.keys(record).length === 0) {
+        delete entry.pluginExtensionSlotKeys[ownerPluginId];
+      }
+    }
+  }
+  if (Object.keys(entry.pluginExtensionSlotKeys).length === 0) {
+    delete entry.pluginExtensionSlotKeys;
   }
 }
 
@@ -225,7 +261,10 @@ async function clearPromotedSessionEntrySlotStores(params: {
         ) {
           continue;
         }
-        clearPromotedSessionEntrySlots(entry, params.pluginId, params.sessionEntrySlotKeys);
+        clearPromotedSessionEntrySlots(entry, params.pluginId, params.sessionEntrySlotKeys, {
+          includeStoredSlotKeys: false,
+          pruneSlotOwnership: true,
+        });
         entry.updatedAt = now;
         clearedInStore += 1;
       }
