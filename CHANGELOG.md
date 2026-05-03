@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Active Memory: apply `setupGraceTimeoutMs` to the embedded recall runner as well as the outer prompt-build watchdog, so very-cold first recalls keep the configured setup grace end-to-end. (#74480) Thanks @volcano303.
+- CLI/config: keep JSON dry-run patches validating touched channel configuration against bundled channel schemas even when the patch only contains SecretRef objects.
 - Plugins/tools: keep disabled bundled tool plugins out of explicit runtime allowlist ownership and fall back from loaded-but-empty channel registries to tool-bearing plugin registries, so Active Memory can use bundled `memory-core` search/get tools even when `memory-lancedb` is disabled. Fixes #76603. Thanks @jwong-art.
 - Plugins/install: run `npm install` from the managed npm-root manifest so installing one `@openclaw/*` plugin preserves already installed sibling plugins instead of pruning them. Fixes #76571. (#76602) Thanks @byungskers and @crpol.
 - Channels/QQ Bot: resolve structured `clientSecret` SecretRefs before QQ token exchange, expose the QQ Bot secret contract to secrets tooling, and reject legacy `secretref:/...` marker strings. (#74772) Thanks @xialonglee.
@@ -57,6 +58,7 @@ Docs: https://docs.openclaw.ai
 - Feishu: suppress duplicate text when replies send native voice media while preserving captions for ordinary audio files and falling back to text plus attachment links when voice uploads fail.
 - Feishu: send the skipped reply text when `audioAsVoice` falls back to a generic file attachment after transcode failure, so voice-intent replies do not lose their caption.
 - TTS/plugins: activate the configured speech provider plugin during Gateway startup, so Microsoft and Local CLI voice replies work immediately after selecting them instead of staying invisible in the startup plugin set. Fixes #76481. Thanks @amknight.
+- TTS/plugins: include speech providers selected through inherited agent, channel, and account TTS personas during Gateway startup, matching the runtime TTS config merge. Carries forward #76481. Thanks @amknight.
 - Feishu: keep packaged Feishu startup from bundling the Lark SDK's ESM `__dirname` path by loading the SDK as a plugin-local runtime dependency. Fixes #76291 and #76494. (#76392) Thanks @zqchris.
 - Plugins/npm: build package-local runtime dist files for publishable plugins and stop listing root-package-excluded plugin sidecars in the core package metadata, so npm plugin installs such as `@openclaw/diffs` and `@openclaw/discord` no longer publish source-only runtime payloads. Fixes #76426. Thanks @PrinceOfEgypt.
 - Channels/secrets: resolve SecretRef-backed channel credentials through external plugin secret contracts after the plugin split, covering runtime startup, target discovery, webhook auth, disabled-account enumeration, and late-bound web_search config. Fixes #76371. (#76449) Thanks @joshavant and @neeravmakwana.

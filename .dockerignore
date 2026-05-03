@@ -61,7 +61,7 @@ apps/ios/build
 apps/
 assets/
 Peekaboo/
-Swabble/
+apps/swabble/
 Core/
 Users/
 vendor/
