@@ -109,6 +109,8 @@ describe("proxy cli runtime", () => {
       proxyUrl: "http://override.example:3128",
       allowedUrls: ["https://allowed.example/"],
       deniedUrls: ["http://127.0.0.1/"],
+      apnsReachability: true,
+      apnsAuthority: "https://api.sandbox.push.apple.com",
       timeoutMs: 1234,
     });
 
@@ -122,6 +124,8 @@ describe("proxy cli runtime", () => {
       proxyUrlOverride: "http://override.example:3128",
       allowedUrls: ["https://allowed.example/"],
       deniedUrls: ["http://127.0.0.1/"],
+      apnsReachability: true,
+      apnsAuthority: "https://api.sandbox.push.apple.com",
       timeoutMs: 1234,
     });
     expect(process.stdout.write).toHaveBeenCalledWith(

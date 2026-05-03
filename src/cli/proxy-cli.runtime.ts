@@ -227,6 +227,8 @@ export async function runProxyValidateCommand(opts: {
   proxyUrl?: string;
   allowedUrls?: string[];
   deniedUrls?: string[];
+  apnsReachability?: boolean;
+  apnsAuthority?: string;
   timeoutMs?: number;
 }) {
   const config = getRuntimeConfig();
@@ -236,6 +238,8 @@ export async function runProxyValidateCommand(opts: {
     proxyUrlOverride: opts.proxyUrl,
     allowedUrls: opts.allowedUrls,
     deniedUrls: opts.deniedUrls,
+    apnsReachability: opts.apnsReachability,
+    apnsAuthority: opts.apnsAuthority,
     timeoutMs: opts.timeoutMs,
   });
   const outputResult = redactProxyValidationResult(result);

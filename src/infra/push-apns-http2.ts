@@ -16,6 +16,17 @@ export type ConnectApnsHttp2SessionParams = {
   timeoutMs: number;
 };
 
+export type ProbeApnsHttp2ReachabilityViaProxyParams = {
+  authority: string;
+  proxyUrl: string;
+  timeoutMs: number;
+};
+
+export type ProbeApnsHttp2ReachabilityViaProxyResult = {
+  status: number;
+  body: string;
+};
+
 function assertApnsAuthority(authority: string): ApnsAuthority {
   let parsed: URL;
   try {
@@ -30,6 +41,24 @@ function assertApnsAuthority(authority: string): ApnsAuthority {
   return normalized as ApnsAuthority;
 }
 
+async function openProxiedApnsHttp2Session(params: {
+  authority: ApnsAuthority;
+  proxyUrl: string;
+  timeoutMs: number;
+}): Promise<http2.ClientHttp2Session> {
+  const apnsHost = new URL(params.authority).hostname;
+  const tlsSocket = await openHttpConnectTunnel({
+    proxyUrl: params.proxyUrl,
+    targetHost: apnsHost,
+    targetPort: 443,
+    timeoutMs: params.timeoutMs,
+  });
+
+  return http2.connect(params.authority, {
+    createConnection: () => tlsSocket,
+  });
+}
+
 export async function connectApnsHttp2Session(
   params: ConnectApnsHttp2SessionParams,
 ): Promise<http2.ClientHttp2Session> {
@@ -39,15 +68,86 @@ export async function connectApnsHttp2Session(
     return http2.connect(authority);
   }
 
-  const apnsHost = new URL(authority).hostname;
-  const tlsSocket = await openHttpConnectTunnel({
+  return await openProxiedApnsHttp2Session({
+    authority,
     proxyUrl,
-    targetHost: apnsHost,
-    targetPort: 443,
+    timeoutMs: params.timeoutMs,
+  });
+}
+
+export async function probeApnsHttp2ReachabilityViaProxy(
+  params: ProbeApnsHttp2ReachabilityViaProxyParams,
+): Promise<ProbeApnsHttp2ReachabilityViaProxyResult> {
+  const authority = assertApnsAuthority(params.authority);
+  const session = await openProxiedApnsHttp2Session({
+    authority,
+    proxyUrl: params.proxyUrl,
     timeoutMs: params.timeoutMs,
   });
 
-  return http2.connect(authority, {
-    createConnection: () => tlsSocket,
-  });
+  try {
+    return await new Promise<ProbeApnsHttp2ReachabilityViaProxyResult>((resolve, reject) => {
+      let settled = false;
+      let body = "";
+      let status: number | undefined;
+      const timeout = setTimeout(() => {
+        fail(
+          new Error(`APNs reachability probe timed out after ${Math.trunc(params.timeoutMs)}ms`),
+        );
+      }, Math.trunc(params.timeoutMs));
+      timeout.unref?.();
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        session.off("error", fail);
+      };
+
+      const fail = (err: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        session.destroy(err instanceof Error ? err : new Error(String(err)));
+        reject(err);
+      };
+
+      const request = session.request({
+        ":method": "POST",
+        ":path": `/3/device/${"0".repeat(64)}`,
+        authorization: "bearer intentionally.invalid.openclaw.proxy.validation",
+        "apns-topic": "ai.openclaw.ios",
+        "apns-push-type": "alert",
+        "apns-priority": "10",
+      });
+
+      session.once("error", fail);
+      request.setEncoding("utf8");
+      request.on("response", (headers) => {
+        const rawStatus = headers[":status"];
+        status = typeof rawStatus === "number" ? rawStatus : Number(rawStatus);
+      });
+      request.on("data", (chunk) => {
+        body += String(chunk);
+      });
+      request.once("error", fail);
+      request.once("end", () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        if (status === undefined || !Number.isFinite(status)) {
+          reject(new Error("APNs reachability probe ended without an HTTP/2 status"));
+          return;
+        }
+        resolve({ status, body });
+      });
+      request.end(JSON.stringify({ aps: { alert: "OpenClaw APNs proxy validation" } }));
+    });
+  } finally {
+    if (!session.closed && !session.destroyed) {
+      session.close();
+    }
+  }
 }

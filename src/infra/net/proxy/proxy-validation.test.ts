@@ -420,4 +420,72 @@ describe("proxy validation", () => {
       },
     ]);
   });
+
+  it("adds an APNs reachability check when requested", async () => {
+    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const apnsCheck = vi.fn().mockResolvedValue({ status: 403 });
+
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: [],
+      apnsReachability: true,
+      apnsAuthority: "https://api.sandbox.push.apple.com",
+      timeoutMs: 1234,
+      fetchCheck,
+      apnsCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(apnsCheck).toHaveBeenCalledWith({
+      proxyUrl: "http://127.0.0.1:3128",
+      authority: "https://api.sandbox.push.apple.com",
+      timeoutMs: 1234,
+    });
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+        source: "config",
+        errors: [],
+      },
+      checks: [
+        {
+          kind: "apns",
+          url: "https://api.sandbox.push.apple.com",
+          ok: true,
+          status: 403,
+        },
+      ],
+    });
+  });
+
+  it("fails APNs reachability when the proxy blocks CONNECT", async () => {
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: [],
+      apnsReachability: true,
+      apnsCheck: vi.fn().mockRejectedValue(new Error("HTTP/1.1 403 Forbidden")),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.checks).toEqual([
+      {
+        kind: "apns",
+        url: "https://api.sandbox.push.apple.com",
+        ok: false,
+        error: "HTTP/1.1 403 Forbidden",
+      },
+    ]);
+  });
 });

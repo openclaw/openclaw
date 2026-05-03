@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
+import { probeApnsHttp2ReachabilityViaProxy } from "../../push-apns-http2.js";
 import { fetchWithRuntimeDispatcher } from "../runtime-fetch.js";
 import { createHttp1ProxyAgent } from "../undici-runtime.js";
 
 export const DEFAULT_PROXY_VALIDATION_ALLOWED_URLS = ["https://example.com/"] as const;
+export const DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY = "https://api.sandbox.push.apple.com";
 
 const DEFAULT_PROXY_VALIDATION_TIMEOUT_MS = 5000;
 const DENIED_CANARY_HEADER = "x-openclaw-proxy-validation-canary";
@@ -18,7 +20,7 @@ export type ProxyValidationResolvedConfig = {
   errors: string[];
 };
 
-export type ProxyValidationCheckKind = "allowed" | "denied";
+export type ProxyValidationCheckKind = "allowed" | "denied" | "apns";
 
 export type ProxyValidationCheck = {
   kind: ProxyValidationCheckKind;
@@ -50,6 +52,20 @@ export type ProxyValidationFetchCheck = (
   params: ProxyValidationFetchCheckParams,
 ) => Promise<ProxyValidationFetchCheckResult>;
 
+export type ProxyValidationApnsCheckParams = {
+  proxyUrl: string;
+  authority: string;
+  timeoutMs: number;
+};
+
+export type ProxyValidationApnsCheckResult = {
+  status: number;
+};
+
+export type ProxyValidationApnsCheck = (
+  params: ProxyValidationApnsCheckParams,
+) => Promise<ProxyValidationApnsCheckResult>;
+
 export type ResolveProxyValidationConfigOptions = {
   config?: ProxyConfig;
   env?: NodeJS.ProcessEnv | Partial<Record<"OPENCLAW_PROXY_URL", string | undefined>>;
@@ -61,6 +77,9 @@ export type RunProxyValidationOptions = ResolveProxyValidationConfigOptions & {
   deniedUrls?: readonly string[];
   timeoutMs?: number;
   fetchCheck?: ProxyValidationFetchCheck;
+  apnsReachability?: boolean;
+  apnsAuthority?: string;
+  apnsCheck?: ProxyValidationApnsCheck;
 };
 
 function normalizeProxyUrl(value: string | undefined): string | undefined {
@@ -174,6 +193,15 @@ async function defaultProxyValidationFetchCheck({
   } finally {
     await dispatcher.close();
   }
+}
+
+async function defaultProxyValidationApnsCheck({
+  proxyUrl,
+  authority,
+  timeoutMs,
+}: ProxyValidationApnsCheckParams): Promise<ProxyValidationApnsCheckResult> {
+  const result = await probeApnsHttp2ReachabilityViaProxy({ proxyUrl, authority, timeoutMs });
+  return { status: result.status };
 }
 
 function normalizeTimeoutMs(value: number | undefined): number {
@@ -380,6 +408,34 @@ async function runDeniedCheck(params: {
   }
 }
 
+async function runApnsReachabilityCheck(params: {
+  authority: string;
+  proxyUrl: string;
+  timeoutMs: number;
+  apnsCheck: ProxyValidationApnsCheck;
+}): Promise<ProxyValidationCheck> {
+  try {
+    const result = await params.apnsCheck({
+      proxyUrl: params.proxyUrl,
+      authority: params.authority,
+      timeoutMs: params.timeoutMs,
+    });
+    return {
+      kind: "apns",
+      url: params.authority,
+      ok: true,
+      status: result.status,
+    };
+  } catch (err) {
+    return {
+      kind: "apns",
+      url: params.authority,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export async function runProxyValidation(
   options: RunProxyValidationOptions,
 ): Promise<ProxyValidationResult> {
@@ -405,6 +461,8 @@ export async function runProxyValidation(
 
   const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
   const fetchCheck = options.fetchCheck ?? defaultProxyValidationFetchCheck;
+  const apnsCheck = options.apnsCheck ?? defaultProxyValidationApnsCheck;
+  const apnsAuthority = options.apnsAuthority ?? DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY;
   const allowedUrls = options.allowedUrls ?? DEFAULT_PROXY_VALIDATION_ALLOWED_URLS;
   const deniedTargets = await resolveDeniedTargets(options.deniedUrls);
   const checks: ProxyValidationCheck[] = [];
@@ -416,6 +474,16 @@ export async function runProxyValidation(
     for (const target of deniedTargets.targets) {
       checks.push(
         await runDeniedCheck({ target, proxyUrl: config.proxyUrl, timeoutMs, fetchCheck }),
+      );
+    }
+    if (options.apnsReachability === true) {
+      checks.push(
+        await runApnsReachabilityCheck({
+          authority: apnsAuthority,
+          proxyUrl: config.proxyUrl,
+          timeoutMs,
+          apnsCheck,
+        }),
       );
     }
   } finally {
