@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/onboarding: trust optional official plugin and web-search installs selected from the official catalog so npm security scanning treats them like other source-linked official install paths. Thanks @vincentkoc.
 - Tests/plugins: expose the Discord npm onboarding Docker lane as a package script and assert planned Docker lanes point at real scripts, so external-channel onboarding coverage can actually run. Thanks @vincentkoc.
 - Plugins/ClawHub: explain unreleased ClawHub plugin artifacts as a rollout-state fallback to `npm:` installs instead of leaking raw archive metadata fields. Thanks @vincentkoc.
+- Tests/onboarding: assert packaged channel onboarding leaves `openclaw channels status --json` and plain `openclaw status` showing the configured channel, covering the empty Channels table regression path. Thanks @vincentkoc.
 - Microsoft Teams: persist sent-message markers across Gateway restarts so follow-up replies to recent bot messages keep resolving the original conversation instead of dropping out after restart, with marker TTLs preserved on best-effort recovery. (#75585) Thanks @amknight.
 - Matrix: persist pending approval reaction targets across Gateway restarts so room approvers can still approve or deny outstanding prompts after OpenClaw comes back online. (#75586) Thanks @amknight.
 - Channels/onboarding: map third-party official WeCom and Yuanbao catalog entries to their published plugin ids so npm installs pass expected-plugin validation. Thanks @vincentkoc.
