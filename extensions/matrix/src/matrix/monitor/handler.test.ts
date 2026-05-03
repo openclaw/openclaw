@@ -2745,14 +2745,7 @@ describe("matrix monitor handler draft streaming", () => {
     await vi.waitFor(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
-    await vi.waitFor(() => {
-      expect(editMessageMatrixMock).toHaveBeenCalledWith(
-        "!room:example.org",
-        "$draft1",
-        "Pearling\n- `second`",
-        expect.anything(),
-      );
-    });
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Pearling\n- `second`");
     await finish();
   });
 

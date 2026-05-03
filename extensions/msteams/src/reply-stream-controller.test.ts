@@ -213,7 +213,8 @@ describe("createTeamsReplyStreamController", () => {
       log: { debug: vi.fn() } as never,
       msteamsConfig: { streaming: { mode: "progress" } } as never,
     });
-    await ctrl.onReplyStart();
+    await ctrl.noteProgressWork({ toolName: "exec" });
+    await ctrl.noteProgressWork();
     const fullText = "x".repeat(4200);
 
     const result = await ctrl.preparePayload({ text: fullText });

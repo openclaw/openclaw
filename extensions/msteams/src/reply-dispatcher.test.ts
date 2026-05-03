@@ -166,11 +166,13 @@ describe("createMSTeamsReplyDispatcher", () => {
     lastCreatedDispatcher.replyOptions.onPartialReply?.({ text });
   }
 
-  it("sends an informative status update on reply start for personal chats", async () => {
-    createDispatcher("personal");
+  it("sends an informative status update once work expands in personal chats", async () => {
+    const dispatcher = createDispatcher("personal", { streaming: { mode: "progress" } });
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
 
     await options.onReplyStart?.();
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
+    await dispatcher.replyOptions.onItemEvent?.({ progressText: "done" });
 
     expect(streamInstances).toHaveLength(1);
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledTimes(1);
@@ -194,9 +196,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     await options.onReplyStart?.();
 
-    // Even though we still send the informative update, the opt-out
-    // disables the typing keepalive.
-    expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledTimes(1);
+    expect(streamInstances[0]?.sendInformativeUpdate).not.toHaveBeenCalled();
     expect(typingCallbacks.onReplyStart).not.toHaveBeenCalled();
   });
 
@@ -314,14 +314,16 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(typingCallbacks.onReplyStart).not.toHaveBeenCalled();
   });
 
-  it("only sends the informative status update once", async () => {
-    createDispatcher("personal");
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+  it("delays the informative status update until work expands", async () => {
+    const dispatcher = createDispatcher("personal", { streaming: { mode: "progress" } });
 
-    await options.onReplyStart?.();
-    await options.onReplyStart?.();
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
+    expect(streamInstances[0]?.sendInformativeUpdate).not.toHaveBeenCalled();
 
-    expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledTimes(1);
+    await dispatcher.replyOptions.onItemEvent?.({ progressText: "done" });
+    await dispatcher.replyOptions.onPatchSummary?.({ phase: "end", summary: "patched" });
+
+    expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledTimes(2);
   });
 
   it("forwards partial replies into the Teams stream", async () => {
@@ -344,9 +346,12 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBe(true);
     await dispatcher.replyOptions.onToolStart?.({ name: "web_search" });
+    expect(streamInstances[0]?.sendInformativeUpdate).not.toHaveBeenCalled();
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
 
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledWith(
-      "Working\n- tool: web_search",
+      "Working\n- tool: web_search\n- tool: exec",
     );
   });
 
@@ -361,8 +366,14 @@ describe("createMSTeamsReplyDispatcher", () => {
     });
 
     expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBe(true);
-    expect(dispatcher.replyOptions.onToolStart).toBeUndefined();
+    await dispatcher.replyOptions.onToolStart?.({ name: "web_search" });
     expect(streamInstances[0]?.sendInformativeUpdate).not.toHaveBeenCalled();
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
+
+    expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledWith(
+      expect.stringMatching(/^[^\n]+\.\.\.$/),
+    );
   });
 
   it("does not create a stream for channel conversations", async () => {

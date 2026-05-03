@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createChannelProgressDraftGate,
   DEFAULT_PROGRESS_DRAFT_LABELS,
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
+  isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
@@ -16,6 +18,10 @@ import {
 } from "./channel-streaming.js";
 
 describe("channel-streaming", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("reads canonical nested streaming config first", () => {
     const entry = {
       streaming: {
@@ -171,5 +177,41 @@ describe("channel-streaming", () => {
         formatLine: (line) => `\`${line}\``,
       }),
     ).toBe("Shelling\n• `patch applied`\n• `tests done`");
+  });
+
+  it("starts progress drafts after five seconds or a second work event", async () => {
+    vi.useFakeTimers();
+    const onStart = vi.fn(async () => {});
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await expect(gate.noteWork()).resolves.toBe(false);
+    expect(onStart).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(onStart).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
+  });
+
+  it("starts progress drafts immediately on the second work event", async () => {
+    vi.useFakeTimers();
+    const onStart = vi.fn(async () => {});
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await gate.noteWork();
+    await expect(gate.noteWork()).resolves.toBe(true);
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores message-like tools for progress draft work", () => {
+    expect(isChannelProgressDraftWorkToolName("message")).toBe(false);
+    expect(isChannelProgressDraftWorkToolName("react")).toBe(false);
+    expect(isChannelProgressDraftWorkToolName("web_search")).toBe(true);
+    expect(isChannelProgressDraftWorkToolName("exec")).toBe(true);
   });
 });

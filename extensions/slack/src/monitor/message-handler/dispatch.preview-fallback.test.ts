@@ -231,6 +231,30 @@ vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
+  createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
+    let started = false;
+    let workEvents = 0;
+    return {
+      get hasStarted() {
+        return started;
+      },
+      async noteWork() {
+        workEvents += 1;
+        if (!started && workEvents > 1) {
+          started = true;
+          await params.onStart();
+        }
+        return started;
+      },
+      async startNow() {
+        if (!started) {
+          started = true;
+          await params.onStart();
+        }
+      },
+      cancel() {},
+    };
+  },
   formatChannelProgressDraftText: (params: {
     entry?: { streaming?: { progress?: { label?: string; maxLines?: number } } };
     lines: string[];
@@ -269,6 +293,8 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
     }
     return options?.previewToolProgressEnabled ?? true;
   },
+  isChannelProgressDraftWorkToolName: (name?: string) =>
+    Boolean(name && !["message", "react", "reaction"].includes(name.toLowerCase())),
 }));
 
 vi.mock("openclaw/plugin-sdk/outbound-runtime", () => ({

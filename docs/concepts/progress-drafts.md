@@ -12,9 +12,9 @@ Progress drafts make long-running agent turns feel alive in chat without turning
 the conversation into a stack of temporary status replies.
 
 When progress drafts are enabled, OpenClaw creates one visible work-in-progress
-message, updates it while the agent reads, plans, calls tools, or waits for
-approval, and then turns that draft into the final answer when the channel can
-do that safely.
+message only after the turn proves it is doing real work, updates it while the
+agent reads, plans, calls tools, or waits for approval, and then turns that draft
+into the final answer when the channel can do that safely.
 
 ```text
 Shelling...
@@ -42,9 +42,10 @@ Enable progress drafts per channel with `streaming.mode: "progress"`:
 }
 ```
 
-That is usually enough. OpenClaw will pick an automatic one-word label, add
-compact progress lines while useful work happens, and suppress duplicate
-standalone progress chatter for that turn.
+That is usually enough. OpenClaw will pick an automatic one-word label, wait
+until work lasts at least five seconds or emits a second work event, add compact
+progress lines while useful work happens, and suppress duplicate standalone
+progress chatter for that turn.
 
 ## What Users See
 
@@ -55,10 +56,12 @@ A progress draft has two parts:
 | Label          | A short title such as `Thinking...` or `Shelling...`.             |
 | Progress lines | Compact run updates such as tool calls, task steps, or approvals. |
 
-The label appears immediately when the agent starts replying. Progress lines are
-added only when the agent emits useful work updates. The final answer replaces
-the draft when possible; otherwise OpenClaw sends the final answer normally and
-cleans up or stops updating the draft according to the channel's transport.
+The label appears after the agent starts meaningful work and either remains busy
+for five seconds or emits a second work event. Plain text-only replies do not
+show a progress draft. Progress lines are added only when the agent emits useful
+work updates. The final answer replaces the draft when possible; otherwise
+OpenClaw sends the final answer normally and cleans up or stops updating the
+draft according to the channel's transport.
 
 ## Choose A Mode
 

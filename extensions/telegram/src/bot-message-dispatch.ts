@@ -7,7 +7,9 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
+  createChannelProgressDraftGate,
   formatChannelProgressDraftText,
+  isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
@@ -476,30 +478,72 @@ export const dispatchTelegramMessage = async ({
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: string[] = [];
-  const pushPreviewToolProgress = (line?: string) => {
-    if (!previewToolProgressEnabled || previewToolProgressSuppressed || !answerLane.stream) {
+  const renderProgressDraft = async (options?: { flush?: boolean }) => {
+    if (!answerLane.stream || streamMode !== "progress") {
       return;
     }
-    const normalized = line?.replace(/\s+/g, " ").trim();
-    if (!normalized) {
-      return;
-    }
-    const previous = previewToolProgressLines.at(-1);
-    if (previous === normalized) {
-      return;
-    }
-    previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
-      -resolveChannelProgressDraftMaxLines(telegramCfg),
-    );
     const previewText = formatChannelProgressDraftText({
       entry: telegramCfg,
       lines: previewToolProgressLines,
       seed: progressSeed,
       formatLine: formatProgressAsMarkdownCode,
     });
+    if (!previewText || previewText === answerLane.lastPartialText) {
+      return;
+    }
     answerLane.lastPartialText = previewText;
     answerLane.hasStreamedMessage = true;
     answerLane.stream.update(previewText);
+    if (options?.flush) {
+      await answerLane.stream.flush();
+    }
+  };
+  const progressDraftGate = createChannelProgressDraftGate({
+    onStart: () => renderProgressDraft({ flush: true }),
+  });
+  const pushPreviewToolProgress = async (line?: string, options?: { toolName?: string }) => {
+    if (!answerLane.stream) {
+      return;
+    }
+    if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
+      return;
+    }
+    const normalized = line?.replace(/\s+/g, " ").trim();
+    if (streamMode !== "progress") {
+      if (!previewToolProgressEnabled || previewToolProgressSuppressed || !normalized) {
+        return;
+      }
+      const previous = previewToolProgressLines.at(-1);
+      if (previous === normalized) {
+        return;
+      }
+      previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+        -resolveChannelProgressDraftMaxLines(telegramCfg),
+      );
+      const previewText = formatChannelProgressDraftText({
+        entry: telegramCfg,
+        lines: previewToolProgressLines,
+        seed: progressSeed,
+        formatLine: formatProgressAsMarkdownCode,
+      });
+      answerLane.lastPartialText = previewText;
+      answerLane.hasStreamedMessage = true;
+      answerLane.stream.update(previewText);
+      return;
+    }
+    if (previewToolProgressEnabled && !previewToolProgressSuppressed && normalized) {
+      const previous = previewToolProgressLines.at(-1);
+      if (previous !== normalized) {
+        previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+          -resolveChannelProgressDraftMaxLines(telegramCfg),
+        );
+      }
+    }
+    const alreadyStarted = progressDraftGate.hasStarted;
+    await progressDraftGate.noteWork();
+    if (alreadyStarted && progressDraftGate.hasStarted) {
+      await renderProgressDraft();
+    }
   };
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
@@ -1067,25 +1111,6 @@ export const dispatchTelegramMessage = async ({
                 replyOptions: {
                   skillFilter,
                   disableBlockStreaming,
-                  onReplyStart:
-                    answerLane.stream && streamMode === "progress"
-                      ? () =>
-                          enqueueDraftLaneEvent(async () => {
-                            const previewText = formatChannelProgressDraftText({
-                              entry: telegramCfg,
-                              lines: [],
-                              seed: progressSeed,
-                              formatLine: formatProgressAsMarkdownCode,
-                            });
-                            if (!previewText || previewText === answerLane.lastPartialText) {
-                              return;
-                            }
-                            answerLane.lastPartialText = previewText;
-                            answerLane.hasStreamedMessage = true;
-                            answerLane.stream?.update(previewText);
-                            await answerLane.stream?.flush();
-                          })
-                      : undefined,
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream
                       ? (payload) =>
@@ -1147,10 +1172,12 @@ export const dispatchTelegramMessage = async ({
                     if (statusReactionController && toolName) {
                       await statusReactionController.setTool(toolName);
                     }
-                    pushPreviewToolProgress(toolName ? `tool: ${toolName}` : "tool running");
+                    await pushPreviewToolProgress(toolName ? `tool: ${toolName}` : "tool running", {
+                      toolName,
+                    });
                   },
                   onItemEvent: async (payload) => {
-                    pushPreviewToolProgress(
+                    await pushPreviewToolProgress(
                       payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
                     );
                   },
@@ -1158,7 +1185,7 @@ export const dispatchTelegramMessage = async ({
                     if (payload.phase !== "update") {
                       return;
                     }
-                    pushPreviewToolProgress(
+                    await pushPreviewToolProgress(
                       payload.explanation ?? payload.steps?.[0] ?? "planning",
                     );
                   },
@@ -1166,7 +1193,7 @@ export const dispatchTelegramMessage = async ({
                     if (payload.phase !== "requested") {
                       return;
                     }
-                    pushPreviewToolProgress(
+                    await pushPreviewToolProgress(
                       payload.command ? `approval: ${payload.command}` : "approval requested",
                     );
                   },
@@ -1174,7 +1201,7 @@ export const dispatchTelegramMessage = async ({
                     if (payload.phase !== "end") {
                       return;
                     }
-                    pushPreviewToolProgress(
+                    await pushPreviewToolProgress(
                       payload.name
                         ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
                         : payload.title,
@@ -1184,7 +1211,9 @@ export const dispatchTelegramMessage = async ({
                     if (payload.phase !== "end") {
                       return;
                     }
-                    pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
+                    await pushPreviewToolProgress(
+                      payload.summary ?? payload.title ?? "patch applied",
+                    );
                   },
                   onCompactionStart:
                     statusReactionController || answerLane.stream
@@ -1223,6 +1252,7 @@ export const dispatchTelegramMessage = async ({
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
       await draftLaneEventQueue;
+      progressDraftGate.cancel();
       if (isDispatchSuperseded()) {
         if (answerLane.hasStreamedMessage || typeof answerLane.stream?.messageId() === "number") {
           retainPreviewOnCleanupByLane.answer = true;

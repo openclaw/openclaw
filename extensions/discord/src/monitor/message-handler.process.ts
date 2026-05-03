@@ -436,7 +436,11 @@ export async function processDiscordMessage(
             return;
           }
         }
-        if (draftStream && isFinal) {
+        if (
+          draftStream &&
+          isFinal &&
+          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted)
+        ) {
           draftPreview.markFinalDeliveryHandled();
           const reply = resolveSendableOutboundReplyParts(payload);
           const hasMedia = reply.hasMedia;
@@ -571,7 +575,6 @@ export async function processDiscordMessage(
         }
         await replyPipeline.typingCallbacks?.onReplyStart();
         await statusReactions.setThinking();
-        await draftPreview.startProgressDraft();
       },
     });
 
@@ -625,7 +628,6 @@ export async function processDiscordMessage(
           },
           onPreDispatchFailure: settleDispatchBeforeStart,
           runDispatch: async () => {
-            await draftPreview.startProgressDraft();
             return await dispatchInboundMessage({
               ctx: ctxPayload,
               cfg,
@@ -662,12 +664,13 @@ export async function processDiscordMessage(
                   }
                   await maybeBindStatusReactionsToToolReaction(payload);
                   await statusReactions.setTool(payload.name);
-                  draftPreview.pushToolProgress(
+                  await draftPreview.pushToolProgress(
                     payload.name ? `tool: ${payload.name}` : "tool running",
+                    { toolName: payload.name },
                   );
                 },
                 onItemEvent: async (payload) => {
-                  draftPreview.pushToolProgress(
+                  await draftPreview.pushToolProgress(
                     payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
                   );
                 },
@@ -675,7 +678,7 @@ export async function processDiscordMessage(
                   if (payload.phase !== "update") {
                     return;
                   }
-                  draftPreview.pushToolProgress(
+                  await draftPreview.pushToolProgress(
                     payload.explanation ?? payload.steps?.[0] ?? "planning",
                   );
                 },
@@ -683,7 +686,7 @@ export async function processDiscordMessage(
                   if (payload.phase !== "requested") {
                     return;
                   }
-                  draftPreview.pushToolProgress(
+                  await draftPreview.pushToolProgress(
                     payload.command ? `approval: ${payload.command}` : "approval requested",
                   );
                 },
@@ -691,7 +694,7 @@ export async function processDiscordMessage(
                   if (payload.phase !== "end") {
                     return;
                   }
-                  draftPreview.pushToolProgress(
+                  await draftPreview.pushToolProgress(
                     payload.name
                       ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
                       : payload.title,
@@ -701,7 +704,7 @@ export async function processDiscordMessage(
                   if (payload.phase !== "end") {
                     return;
                   }
-                  draftPreview.pushToolProgress(
+                  await draftPreview.pushToolProgress(
                     payload.summary ?? payload.title ?? "patch applied",
                   );
                 },

@@ -343,6 +343,32 @@ export function createMSTeamsReplyDispatcher(params: {
         ? {
             onPartialReply: (payload: { text?: string }) =>
               streamController.onPartialReply(payload),
+            onToolStart: async (payload: { name?: string }) => {
+              await streamController.noteProgressWork({ toolName: payload.name });
+            },
+            onItemEvent: async () => {
+              await streamController.noteProgressWork();
+            },
+            onPlanUpdate: async (payload: { phase?: string }) => {
+              if (payload.phase === "update") {
+                await streamController.noteProgressWork();
+              }
+            },
+            onApprovalEvent: async (payload: { phase?: string }) => {
+              if (payload.phase === "requested") {
+                await streamController.noteProgressWork();
+              }
+            },
+            onCommandOutput: async (payload: { phase?: string }) => {
+              if (payload.phase === "end") {
+                await streamController.noteProgressWork();
+              }
+            },
+            onPatchSummary: async (payload: { phase?: string }) => {
+              if (payload.phase === "end") {
+                await streamController.noteProgressWork();
+              }
+            },
           }
         : {}),
       ...(streamController.shouldSuppressDefaultToolProgressMessages()
@@ -353,6 +379,7 @@ export function createMSTeamsReplyDispatcher(params: {
             onToolStart: async (payload: { name?: string; phase?: string }) => {
               await streamController.pushProgressLine(
                 payload.name ? `tool: ${payload.name}` : (payload.phase ?? "tool running"),
+                { toolName: payload.name },
               );
             },
             onItemEvent: async (payload: {

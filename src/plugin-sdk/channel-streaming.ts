@@ -107,6 +107,97 @@ export const DEFAULT_PROGRESS_DRAFT_LABELS = [
   "Surfacing...",
 ] as const;
 
+export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5_000;
+
+const NON_WORK_PROGRESS_TOOL_NAMES = new Set([
+  "message",
+  "messages",
+  "reply",
+  "send",
+  "reaction",
+  "react",
+  "typing",
+]);
+
+export function isChannelProgressDraftWorkToolName(name: string | null | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(name);
+  return Boolean(normalized && !NON_WORK_PROGRESS_TOOL_NAMES.has(normalized));
+}
+
+export function createChannelProgressDraftGate(params: {
+  onStart: () => void | Promise<void>;
+  initialDelayMs?: number;
+  setTimeoutFn?: typeof setTimeout;
+  clearTimeoutFn?: typeof clearTimeout;
+}) {
+  const initialDelayMs = params.initialDelayMs ?? DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS;
+  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
+  let started = false;
+  let disposed = false;
+  let workEvents = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let startPromise: Promise<void> | undefined;
+
+  const clearTimer = () => {
+    if (timer) {
+      clearTimeoutFn(timer);
+      timer = undefined;
+    }
+  };
+
+  const start = (): Promise<void> => {
+    if (disposed || started) {
+      return startPromise ?? Promise.resolve();
+    }
+    started = true;
+    clearTimer();
+    startPromise = Promise.resolve().then(params.onStart);
+    return startPromise;
+  };
+
+  const schedule = () => {
+    if (timer || started || disposed || initialDelayMs < 0) {
+      return;
+    }
+    timer = setTimeoutFn(() => {
+      timer = undefined;
+      void start().catch(() => {});
+    }, initialDelayMs);
+  };
+
+  return {
+    get hasStarted() {
+      return started;
+    },
+    get workEvents() {
+      return workEvents;
+    },
+    async noteWork(): Promise<boolean> {
+      if (disposed) {
+        return false;
+      }
+      workEvents += 1;
+      if (started) {
+        return true;
+      }
+      if (workEvents > 1) {
+        await start();
+        return true;
+      }
+      schedule();
+      return false;
+    },
+    async startNow(): Promise<void> {
+      await start();
+    },
+    cancel(): void {
+      disposed = true;
+      clearTimer();
+    },
+  };
+}
+
 export function getChannelStreamingConfigObject(
   entry: StreamingCompatEntry | null | undefined,
 ): ChannelStreamingConfig | undefined {

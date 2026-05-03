@@ -752,7 +752,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith("HelloWorld");
   });
 
-  it("reuses the Telegram progress draft for the first assistant final", async () => {
+  it("does not create a Telegram progress draft for a text-only final", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -770,10 +770,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
     });
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
+    expect(draftStream.update).not.toHaveBeenCalled();
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
-    expect(editMessageTelegram).toHaveBeenCalledWith(123, 2001, "Final answer", expect.any(Object));
-    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Final answer" })],
+      }),
+    );
   });
 
   it("keeps the Telegram progress draft across post-tool assistant boundaries", async () => {
@@ -784,6 +788,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await replyOptions?.onReplyStart?.();
         await replyOptions?.onAssistantMessageStart?.();
         await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
+        await replyOptions?.onItemEvent?.({ progressText: "tests passed" });
         await replyOptions?.onAssistantMessageStart?.();
         await dispatcherOptions.deliver({ text: "Final after tool" }, { kind: "final" });
         return { queuedFinal: true };
@@ -796,9 +801,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
     });
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
     expect(draftStream.update).toHaveBeenCalledWith(
-      expect.stringMatching(/^Shelling\n• `exec ls ~\/Desktop`$/),
+      expect.stringMatching(/^Shelling\n• `exec ls ~\/Desktop`\n• `tests passed`$/),
     );
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(draftStream.materialize).not.toHaveBeenCalled();

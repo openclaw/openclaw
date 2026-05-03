@@ -13,7 +13,9 @@ import {
   resolveChannelSourceReplyDeliveryMode,
 } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
+  createChannelProgressDraftGate,
   formatChannelProgressDraftText,
+  isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingNativeTransport,
@@ -885,22 +887,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let statusUpdateCount = 0;
   const progressSeed = `${account.accountId}:${message.channel}`;
 
-  const pushPreviewToolProgress = (line?: string) => {
-    if (!draftStream || !previewToolProgressEnabled || previewToolProgressSuppressed) {
+  const renderProgressDraft = () => {
+    if (!draftStream || streamMode !== "status_final") {
       return;
     }
-    const normalized = line?.replace(/\s+/g, " ").trim();
-    if (!normalized) {
-      return;
-    }
-    const escaped = escapeSlackMrkdwn(normalized);
-    const previous = previewToolProgressLines.at(-1);
-    if (previous === escaped) {
-      return;
-    }
-    previewToolProgressLines = [...previewToolProgressLines, escaped].slice(
-      -resolveChannelProgressDraftMaxLines(account.config),
-    );
     draftStream.update(
       formatChannelProgressDraftText({
         entry: account.config,
@@ -909,6 +899,55 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }),
     );
     hasStreamedMessage = true;
+  };
+  const progressDraftGate = createChannelProgressDraftGate({
+    onStart: renderProgressDraft,
+  });
+
+  const pushPreviewToolProgress = async (line?: string, options?: { toolName?: string }) => {
+    if (!draftStream) {
+      return;
+    }
+    if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
+      return;
+    }
+    const normalized = line?.replace(/\s+/g, " ").trim();
+    if (streamMode !== "status_final") {
+      if (!previewToolProgressEnabled || previewToolProgressSuppressed || !normalized) {
+        return;
+      }
+      const escaped = escapeSlackMrkdwn(normalized);
+      const previous = previewToolProgressLines.at(-1);
+      if (previous === escaped) {
+        return;
+      }
+      previewToolProgressLines = [...previewToolProgressLines, escaped].slice(
+        -resolveChannelProgressDraftMaxLines(account.config),
+      );
+      draftStream.update(
+        formatChannelProgressDraftText({
+          entry: account.config,
+          lines: previewToolProgressLines,
+          seed: progressSeed,
+        }),
+      );
+      hasStreamedMessage = true;
+      return;
+    }
+    if (previewToolProgressEnabled && !previewToolProgressSuppressed && normalized) {
+      const escaped = escapeSlackMrkdwn(normalized);
+      const previous = previewToolProgressLines.at(-1);
+      if (previous !== escaped) {
+        previewToolProgressLines = [...previewToolProgressLines, escaped].slice(
+          -resolveChannelProgressDraftMaxLines(account.config),
+        );
+      }
+    }
+    const alreadyStarted = progressDraftGate.hasStarted;
+    await progressDraftGate.noteWork();
+    if (alreadyStarted && progressDraftGate.hasStarted) {
+      renderProgressDraft();
+    }
   };
 
   const updateDraftFromPartial = (text?: string) => {
@@ -936,6 +975,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
 
     if (streamMode === "status_final") {
+      if (!progressDraftGate.hasStarted) {
+        return;
+      }
       statusUpdateCount += 1;
       if (statusUpdateCount > 1 && statusUpdateCount % 4 !== 0) {
         return;
@@ -1036,10 +1078,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   if (statusReactionsEnabled) {
                     await statusReactions.setTool(payload.name);
                   }
-                  pushPreviewToolProgress(payload.name ? `tool: ${payload.name}` : "tool running");
+                  await pushPreviewToolProgress(
+                    payload.name ? `tool: ${payload.name}` : "tool running",
+                    { toolName: payload.name },
+                  );
                 },
                 onItemEvent: async (payload) => {
-                  pushPreviewToolProgress(
+                  await pushPreviewToolProgress(
                     payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
                   );
                 },
@@ -1047,13 +1092,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   if (payload.phase !== "update") {
                     return;
                   }
-                  pushPreviewToolProgress(payload.explanation ?? payload.steps?.[0] ?? "planning");
+                  await pushPreviewToolProgress(
+                    payload.explanation ?? payload.steps?.[0] ?? "planning",
+                  );
                 },
                 onApprovalEvent: async (payload) => {
                   if (payload.phase !== "requested") {
                     return;
                   }
-                  pushPreviewToolProgress(
+                  await pushPreviewToolProgress(
                     payload.command ? `approval: ${payload.command}` : "approval requested",
                   );
                 },
@@ -1061,7 +1108,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   if (payload.phase !== "end") {
                     return;
                   }
-                  pushPreviewToolProgress(
+                  await pushPreviewToolProgress(
                     payload.name
                       ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
                       : payload.title,
@@ -1071,7 +1118,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   if (payload.phase !== "end") {
                     return;
                   }
-                  pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
+                  await pushPreviewToolProgress(
+                    payload.summary ?? payload.title ?? "patch applied",
+                  );
                 },
               },
             }),
@@ -1087,6 +1136,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   } catch (err) {
     dispatchError = err;
   } finally {
+    progressDraftGate.cancel();
     await draftStream?.discardPending();
     if (!dispatchSettledBeforeStart) {
       markDispatchIdle();

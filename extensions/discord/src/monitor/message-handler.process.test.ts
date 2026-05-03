@@ -1452,6 +1452,7 @@ describe("processDiscordMessage draft streaming", () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReplyStart?.();
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       return createNoQueuedDispatchResult();
     });
 
@@ -1477,7 +1478,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
   });
 
-  it("starts Discord progress drafts when accepted turns dispatch", async () => {
+  it("does not start Discord progress drafts for text-only accepted turns", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
@@ -1495,17 +1496,17 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledTimes(1);
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
-    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(draftStream.flush).not.toHaveBeenCalled();
   });
 
-  it("keeps Discord progress drafts instead of delivering text-only interim blocks", async () => {
+  it("keeps Discord progress drafts instead of delivering text-only interim blocks after work expands", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendBlockReply({ text: "on it" });
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       await params?.dispatcher.sendFinalReply({ text: "done" });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 1 } };
     });
@@ -1523,8 +1524,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: exec");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: exec\n• exec done");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
     expect(editMessageDiscord).toHaveBeenCalledWith(
       "c1",
@@ -1557,7 +1557,6 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: first");
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: first\n• tool: second");
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
