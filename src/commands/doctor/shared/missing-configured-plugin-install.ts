@@ -545,6 +545,7 @@ async function repairMissingPluginInstalls(params: {
   const changes: string[] = [];
   const warnings: string[] = [];
   const deferredPluginIds = new Set<string>();
+  const failedRecordedRepairPluginIds = new Set<string>();
   let nextRecords = records;
 
   for (const [pluginId, record] of Object.entries(records)) {
@@ -616,6 +617,7 @@ async function repairMissingPluginInstalls(params: {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
         changes.push(`Repaired missing configured plugin "${outcome.pluginId}".`);
       } else if (outcome.status === "error") {
+        failedRecordedRepairPluginIds.add(outcome.pluginId);
         warnings.push(outcome.message);
       }
     }
@@ -627,6 +629,9 @@ async function repairMissingPluginInstalls(params: {
       if (deferredPluginIds.has(pluginId)) {
         return false;
       }
+      if (failedRecordedRepairPluginIds.has(pluginId)) {
+        return false;
+      }
       const hasRecord = Object.hasOwn(nextRecords, pluginId);
       return (
         (!knownIds.has(pluginId) && !hasRecord && !bundledPluginsById.has(pluginId)) ||
@@ -636,16 +641,21 @@ async function repairMissingPluginInstalls(params: {
       );
     }),
   );
+  const fallbackBlockedPluginIds =
+    deferredPluginIds.size > 0 || failedRecordedRepairPluginIds.size > 0
+      ? new Set([
+          ...(params.blockedPluginIds ?? []),
+          ...deferredPluginIds,
+          ...failedRecordedRepairPluginIds,
+        ])
+      : params.blockedPluginIds;
   for (const candidate of collectDownloadableInstallCandidates({
     cfg: params.cfg,
     env,
     missingPluginIds,
     configuredPluginIds: params.pluginIds,
     configuredChannelIds: params.channelIds,
-    blockedPluginIds:
-      deferredPluginIds.size > 0
-        ? new Set([...(params.blockedPluginIds ?? []), ...deferredPluginIds])
-        : params.blockedPluginIds,
+    blockedPluginIds: fallbackBlockedPluginIds,
   })) {
     const hasUsableRecord =
       Object.hasOwn(nextRecords, candidate.pluginId) &&

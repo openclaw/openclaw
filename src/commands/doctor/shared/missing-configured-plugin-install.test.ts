@@ -1287,6 +1287,84 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
   });
 
+  it("does not fall back to catalog reinstall after a persisted record repair error", async () => {
+    const records = {
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@1.2.3",
+        installPath: "/tmp/openclaw-missing-discord-install-record",
+        integrity: "sha512-pinned-good-integrity",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          channels: ["discord"],
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "discord",
+        pluginId: "discord",
+        meta: { label: "Discord" },
+        install: {
+          npmSpec: "@openclaw/discord",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+    ]);
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      changed: false,
+      config: {
+        plugins: {
+          installs: records,
+        },
+      },
+      outcomes: [
+        {
+          pluginId: "discord",
+          status: "error",
+          message: "Integrity drift for discord.",
+        },
+      ],
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["discord"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({ installs: records }),
+        }),
+      }),
+    );
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      changes: [],
+      warnings: ["Integrity drift for discord."],
+    });
+  });
+
   it("updates a known configured plugin when its installed manifest path still exists", async () => {
     const records = {
       discord: {
