@@ -118,6 +118,55 @@ async function runTransportStream(
   return stream.result();
 }
 
+describe("resolveAnthropicMessagesUrl", () => {
+  let resolveAnthropicMessagesUrl: typeof import("./anthropic-transport-stream.js").resolveAnthropicMessagesUrl;
+
+  beforeAll(async () => {
+    ({ resolveAnthropicMessagesUrl } = await import("./anthropic-transport-stream.js"));
+  });
+
+  it("uses the explicit baseUrl when provided", () => {
+    expect(resolveAnthropicMessagesUrl("https://proxy.example.com", {})).toBe(
+      "https://proxy.example.com/v1/messages",
+    );
+    expect(resolveAnthropicMessagesUrl("https://proxy.example.com/v1", {})).toBe(
+      "https://proxy.example.com/v1/messages",
+    );
+  });
+
+  it("prefers explicit baseUrl over ANTHROPIC_BASE_URL", () => {
+    expect(
+      resolveAnthropicMessagesUrl("https://explicit.example.com", {
+        ANTHROPIC_BASE_URL: "https://env.example.com",
+      }),
+    ).toBe("https://explicit.example.com/v1/messages");
+  });
+
+  it("falls back to ANTHROPIC_BASE_URL when baseUrl is empty", () => {
+    expect(
+      resolveAnthropicMessagesUrl(undefined, { ANTHROPIC_BASE_URL: "https://env.example.com" }),
+    ).toBe("https://env.example.com/v1/messages");
+    expect(resolveAnthropicMessagesUrl("", { ANTHROPIC_BASE_URL: "https://env.example.com" })).toBe(
+      "https://env.example.com/v1/messages",
+    );
+    expect(
+      resolveAnthropicMessagesUrl("   ", { ANTHROPIC_BASE_URL: "https://env.example.com" }),
+    ).toBe("https://env.example.com/v1/messages");
+  });
+
+  it("falls back to api.anthropic.com when neither baseUrl nor env is set", () => {
+    expect(resolveAnthropicMessagesUrl(undefined, {})).toBe(
+      "https://api.anthropic.com/v1/messages",
+    );
+    expect(resolveAnthropicMessagesUrl(undefined, { ANTHROPIC_BASE_URL: "" })).toBe(
+      "https://api.anthropic.com/v1/messages",
+    );
+    expect(resolveAnthropicMessagesUrl(undefined, { ANTHROPIC_BASE_URL: "   " })).toBe(
+      "https://api.anthropic.com/v1/messages",
+    );
+  });
+});
+
 describe("anthropic transport stream", () => {
   beforeAll(async () => {
     ({ createAnthropicMessagesTransportStreamFn } =

@@ -470,8 +470,23 @@ function mapStopReason(reason: string | undefined): string {
   }
 }
 
-function resolveAnthropicMessagesUrl(baseUrl?: string): string {
-  const normalized = (baseUrl?.trim() || "https://api.anthropic.com").replace(/\/+$/, "");
+/**
+ * Resolve the URL for an Anthropic /v1/messages call.
+ *
+ * Precedence: explicit baseUrl > ANTHROPIC_BASE_URL env var > hardcoded default.
+ * Honoring the env var here matches what the Anthropic Node SDK does and
+ * unblocks running OpenClaw behind an Anthropic-compatible proxy (LiteLLM,
+ * vLLM, local gateway) without forcing users to mirror the URL into config.
+ *
+ * @internal Exported for tests.
+ */
+export function resolveAnthropicMessagesUrl(
+  baseUrl?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const explicit = baseUrl?.trim();
+  const fromEnv = env.ANTHROPIC_BASE_URL?.trim();
+  const normalized = (explicit || fromEnv || "https://api.anthropic.com").replace(/\/+$/, "");
   return normalized.endsWith("/v1") ? `${normalized}/messages` : `${normalized}/v1/messages`;
 }
 
