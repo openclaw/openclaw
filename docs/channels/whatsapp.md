@@ -509,10 +509,13 @@ Behavior notes:
 
 ## Tools, actions, and config writes
 
-- Agent tool support includes WhatsApp reaction action (`react`).
+- Agent tool support includes WhatsApp message actions: `react`, `poll`, `edit`, `delete`, and `unsend`.
+- `edit` updates bot-owned sent messages.
+- `delete` and `unsend` revoke bot-owned sent messages through the same WhatsApp/Baileys delete payload.
 - Action gates:
   - `channels.whatsapp.actions.reactions`
   - `channels.whatsapp.actions.polls`
+  - `channels.whatsapp.actions.sendMessage` for `edit`, `delete`, and `unsend`
 - Channel-initiated config writes are enabled by default (disable via `channels.whatsapp.configWrites=false`).
 
 ## Troubleshooting

@@ -106,12 +106,18 @@ Name lookup:
   - Discord only: `--around`
 
 - `edit`
-  - Channels: Discord/Slack/Matrix
+  - Channels: Discord/Slack/Matrix/WhatsApp
   - Required: `--message-id`, `--message`, `--target`
 
 - `delete`
-  - Channels: Discord/Slack/Telegram/Matrix
+  - Channels: Discord/Slack/Telegram/Matrix/WhatsApp
   - Required: `--message-id`, `--target`
+  - WhatsApp only: deletes/revokes bot-owned sent messages; `unsend` is also accepted as an alias.
+
+- `unsend`
+  - Channels: WhatsApp
+  - Required: `--message-id`, `--target`
+  - Alias for WhatsApp bot-owned message delete/revoke.
 
 - `pin` / `unpin`
   - Channels: Discord/Slack/Matrix

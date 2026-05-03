@@ -10,7 +10,7 @@ import {
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
 
-export async function handleWhatsAppReactAction(params: {
+type WhatsAppMessageActionParams = {
   action: string;
   params: Record<string, unknown>;
   cfg: OpenClawConfig;
@@ -21,23 +21,44 @@ export async function handleWhatsAppReactAction(params: {
     currentChannelProvider?: string | null;
     currentMessageId?: string | number | null;
   };
-}) {
+};
+
+function isWhatsAppSource(
+  toolContext: WhatsAppMessageActionParams["toolContext"] | undefined,
+): boolean {
+  return toolContext?.currentChannelProvider === WHATSAPP_CHANNEL;
+}
+
+function readWhatsAppActionTarget(params: WhatsAppMessageActionParams): string {
+  const explicitTarget =
+    readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
+  if (explicitTarget) {
+    return explicitTarget;
+  }
+  if (isWhatsAppSource(params.toolContext) && params.toolContext?.currentChannelId) {
+    return params.toolContext.currentChannelId;
+  }
+  readStringParam(params.params, "to", { required: true });
+  throw new Error("WhatsApp target is required.");
+}
+
+async function handleReactAction(params: WhatsAppMessageActionParams) {
   if (params.action !== "react") {
     throw new Error(`Action ${params.action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
   }
-  const isWhatsAppSource = params.toolContext?.currentChannelProvider === WHATSAPP_CHANNEL;
+  const fromWhatsApp = isWhatsAppSource(params.toolContext);
   const explicitTarget =
     readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
   const normalizedTarget = explicitTarget ? normalizeWhatsAppTarget(explicitTarget) : null;
   const normalizedCurrent =
-    isWhatsAppSource && params.toolContext?.currentChannelId
+    fromWhatsApp && params.toolContext?.currentChannelId
       ? normalizeWhatsAppTarget(params.toolContext.currentChannelId)
       : null;
   const isCrossChat =
     normalizedTarget != null &&
     (normalizedCurrent == null || normalizedTarget !== normalizedCurrent);
   const scopedContext =
-    !isWhatsAppSource || isCrossChat || !params.toolContext
+    !fromWhatsApp || isCrossChat || !params.toolContext
       ? undefined
       : {
           currentChannelId: params.toolContext.currentChannelId ?? undefined,
@@ -59,7 +80,7 @@ export async function handleWhatsAppReactAction(params: {
   const inferredParticipant =
     explicitParticipant ||
     explicitMessageId != null ||
-    !isWhatsAppSource ||
+    !fromWhatsApp ||
     isCrossChat ||
     !isWhatsAppGroupJid(explicitTarget ?? params.toolContext?.currentChannelId ?? "")
       ? undefined
@@ -81,4 +102,35 @@ export async function handleWhatsAppReactAction(params: {
     },
     params.cfg,
   );
+}
+
+export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionParams) {
+  if (params.action === "react") {
+    return await handleReactAction(params);
+  }
+  if (params.action === "edit" || params.action === "delete" || params.action === "unsend") {
+    const target = readWhatsAppActionTarget(params);
+    const messageId = readStringParam(params.params, "messageId", { required: true });
+    const message =
+      params.action === "edit"
+        ? (readStringParam(params.params, "message", { allowEmpty: true }) ??
+          readStringParam(params.params, "text", { allowEmpty: true }))
+        : undefined;
+    return await handleWhatsAppAction(
+      {
+        action: params.action,
+        chatJid: target,
+        messageId,
+        ...(message !== undefined ? { message } : {}),
+        accountId: params.accountId ?? undefined,
+      },
+      params.cfg,
+    );
+  }
+  throw new Error(`Action ${params.action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
+}
+
+/** @deprecated Use handleWhatsAppMessageAction for new WhatsApp message actions. */
+export async function handleWhatsAppReactAction(params: WhatsAppMessageActionParams) {
+  return await handleWhatsAppMessageAction(params);
 }
