@@ -7,6 +7,7 @@ import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approva
 import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalPendingReplyParams,
   type ExecApprovalRequest,
   type PluginApprovalRequest,
@@ -63,6 +64,14 @@ function buildPendingPayload(params: {
   view: PendingApprovalView;
 }): TelegramPendingDelivery {
   const approvalCommandId = params.request.id.slice(0, 8);
+  const execAllowedDecisions =
+    params.approvalKind === "exec"
+      ? params.view.actions.length > 0
+        ? params.view.actions.map((action) => action.decision)
+        : resolveExecApprovalRequestAllowedDecisions(
+            (params.request as ExecApprovalRequest).request,
+          )
+      : [];
   const payload =
     params.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({
@@ -79,7 +88,7 @@ function buildPendingPayload(params: {
             params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
           nodeId:
             params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
-          allowedDecisions: params.view.actions.map((action) => action.decision),
+          allowedDecisions: execAllowedDecisions,
           expiresAtMs: params.request.expiresAtMs,
           nowMs: params.nowMs,
         } satisfies ExecApprovalPendingReplyParams);

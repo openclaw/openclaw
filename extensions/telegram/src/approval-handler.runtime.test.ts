@@ -50,6 +50,37 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
   });
 
+  it("falls back to request allowed decisions when the native exec view has no actions", async () => {
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId: "req-1",
+        commandText: "echo hi",
+        actions: [],
+      } as never,
+    })) as TelegramPayload;
+
+    expect(payload.text).toContain("/approve req-1 allow-once");
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
+  });
+
   it("keeps exec approval callbacks compact enough for Telegram inline buttons", async () => {
     const approvalId = "a1bcdef0-long-approval-id-that-would-overflow-telegram-callback-data";
     const approvalSlug = approvalId.slice(0, 8);
