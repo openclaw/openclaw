@@ -16,7 +16,7 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type CompletionShell = "zsh" | "bash" | "fish" | "powershell";
 
-const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 120_000;
 
 /** Generate the completion cache by spawning the CLI. */
 async function generateCompletionCache(): Promise<boolean> {

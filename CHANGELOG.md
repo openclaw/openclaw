@@ -1278,6 +1278,10 @@ Docs: https://docs.openclaw.ai
 - Feishu: retry WebSocket startup failures with monitor-owned backoff while preserving SDK-local heartbeat defaults, so persistent-connection startup failures no longer leave the monitor hung. Fixes #68766; related #42354 and #55532. Thanks @alex-xuweilong, @120106835, @sirfengyu, and @tianhaocui.
 - Cron: normalize isolated job tool allowlists before granting the narrow self-removal cron tool path, keeping scheduled jobs aligned with shared tool policy normalization. (#73028) Thanks @jalehman.
 
+### Fixes
+
+- CLI/update: allow completion cache refreshes during package update and doctor repair to run for up to two minutes, and print start/finish messages so slower machines show progress before returning to follow-up tasks. Thanks @aaronescobar09.
+
 ## 2026.4.26
 
 ### Changes

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
@@ -259,7 +260,7 @@ export async function resolveGlobalManager(params: {
   return byPresence ?? "npm";
 }
 
-const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 120_000;
 const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
   "Shell tab-completion may be stale; refresh manually with: openclaw completion --write-state";
 
@@ -269,6 +270,10 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
     return;
   }
 
+  if (!jsonMode) {
+    defaultRuntime.log(theme.muted("Refreshing shell completion cache..."));
+  }
+  const startedAt = Date.now();
   const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
     cwd: root,
     env: {
@@ -278,6 +283,7 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
     encoding: "utf-8",
     timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   });
+  const durationMs = Date.now() - startedAt;
 
   if (result.error) {
     if (!jsonMode) {
@@ -302,6 +308,12 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
       theme.warn(
         `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
       ),
+    );
+  }
+
+  if (result.status === 0 && !jsonMode) {
+    defaultRuntime.log(
+      theme.success(`Completion cache refreshed in ${formatDurationPrecise(durationMs)}.`),
     );
   }
 }
