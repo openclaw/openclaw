@@ -29,6 +29,12 @@ export function formatPluginSourceForTable(
 ): { value: string; rootKey?: keyof PluginSourceRoots } {
   const raw = plugin.source;
 
+  if (plugin.origin === "system" && roots.system) {
+    const rel = tryRelative(roots.system, raw);
+    if (rel) {
+      return { value: `system:${rel}`, rootKey: "system" };
+    }
+  }
   if (plugin.origin === "bundled" && roots.stock) {
     const rel = tryRelative(roots.stock, raw);
     if (rel) {

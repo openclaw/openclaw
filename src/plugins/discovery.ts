@@ -962,6 +962,17 @@ export function discoverOpenClawPlugins(params: {
       const result = createDiscoveryResult();
       const seen = new Set<string>();
       const realpathCache = new Map<string, string>();
+      // System-tier plugins: machine-wide, highest precedence, cannot be
+      // overridden or disabled by user config.
+      discoverInDirectory({
+        dir: roots.system,
+        origin: "system",
+        ownershipUid: params.ownershipUid,
+        candidates: result.candidates,
+        diagnostics: result.diagnostics,
+        seen,
+        realpathCache,
+      });
       const extra = params.extraPaths ?? [];
       for (const extraPath of extra) {
         if (typeof extraPath !== "string") {
