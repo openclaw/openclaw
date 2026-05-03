@@ -184,6 +184,8 @@ Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models). Auth pr
 OpenClaw connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
 
 Full security guide: [Security](https://docs.openclaw.ai/gateway/security)
+Before exposing anything remotely, read [Security](/docs/gateway/security/index.md), [Sandboxing](/docs/gateway/sandboxing), and [Configuration](/docs/gateway/configuration).
+Skill users should also review the [Skill Safety Checklist](/docs/tools/safety-checklist.md) before installing third-party skills.
 
 Default behavior on Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Google Chat/Slack:
 
