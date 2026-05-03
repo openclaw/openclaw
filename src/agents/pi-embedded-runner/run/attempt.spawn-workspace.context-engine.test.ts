@@ -207,6 +207,53 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     }
   });
 
+  it("keeps bootstrap truncation warnings out of WebChat runtime context", async () => {
+    const seen: { prompt?: string; messages?: unknown[] } = {};
+    hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/openclaw-warning-workspace/AGENTS.md",
+          content: "A".repeat(200),
+          missing: false,
+        },
+      ],
+      contextFiles: [
+        { path: "/tmp/openclaw-warning-workspace/AGENTS.md", content: "A".repeat(20) },
+      ],
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {
+              bootstrapMaxChars: 50,
+              bootstrapTotalMaxChars: 50,
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "visible ask",
+        transcriptPrompt: "visible ask",
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toBe("visible ask");
+    expect(JSON.stringify(seen.messages)).not.toContain("[Bootstrap truncation warning]");
+    expect(JSON.stringify(seen.messages)).not.toContain("bootstrapMaxChars");
+  });
+
   it("adds explicit reply context to the current model input without exposing generic runtime context", async () => {
     let seenPrompt: string | undefined;
 

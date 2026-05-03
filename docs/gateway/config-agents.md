@@ -116,12 +116,16 @@ Max total characters injected across all workspace bootstrap files. Default: `60
 
 ### `agents.defaults.bootstrapPromptTruncationWarning`
 
-Controls agent-visible warning text when bootstrap context is truncated.
+Controls the agent-visible system-prompt notice when bootstrap context is truncated.
 Default: `"once"`.
 
-- `"off"`: never inject warning text into the system prompt.
-- `"once"`: inject warning once per unique truncation signature (recommended).
-- `"always"`: inject warning on every run when truncation exists.
+- `"off"`: never inject truncation notice text into the system prompt.
+- `"once"`: inject a concise notice once per unique truncation signature (recommended).
+- `"always"`: inject a concise notice on every run when truncation exists.
+
+Detailed raw/injected counts and config tuning fields stay in diagnostics such
+as context/status reports and logs; routine WebChat user/runtime context only
+gets the concise recovery notice.
 
 ```json5
 {

@@ -223,32 +223,36 @@ function buildMemorySection(params: {
   });
 }
 
-export function buildAgentUserPromptPrefix(params: {
+export function buildAgentBootstrapSystemContext(params: {
   bootstrapMode?: BootstrapMode;
-}): string | undefined {
+  hasBootstrapFileInProjectContext?: boolean;
+}): string[] {
   if (!params.bootstrapMode || params.bootstrapMode === "none") {
-    return undefined;
+    return [];
   }
   if (params.bootstrapMode === "limited") {
     return [
-      "[Bootstrap pending]",
+      "## Bootstrap Pending",
       ...buildLimitedBootstrapPromptLines({
         introLine:
           "Bootstrap is still pending for this workspace, but this run cannot safely complete the full BOOTSTRAP.md workflow here.",
         nextStepLine:
           "Typical next steps include switching to a primary interactive run with normal workspace access or having the user complete the canonical BOOTSTRAP.md deletion afterward.",
       }),
-    ].join("\n");
+      "",
+    ];
   }
   return [
-    "[Bootstrap pending]",
+    "## Bootstrap Pending",
     ...buildFullBootstrapPromptLines({
-      readLine:
-        "Please read BOOTSTRAP.md from the workspace and follow it before replying normally.",
+      readLine: params.hasBootstrapFileInProjectContext
+        ? "BOOTSTRAP.md is included below in Project Context; follow it before replying normally."
+        : "Please read BOOTSTRAP.md from the workspace and follow it before replying normally.",
       firstReplyLine:
         "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md, not a generic greeting.",
     }),
-  ].join("\n");
+    "",
+  ];
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
@@ -503,6 +507,8 @@ export function buildAgentSystemPrompt(params: {
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
+  bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   heartbeatPrompt?: string;
   docsPath?: string;
@@ -762,6 +768,14 @@ export function buildAgentSystemPrompt(params: {
   const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
   const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
   const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
+  const hasBootstrapFileInProjectContext = orderedContextFiles.some((file) =>
+    /(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()),
+  );
+  const bootstrapSystemContext = buildAgentBootstrapSystemContext({
+    bootstrapMode: params.bootstrapMode,
+    hasBootstrapFileInProjectContext,
+  });
+  const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
     promptMode,
@@ -787,6 +801,9 @@ export function buildAgentSystemPrompt(params: {
     displayWorkspaceDir,
     workspaceGuidance,
     workspaceNotes,
+    bootstrapMode: params.bootstrapMode,
+    bootstrapSystemContext,
+    bootstrapTruncationNotice,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     skillsPrompt,
@@ -995,6 +1012,10 @@ export function buildAgentSystemPrompt(params: {
       ...buildTimeSection({
         userTimezone,
       }),
+      ...bootstrapSystemContext,
+      bootstrapTruncationNotice ? "## Bootstrap Context Notice" : "",
+      bootstrapTruncationNotice ?? "",
+      bootstrapTruncationNotice ? "" : "",
       "## Workspace Files (injected)",
       "These user-editable files are loaded by OpenClaw and included below in Project Context.",
       "",

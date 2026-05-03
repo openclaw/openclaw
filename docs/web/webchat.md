@@ -28,6 +28,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 - Compaction entries render as an explicit compacted-history divider. The divider explains that earlier turns are preserved in a checkpoint and links to the Sessions checkpoint controls, where operators can branch or restore the pre-compaction view when their permissions allow it.
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history` and includes it on follow-up `chat.send` calls, so reconnects and page refreshes continue the same stored conversation unless the user starts or resets a session.
 - Control UI coalesces duplicate in-flight submits for the same session, message, and attachments before generating a new `chat.send` run id; the Gateway still dedupes repeated requests that reuse the same idempotency key.
+- Workspace startup files and pending `BOOTSTRAP.md` instructions are supplied through the agent system prompt's Project Context, not copied into the WebChat user message. Bootstrap truncation only adds a concise system-prompt recovery notice; detailed counts and config knobs stay on diagnostic surfaces.
 - `chat.history` is also display-normalized: runtime-only OpenClaw context,
   inbound envelope wrappers, inline delivery directive tags
   such as `[[reply_to_*]]` and `[[audio_as_voice]]`, plain-text tool-call XML
