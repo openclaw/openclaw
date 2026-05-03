@@ -28,6 +28,7 @@ import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
+  buildTurnCollaborationMode,
   buildThreadResumeParams,
   buildTurnStartParams,
   startOrResumeThread,
@@ -2325,8 +2326,38 @@ describe("runCodexAppServerAttempt", () => {
         approvalsReviewer: "guardian_subagent",
         sandboxPolicy: { type: "dangerFullAccess" },
         serviceTier: "flex",
+        collaborationMode: {
+          mode: "default",
+          settings: {
+            model: "gpt-5.4-codex",
+            reasoning_effort: "medium",
+            developer_instructions: null,
+          },
+        },
       }),
     );
+  });
+
+  it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
+    const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
+    params.trigger = "heartbeat";
+
+    expect(buildTurnCollaborationMode(params)).toEqual({
+      mode: "default",
+      settings: {
+        model: "gpt-5.4-codex",
+        reasoning_effort: "medium",
+        developer_instructions: expect.stringContaining(
+          "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
+        ),
+      },
+    });
+    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive.",
+    );
+
+    params.trigger = "user";
+    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toBeNull();
   });
 
   it("preserves the bound auth profile when resume params omit authProfileId", async () => {

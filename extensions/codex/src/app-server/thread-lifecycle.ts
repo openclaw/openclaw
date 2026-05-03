@@ -2,7 +2,10 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
+import {
+  CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
+  renderCodexPromptOverlay,
+} from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
@@ -205,7 +208,31 @@ export function buildTurnStartParams(
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+    collaborationMode: buildTurnCollaborationMode(params),
   };
+}
+
+type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;
+
+export function buildTurnCollaborationMode(
+  params: EmbeddedRunAttemptParams,
+): CodexTurnCollaborationMode {
+  return {
+    mode: "default",
+    settings: {
+      model: params.modelId,
+      reasoning_effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+      developer_instructions:
+        params.trigger === "heartbeat" ? buildHeartbeatCollaborationInstructions() : null,
+    },
+  };
+}
+
+function buildHeartbeatCollaborationInstructions(): string {
+  return [
+    "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.",
+    CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
+  ].join("\n\n");
 }
 
 function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
