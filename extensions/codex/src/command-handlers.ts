@@ -335,14 +335,20 @@ async function bindConversation(
     };
   }
   const workspaceDir = parsed.cwd ?? deps.resolveCodexDefaultWorkspaceDir(pluginConfig);
-  const data = await deps.startCodexConversationThread({
+  const existingBinding = await deps.readCodexAppServerBinding(ctx.sessionFile);
+  const authProfileId = existingBinding?.authProfileId;
+  const startParams: Parameters<CodexCommandDeps["startCodexConversationThread"]>[0] = {
     pluginConfig,
     sessionFile: ctx.sessionFile,
     workspaceDir,
     threadId: parsed.threadId,
     model: parsed.model,
     modelProvider: parsed.provider,
-  });
+  };
+  if (authProfileId) {
+    startParams.authProfileId = authProfileId;
+  }
+  const data = await deps.startCodexConversationThread(startParams);
   const binding = await deps.readCodexAppServerBinding(ctx.sessionFile);
   const threadId = binding?.threadId ?? parsed.threadId ?? "new thread";
   const summary = `Codex app-server thread ${threadId} in ${workspaceDir}`;
