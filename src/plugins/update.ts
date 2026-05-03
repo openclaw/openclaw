@@ -33,6 +33,10 @@ import {
 } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
+import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalPluginInstall,
+} from "./official-external-plugin-catalog.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -424,6 +428,37 @@ function isDefaultNpmSpecForBetaUpdate(spec: string): { name: string } | null {
   return null;
 }
 
+function resolveNpmSpecPackageName(spec: string | undefined): string | undefined {
+  return spec ? parseRegistryNpmSpec(spec)?.name : undefined;
+}
+
+function isTrustedSourceLinkedOfficialNpmUpdate(params: {
+  pluginId: string;
+  spec: string | undefined;
+  record: PluginInstallRecord;
+}): boolean {
+  if (params.record.source !== "npm") {
+    return false;
+  }
+  const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
+  if (!entry) {
+    return false;
+  }
+  const officialPackageName = resolveNpmSpecPackageName(
+    resolveOfficialExternalPluginInstall(entry)?.npmSpec,
+  );
+  const requestedPackageName = resolveNpmSpecPackageName(params.spec);
+  if (!officialPackageName || requestedPackageName !== officialPackageName) {
+    return false;
+  }
+  const recordedPackageNames = [
+    params.record.resolvedName,
+    resolveNpmSpecPackageName(params.record.spec),
+    resolveNpmSpecPackageName(params.record.resolvedSpec),
+  ].filter((value): value is string => Boolean(value));
+  return recordedPackageNames.includes(officialPackageName);
+}
+
 function resolveNpmUpdateSpecs(params: {
   record: PluginInstallRecord;
   specOverride?: string;
@@ -727,6 +762,11 @@ export async function updateNpmInstalledPlugins(params: {
       record.source === "npm" && npmSpecs?.fallbackSpec === record.spec
         ? expectedIntegrityForUpdate(record.spec, record.integrity)
         : undefined;
+    const trustedSourceLinkedOfficialInstall = isTrustedSourceLinkedOfficialNpmUpdate({
+      pluginId,
+      spec: effectiveSpec,
+      record,
+    });
 
     if (record.source === "npm" && !effectiveSpec) {
       outcomes.push({
@@ -851,6 +891,7 @@ export async function updateNpmInstalledPlugins(params: {
                 timeoutMs: params.timeoutMs,
                 dryRun: true,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+                trustedSourceLinkedOfficialInstall,
                 expectedPluginId: pluginId,
                 expectedIntegrity,
                 onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
@@ -919,6 +960,7 @@ export async function updateNpmInstalledPlugins(params: {
           timeoutMs: params.timeoutMs,
           dryRun: true,
           dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+          trustedSourceLinkedOfficialInstall,
           expectedPluginId: pluginId,
           expectedIntegrity: fallbackExpectedIntegrity,
           onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
@@ -1033,6 +1075,7 @@ export async function updateNpmInstalledPlugins(params: {
               extensionsDir,
               timeoutMs: params.timeoutMs,
               dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+              trustedSourceLinkedOfficialInstall,
               expectedPluginId: pluginId,
               expectedIntegrity,
               onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
@@ -1097,6 +1140,7 @@ export async function updateNpmInstalledPlugins(params: {
         extensionsDir,
         timeoutMs: params.timeoutMs,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        trustedSourceLinkedOfficialInstall,
         expectedPluginId: pluginId,
         expectedIntegrity: fallbackExpectedIntegrity,
         onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
@@ -1391,6 +1435,7 @@ export async function syncPluginsForUpdateChannel(params: {
             spec: npmSpec,
             mode: "update",
             expectedPluginId: targetPluginId,
+            trustedSourceLinkedOfficialInstall: true,
             logger,
           });
         }
@@ -1399,6 +1444,7 @@ export async function syncPluginsForUpdateChannel(params: {
           spec: npmSpec,
           mode: "update",
           expectedPluginId: targetPluginId,
+          trustedSourceLinkedOfficialInstall: true,
           logger,
         });
       }

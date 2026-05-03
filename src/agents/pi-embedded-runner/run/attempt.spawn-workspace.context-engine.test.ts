@@ -128,6 +128,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     resetEmbeddedAttemptHarness();
     clearMemoryPluginState();
     hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
+    hoisted.detectAndLoadPromptImagesMock.mockClear();
   });
 
   afterEach(async () => {
@@ -204,6 +205,63 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       expect(String(value)).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
       expect(String(value)).not.toContain("secret runtime context");
     }
+  });
+
+  it("adds explicit reply context to the current model input without exposing generic runtime context", async () => {
+    let seenPrompt: string | undefined;
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: [
+          "what does this mean?",
+          "",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "secret runtime context",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        transcriptPrompt: "what does this mean?",
+        currentTurnContext: {
+          reply: {
+            senderLabel: "Mike",
+            body: "WT daily plan - Sat May 2\nSee ./quoted-secret.png and [media attached: media://inbound/quoted.png]",
+          },
+        },
+      },
+      sessionPrompt: async (session, prompt) => {
+        seenPrompt = prompt;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seenPrompt).toContain("what does this mean?");
+    expect(seenPrompt).toContain("Replied message (untrusted, for context):");
+    expect(seenPrompt).toContain('"sender_label": "Mike"');
+    expect(seenPrompt).toContain("WT daily plan - Sat May 2");
+    expect(seenPrompt).toContain("./quoted-secret.png");
+    expect(seenPrompt).toContain("media://inbound/quoted.png");
+    expect(seenPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
+    expect(seenPrompt).not.toContain("secret runtime context");
+    expect(result.finalPromptText).toBe(seenPrompt);
+    expect(hoisted.detectAndLoadPromptImagesMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.detectAndLoadPromptImagesMock.mock.calls[0]?.[0]).toMatchObject({
+      prompt: "what does this mean?",
+    });
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
+    expect(promptSubmitted?.data?.prompt).toBe(seenPrompt);
+    expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
+    expect(promptSubmitted?.data?.prompt).not.toContain("secret runtime context");
   });
 
   it("marks inter-session transcriptPrompt before submitting the visible prompt", async () => {

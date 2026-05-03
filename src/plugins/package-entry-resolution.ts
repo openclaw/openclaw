@@ -9,7 +9,10 @@ import { resolveBoundaryPath, resolveBoundaryPathSync } from "../infra/boundary-
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
-import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
+import {
+  isTypeScriptPackageEntry,
+  listBuiltRuntimeEntryCandidates,
+} from "./package-entrypoints.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type ExtensionEntryValidation = { ok: true; exists: boolean } | { ok: false; error: string };
@@ -54,6 +57,14 @@ function resolvePackageRuntimeExtensionEntries(params: {
     };
   }
   return { ok: true, runtimeExtensions };
+}
+
+function missingCompiledRuntimeEntryMessage(params: {
+  label: string;
+  entry: string;
+  candidates: readonly string[];
+}): string {
+  return `${params.label} requires compiled runtime output for TypeScript entry ${params.entry}: expected ${params.candidates.join(", ")}`;
 }
 
 async function validatePackageExtensionEntry(params: {
@@ -142,12 +153,9 @@ export async function validatePackageExtensionEntriesForInstall(params: {
       continue;
     }
 
-    if (sourceEntry.exists) {
-      continue;
-    }
-
     let foundBuiltEntry = false;
-    for (const builtEntry of listBuiltRuntimeEntryCandidates(entry)) {
+    const builtEntryCandidates = listBuiltRuntimeEntryCandidates(entry);
+    for (const builtEntry of builtEntryCandidates) {
       const builtResult = await validatePackageExtensionEntry({
         packageDir: params.packageDir,
         entry: builtEntry,
@@ -163,9 +171,37 @@ export async function validatePackageExtensionEntriesForInstall(params: {
       }
     }
 
-    if (!foundBuiltEntry) {
-      return { ok: false, error: `extension entry not found: ${entry}` };
+    if (foundBuiltEntry) {
+      continue;
     }
+
+    if (sourceEntry.exists && isTypeScriptPackageEntry(entry)) {
+      return {
+        ok: false,
+        error: missingCompiledRuntimeEntryMessage({
+          label: "package install",
+          entry,
+          candidates: builtEntryCandidates,
+        }),
+      };
+    }
+
+    if (sourceEntry.exists) {
+      continue;
+    }
+
+    if (builtEntryCandidates.length > 0) {
+      return {
+        ok: false,
+        error: missingCompiledRuntimeEntryMessage({
+          label: "package install",
+          entry,
+          candidates: builtEntryCandidates,
+        }),
+      };
+    }
+
+    return { ok: false, error: `extension entry not found: ${entry}` };
   }
 
   const packageManifest = getPackageManifestMetadata(params.manifest);
@@ -201,12 +237,9 @@ export async function validatePackageExtensionEntriesForInstall(params: {
       return { ok: true };
     }
 
-    if (sourceEntry.exists) {
-      return { ok: true };
-    }
-
     let foundBuiltSetupEntry = false;
-    for (const builtEntry of listBuiltRuntimeEntryCandidates(setupEntry)) {
+    const builtSetupCandidates = listBuiltRuntimeEntryCandidates(setupEntry);
+    for (const builtEntry of builtSetupCandidates) {
       const builtResult = await validatePackageExtensionEntry({
         packageDir: params.packageDir,
         entry: builtEntry,
@@ -221,9 +254,38 @@ export async function validatePackageExtensionEntriesForInstall(params: {
         break;
       }
     }
-    if (!foundBuiltSetupEntry) {
-      return { ok: false, error: `setup entry not found: ${setupEntry}` };
+
+    if (foundBuiltSetupEntry) {
+      return { ok: true };
     }
+
+    if (sourceEntry.exists && isTypeScriptPackageEntry(setupEntry)) {
+      return {
+        ok: false,
+        error: missingCompiledRuntimeEntryMessage({
+          label: "package install",
+          entry: setupEntry,
+          candidates: builtSetupCandidates,
+        }),
+      };
+    }
+
+    if (sourceEntry.exists) {
+      return { ok: true };
+    }
+
+    if (builtSetupCandidates.length > 0) {
+      return {
+        ok: false,
+        error: missingCompiledRuntimeEntryMessage({
+          label: "package install",
+          entry: setupEntry,
+          candidates: builtSetupCandidates,
+        }),
+      };
+    }
+
+    return { ok: false, error: `setup entry not found: ${setupEntry}` };
   }
 
   return { ok: true };
@@ -294,6 +356,10 @@ function resolvePackageEntrySource(params: {
 
 function shouldInferBuiltRuntimeEntry(origin: PluginOrigin): boolean {
   return origin === "config" || origin === "global";
+}
+
+function shouldRequireBuiltRuntimeEntry(origin: PluginOrigin): boolean {
+  return origin === "global";
 }
 
 function resolveSafePackageEntry(params: {
@@ -408,7 +474,8 @@ function resolvePackageRuntimeEntrySource(params: {
   }
 
   if (shouldInferBuiltRuntimeEntry(params.origin)) {
-    for (const candidate of listBuiltRuntimeEntryCandidates(safeEntry.relativePath)) {
+    const builtEntryCandidates = listBuiltRuntimeEntryCandidates(safeEntry.relativePath);
+    for (const candidate of builtEntryCandidates) {
       const runtimeSource = resolveExistingPackageEntrySource({
         packageDir: params.packageDir,
         ...(params.packageRootRealPath !== undefined
@@ -422,6 +489,21 @@ function resolvePackageRuntimeEntrySource(params: {
       if (runtimeSource) {
         return runtimeSource;
       }
+    }
+    if (
+      shouldRequireBuiltRuntimeEntry(params.origin) &&
+      isTypeScriptPackageEntry(safeEntry.relativePath)
+    ) {
+      params.diagnostics.push({
+        level: "error",
+        message: missingCompiledRuntimeEntryMessage({
+          label: "installed plugin package",
+          entry: safeEntry.relativePath,
+          candidates: builtEntryCandidates,
+        }),
+        source: params.sourceLabel,
+      });
+      return null;
     }
   }
 

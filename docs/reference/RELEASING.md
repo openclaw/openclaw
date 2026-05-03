@@ -286,8 +286,9 @@ gh workflow run full-release-validation.yml \
 ```
 
 The workflow resolves the target ref, dispatches manual `CI` with
-`target_ref=<release-ref>`, dispatches `OpenClaw Release Checks`, and dispatches
-standalone package Telegram E2E when `release_profile=full` with
+`target_ref=<release-ref>`, dispatches `OpenClaw Release Checks`, prepares a
+parent `release-package-under-test` artifact for package-facing checks, and
+dispatches standalone package Telegram E2E when `release_profile=full` with
 `rerun_group=all` or when `npm_telegram_package_spec` is set. `OpenClaw Release
 Checks` then fans out install smoke, cross-OS release checks, live/E2E Docker
 release-path coverage, Package Acceptance with Telegram package QA, QA Lab

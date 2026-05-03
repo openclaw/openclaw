@@ -133,9 +133,15 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
 
       const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const calledOpts = replySpy.mock.calls[0]?.[1] as {
+        enableHeartbeatTool?: boolean;
+        forceHeartbeatTool?: boolean;
+      };
       expect(calledCtx.Body).toContain("heartbeat_respond");
       expect(calledCtx.Body).toContain("notify=false");
       expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
+      expect(calledOpts.enableHeartbeatTool).toBe(true);
+      expect(calledOpts.forceHeartbeatTool).toBe(true);
     });
   });
 
@@ -163,8 +169,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
 
       const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const calledOpts = replySpy.mock.calls[0]?.[1] as {
+        enableHeartbeatTool?: boolean;
+        forceHeartbeatTool?: boolean;
+      };
       expect(calledCtx.Body).toContain("heartbeat_respond");
       expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
+      expect(calledOpts.enableHeartbeatTool).toBe(true);
+      expect(calledOpts.forceHeartbeatTool).toBe(true);
     });
   });
 
@@ -196,8 +208,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
 
       const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const calledOpts = replySpy.mock.calls[0]?.[1] as {
+        enableHeartbeatTool?: boolean;
+        forceHeartbeatTool?: boolean;
+      };
       expect(calledCtx.Body).toContain("heartbeat_respond");
       expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
+      expect(calledOpts.enableHeartbeatTool).toBe(true);
+      expect(calledOpts.forceHeartbeatTool).toBe(true);
     });
   });
 
@@ -225,8 +243,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
 
       const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const calledOpts = replySpy.mock.calls[0]?.[1] as {
+        enableHeartbeatTool?: boolean;
+        forceHeartbeatTool?: boolean;
+      };
       expect(calledCtx.Body).toContain("heartbeat_respond");
       expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
+      expect(calledOpts.enableHeartbeatTool).toBe(true);
+      expect(calledOpts.forceHeartbeatTool).toBe(true);
     });
   });
 
@@ -262,10 +286,16 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
 
       const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const calledOpts = replySpy.mock.calls[0]?.[1] as {
+        enableHeartbeatTool?: boolean;
+        forceHeartbeatTool?: boolean;
+      };
       expect(calledCtx.Body).toContain("Run the following periodic tasks");
       expect(calledCtx.Body).toContain("Check deployment status");
       expect(calledCtx.Body).toContain("heartbeat_respond");
       expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
+      expect(calledOpts.enableHeartbeatTool).toBe(true);
+      expect(calledOpts.forceHeartbeatTool).toBe(true);
     });
   });
 
@@ -292,8 +322,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
 
       const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const calledOpts = replySpy.mock.calls[0]?.[1] as {
+        enableHeartbeatTool?: boolean;
+        forceHeartbeatTool?: boolean;
+      };
       expect(calledCtx.Body).toContain("HEARTBEAT_OK");
       expect(calledCtx.Body).not.toContain("heartbeat_respond");
+      expect(calledOpts.enableHeartbeatTool).toBeUndefined();
+      expect(calledOpts.forceHeartbeatTool).toBeUndefined();
     });
   });
 });

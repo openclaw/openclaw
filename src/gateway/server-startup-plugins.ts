@@ -19,6 +19,10 @@ type GatewayPluginBootstrapLog = {
   debug: (message: string) => void;
 };
 
+type GatewayStartupTrace = {
+  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+};
+
 export function resolveGatewayStartupMaintenanceConfig(params: {
   cfgAtStart: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
@@ -151,6 +155,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
+  startupTrace?: GatewayStartupTrace;
 }) {
   return loadGatewayStartupPlugins({
     cfg: params.cfg,
@@ -163,5 +168,6 @@ export async function loadGatewayStartupPluginRuntime(params: {
     pluginLookUpTable: params.pluginLookUpTable,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
+    startupTrace: params.startupTrace,
   });
 }

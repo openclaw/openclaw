@@ -86,6 +86,7 @@ export type GuardedFetchResult = {
   response: Response;
   finalUrl: string;
   release: () => Promise<void>;
+  refreshTimeout?: () => void;
 };
 
 type GuardedFetchPresetOptions = Omit<
@@ -315,7 +316,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       : DEFAULT_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
 
-  const { signal, cleanup } = buildTimeoutAbortSignal({
+  const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
     operation: "fetchWithSsrFGuard",
@@ -480,6 +481,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         response,
         finalUrl: currentUrl,
         release: async () => release(dispatcher),
+        refreshTimeout: refresh,
       };
     } catch (err) {
       if (err instanceof SsrFBlockedError) {

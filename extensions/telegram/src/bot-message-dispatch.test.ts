@@ -3006,6 +3006,95 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliveredReplies?.[0]?.text?.trim()).not.toBe("NO_REPLY");
   });
 
+  it("does not add silent-reply fallback for message-tool-only turns", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:123",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              direct: "disallow",
+              group: "allow",
+              internal: "allow",
+            },
+            silentReplyRewrite: {
+              direct: true,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("falls back in forum topics when a queued final was not delivered to Telegram", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    deliverReplies.mockResolvedValueOnce({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        isGroup: true,
+        chatId: -1003752586071,
+        primaryCtx: {
+          message: { chat: { id: -1003752586071, type: "supergroup" } },
+        } as TelegramMessageContext["primaryCtx"],
+        msg: {
+          chat: { id: -1003752586071, type: "supergroup" },
+          message_id: 3,
+          message_thread_id: 2,
+          is_topic_message: true,
+        } as TelegramMessageContext["msg"],
+        threadSpec: { id: 2, scope: "forum" },
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-1003752586071:topic:2",
+          MessageThreadId: 2,
+          IsForum: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              direct: "disallow",
+              group: "disallow",
+              internal: "allow",
+            },
+            silentReplyRewrite: {
+              group: false,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "-1003752586071",
+        thread: { id: 2, scope: "forum" },
+        replies: [expect.objectContaining({ text: "NO_REPLY" })],
+      }),
+    );
+  });
+
   it("does not add silent-reply fallback after visible block delivery", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -3145,8 +3234,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("handles error block + response final — error delivered, response finalizes preview", async () => {
-    const draftStream = createDraftStream(999);
+  it("sends a fresh final after a visible error block bubble pushes the preview up", async () => {
+    const draftStream = createTestDraftStream({
+      messageId: 999,
+      visibleSinceMs: Date.now() - 1_000,
+    });
     createTelegramDraftStream.mockReturnValue(draftStream);
     editMessageTelegram.mockResolvedValue({ ok: true });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -3167,16 +3259,56 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext() });
 
-    // Block error went through deliverReplies
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    // Final was finalized via preview edit
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      999,
-      "The command timed out. Here's what I found...",
-      expect.any(Object),
+    // Error block + fresh final both went through deliverReplies; preview was
+    // not edited in place and the stale preview was cleared.
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({ text: "The command timed out. Here's what I found..." }),
+        ],
+      }),
     );
-    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalled();
+  });
+
+  // #76529: when a visible non-final message is delivered after the answer
+  // preview is already on screen, finalizing the preview by edit puts the
+  // final answer above the intermediate output. Force a fresh send instead.
+  it("sends a fresh final after a visible block bubble pushes the preview up (#76529)", async () => {
+    // Preview was already on screen before the block bubble was sent.
+    const draftStream = createTestDraftStream({
+      messageId: 999,
+      visibleSinceMs: Date.now() - 1_000,
+    });
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    editMessageTelegram.mockResolvedValue({ ok: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Checked maxDBdays..." });
+        await dispatcherOptions.deliver(
+          { text: "Changed maxDBdays from 91 → 14" },
+          { kind: "block" },
+        );
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    // Block + fresh final both went through deliverReplies; preview was not
+    // edited in place and the stale preview was cleared.
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Done" })],
+      }),
+    );
+    expect(draftStream.clear).toHaveBeenCalled();
   });
 
   it("cleans up preview even when fallback delivery throws (double failure)", async () => {
@@ -4038,7 +4170,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     vi.useFakeTimers();
     const reactionApi = vi.fn(async () => true);
     const statusReactionController = createStatusReactionController();
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
     deliverReplies.mockResolvedValue({ delivered: true });
 
     try {
@@ -4077,7 +4212,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it("restores the initial Telegram status reaction after reply when removeAckAfterReply is disabled", async () => {
     const reactionApi = vi.fn(async () => true);
     const statusReactionController = createStatusReactionController();
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
     deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({

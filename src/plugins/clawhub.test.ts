@@ -1038,7 +1038,7 @@ describe("installPluginFromClawHub", () => {
       ok: false,
       code: CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY,
       error:
-        'ClawHub version metadata for "demo@2026.3.22" is missing sha256hash and usable files[] metadata for fallback archive verification.',
+        'ClawHub package "demo@2026.3.22" does not expose a downloadable plugin artifact yet. Use "npm:demo@2026.3.22" for launch installs while ClawHub artifact routing is being rolled out.',
     });
     expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
   });
@@ -1064,7 +1064,7 @@ describe("installPluginFromClawHub", () => {
       ok: false,
       code: CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY,
       error:
-        'ClawHub version metadata for "demo@2026.3.22" is missing sha256hash and usable files[] metadata for fallback archive verification.',
+        'ClawHub package "demo@2026.3.22" does not expose a downloadable plugin artifact yet. Use "npm:demo@2026.3.22" for launch installs while ClawHub artifact routing is being rolled out.',
     });
     expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
   });
