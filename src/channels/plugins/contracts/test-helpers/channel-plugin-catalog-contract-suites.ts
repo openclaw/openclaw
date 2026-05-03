@@ -453,7 +453,7 @@ export function describeChannelPluginCatalogEntriesContract() {
               install: {
                 npmSpec: "openclaw-plugin-yuanbao@3.0.1",
                 defaultChoice: "npm",
-                minHostVersion: ">=2026.4.10",
+                minHostVersion: ">=2026.4.27",
                 expectedIntegrity: "sha512-yuanbao",
               },
             },
