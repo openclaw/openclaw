@@ -766,7 +766,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("suppresses duplicate user persistence only after the current turn has flushed", async () => {
-    const attemptCalls: Array<Record<string, unknown>> = [];
+    type AttemptCall = {
+      onUserMessagePersisted?: () => void;
+      suppressPromptPersistenceOnRetry?: boolean;
+    };
+    const attemptCalls: AttemptCall[] = [];
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       const first = await params.run(params.provider, params.model);
       const result = await params.run(params.provider, params.model);
@@ -777,13 +781,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         attempts: [first],
       };
     });
-    state.runAgentAttemptMock.mockImplementation(async (params: unknown) => {
-      const attemptParams = params as Record<string, unknown>;
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
       attemptCalls.push(attemptParams);
-      const persisted = attemptParams.onUserMessagePersisted;
-      if (typeof persisted === "function") {
-        persisted();
-      }
+      attemptParams.onUserMessagePersisted?.();
       return makeSuccessResult("openai", "gpt-5.4");
     });
 

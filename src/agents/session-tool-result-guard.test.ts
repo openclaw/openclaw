@@ -500,12 +500,9 @@ describe("installSessionToolResultGuard", () => {
 
   it("suppresses only the next persisted user message when requested", () => {
     const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(
-      sm,
-      {
-        suppressNextUserMessagePersistence: true,
-      } as never,
-    );
+    installSessionToolResultGuard(sm, {
+      suppressNextUserMessagePersistence: true,
+    });
 
     sm.appendMessage(
       asAppendMessage({

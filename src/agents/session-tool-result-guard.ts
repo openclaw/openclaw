@@ -44,6 +44,12 @@ function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): numb
   return Math.max(1, opts?.maxToolResultChars ?? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
 }
 
+type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
+
+function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage {
+  return message.role === "user";
+}
+
 // `details` is runtime/UI metadata, not model-visible tool output. Keep the
 // session JSONL useful for debugging without letting metadata blobs dominate
 // disk, replay repair, transcript broadcasts, or future tooling that reads raw
@@ -455,10 +461,7 @@ export function installSessionToolResultGuard(
     if (!finalMessage) {
       return undefined;
     }
-    if (
-      (finalMessage as { role?: unknown }).role === "user" &&
-      suppressNextUserMessagePersistence
-    ) {
+    if (isUserAgentMessage(finalMessage) && suppressNextUserMessagePersistence) {
       suppressNextUserMessagePersistence = false;
       return undefined;
     }
@@ -479,8 +482,8 @@ export function installSessionToolResultGuard(
     if (toolCalls.length > 0) {
       pendingState.trackToolCalls(toolCalls);
     }
-    if ((finalMessage as { role?: unknown }).role === "user") {
-      void opts?.onUserMessagePersisted?.(finalMessage as Extract<AgentMessage, { role: "user" }>);
+    if (isUserAgentMessage(finalMessage)) {
+      void opts?.onUserMessagePersisted?.(finalMessage);
     }
 
     return result;
