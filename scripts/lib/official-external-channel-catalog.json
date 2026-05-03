@@ -356,7 +356,6 @@
           "label": "Twitch",
           "selectionLabel": "Twitch (Chat)",
           "docsPath": "/channels/twitch",
-          "docsLabel": "twitch",
           "blurb": "Twitch chat integration",
           "aliases": ["twitch-chat"]
         },
