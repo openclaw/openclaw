@@ -26,7 +26,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
-  { renderSignalMentions },
+  { doesSignalMentionTargetBot, renderSignalMentions },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
@@ -263,6 +263,75 @@ describe("signal mention gating", () => {
     expect(body).not.toContain(placeholder);
   });
 
+  it("treats native @mention of the bot's own uuid as a mention under requireMention", async () => {
+    const botUuid = "bot-uuid-aaaa";
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: createSignalConfig({ requireMention: true, mentionPattern: "@caio" }),
+        account: "+15559990000",
+        accountUuid: botUuid,
+      }),
+    );
+
+    const placeholder = "\uFFFC";
+    const message = `${placeholder} ping`;
+
+    await handler(
+      makeGroupEvent({
+        message,
+        mentions: [{ uuid: botUuid, start: 0, length: placeholder.length }],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(getCapturedCtx()?.WasMentioned).toBe(true);
+  });
+
+  it("treats native @mention of the bot's own phone as a mention under requireMention", async () => {
+    const botPhone = "+15559990000";
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: createSignalConfig({ requireMention: true, mentionPattern: "@caio" }),
+        account: botPhone,
+      }),
+    );
+
+    const placeholder = "\uFFFC";
+    const message = `${placeholder} ping`;
+
+    await handler(
+      makeGroupEvent({
+        message,
+        mentions: [{ number: botPhone, start: 0, length: placeholder.length }],
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect(getCapturedCtx()?.WasMentioned).toBe(true);
+  });
+
+  it("does not treat @mentions of other participants as bot mentions", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: createSignalConfig({ requireMention: true, mentionPattern: "@caio" }),
+        account: "+15559990000",
+        accountUuid: "bot-uuid-aaaa",
+      }),
+    );
+
+    const placeholder = "\uFFFC";
+    const message = `${placeholder} hi`;
+
+    await handler(
+      makeGroupEvent({
+        message,
+        mentions: [{ uuid: "someone-else-uuid", start: 0, length: placeholder.length }],
+      }),
+    );
+
+    expect(capturedCtx).toBeUndefined();
+  });
+
   it("counts mention metadata replacements toward requireMention gating", async () => {
     const handler = createMentionHandler({
       requireMention: true,
@@ -321,5 +390,87 @@ describe("renderSignalMentions", () => {
     const normalized = renderSignalMentions(message, [{ uuid: "valid", start: -0.7, length: 1.9 }]);
 
     expect(normalized).toBe("@valid ping");
+  });
+});
+
+describe("doesSignalMentionTargetBot", () => {
+  const PH = "\uFFFC";
+
+  it("returns false when no mentions are supplied", () => {
+    expect(doesSignalMentionTargetBot(undefined, { uuid: "u" })).toBe(false);
+    expect(doesSignalMentionTargetBot(null, { uuid: "u" })).toBe(false);
+    expect(doesSignalMentionTargetBot([], { uuid: "u" })).toBe(false);
+  });
+
+  it("returns false when the bot has no identity", () => {
+    expect(doesSignalMentionTargetBot([{ uuid: "u", start: 0, length: 1 }], {}, `${PH} hi`)).toBe(
+      false,
+    );
+    expect(
+      doesSignalMentionTargetBot(
+        [{ uuid: "u", start: 0, length: 1 }],
+        { uuid: "", phone: "" },
+        `${PH} hi`,
+      ),
+    ).toBe(false);
+  });
+
+  it("matches by bot uuid when message contains placeholder", () => {
+    const msg = `${PH} ping`;
+    expect(
+      doesSignalMentionTargetBot([{ uuid: "bot-u", start: 0, length: 1 }], { uuid: "bot-u" }, msg),
+    ).toBe(true);
+    expect(
+      doesSignalMentionTargetBot([{ uuid: "other", start: 0, length: 1 }], { uuid: "bot-u" }, msg),
+    ).toBe(false);
+  });
+
+  it("matches by bot phone with E.164 normalization", () => {
+    const msg = `${PH} ping`;
+    expect(
+      doesSignalMentionTargetBot(
+        [{ number: "15551234567", start: 0, length: 1 }],
+        { phone: "+1 (555) 123-4567" },
+        msg,
+      ),
+    ).toBe(true);
+    expect(
+      doesSignalMentionTargetBot(
+        [{ number: "+15550009999", start: 0, length: 1 }],
+        { phone: "+15551234567" },
+        msg,
+      ),
+    ).toBe(false);
+  });
+
+  it("matches when any of several mentions targets the bot", () => {
+    const msg = `${PH} ${PH} ${PH}`;
+    expect(
+      doesSignalMentionTargetBot(
+        [
+          { uuid: "someone", start: 0, length: 1 },
+          { uuid: "bot-u", start: 2, length: 1 },
+          { number: "+15550001111", start: 4, length: 1 },
+        ],
+        { uuid: "bot-u" },
+        msg,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects forged mentions whose text span has no placeholder", () => {
+    // Mention metadata claims bot uuid at offset 0, but message has plain text
+    expect(
+      doesSignalMentionTargetBot(
+        [{ uuid: "bot-u", start: 0, length: 5 }],
+        { uuid: "bot-u" },
+        "hello world",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects mentions with missing start/length", () => {
+    const msg = `${PH} ping`;
+    expect(doesSignalMentionTargetBot([{ uuid: "bot-u" }], { uuid: "bot-u" }, msg)).toBe(false);
   });
 });
