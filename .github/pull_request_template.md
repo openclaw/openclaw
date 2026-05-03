@@ -1,5 +1,7 @@
 ## Summary
 
+Do not include passwords, tokens, API keys, session cookies, or other secrets in this PR body, code snippets, logs, or follow-up comments.
+
 Describe the problem and fix in 2–5 bullets:
 
 If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta blocker - <summary>` and link the matching `Beta blocker: <plugin-name> - <summary>` issue labeled `beta-blocker`. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation.
