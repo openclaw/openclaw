@@ -402,7 +402,7 @@ export function resolveMemoryDreamingConfig(params: {
       const stagger =
         typeof rawStagger === "number" && Number.isFinite(rawStagger) && rawStagger >= 0
           ? Math.floor(rawStagger)
-          : typeof rawStagger === "string"
+          : typeof rawStagger === "string" && rawStagger.trim() !== ""
             ? (() => {
                 const num = Number(rawStagger);
                 return Number.isFinite(num) && num >= 0 ? Math.floor(num) : undefined;
