@@ -101,6 +101,11 @@ function listRuntimeFiles(root: string): string[] {
   return files.toSorted();
 }
 
+function readManifestText(root: string): string {
+  const manifestPath = path.join(root, "openclaw.plugin.json");
+  return fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath, "utf8") : "";
+}
+
 function packageNameForSpecifier(specifier: string): string | null {
   if (
     specifier.startsWith("$") ||
@@ -244,6 +249,7 @@ describe("extension runtime dependency manifests", () => {
       const allowedIndirect = INDIRECT_RUNTIME_DEPENDENCIES.get(extensionDir) ?? new Set<string>();
       const runtimeText = listRuntimeFiles(extensionDir)
         .map((filePath) => fs.readFileSync(filePath, "utf8"))
+        .concat(readManifestText(extensionDir))
         .join("\n");
 
       const unused = declared.filter(
