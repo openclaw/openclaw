@@ -94,6 +94,8 @@ tmp/
 IDENTITY.md
 USER.md
 *.tgz
+*.tar.gz
+*.zip
 .idea
 
 # local tooling
@@ -153,6 +155,9 @@ apps/ios/LocalSigning.xcconfig
 apps/ios/build/
 apps/shared/OpenClawKit/build/
 Swabble/build/
+*.xcresult
+*.trace
+*.profraw
 
 # Generated protocol schema (produced via pnpm protocol:gen)
 dist/protocol.schema.json
