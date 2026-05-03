@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Cron: add a process-local slot-level delivery dedup guard so same-process restart catch-up replays of the same scheduled slot cannot double-deliver, complementing the executionId guard from #67896, and propagate `deliveryAttempted` from startup catch-up outcomes. (#66712) Thanks @jeffchen1981-fu.
+
 ### Fixes
 
 - Gateway/Bonjour: keep @homebridge/ciao cancellation handlers registered across advertiser restarts so late probing cancellations cannot crash Linux and other mDNS-churned gateways. Thanks @codex.
