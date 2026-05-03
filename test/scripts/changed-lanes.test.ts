@@ -743,7 +743,10 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("routes root test/support changes to the tooling test lane instead of all lanes", () => {
-    const result = detectChangedLanes(["test/git-hooks-pre-commit.test.ts"]);
+    const result = detectChangedLanes([
+      "test/git-hooks-pre-commit.test.ts",
+      "test-fixtures/legacy-root-fixture.json",
+    ]);
     const plan = createChangedCheckPlan(result);
 
     expect(result.lanes).toMatchObject({

@@ -177,7 +177,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (changedPath.startsWith("test/")) {
+    if (changedPath.startsWith("test/") || changedPath.startsWith("test-fixtures/")) {
       lanes.tooling = true;
       reasons.push(`${changedPath}: root test/support surface`);
       continue;
