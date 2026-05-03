@@ -129,8 +129,8 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
-let getTelegramAbortFenceSizeForTests: typeof import("./bot-message-dispatch.js").getTelegramAbortFenceSizeForTests;
-let resetTelegramAbortFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramAbortFenceForTests;
+let getTelegramReplyFenceSizeForTests: typeof import("./bot-message-dispatch.js").getTelegramReplyFenceSizeForTests;
+let resetTelegramReplyFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramReplyFenceForTests;
 
 const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
@@ -163,13 +163,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
   beforeAll(async () => {
     ({
       dispatchTelegramMessage,
-      getTelegramAbortFenceSizeForTests,
-      resetTelegramAbortFenceForTests,
+      getTelegramReplyFenceSizeForTests,
+      resetTelegramReplyFenceForTests,
     } = await import("./bot-message-dispatch.js"));
   });
 
   beforeEach(() => {
-    resetTelegramAbortFenceForTests();
+    resetTelegramReplyFenceForTests();
     createTelegramDraftStream.mockReset();
     dispatchReplyWithBufferedBlockDispatcher.mockReset();
     deliverReplies.mockReset();
@@ -3707,7 +3707,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     ).rejects.toThrow("sticker setup failed");
 
-    expect(getTelegramAbortFenceSizeForTests()).toBe(0);
+    expect(getTelegramReplyFenceSizeForTests()).toBe(0);
   });
 
   it("keeps older answer finalization when abort targets a different session", async () => {
