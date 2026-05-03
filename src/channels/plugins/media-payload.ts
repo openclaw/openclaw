@@ -17,11 +17,15 @@ export function buildMediaPayload(
   opts?: { preserveMediaTypeCardinality?: boolean },
 ): MediaPayload {
   const first = mediaList[0];
-  const mediaPaths = mediaList.map((media) => media.path);
-  const rawMediaTypes = mediaList.map((media) => media.contentType ?? "");
-  const mediaTypes = opts?.preserveMediaTypeCardinality
-    ? rawMediaTypes
-    : rawMediaTypes.filter((value): value is string => Boolean(value));
+  const mediaPaths: string[] = [];
+  const mediaTypes: string[] = [];
+  for (const media of mediaList) {
+    mediaPaths.push(media.path);
+    const contentType = media.contentType ?? "";
+    if (opts?.preserveMediaTypeCardinality || contentType) {
+      mediaTypes.push(contentType);
+    }
+  }
   return {
     MediaPath: first?.path,
     MediaType: first?.contentType,

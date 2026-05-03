@@ -10,7 +10,12 @@ function parseTelegramGroupId(value?: string | null) {
   if (!raw) {
     return { chatId: undefined, topicId: undefined };
   }
-  const parts = raw.split(":").filter(Boolean);
+  const parts: string[] = [];
+  for (const part of raw.split(":")) {
+    if (part) {
+      parts.push(part);
+    }
+  }
   if (
     parts.length >= 3 &&
     parts[1] === "topic" &&

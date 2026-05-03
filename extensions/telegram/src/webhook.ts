@@ -200,15 +200,15 @@ function resolveForwardedClientIp(
   if (!trustedProxies?.length) {
     return undefined;
   }
-  const forwardedChain = forwardedFor
-    ?.split(",")
-    .map((entry) => parseIpLiteral(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  if (!forwardedChain?.length) {
+  if (!forwardedFor) {
     return undefined;
   }
+  const forwardedChain = forwardedFor.split(",");
   for (let index = forwardedChain.length - 1; index >= 0; index -= 1) {
-    const hop = forwardedChain[index];
+    const hop = parseIpLiteral(forwardedChain[index]);
+    if (!hop) {
+      continue;
+    }
     if (!isTrustedProxyAddress(hop, trustedProxies)) {
       return hop;
     }

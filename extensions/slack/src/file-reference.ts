@@ -11,5 +11,10 @@ export function formatSlackFileReferenceList(files: readonly SlackFile[] | undef
   if (!files?.length) {
     return "file";
   }
-  return files.map((file) => formatSlackFileReference(file)).join(", ");
+  let text = "";
+  for (const file of files) {
+    const reference = formatSlackFileReference(file);
+    text = text ? `${text}, ${reference}` : reference;
+  }
+  return text;
 }

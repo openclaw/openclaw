@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Core/performance: trim OpenAI response replay conversion and QA Lab bus, report, outbound wait, and transcript helpers by replacing repeated filter/map/slice chains with bounded direct scans. Thanks @vincentkoc.
 - Core/performance: trim reply payload routing, heartbeat filtering, tool display, core tool assembly, channel directory, task status, and Slack approval formatting helper chains with direct bounded scans. Thanks @vincentkoc.
 - Core/performance: trim Slack allowlist/directory lookup, Telegram sender/API-root parsing, SDK event normalization, prompt prelude, QA env, and RTT summary helper chains with direct scans. Thanks @vincentkoc.
+- Core/performance: trim SDK run-option validation, agent tool/reply text assembly, channel media/status helpers, and Slack/Telegram message parsing by replacing more transient array chains with direct bounded assembly. Thanks @vincentkoc.
 - QA/RTT: add a Slack live transport harness with Convex credential leasing, mention-gating checks, and per-reply RTT artifacts so Slack can be measured beside Telegram and Discord. Thanks @vincentkoc.
 - QA/RTT: let the Telegram RTT package harness use Convex credential leasing via `--credential-source convex`, so cloud lanes can run live RTT proof without direct Telegram bot env vars. Thanks @vincentkoc.
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.

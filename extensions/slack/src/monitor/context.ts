@@ -313,17 +313,23 @@ export function createSlackMonitorContext(params: {
     }
 
     if (isGroupDm && groupDmChannels.length > 0) {
-      const candidates = [
-        p.channelId,
-        p.channelName ? `#${p.channelName}` : undefined,
-        p.channelName,
-        p.channelName ? normalizeSlackSlug(p.channelName) : undefined,
-      ]
-        .filter((value): value is string => Boolean(value))
-        .map((value) => normalizeLowercaseStringOrEmpty(value));
-      const permitted =
-        groupDmChannelsLower.includes("*") ||
-        candidates.some((candidate) => groupDmChannelsLower.includes(candidate));
+      let permitted = groupDmChannelsLower.includes("*");
+      if (!permitted) {
+        for (const candidate of [
+          p.channelId,
+          p.channelName ? `#${p.channelName}` : undefined,
+          p.channelName,
+          p.channelName ? normalizeSlackSlug(p.channelName) : undefined,
+        ]) {
+          if (
+            candidate &&
+            groupDmChannelsLower.includes(normalizeLowercaseStringOrEmpty(candidate))
+          ) {
+            permitted = true;
+            break;
+          }
+        }
+      }
       if (!permitted) {
         return false;
       }
