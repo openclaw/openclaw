@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/systemd: preserve operator-added secrets in the Gateway env file across re-stage while clearing OpenClaw-managed keys (such as `OPENCLAW_GATEWAY_TOKEN`) so a fresh staging value is never shadowed by a stale env-file copy; operator secrets are also retained when the state-dir `.env` is empty. Fixes #76860. Thanks @hclsys.
 - OpenAI/Google Meet: wait for realtime voice `session.updated` before treating the bridge as connected, so Meet joins do not return with audio queued behind an unconfigured realtime session. Thanks @vincentkoc.
 - Plugins/catalog: merge official external catalog descriptors into partial package channel config metadata, so lagging WeCom/Yuanbao manifests keep their own schema while still exposing host-supplied labels and setup text. Thanks @vincentkoc.
 - Plugins/catalog: supplement lagging official external WeCom and Yuanbao npm manifests with channel config descriptors and declared tool contracts from the OpenClaw catalog, so trusted package sweeps no longer fail because external package metadata trails the host contract. Thanks @vincentkoc.
