@@ -1282,6 +1282,7 @@ export const dispatchTelegramMessage = async ({
     return;
   }
   let sentFallback = false;
+  let handledSilentNoVisibleResponse = false;
   const deliverySummary = deliveryState.snapshot();
   if (
     dispatchError ||
@@ -1305,14 +1306,18 @@ export const dispatchTelegramMessage = async ({
       ctxPayload.CommandSource === "native"
         ? (ctxPayload.CommandTargetSessionKey ?? ctxPayload.SessionKey)
         : ctxPayload.SessionKey;
-    const silentReplyFallback = projectOutboundPayloadPlanForDelivery(
-      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-        cfg,
-        sessionKey: policySessionKey,
-        surface: "telegram",
-      }),
-    );
-    if (silentReplyFallback.length > 0) {
+    const silentReplyFallback = isGroup
+      ? projectOutboundPayloadPlanForDelivery(
+          createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+            cfg,
+            sessionKey: policySessionKey,
+            surface: "telegram",
+          }),
+        )
+      : [];
+    if (!isGroup || silentReplyFallback.length === 0) {
+      handledSilentNoVisibleResponse = true;
+    } else {
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         replies: silentReplyFallback,
         ...deliveryBaseOptions,
@@ -1326,16 +1331,19 @@ export const dispatchTelegramMessage = async ({
       hasChatId: chatId != null,
       queuedFinal,
       sentFallback,
+      handledSilentNoVisibleResponse,
     });
   }
 
-  const hasFinalResponse = hasFinalInboundReplyDispatch(
-    { queuedFinal },
-    {
-      fallbackDelivered: sentFallback,
-      deliverySummaryDelivered: deliverySummary.delivered,
-    },
-  );
+  const hasFinalResponse =
+    handledSilentNoVisibleResponse ||
+    hasFinalInboundReplyDispatch(
+      { queuedFinal },
+      {
+        fallbackDelivered: sentFallback,
+        deliverySummaryDelivered: deliverySummary.delivered,
+      },
+    );
 
   if (statusReactionController && !hasFinalResponse) {
     void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
