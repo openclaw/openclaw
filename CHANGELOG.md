@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Google Chat: normalize custom Google auth transport headers before google-auth/gaxios interceptors run, restoring webhook token verification when certificate retrieval expects Fetch `Headers`. Fixes #76742. Thanks @donbowman.
+- Doctor/plugins: reset stale `plugins.slots.memory` and `plugins.slots.contextEngine` references during `doctor --fix`, so cleanup of missing plugin config does not leave unrecoverable slot owners behind. Fixes #76550 and #76551. Thanks @vincentkoc.
 - Docs/WhatsApp: merge the duplicate top-level `web` objects in the gateway channel config example so copy-pasted WhatsApp config keeps both `web.whatsapp` and reconnect settings. Fixes #76619. Thanks @WadydX.
 - Plugins/Anthropic: expose Claude thinking profiles from the bundled provider-policy artifact so non-runtime callers keep Opus 4.7 `adaptive`, `xhigh`, and `max` instead of downgrading to `high`. Fixes #76779. Thanks @tomascupr and @iAbhi001.
 - Discord/native commands: skip slash-command registration and cleanup REST calls when `channels.discord.commands.native=false`, letting low-power gateways start without waiting on disabled native-command lifecycle requests. Fixes #76202. Thanks @vincentkoc.
