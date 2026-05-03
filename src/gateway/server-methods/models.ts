@@ -85,6 +85,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         defaultProvider: DEFAULT_PROVIDER,
         workspaceDir,
         view,
+        runtimeAuthDiscovery: false,
       });
       respond(true, { models }, undefined);
     } catch (err) {

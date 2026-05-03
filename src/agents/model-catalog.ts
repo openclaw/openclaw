@@ -53,6 +53,7 @@ type PiRegistryClassLike = {
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
+let hasLoggedReadOnlyStaticCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
 const modelSuppressionLoader = createLazyImportLoader(
@@ -70,6 +71,7 @@ function loadModelSuppression() {
 export function resetModelCatalogCache() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
+  hasLoggedReadOnlyStaticCatalogError = false;
 }
 
 export function resetModelCatalogCacheForTest() {
@@ -117,22 +119,29 @@ export function loadManifestModelCatalog(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  fallbackToMetadataScan?: boolean;
 }): ModelCatalogEntry[] {
-  const snapshot =
-    getCurrentPluginMetadataSnapshot({
-      config: params.config,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    }) ??
-    loadPluginMetadataSnapshot({
-      config: params.config,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-      env: params.env ?? process.env,
-    });
-  const eligiblePlugins = snapshot.plugins.filter(
+  const snapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+  });
+  const resolvedSnapshot =
+    snapshot ??
+    (params.fallbackToMetadataScan === false
+      ? undefined
+      : loadPluginMetadataSnapshot({
+          config: params.config,
+          ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+          env: params.env ?? process.env,
+        }));
+  if (!resolvedSnapshot) {
+    return [];
+  }
+  const eligiblePlugins = resolvedSnapshot.plugins.filter(
     (plugin) =>
       plugin.modelCatalog &&
       isManifestPluginAvailableForControlPlane({
-        snapshot,
+        snapshot: resolvedSnapshot,
         plugin,
         config: params.config,
       }),
@@ -250,6 +259,32 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   return sortModelCatalogEntries(models);
 }
 
+function loadReadOnlyStaticModelCatalog(params?: { config?: OpenClawConfig }): ModelCatalogEntry[] {
+  const cfg = params?.config ?? getRuntimeConfig();
+  const models: ModelCatalogEntry[] = [];
+  try {
+    appendCatalogEntriesIfAbsent(
+      models,
+      loadManifestModelCatalog({
+        config: cfg,
+        env: process.env,
+        fallbackToMetadataScan: false,
+      }),
+    );
+  } catch (error) {
+    if (!hasLoggedReadOnlyStaticCatalogError) {
+      hasLoggedReadOnlyStaticCatalogError = true;
+      log.warn(`Failed to load read-only manifest model catalog: ${String(error)}`);
+    }
+  }
+
+  const configuredModels = buildConfiguredModelCatalog({ cfg });
+  if (configuredModels.length > 0) {
+    appendCatalogEntriesIfAbsent(models, configuredModels);
+  }
+  return sortModelCatalogEntries(models);
+}
+
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
@@ -260,7 +295,9 @@ export async function loadModelCatalog(params?: {
     try {
       return await loadReadOnlyPersistedModelCatalog(params);
     } catch {
-      // fall through to full catalog path
+      // Keep gateway models.list on side-effect-free sources. The RPC timeout
+      // cannot fire while provider discovery blocks the event loop.
+      return loadReadOnlyStaticModelCatalog(params);
     }
   }
   if (!readOnly && params?.useCache === false) {
