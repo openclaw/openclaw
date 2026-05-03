@@ -29,6 +29,7 @@ export type ResolveCronModelSelectionParams = {
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
   isGmailHook: boolean;
+  agentId?: string;
 };
 
 export type ResolveCronModelSelectionResult =
@@ -152,6 +153,7 @@ export async function resolveCronModelSelection(
     resolveCliRuntimeExecutionProvider({
       provider,
       cfg: params.cfgWithAgentDefaults,
+      agentId: params.agentId,
     }) ?? provider;
 
   return { ok: true, provider: executionProvider, model };

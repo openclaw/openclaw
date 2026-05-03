@@ -65,6 +65,7 @@ type SelectModelOptions = {
     providerOverride?: string;
   };
   isGmailHook?: boolean;
+  agentId?: string;
 };
 
 function parseModelRef(raw: string): { provider: string; model: string } | { error: string } {
@@ -126,6 +127,7 @@ async function selectModel(options: SelectModelOptions = {}) {
     sessionEntry: options.sessionEntry ?? {},
     payload: options.payload ?? defaultPayload(),
     isGmailHook: options.isGmailHook ?? false,
+    agentId: options.agentId,
   });
 }
 
@@ -402,7 +404,56 @@ describe("cron model formatting and precedence edge cases", () => {
   });
 
   describe("CLI runtime compatibility", () => {
-    it("uses a configured Claude CLI runtime for resolved Anthropic models", async () => {
+    it("uses a configured per-agent Claude CLI runtime for resolved Anthropic models", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-opus-4-6",
+              },
+              list: [
+                {
+                  id: "scheduler",
+                  agentRuntime: { id: "claude-cli" },
+                },
+              ],
+            },
+          },
+          agentId: "scheduler",
+        },
+        { provider: "claude-cli", model: "claude-opus-4-6" },
+      );
+    });
+
+    it("keeps an OpenAI payload override on OpenAI when per-agent Claude CLI is configured", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-opus-4-6",
+              },
+              list: [
+                {
+                  id: "scheduler",
+                  agentRuntime: { id: "claude-cli" },
+                },
+              ],
+            },
+          },
+          agentId: "scheduler",
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openai/gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+    });
+
+    it("uses a configured default Claude CLI runtime for resolved Anthropic models", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -418,7 +469,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("keeps an OpenAI payload override on OpenAI when Claude CLI is configured", async () => {
+    it("keeps an OpenAI payload override on OpenAI when default Claude CLI is configured", async () => {
       await expectSelectedModel(
         {
           cfg: {
