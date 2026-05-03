@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/idle-timeout: substitute the actual provider id into the model-idle-timeout error's config-path hint instead of leaving the literal `<id>` placeholder, so the message says (for example) `models.providers.openai.timeoutSeconds` and is copy-pasteable. The placeholder shorthand was being rendered to end users and read as if no such config path existed. Fixes #76331. Thanks @cldmarketinggigi-commits.
 - Gateway/sessions: keep async `sessions.list` title and preview hydration bounded to transcript head/tail reads so Control UI polling cannot full-scan large session transcripts every refresh. Thanks @vincentkoc.
 - Gateway: preserve stack diagnostics when `chat.send` or agent attachment parsing/staging fails, improving image-send failure triage. Refs #63432. (#75135) Thanks @keen0206.
 - Maintainer workflow: push prepared PR heads through GitHub's verified commit API by default and require an explicit override before git-protocol pushes can publish unsigned commits. Thanks @BunsDev.

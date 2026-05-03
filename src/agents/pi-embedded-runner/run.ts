@@ -2087,9 +2087,15 @@ export async function runEmbeddedPiAgent(
             !timedOutDuringToolExecution &&
             !payloadsWithToolMedia?.length
           ) {
+            // Substitute the actual provider id into the config-path hint so
+            // the user can copy-paste it directly. The literal `<id>`
+            // placeholder confused at least one user (#76331) who could not
+            // find that exact path in their config and assumed it did not
+            // exist. `provider` is in scope from the run-loop binding and is
+            // already used in surrounding error messages.
             const timeoutText = idleTimedOut
-              ? "The model did not produce a response before the model idle timeout. " +
-                "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers."
+              ? `The model did not produce a response before the model idle timeout. ` +
+                `Please try again, or increase \`models.providers.${provider}.timeoutSeconds\` for slow local or self-hosted providers.`
               : "Request timed out before a response was generated. " +
                 "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
             const replayInvalid = resolveReplayInvalidForAttempt(null);

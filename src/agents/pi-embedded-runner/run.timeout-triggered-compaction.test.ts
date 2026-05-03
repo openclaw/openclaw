@@ -238,7 +238,7 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
-  it("points idle-timeout errors at the provider timeout config key", async () => {
+  it("points idle-timeout errors at the provider timeout config key with the actual provider id substituted (#76331)", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
@@ -253,7 +253,13 @@ describe("timeout-triggered compaction", () => {
 
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("models.providers.<id>.timeoutSeconds");
+    // The harness default provider is "anthropic" (run.overflow-compaction.harness.ts).
+    // The error message must substitute the actual provider id into the
+    // config-path hint so the user can copy-paste it directly. The literal
+    // `<id>` placeholder is documentation shorthand and does not exist as a
+    // real config key, which confused the reporter on #76331.
+    expect(result.payloads?.[0]?.text).toContain("models.providers.anthropic.timeoutSeconds");
+    expect(result.payloads?.[0]?.text).not.toContain("models.providers.<id>.timeoutSeconds");
     expect(result.payloads?.[0]?.text).not.toContain("agents.defaults.timeoutSeconds");
   });
 
