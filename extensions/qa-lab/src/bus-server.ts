@@ -15,6 +15,11 @@ import type {
   QaBusWaitForInput,
 } from "./runtime-api.js";
 
+function resolveEffectivePollCursor(currentCursor: number, requestedCursor?: number): number {
+  const startCursor = requestedCursor ?? 0;
+  return currentCursor < startCursor ? 0 : startCursor;
+}
+
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -137,14 +142,15 @@ export async function handleQaBusRequest(params: {
         const timeoutMs = Math.max(0, Math.min(input.timeoutMs ?? 0, 30_000));
         const accountId = normalizeAccountId(input.accountId);
         const initial = params.state.poll(input);
+        const effectiveCursor = resolveEffectivePollCursor(initial.cursor, input.cursor);
         if (initial.events.length > 0 || timeoutMs === 0) {
           writeJson(params.res, 200, initial);
           return true;
         }
         try {
-          await params.state.waitForCursorAdvance(input.cursor ?? 0, timeoutMs, (snapshot) => {
+          await params.state.waitForCursorAdvance(effectiveCursor, timeoutMs, (snapshot) => {
             return snapshot.events.some(
-              (event) => event.accountId === accountId && event.cursor > (input.cursor ?? 0),
+              (event) => event.accountId === accountId && event.cursor > effectiveCursor,
             );
           });
         } catch {
