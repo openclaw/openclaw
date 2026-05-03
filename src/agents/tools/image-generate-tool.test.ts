@@ -8,31 +8,39 @@ let webMedia: typeof import("../../media/web-media.js");
 let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
 let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
 
-const IMAGE_GENERATION_PROVIDER_AUTH_ENV_VARS = [
-  "OPENAI_API_KEY",
-  "OPENAI_API_KEYS",
+const GENERATION_PROVIDER_ENV_VARS = [
+  "BYTEPLUS_API_KEY",
+  "COMFY_API_KEY",
+  "COMFY_CLOUD_API_KEY",
+  "DASHSCOPE_API_KEY",
+  "DEEPINFRA_API_KEY",
+  "FAL_API_KEY",
+  "FAL_KEY",
+  "GCLOUD_PROJECT",
   "GEMINI_API_KEY",
   "GEMINI_API_KEYS",
   "GOOGLE_API_KEY",
   "GOOGLE_API_KEYS",
-  "DEEPINFRA_API_KEY",
-  "FAL_KEY",
-  "FAL_API_KEY",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_API_KEY",
+  "GOOGLE_CLOUD_LOCATION",
+  "GOOGLE_CLOUD_PROJECT",
   "LITELLM_API_KEY",
+  "MINIMAX_API_KEY",
   "MINIMAX_CODE_PLAN_KEY",
   "MINIMAX_CODING_API_KEY",
-  "MINIMAX_API_KEY",
   "MINIMAX_OAUTH_TOKEN",
+  "MODELSTUDIO_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENAI_API_KEYS",
   "OPENROUTER_API_KEY",
-  "XAI_API_KEY",
+  "QWEN_API_KEY",
+  "RUNWAY_API_KEY",
+  "RUNWAYML_API_SECRET",
+  "TOGETHER_API_KEY",
   "VYDRA_API_KEY",
-] as const;
-
-function clearImageGenerationProviderAuthEnv() {
-  for (const key of IMAGE_GENERATION_PROVIDER_AUTH_ENV_VARS) {
-    vi.stubEnv(key, "");
-  }
-}
+  "XAI_API_KEY",
+];
 
 function hasStubbedImageProviderAuth(providerId: string): boolean {
   if (providerId === "openai") {
@@ -243,7 +251,9 @@ describe("createImageGenerateTool", () => {
   });
 
   beforeEach(() => {
-    clearImageGenerationProviderAuthEnv();
+    for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
+      vi.stubEnv(envVar, "");
+    }
   });
 
   afterEach(() => {
