@@ -259,8 +259,99 @@ Define providers under `secrets.providers`:
           },
         },
       },
+    },
+  },
+}
+    ```
+  </Accordion>
+  <Accordion title="password-store (`pass`)">
+    Use a small resolver wrapper when you want SecretRef ids to map directly to
+    `pass` entries. Save this as an executable in an absolute path that passes
+    your exec-provider path checks, for example
+    `/usr/local/bin/openclaw-pass-resolver`. The `#!/usr/bin/env node` shebang
+    resolves `node` from the resolver process `PATH`, so include `PATH` in
+    `passEnv`. If `pass` is not on that `PATH`, set `PASS_BIN` in the parent
+    environment and include it in `passEnv` too:
+
+    ```js
+    #!/usr/bin/env node
+    const { spawnSync } = require("node:child_process");
+
+    let stdin = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      stdin += chunk;
+    });
+    process.stdin.on("error", (err) => {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(1);
+    });
+    process.stdin.on("end", () => {
+      let request;
+      try {
+        request = JSON.parse(stdin || "{}");
+      } catch (err) {
+        process.stderr.write(`Failed to parse request: ${err.message}\n`);
+        process.exit(1);
+      }
+
+      const passBin = process.env.PASS_BIN || "pass";
+      const values = {};
+      const errors = {};
+
+      for (const id of request.ids ?? []) {
+        const result = spawnSync(passBin, ["show", id], { encoding: "utf8" });
+        if (result.status === 0) {
+          values[id] = result.stdout.split(/\r?\n/, 1)[0] ?? "";
+        } else {
+          errors[id] = { message: (result.stderr || `pass exited ${result.status}`).trim() };
+        }
+      }
+
+      process.stdout.write(JSON.stringify({ protocolVersion: 1, values, errors }));
+    });
+    ```
+
+    Then configure the exec provider and point `apiKey` at the `pass` entry
+    path:
+
+    ```json5
+    {
+      secrets: {
+        providers: {
+          pass_store: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-pass-resolver",
+            passEnv: ["PATH", "HOME", "GNUPGHOME", "GPG_TTY", "PASSWORD_STORE_DIR", "PASS_BIN"],
+            jsonOnly: true,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: {
+              source: "exec",
+              provider: "pass_store",
+              id: "openclaw/providers/openai/apiKey",
+            },
+          },
+        },
+      },
     }
     ```
+
+    Keep the secret on the first line of the `pass` entry, or customize the
+    wrapper if you want to return the full `pass show` output instead. After
+    updating config, verify both the static audit and the exec resolver path:
+
+    ```bash
+    openclaw secrets audit --check
+    openclaw secrets audit --allow-exec
+    ```
+
   </Accordion>
   <Accordion title="sops">
     ```json5
