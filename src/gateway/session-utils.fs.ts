@@ -265,11 +265,18 @@ async function readRecentTranscriptTailLinesAsync(
   }
 }
 
+const MAX_TRANSCRIPT_PARSE_LINE_BYTES = 256 * 1024;
+
+function isOversizedTranscriptLine(line: string): boolean {
+  return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
+}
+
 function normalizeTailEntryString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function parseTailTranscriptRecord(line: string): TailTranscriptRecord | null {
+  if (isOversizedTranscriptLine(line)) return null;
   try {
     const parsed = JSON.parse(line) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -797,59 +804,7 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   agentId?: string,
   opts?: { includeInterSession?: boolean },
 ): Promise<SessionTitleFields> {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) {
-    return { firstUserMessage: null, lastMessagePreview: null };
-  }
-  let stat: fs.Stats;
-  try {
-    stat = await fs.promises.stat(filePath);
-  } catch {
-    return { firstUserMessage: null, lastMessagePreview: null };
-  }
-  const cacheKey = readSessionTitleFieldsCacheKey(filePath, opts);
-  const cached = getCachedSessionTitleFields(cacheKey, stat);
-  if (cached) {
-    return cached;
-  }
-  const index = await readSessionTranscriptIndex(filePath);
-  if (!index) {
-    return { firstUserMessage: null, lastMessagePreview: null };
-  }
-
-  let firstUserMessage: string | null = null;
-  for (const entry of index.entries) {
-    const msg = entry.record.message as TranscriptMessage | undefined;
-    if (msg?.role !== "user") {
-      continue;
-    }
-    if (opts?.includeInterSession !== true && hasInterSessionUserProvenance(msg)) {
-      continue;
-    }
-    const text = extractTextFromContent(msg.content);
-    if (text) {
-      firstUserMessage = text;
-      break;
-    }
-  }
-
-  let lastMessagePreview: string | null = null;
-  for (const entry of index.entries.toReversed()) {
-    const msg = entry.record.message as TranscriptMessage | undefined;
-    if (!msg || (msg.role !== "user" && msg.role !== "assistant")) {
-      continue;
-    }
-    const text = extractTextFromContent(msg.content);
-    if (text) {
-      lastMessagePreview = text;
-      break;
-    }
-  }
-
-  const result = { firstUserMessage, lastMessagePreview };
-  setCachedSessionTitleFields(cacheKey, stat, result);
-  return result;
+  return readSessionTitleFieldsFromTranscript(sessionId, storePath, sessionFile, agentId, opts);
 }
 
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
@@ -1045,6 +1000,7 @@ function resolvePositiveUsageNumber(value: unknown): number | undefined {
 function extractUsageSnapshotFromTranscriptLine(
   line: string,
 ): SessionTranscriptUsageSnapshot | null {
+  if (isOversizedTranscriptLine(line)) return null;
   try {
     const parsed = JSON.parse(line) as Record<string, unknown>;
     const message =
