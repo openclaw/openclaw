@@ -84,14 +84,16 @@ pnpm openclaw qa mantis run \
 ```
 
 The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
-workflow should accept equivalent inputs:
+workflow for the first real scenario is `Mantis Discord Status Reactions`. It
+accepts:
 
-- `transport`: `discord` for the first version.
-- `scenario`: one or more scenario ids.
-- `baseline_ref`: default `origin/main` or the linked issue's reported bad tag.
-- `candidate_ref`: the PR head SHA.
-- `machine_provider`: `aws` by default, with later `hetzner` fallback.
-- `post_to_pr`: whether ClawSweeper should comment with the result.
+- `baseline_ref`: the ref expected to reproduce queued-only behavior.
+- `candidate_ref`: the ref expected to show `queued -> thinking -> done`.
+
+It checks out the workflow harness ref, builds separate baseline and candidate
+worktrees, runs `discord-status-reactions-tool-only` against each worktree, and
+uploads `baseline/`, `candidate/`, `comparison.json`, and `mantis-report.md` as
+Actions artifacts.
 
 ClawSweeper command examples:
 
@@ -178,6 +180,25 @@ Baseline evidence should show the queued acknowledgement reaction but no
 lifecycle transition in tool-only mode. Candidate evidence should show lifecycle
 status reactions running when `messages.statusReactions.enabled` is explicitly
 true.
+
+The executable first slice is the opt-in Discord live QA scenario:
+
+```bash
+pnpm openclaw qa discord \
+  --scenario discord-status-reactions-tool-only \
+  --provider-mode live-frontier \
+  --model openai/gpt-5.4 \
+  --alt-model openai/gpt-5.4 \
+  --fast \
+  --output-dir .artifacts/qa-e2e/mantis/discord-status-reactions-candidate
+```
+
+It configures the SUT with always-on guild handling, `visibleReplies:
+"message_tool"`, `ackReaction: "👀"`, and explicit status reactions. The oracle
+polls the real Discord triggering message and expects the observed sequence
+`👀 -> 🤔 -> 👍`. Artifacts include `discord-qa-reaction-timelines.json`,
+`discord-status-reactions-tool-only-timeline.html`, and
+`discord-status-reactions-tool-only-timeline.png`.
 
 ## Existing QA Pieces
 

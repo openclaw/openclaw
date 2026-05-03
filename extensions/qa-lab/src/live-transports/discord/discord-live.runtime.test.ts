@@ -162,6 +162,47 @@ describe("discord live qa runtime", () => {
     });
   });
 
+  it("injects tool-only Discord status reaction config for the Mantis scenario", () => {
+    const next = __testing.buildDiscordQaConfig(
+      {},
+      {
+        guildId: "123456789012345678",
+        channelId: "223456789012345678",
+        driverBotId: "423456789012345678",
+        sutAccountId: "sut",
+        sutBotToken: "sut-token",
+      },
+      { statusReactionsToolOnly: true },
+    );
+
+    expect(next.messages).toMatchObject({
+      ackReaction: "👀",
+      ackReactionScope: "all",
+      groupChat: { visibleReplies: "message_tool" },
+      statusReactions: {
+        enabled: true,
+        timing: { debounceMs: 0 },
+      },
+    });
+    expect(next.channels?.discord).toMatchObject({
+      accounts: {
+        sut: {
+          allowBots: true,
+          guilds: {
+            "123456789012345678": {
+              requireMention: false,
+              channels: {
+                "223456789012345678": {
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("normalizes observed Discord messages", () => {
     expect(
       __testing.normalizeDiscordObservedMessage({
@@ -227,6 +268,80 @@ describe("discord live qa runtime", () => {
       "discord-mention-gating",
       "discord-native-help-command-registration",
     ]);
+    expect(
+      __testing.findScenario(["discord-status-reactions-tool-only"]).map((scenario) => scenario.id),
+    ).toEqual(["discord-status-reactions-tool-only"]);
+  });
+
+  it("collects the status reaction sequence across timeline snapshots", () => {
+    expect(
+      __testing.collectSeenReactionSequence(
+        [
+          {
+            elapsedMs: 0,
+            observedAt: "2026-05-03T12:00:00.000Z",
+            reactions: [{ emoji: "👀", count: 1, me: true }],
+          },
+          {
+            elapsedMs: 250,
+            observedAt: "2026-05-03T12:00:00.250Z",
+            reactions: [
+              { emoji: "👀", count: 1, me: true },
+              { emoji: "🤔", count: 1, me: true },
+            ],
+          },
+          {
+            elapsedMs: 500,
+            observedAt: "2026-05-03T12:00:00.500Z",
+            reactions: [{ emoji: "👍", count: 1, me: true }],
+          },
+        ],
+        ["👀", "🤔", "👍"],
+      ),
+    ).toEqual(["👀", "🤔", "👍"]);
+  });
+
+  it("normalizes reaction snapshots from Discord messages", () => {
+    expect(
+      __testing.normalizeDiscordReactionSnapshot({
+        startedAtMs: new Date("2026-05-03T12:00:00.000Z").getTime(),
+        observedAt: new Date("2026-05-03T12:00:01.000Z"),
+        message: {
+          id: "523456789012345678",
+          channel_id: "223456789012345678",
+          reactions: [
+            { count: 1, emoji: { name: "🤔" }, me: true },
+            { count: 2, emoji: { name: "👀" }, me: false },
+          ],
+        },
+      }),
+    ).toEqual({
+      elapsedMs: 1000,
+      observedAt: "2026-05-03T12:00:01.000Z",
+      reactions: [
+        { emoji: "👀", count: 2, me: false },
+        { emoji: "🤔", count: 1, me: true },
+      ],
+    });
+  });
+
+  it("renders a human-readable status reaction timeline artifact", () => {
+    const html = __testing.renderDiscordStatusReactionHtml({
+      scenarioTitle: "Discord status reactions",
+      expectedSequence: ["👀", "🤔", "👍"],
+      seenSequence: ["👀", "🤔"],
+      snapshots: [
+        {
+          elapsedMs: 0,
+          observedAt: "2026-05-03T12:00:00.000Z",
+          reactions: [{ emoji: "👀", count: 1, me: true }],
+        },
+      ],
+    });
+
+    expect(html).toContain("Discord status reactions");
+    expect(html).toContain("Expected: 👀 → 🤔 → 👍");
+    expect(html).toContain("Seen: 👀 → 🤔");
   });
 
   it("waits for the Discord account to become connected, not just running", async () => {
