@@ -25,6 +25,13 @@
   overflow-wrap: break-word;
 }
 
+/* Streaming mode: plain text rendering to avoid DOM replacement flicker.
+   Uses pre-wrap to preserve newlines while allowing normal word breaking.
+   Switches to full markdown rendering when streaming completes. */
+.chat-text--streaming {
+  white-space: pre-wrap;
+}
+
 .chat-text :where(p, ul, ol, pre, blockquote, table) {
   margin: 0;
 }
