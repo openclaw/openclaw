@@ -430,6 +430,12 @@ export async function processDiscordMessage(
           return;
         }
         const draftStream = draftPreview.draftStream;
+        if (draftStream && draftPreview.isProgressMode && info.kind === "block") {
+          const reply = resolveSendableOutboundReplyParts(payload);
+          if (!reply.hasMedia && !payload.isError) {
+            return;
+          }
+        }
         if (draftStream && isFinal) {
           draftPreview.markFinalDeliveryHandled();
           const reply = resolveSendableOutboundReplyParts(payload);

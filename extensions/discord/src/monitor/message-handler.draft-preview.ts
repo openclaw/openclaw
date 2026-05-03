@@ -103,6 +103,9 @@ export function createDiscordDraftPreviewController(params: {
     draftStream,
     previewToolProgressEnabled,
     suppressDefaultToolProgressMessages,
+    get isProgressMode() {
+      return discordStreamMode === "progress";
+    },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },
@@ -252,7 +255,12 @@ export function createDiscordDraftPreviewController(params: {
         },
       });
     },
-    handleAssistantMessageBoundary: forceNewMessageIfNeeded,
+    handleAssistantMessageBoundary() {
+      if (discordStreamMode === "progress") {
+        return;
+      }
+      forceNewMessageIfNeeded();
+    },
     async flush() {
       if (!draftStream) {
         return;
