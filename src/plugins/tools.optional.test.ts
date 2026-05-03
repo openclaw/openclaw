@@ -277,7 +277,19 @@ function installToolManifestSnapshots(params: {
         policyHash: "test",
         generatedAtMs: 0,
         installRecords: {},
-        plugins: [],
+        plugins: plugins.map((plugin) => ({
+          pluginId: String(plugin.id),
+          origin: plugin.origin,
+          enabled: true,
+          enabledByDefault: plugin.enabledByDefault,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          compat: [],
+        })),
         diagnostics: [],
       },
       registryDiagnostics: [],
@@ -301,7 +313,7 @@ function installToolManifestSnapshots(params: {
         manifestRegistryMs: 0,
         ownerMapsMs: 0,
         totalMs: 0,
-        indexPluginCount: 0,
+        indexPluginCount: plugins.length,
         manifestPluginCount: plugins.length,
       },
     } as never,
@@ -491,16 +503,28 @@ describe("resolvePluginTools optional tools", () => {
     );
   });
 
-  it("auto-loads cold registry for path-based (bundled-origin) plugins without pre-warming (#76598)", () => {
-    const config = createContext().config;
+  it("auto-loads cold registry for path-based config-origin plugins without pre-warming (#76598)", () => {
+    const context = {
+      ...createContext(),
+      config: {
+        ...createContext().config,
+        plugins: {
+          ...createContext().config.plugins,
+          entries: {
+            "optional-demo": { enabled: true },
+          },
+        },
+      },
+    };
+    const config = context.config;
     const registry = createToolRegistry([createOptionalDemoEntry()]);
     loadOpenClawPluginsMock.mockReturnValue(registry);
     installToolManifestSnapshot({
       config,
       plugin: {
         id: "optional-demo",
-        origin: "bundled",
-        enabledByDefault: true,
+        origin: "config",
+        enabledByDefault: undefined,
         channels: [],
         providers: [],
         contracts: {
@@ -514,6 +538,7 @@ describe("resolvePluginTools optional tools", () => {
     // This is the regression path from PR #76004 where path-based plugin tools disappeared.
     const tools = resolvePluginTools(
       createResolveToolsParams({
+        context,
         toolAllowlist: ["optional_tool"],
       }),
     );
@@ -525,6 +550,50 @@ describe("resolvePluginTools optional tools", () => {
         onlyPluginIds: ["optional-demo"],
         toolDiscovery: true,
       }),
+    );
+  });
+
+  it("warns when cold registry load still does not provide the selected plugin tools", () => {
+    const context = {
+      ...createContext(),
+      config: {
+        ...createContext().config,
+        plugins: {
+          ...createContext().config.plugins,
+          entries: {
+            "optional-demo": { enabled: true },
+          },
+        },
+      },
+    };
+    const config = context.config;
+    const registry = createToolRegistry([]);
+    loadOpenClawPluginsMock.mockReturnValue(registry);
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "optional-demo",
+        origin: "config",
+        enabledByDefault: undefined,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["optional_tool"],
+        },
+      },
+    });
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context,
+        toolAllowlist: ["optional_tool"],
+      }),
+    );
+
+    expect(tools).toEqual([]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool registry did not include selected plugin tools after cold load (optional-demo)",
     );
   });
 
