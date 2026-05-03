@@ -9,6 +9,7 @@
 
 import http from "node:http";
 import https from "node:https";
+import { isIP } from "node:net";
 import { bootstrap as bootstrapGlobalAgent } from "global-agent";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
@@ -40,8 +41,19 @@ const ALL_PROXY_ENV_KEYS = [
   ...NO_PROXY_ENV_KEYS,
   ...PROXY_ACTIVE_KEYS,
 ] as const;
+const GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS = [
+  ...ALL_PROXY_ENV_KEYS,
+  "all_proxy",
+  "ALL_PROXY",
+] as const;
 type ProxyEnvKey = (typeof ALL_PROXY_ENV_KEYS)[number];
 type ProxyEnvSnapshot = Record<ProxyEnvKey, string | undefined>;
+type GatewayControlPlaneProxyBypassEnvKey =
+  (typeof GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS)[number];
+type GatewayControlPlaneProxyBypassEnvSnapshot = Record<
+  GatewayControlPlaneProxyBypassEnvKey,
+  string | undefined
+>;
 type NodeHttpStackSnapshot = {
   httpRequest: typeof http.request;
   httpGet: typeof http.get;
@@ -56,17 +68,30 @@ type ActiveProxyRegistration = {
   proxyUrl: string;
   stopped: boolean;
 };
+type GlobalAgentConnectConfiguration = Record<string, unknown> & {
+  host: string;
+  tls: Record<string, unknown>;
+};
+type GlobalAgentCreateConnection = typeof https.globalAgent.createConnection;
+type GlobalAgentCreateConnectionConfiguration = Parameters<GlobalAgentCreateConnection>[0];
+type GlobalAgentCreateConnectionCallback = Parameters<GlobalAgentCreateConnection>[1];
+type GlobalAgentCreateConnectionResult = ReturnType<GlobalAgentCreateConnection>;
+type GlobalAgentHttpsAgent = {
+  createConnection: GlobalAgentCreateConnection;
+};
 
 let globalAgentBootstrapped = false;
 let nodeHttpStackSnapshot: NodeHttpStackSnapshot | null = null;
 let activeProxyRegistrations: ActiveProxyRegistration[] = [];
 let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
+let patchedGlobalAgentHttpsAgents = new WeakSet<object>();
 
 export function _resetGlobalAgentBootstrapForTests(): void {
   globalAgentBootstrapped = false;
   nodeHttpStackSnapshot = null;
   activeProxyRegistrations = [];
   baseProxyEnvSnapshot = null;
+  patchedGlobalAgentHttpsAgents = new WeakSet<object>();
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -113,6 +138,39 @@ function restoreProxyEnv(snapshot: ProxyEnvSnapshot): void {
     } else {
       process.env[key] = value;
     }
+  }
+}
+
+function captureGatewayControlPlaneProxyBypassEnv(): GatewayControlPlaneProxyBypassEnvSnapshot {
+  const snapshot = {} as GatewayControlPlaneProxyBypassEnvSnapshot;
+  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
+    snapshot[key] = process.env[key];
+  }
+  return snapshot;
+}
+
+function restoreGatewayControlPlaneProxyBypassEnv(
+  snapshot: GatewayControlPlaneProxyBypassEnvSnapshot,
+): void {
+  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
+function withoutGatewayControlPlaneProxyEnv<T>(run: () => T): T {
+  const snapshot = captureGatewayControlPlaneProxyBypassEnv();
+  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
+    delete process.env[key];
+  }
+  try {
+    return run();
+  } finally {
+    restoreGatewayControlPlaneProxyBypassEnv(snapshot);
   }
 }
 
@@ -168,6 +226,7 @@ function bootstrapNodeHttpStack(proxyUrl: string): void {
   if (!globalAgentBootstrapped) {
     nodeHttpStackSnapshot = captureNodeHttpStack();
     bootstrapGlobalAgent();
+    patchGlobalAgentHttpsConnectTlsTargetHost();
     globalAgentBootstrapped = true;
   }
 
@@ -180,6 +239,67 @@ function bootstrapNodeHttpStack(proxyUrl: string): void {
     agent["HTTPS_PROXY"] = proxyUrl;
     agent["NO_PROXY"] = process.env["GLOBAL_AGENT_NO_PROXY"];
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isGlobalAgentConnectConfiguration(
+  value: unknown,
+): value is GlobalAgentConnectConfiguration {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value["host"] === "string" && isRecord(value["tls"]);
+}
+
+function isGlobalAgentHttpsAgent(value: unknown): value is GlobalAgentHttpsAgent {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value["createConnection"] === "function";
+}
+
+function withTlsTargetHost(
+  configuration: GlobalAgentCreateConnectionConfiguration,
+): GlobalAgentCreateConnectionConfiguration {
+  if (!isGlobalAgentConnectConfiguration(configuration)) {
+    return configuration;
+  }
+
+  // Compatibility shim for https://github.com/gajus/global-agent/issues/83.
+  // global-agent@4.1.3 can CONNECT to the right host while leaving Node TLS
+  // certificate validation pointed at the proxy socket host. Keep this until
+  // upstream carries the CONNECT target host through to tls.connect().
+  const tlsOptions: Record<string, unknown> = {
+    ...configuration.tls,
+    host: configuration.host,
+  };
+  if (tlsOptions["servername"] === undefined && isIP(configuration.host) === 0) {
+    tlsOptions["servername"] = configuration.host;
+  }
+  return {
+    ...configuration,
+    tls: tlsOptions,
+  } as GlobalAgentCreateConnectionConfiguration;
+}
+
+function patchGlobalAgentHttpsConnectTlsTargetHost(): void {
+  const agent = https.globalAgent;
+  if (!isGlobalAgentHttpsAgent(agent) || patchedGlobalAgentHttpsAgents.has(agent)) {
+    return;
+  }
+
+  const createConnection = agent.createConnection.bind(agent);
+  agent.createConnection = function createConnectionWithTlsTargetHost(
+    this: unknown,
+    configuration: GlobalAgentCreateConnectionConfiguration,
+    callback?: GlobalAgentCreateConnectionCallback,
+  ): GlobalAgentCreateConnectionResult {
+    return createConnection(withTlsTargetHost(configuration), callback);
+  };
+  patchedGlobalAgentHttpsAgents.add(agent);
 }
 
 function findTopActiveProxyRegistration(): ActiveProxyRegistration | null {
@@ -371,7 +491,12 @@ function isGatewayLoopbackControlPlaneUrl(value: string): boolean {
   ) {
     return false;
   }
-  return isLoopbackIpAddress(url.hostname);
+  return isGatewayControlPlaneLoopbackHost(url.hostname);
+}
+
+function isGatewayControlPlaneLoopbackHost(hostname: string): boolean {
+  const normalizedHost = hostname.trim().toLowerCase().replace(/\.+$/, "");
+  return normalizedHost === "localhost" || isLoopbackIpAddress(hostname);
 }
 
 export function dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane<T>(
@@ -384,38 +509,40 @@ export function dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane<T>(
 
   const snapshot = nodeHttpStackSnapshot;
   if (!snapshot) {
-    return run();
+    return withoutGatewayControlPlaneProxyEnv(run);
   }
 
   // Security-sensitive: this temporarily removes managed proxy hooks for the
   // synchronous Gateway loopback WebSocket constructor only. Do not reuse this
   // helper for provider, plugin, user WebUI, model server, or arbitrary egress.
-  const activeStack = captureNodeHttpStack();
-  const globalRecord = global as Record<string, unknown>;
-  try {
-    http.request = snapshot.httpRequest;
-    http.get = snapshot.httpGet;
-    http.globalAgent = snapshot.httpGlobalAgent;
-    https.request = snapshot.httpsRequest;
-    https.get = snapshot.httpsGet;
-    https.globalAgent = snapshot.httpsGlobalAgent;
-    if (snapshot.hadGlobalAgent) {
-      globalRecord["GLOBAL_AGENT"] = snapshot.globalAgent;
-    } else {
-      delete globalRecord["GLOBAL_AGENT"];
+  return withoutGatewayControlPlaneProxyEnv(() => {
+    const activeStack = captureNodeHttpStack();
+    const globalRecord = global as Record<string, unknown>;
+    try {
+      http.request = snapshot.httpRequest;
+      http.get = snapshot.httpGet;
+      http.globalAgent = snapshot.httpGlobalAgent;
+      https.request = snapshot.httpsRequest;
+      https.get = snapshot.httpsGet;
+      https.globalAgent = snapshot.httpsGlobalAgent;
+      if (snapshot.hadGlobalAgent) {
+        globalRecord["GLOBAL_AGENT"] = snapshot.globalAgent;
+      } else {
+        delete globalRecord["GLOBAL_AGENT"];
+      }
+      return run();
+    } finally {
+      http.request = activeStack.httpRequest;
+      http.get = activeStack.httpGet;
+      http.globalAgent = activeStack.httpGlobalAgent;
+      https.request = activeStack.httpsRequest;
+      https.get = activeStack.httpsGet;
+      https.globalAgent = activeStack.httpsGlobalAgent;
+      if (activeStack.hadGlobalAgent) {
+        globalRecord["GLOBAL_AGENT"] = activeStack.globalAgent;
+      } else {
+        delete globalRecord["GLOBAL_AGENT"];
+      }
     }
-    return run();
-  } finally {
-    http.request = activeStack.httpRequest;
-    http.get = activeStack.httpGet;
-    http.globalAgent = activeStack.httpGlobalAgent;
-    https.request = activeStack.httpsRequest;
-    https.get = activeStack.httpsGet;
-    https.globalAgent = activeStack.httpsGlobalAgent;
-    if (activeStack.hadGlobalAgent) {
-      globalRecord["GLOBAL_AGENT"] = activeStack.globalAgent;
-    } else {
-      delete globalRecord["GLOBAL_AGENT"];
-    }
-  }
+  });
 }

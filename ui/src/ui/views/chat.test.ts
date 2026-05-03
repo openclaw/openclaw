@@ -19,7 +19,7 @@ import { renderChatSessionSelect } from "../chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
-import { renderChat } from "./chat.ts";
+import { renderChat, resetChatViewState } from "./chat.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   vi.fn(async (state: AppViewState) => {
@@ -53,6 +53,29 @@ vi.mock("../chat/build-chat-items.ts", () => ({
     stream: string | null;
     streamStartedAt: number | null;
   }) => {
+    if (
+      props.messages.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { __testDivider?: unknown }).__testDivider === true,
+      )
+    ) {
+      return [
+        {
+          kind: "divider",
+          key: "divider:compaction:test",
+          label: "Compacted history",
+          description:
+            "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+          action: {
+            kind: "session-checkpoints",
+            label: "Open checkpoints",
+          },
+          timestamp: 1,
+        },
+      ];
+    }
     if (props.messages.length > 0) {
       return [
         {
@@ -372,6 +395,7 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       onDismissSideResult: () => undefined,
       onNewSession: () => undefined,
       onClearHistory: () => undefined,
+      onOpenSessionCheckpoints: () => undefined,
       agentsList: null,
       currentAgentId: "main",
       onAgentChange: () => undefined,
@@ -389,9 +413,29 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
   return container;
 }
 
+describe("chat compaction divider", () => {
+  it("renders checkpoint recovery copy and action", () => {
+    const onOpenSessionCheckpoints = vi.fn();
+    const container = renderChatView({
+      messages: [{ __testDivider: true }],
+      onOpenSessionCheckpoints,
+    });
+
+    expect(container.textContent).toContain("Compacted history");
+    expect(container.textContent).toContain("Earlier turns are preserved");
+    const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
+    expect(button?.textContent).toContain("Open checkpoints");
+
+    button?.click();
+
+    expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+  });
+});
+
 afterEach(() => {
   loadSessionsMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
+  resetChatViewState();
   resetChatAttachmentPayloadStoreForTest();
   vi.unstubAllGlobals();
 });
@@ -449,6 +493,134 @@ describe("chat voice controls", () => {
 
     expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
+  });
+});
+
+describe("chat slash menu accessibility", () => {
+  function inputDraft(container: HTMLElement, value: string) {
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    textarea!.value = value;
+    textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function keydownComposer(container: HTMLElement, key: string) {
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  }
+
+  it("wires command suggestions to the composer with stable active option ids", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let container = renderChatView({ draft, onDraftChange });
+
+    inputDraft(container, "/");
+    container = renderChatView({ draft, onDraftChange });
+
+    const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const listbox = container.querySelector<HTMLElement>("#chat-slash-menu-listbox");
+    const activeId = textarea?.getAttribute("aria-activedescendant");
+
+    expect(wrapper?.hasAttribute("role")).toBe(false);
+    expect(wrapper?.hasAttribute("aria-expanded")).toBe(false);
+    expect(wrapper?.hasAttribute("aria-haspopup")).toBe(false);
+    expect(wrapper?.hasAttribute("aria-controls")).toBe(false);
+    expect(textarea?.hasAttribute("role")).toBe(false);
+    expect(textarea?.hasAttribute("aria-expanded")).toBe(false);
+    expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
+    expect(textarea?.getAttribute("aria-controls")).toBe("chat-slash-menu-listbox");
+    expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
+    expect(listbox?.getAttribute("role")).toBe("listbox");
+    expect(activeId).toMatch(/^chat-slash-option-command-/u);
+    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
+  });
+
+  it("updates the active descendant and live announcement during command navigation", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let container = renderChatView({ draft, onDraftChange });
+
+    inputDraft(container, "/");
+    container = renderChatView({ draft, onDraftChange });
+    const initialActiveId = container
+      .querySelector<HTMLTextAreaElement>("textarea")
+      ?.getAttribute("aria-activedescendant");
+
+    keydownComposer(container, "ArrowDown");
+    container = renderChatView({ draft, onDraftChange });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const nextActiveId = textarea?.getAttribute("aria-activedescendant");
+    const activeOption = nextActiveId
+      ? container.querySelector<HTMLElement>(`#${nextActiveId}`)
+      : null;
+    const status = container.querySelector<HTMLElement>("#chat-slash-active-announcement");
+
+    expect(nextActiveId).toBeTruthy();
+    expect(nextActiveId).not.toBe(initialActiveId);
+    expect(activeOption?.getAttribute("aria-selected")).toBe("true");
+    expect(status?.getAttribute("aria-live")).toBe("polite");
+    expect(status?.textContent?.trim()).toBeTruthy();
+    expect(status?.textContent).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
+  });
+
+  it("wires fixed argument suggestions with command-and-argument option ids", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let container = renderChatView({ draft, onDraftChange });
+
+    inputDraft(container, "/tools ");
+    container = renderChatView({ draft, onDraftChange });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const listbox = container.querySelector<HTMLElement>("#chat-slash-menu-listbox");
+    const activeId = textarea?.getAttribute("aria-activedescendant");
+
+    expect(listbox?.getAttribute("aria-label")).toBe("Command arguments");
+    expect(activeId).toBe("chat-slash-option-arg-tools-compact");
+    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("clears active descendant when suggestions close", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let container = renderChatView({ draft, onDraftChange });
+
+    inputDraft(container, "/");
+    container = renderChatView({ draft, onDraftChange });
+    expect(
+      container
+        .querySelector<HTMLTextAreaElement>("textarea")
+        ?.getAttribute("aria-activedescendant"),
+    ).toBeTruthy();
+
+    inputDraft(container, "plain message");
+    container = renderChatView({ draft, onDraftChange });
+
+    expect(container.querySelector(".slash-menu")).toBeNull();
+    expect(
+      container.querySelector<HTMLTextAreaElement>("textarea")?.hasAttribute("aria-expanded"),
+    ).toBe(false);
+    expect(
+      container
+        .querySelector<HTMLElement>(".agent-chat__composer-combobox")
+        ?.hasAttribute("aria-expanded"),
+    ).toBe(false);
+    expect(
+      container
+        .querySelector<HTMLTextAreaElement>("textarea")
+        ?.hasAttribute("aria-activedescendant"),
+    ).toBe(false);
   });
 });
 

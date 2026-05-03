@@ -96,7 +96,7 @@ function buildMessageSendingBeforeDeliver(
 }
 
 export type DispatchInboundResult = DispatchFromConfigResult;
-export { withReplyDispatcher } from "./dispatch-dispatcher.js";
+export { settleReplyDispatcher, withReplyDispatcher } from "./dispatch-dispatcher.js";
 
 function finalizeDispatchResult(
   result: DispatchFromConfigResult,
@@ -113,6 +113,7 @@ function finalizeDispatchResult(
     final: Math.max(0, result.counts.final - cancelledCounts.final),
   };
   return {
+    ...result,
     queuedFinal: result.queuedFinal && counts.final > 0,
     counts,
   };

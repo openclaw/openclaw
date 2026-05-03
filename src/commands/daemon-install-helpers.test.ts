@@ -310,6 +310,74 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
+  it("includes passEnv values for configured exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OP_CONNECT_TOKEN: "op-connect-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/Discord/password"],
+              passEnv: ["OP_CONNECT_TOKEN"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+        channels: {
+          discord: {
+            token: { source: "exec", provider: "onepassword", id: "value" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OP_CONNECT_TOKEN).toBe("op-connect-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("does not include passEnv values for unused exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OP_CONNECT_TOKEN: "op-connect-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              passEnv: ["OP_CONNECT_TOKEN"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OP_CONNECT_TOKEN).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
   it("does not embed gateway auth SecretRef values into the service environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
@@ -555,8 +623,19 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       env: { HOME: tmpDir },
       port: 3000,
       runtime: "node",
+      platform: "linux",
       existingEnvironment: {
-        PATH: ".:/tmp/evil:/custom/go/bin:/usr/bin",
+        PATH: [
+          ".",
+          "/tmp/evil",
+          "/proc/self/cwd/evil-bin",
+          "/proc/thread-self/cwd/evil-bin",
+          "/proc/12345/cwd/evil-bin",
+          "/proc/self/root/evil-bin",
+          `${process.cwd()}/evil-bin`,
+          "/custom/go/bin",
+          "/usr/bin",
+        ].join(path.delimiter),
         GOBIN: "/Users/test/.local/gopath/bin",
         BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
         NODE_OPTIONS: "--require /tmp/evil.js",
@@ -573,6 +652,106 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MARKER).toBeUndefined();
   });
 
+  it("drops stale non-minimal PATH entries from an existing service env", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+        PATH: "/usr/local/bin:/usr/bin:/bin",
+        TMPDIR: "/tmp",
+      },
+    });
+
+    const home = "/home/testuser";
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+      existingEnvironment: {
+        PATH: [
+          `${home}/.volta/bin`,
+          `${home}/.asdf/shims`,
+          `${home}/.nvm/current/bin`,
+          `${home}/.local/share/fnm/aliases/default/bin`,
+          `${home}/.local/share/fnm/current/bin`,
+          `${home}/.fnm/aliases/default/bin`,
+          `${home}/.fnm/current/bin`,
+          `${home}/.local/share/pnpm`,
+          "/opt/pnpm/bin",
+          "/custom/go/bin",
+          "/usr/bin",
+        ].join(path.delimiter),
+      },
+    });
+
+    expect(plan.environment.PATH).toBe("/usr/local/bin:/usr/bin:/bin:/custom/go/bin");
+  });
+
+  it("drops existing PATH entries that resolve through symlinks into temp dirs", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+        PATH: "/managed/bin:/usr/bin",
+        TMPDIR: "/tmp",
+      },
+    });
+    const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
+      const value = String(candidate);
+      if (value === "/opt/safe/bin") {
+        return "/tmp/evil/bin";
+      }
+      if (value === "/opt/safe") {
+        return "/tmp/evil";
+      }
+      if (value === "/opt/safe/missing-bin") {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      return value;
+    });
+
+    try {
+      const plan = await buildGatewayInstallPlan({
+        env: { HOME: tmpDir },
+        port: 3000,
+        runtime: "node",
+        platform: "linux",
+        existingEnvironment: {
+          PATH: "/opt/safe/bin:/opt/safe/missing-bin:/custom/go/bin:/usr/bin",
+        },
+      });
+
+      expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+    } finally {
+      realpathNative.mockRestore();
+    }
+  });
+
+  it("drops workspace-derived PATH entries even when HOME equals the install cwd", async () => {
+    const cwd = process.cwd();
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: cwd,
+        OPENCLAW_PORT: "3000",
+        PATH: "/managed/bin:/usr/bin",
+        TMPDIR: "/tmp",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: cwd },
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+      existingEnvironment: {
+        PATH: `${cwd}/evil-bin:/custom/go/bin:/usr/bin`,
+      },
+    });
+
+    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+  });
+
   it("drops keys that were previously tracked as managed service env", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
@@ -586,6 +765,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       env: { HOME: tmpDir },
       port: 3000,
       runtime: "node",
+      platform: "linux",
       existingEnvironment: {
         PATH: "/custom/go/bin:/usr/bin",
         GOBIN: "/Users/test/.local/gopath/bin",
@@ -600,6 +780,36 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
     expect(plan.environment.GOPATH).toBeUndefined();
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("does not preserve existing PATH entries for macOS LaunchAgents", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        TMPDIR: "/tmp",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      existingEnvironment: {
+        PATH: [
+          "/Users/test/.volta/bin",
+          "/Users/test/.asdf/shims",
+          "/Users/test/Library/Application Support/fnm/aliases/default/bin",
+          "/Users/test/Library/pnpm",
+          "/custom/go/bin",
+          "/usr/bin",
+        ].join(path.delimiter),
+      },
+    });
+
+    expect(plan.environment.PATH).toBe("/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
   });
 
   it("drops legacy inline env values when the key is now managed by .env", async () => {

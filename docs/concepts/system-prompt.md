@@ -53,6 +53,14 @@ The prompt is intentionally compact and uses fixed sections:
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level + /reasoning toggle hint.
 
+OpenClaw keeps large stable content, including **Project Context**, above the
+internal prompt cache boundary. Volatile channel/session sections such as
+Control UI embed guidance, **Messaging**, **Voice**, **Group Chat Context**,
+**Reactions**, **Heartbeats**, and **Runtime** are appended below that boundary
+so local backends with prefix caches can reuse the stable workspace prefix
+across channel turns. Tool descriptions should likewise avoid embedding current
+channel names when the accepted schema already carries that runtime detail.
+
 The Tooling section also includes runtime guidance for long-running work:
 
 - use cron for future follow-up (`check back later`, reminders, recurring work)
@@ -101,6 +109,37 @@ section when the direct/group chat context already includes the resolved
 conversation-specific `NO_REPLY` behavior. This avoids repeating token mechanics
 in both the global system prompt and channel context.
 
+## Prompt snapshots
+
+OpenClaw keeps committed prompt snapshots for the Codex runtime happy path under
+`test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/`. They render
+selected app-server thread/turn params plus a reconstructed model-bound prompt
+layer stack for Telegram direct, Discord group, and heartbeat turns. That stack
+includes a pinned Codex `gpt-5.5` model prompt fixture generated from Codex's
+model catalog/cache shape, the Codex happy-path permission developer text,
+OpenClaw developer instructions, user turn input, and references to the dynamic
+tool specs.
+
+Refresh the pinned Codex model prompt fixture with
+`pnpm prompt:snapshots:sync-codex-model`. By default, the script looks for
+Codex's runtime cache at `$CODEX_HOME/models_cache.json`, then
+`~/.codex/models_cache.json`, and only then falls back to the maintainer Codex
+checkout convention at `~/code/codex/codex-rs/models-manager/models.json`. If
+none of those sources exist, the command exits without changing the committed
+fixture. Pass `--catalog <path>` to refresh from a specific `models_cache.json`
+or `models.json` file.
+
+These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex
+can add runtime-owned workspace context such as `AGENTS.md`, environment
+context, memories, app/plugin instructions, and future collaboration-mode
+instructions inside the Codex runtime after OpenClaw sends thread and turn
+params.
+
+Regenerate them with `pnpm prompt:snapshots:gen` and verify drift with
+`pnpm prompt:snapshots:check`. CI runs the drift check in the additional
+boundary shard so prompt changes and snapshot updates stay attached to the same
+PR.
+
 ## Workspace bootstrap injection
 
 Bootstrap files are trimmed and appended under **Project Context** so the model sees identity and profile context without needing explicit reads:
@@ -120,6 +159,13 @@ heartbeats are disabled for the default agent or
 `agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
 files concise — especially `MEMORY.md`, which can grow over time and lead to
 unexpectedly high context usage and more frequent compaction.
+
+When a session runs on the native Codex harness, Codex loads `AGENTS.md`
+through its own project-doc discovery. OpenClaw still resolves the remaining
+bootstrap files and forwards them as Codex config instructions, so `SOUL.md`,
+`TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, and
+`MEMORY.md` keep the same workspace-context role without duplicating
+`AGENTS.md`.
 
 <Note>
 `memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via the `memory_search` and `memory_get` tools, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.

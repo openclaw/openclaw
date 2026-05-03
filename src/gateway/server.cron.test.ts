@@ -795,6 +795,7 @@ describe("gateway server cron", () => {
   });
 
   test("ignores ambient disabled channel env when validating announce delivery", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-ambient");
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "ambient-telegram");
     const { prevSkipCron } = await setupCronTestRun({
@@ -860,6 +861,8 @@ describe("gateway server cron", () => {
       const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
       expect(runRes.ok).toBe(true);
       expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      const manualRunId = (runRes.payload as { runId?: unknown } | null)?.runId;
+      expect(typeof manualRunId).toBe("string");
       const finishedPayload = await finishedRun;
       expect(finishedPayload).toMatchObject({
         jobId,
@@ -878,6 +881,7 @@ describe("gateway server cron", () => {
       expect((entries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
         "not-requested",
       );
+      expect((entries as Array<{ runId?: unknown }>).at(-1)?.runId).toBe(manualRunId);
       const allRunsRes = await rpcReq(ws, "cron.runs", {
         scope: "all",
         limit: 50,

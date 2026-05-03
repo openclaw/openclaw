@@ -187,6 +187,16 @@ source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_source_tree "$tmp_dir"
 openclaw_live_stage_node_modules "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
+if [ -d /app/dist-runtime/extensions/codex ]; then
+  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
+elif [ -d /app/dist/extensions/codex ]; then
+  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
+elif [ -f "$tmp_dir/extensions/codex/openclaw.plugin.json" ]; then
+  export OPENCLAW_BUNDLED_PLUGINS_DIR="$tmp_dir/extensions"
+else
+  echo "ERROR: staged Codex plugin not found for live harness." >&2
+  exit 1
+fi
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 if [ -n "${OPENCLAW_LIVE_CODEX_TRUSTED_HARNESS_DIR:-}" ] && [ -d "$OPENCLAW_LIVE_CODEX_TRUSTED_HARNESS_DIR" ]; then
   for harness_file in src/gateway/gateway-codex-harness.live-helpers.ts; do
@@ -219,6 +229,11 @@ pnpm test:live ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harne
 EOF
 
 openclaw_live_codex_harness_append_build_extension codex
+# The release package image intentionally excludes externalized plugins such as
+# Codex. This lane must rebuild the live image so the plugin-owned harness is
+# present under the bundled plugin runtime directory.
+OPENCLAW_SKIP_DOCKER_BUILD=0
+export OPENCLAW_SKIP_DOCKER_BUILD
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
 
 echo "==> Run Codex harness live test in Docker"
@@ -257,6 +272,8 @@ DOCKER_RUN_ARGS=(docker run --rm -t \
   -e OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY="${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY:-}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE:-1}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG="${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG:-1}" \
+  -e OPENCLAW_CLI_BACKEND_LOG_OUTPUT="${OPENCLAW_CLI_BACKEND_LOG_OUTPUT:-}" \
+  -e OPENCLAW_TEST_CONSOLE="${OPENCLAW_TEST_CONSOLE:-}" \
   -e OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR="${DOCKER_TRUSTED_HARNESS_CONTAINER_DIR}/scripts" \
   -e OPENCLAW_LIVE_DOCKER_TRUSTED_HARNESS_DIR="$DOCKER_TRUSTED_HARNESS_CONTAINER_DIR" \
   -e OPENCLAW_LIVE_CODEX_TRUSTED_HARNESS_DIR="$DOCKER_TRUSTED_HARNESS_CONTAINER_DIR" \

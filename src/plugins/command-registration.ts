@@ -28,6 +28,8 @@ function getReservedCommands(): Set<string> {
     "help",
     "commands",
     "status",
+    "diagnostics",
+    "codex",
     "whoami",
     "context",
     "btw",
@@ -114,6 +116,14 @@ export function validatePluginCommandDefinition(
   if (!command.description.trim()) {
     return "Command description cannot be empty";
   }
+  if (command.ownership === "reserved") {
+    if (!opts?.allowReservedCommandNames) {
+      return "Reserved command ownership is only available to bundled reserved commands";
+    }
+    if (!isReservedCommandName(command.name)) {
+      return `Reserved command ownership requires a reserved command name: ${normalizeOptionalLowercaseString(command.name) ?? ""}`;
+    }
+  }
   if (command.agentPromptGuidance !== undefined && !Array.isArray(command.agentPromptGuidance)) {
     return "Agent prompt guidance must be an array of strings";
   }
@@ -159,6 +169,14 @@ export function validatePluginCommandDefinition(
       return `Native progress message "${label}" cannot be empty`;
     }
   }
+  for (const [locale, description] of Object.entries(command.descriptionLocalizations ?? {})) {
+    if (typeof description !== "string") {
+      return `Description localization "${locale}" must be a string`;
+    }
+    if (!description.trim()) {
+      return `Description localization "${locale}" cannot be empty`;
+    }
+  }
   return null;
 }
 
@@ -191,6 +209,12 @@ export function registerPluginCommand(
   if (isPluginCommandRegistryLocked()) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
+  if (command.ownership === "reserved") {
+    return {
+      ok: false,
+      error: "Reserved command ownership is only available to bundled reserved commands",
+    };
+  }
 
   const definitionError = validatePluginCommandDefinition(command, opts);
   if (definitionError) {
@@ -198,6 +222,7 @@ export function registerPluginCommand(
   }
 
   const name = command.name.trim();
+  const normalizedName = normalizeLowercaseStringOrEmpty(name);
   const description = command.description.trim();
   const normalizedCommand = {
     ...command,
@@ -208,7 +233,7 @@ export function registerPluginCommand(
       : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
-  const key = `/${normalizeLowercaseStringOrEmpty(name)}`;
+  const key = `/${normalizedName}`;
 
   // Check for duplicate registration
   for (const invocationKey of invocationKeys) {

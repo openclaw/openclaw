@@ -17,9 +17,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
   listSessionFilesForAgent,
   sessionPathForFile,
-  type SessionFileEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildFileEntry,
@@ -29,7 +30,6 @@ import {
   loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
   runWithConcurrency,
-  type MemoryFileEntry,
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -65,6 +65,15 @@ type MemorySyncProgressState = {
   total: number;
   label?: string;
   report: (update: MemorySyncProgressUpdate) => void;
+};
+
+type MemoryIndexEntry = {
+  path: string;
+  absPath: string;
+  mtimeMs: number;
+  size: number;
+  hash: string;
+  content?: string;
 };
 
 const META_KEY = "memory_index_meta_v1";
@@ -197,7 +206,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
   protected abstract indexFile(
-    entry: MemoryFileEntry | SessionFileEntry,
+    entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
 
@@ -439,6 +448,12 @@ export abstract class MemoryManagerSyncOps {
     this.watcher.on("change", markDirty);
     this.watcher.on("unlink", markDirty);
     this.watcher.on("unlinkDir", markDirty);
+    this.watcher.on("error", (err) => {
+      // File watcher errors (e.g., ENOSPC) should not crash the gateway.
+      // Log the error and continue - memory search still works without auto-sync.
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`memory watcher error: ${message}`);
+    });
   }
 
   protected ensureSessionListener() {
@@ -478,6 +493,24 @@ export abstract class MemoryManagerSyncOps {
     this.sessionPendingFiles.clear();
     let shouldSync = false;
     for (const sessionFile of pending) {
+      // Usage-counted session archives (`.jsonl.reset.<iso>` and
+      // `.jsonl.deleted.<iso>`) are one-shot mutation events: the file is
+      // written once by the archive rotation and then never touched again.
+      // They carry no incremental `append` semantics, so the delta-bytes /
+      // delta-messages thresholds (designed for live transcripts accumulating
+      // appended messages) cannot gate them correctly — a short archive
+      // below the threshold would simply never reindex. Mark them dirty
+      // directly and skip the delta accounting.
+      const baseName = path.basename(sessionFile);
+      if (
+        isSessionArchiveArtifactName(baseName) &&
+        isUsageCountedSessionTranscriptFileName(baseName)
+      ) {
+        this.sessionsDirtyFiles.add(sessionFile);
+        this.sessionsDirty = true;
+        shouldSync = true;
+        continue;
+      }
       const delta = await this.updateSessionDelta(sessionFile);
       if (!delta) {
         continue;
@@ -712,7 +745,7 @@ export abstract class MemoryManagerSyncOps {
         ),
         this.getIndexConcurrency(),
       )
-    ).filter((entry): entry is MemoryFileEntry => entry !== null);
+    ).filter((entry): entry is MemoryIndexEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,

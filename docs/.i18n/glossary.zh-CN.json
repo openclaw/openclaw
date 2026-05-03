@@ -4,12 +4,28 @@
     "target": "OpenClaw"
   },
   {
+    "source": "ClawHub",
+    "target": "ClawHub"
+  },
+  {
     "source": "OpenAI",
     "target": "OpenAI"
   },
   {
     "source": "OpenAI provider",
     "target": "OpenAI provider"
+  },
+  {
+    "source": "Mantis",
+    "target": "Mantis"
+  },
+  {
+    "source": "OpenClaw App SDK",
+    "target": "OpenClaw 应用 SDK"
+  },
+  {
+    "source": "OpenClaw App SDK API design",
+    "target": "OpenClaw 应用 SDK API 设计"
   },
   {
     "source": "Azure Speech",
@@ -20,12 +36,24 @@
     "target": "Azure Speech provider"
   },
   {
+    "source": "Web tools",
+    "target": "Web 工具"
+  },
+  {
     "source": "Status",
     "target": "Status"
   },
   {
     "source": "Gateway",
     "target": "Gateway 网关"
+  },
+  {
+    "source": "Gateway RPC reference",
+    "target": "Gateway RPC 参考"
+  },
+  {
+    "source": "Sessions",
+    "target": "会话"
   },
   {
     "source": "Pi",
@@ -50,6 +78,10 @@
   {
     "source": "Agent loop",
     "target": "Agent loop"
+  },
+  {
+    "source": "Steering queue",
+    "target": "Steering queue"
   },
   {
     "source": "Models",
@@ -142,6 +174,26 @@
   {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
+  },
+  {
+    "source": "Model providers",
+    "target": "模型提供商"
+  },
+  {
+    "source": "Model Providers",
+    "target": "模型提供商"
+  },
+  {
+    "source": "NVIDIA",
+    "target": "NVIDIA"
+  },
+  {
+    "source": "NVIDIA API key",
+    "target": "NVIDIA API key"
+  },
+  {
+    "source": "Provider directory",
+    "target": "提供商目录"
   },
   {
     "source": "Additional bundled variants",
@@ -262,6 +314,38 @@
   {
     "source": "Memory Wiki",
     "target": "Memory Wiki"
+  },
+  {
+    "source": "Memory overview",
+    "target": "记忆概览"
+  },
+  {
+    "source": "Active memory",
+    "target": "主动记忆"
+  },
+  {
+    "source": "Commitments",
+    "target": "跟进承诺"
+  },
+  {
+    "source": "Inferred Commitments",
+    "target": "推断式跟进承诺"
+  },
+  {
+    "source": "Inferred commitments",
+    "target": "推断式跟进承诺"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "Heartbeat"
+  },
+  {
+    "source": "Scheduled tasks",
+    "target": "定时任务"
+  },
+  {
+    "source": "Configuration reference",
+    "target": "配置参考"
   },
   {
     "source": "wiki",
@@ -396,6 +480,14 @@
     "target": "插件"
   },
   {
+    "source": "Manage plugins",
+    "target": "管理插件"
+  },
+  {
+    "source": "Plugin manifest",
+    "target": "插件清单"
+  },
+  {
     "source": "Building plugins",
     "target": "构建插件"
   },
@@ -506,6 +598,18 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Update and plugin tests",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Testing updates and plugins",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Testing: updates and plugins",
+    "target": "更新和插件测试"
   },
   {
     "source": "Async Exec Duplicate Completion Investigation",

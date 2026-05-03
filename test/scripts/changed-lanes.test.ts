@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -80,6 +80,85 @@ describe("scripts/changed-lanes", () => {
     expect(JSON.parse(output)).toMatchObject({
       paths: ["scripts/new-check.mjs"],
       lanes: { tooling: true },
+    });
+  });
+
+  it("includes deleted worktree files in the default local diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-deleted-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    mkdirSync(path.join(dir, "src", "shared"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "src", "shared", "obsolete.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+    git(dir, ["add", "src/shared/obsolete.ts"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    unlinkSync(path.join(dir, "src", "shared", "obsolete.ts"));
+
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--base", "HEAD"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    expect(JSON.parse(output)).toMatchObject({
+      paths: ["src/shared/obsolete.ts"],
+      lanes: { core: true, coreTests: true },
+    });
+  });
+
+  it("includes deleted staged files in the staged diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-staged-deleted-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    mkdirSync(path.join(dir, "src", "shared"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "src", "shared", "obsolete.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+    git(dir, ["add", "src/shared/obsolete.ts"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    unlinkSync(path.join(dir, "src", "shared", "obsolete.ts"));
+    git(dir, ["add", "src/shared/obsolete.ts"]);
+
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--staged"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    expect(JSON.parse(output)).toMatchObject({
+      paths: ["src/shared/obsolete.ts"],
+      lanes: { core: true, coreTests: true },
     });
   });
 
@@ -241,6 +320,70 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
   });
 
+  it("routes root hygiene config changes to tooling instead of all lanes", () => {
+    const result = detectChangedLanes([
+      ".dockerignore",
+      ".jscpd.json",
+      ".npmignore",
+      ".pre-commit-config.yaml",
+      ".swiftformat",
+      ".swiftlint.yml",
+      "Makefile",
+      "config/knip.config.ts",
+      "config/markdownlint-cli2.jsonc",
+      "config/shellcheckrc",
+      "config/swiftformat",
+      "config/swiftlint.yml",
+      "deploy/fly.private.toml",
+      "docker-setup.sh",
+      "openclaw.podman.env",
+      "setup-podman.sh",
+      "skills/pyproject.toml",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
+  it("routes VS Code workspace settings to tooling instead of all lanes", () => {
+    const result = detectChangedLanes([".vscode/settings.json", ".vscode/extensions.json"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
+  it("routes legacy root sandbox Dockerfile moves to tooling instead of all lanes", () => {
+    const result = detectChangedLanes([
+      "Dockerfile.sandbox",
+      "Dockerfile.sandbox-browser",
+      "Dockerfile.sandbox-common",
+      "scripts/docker/sandbox/Dockerfile",
+      "scripts/docker/sandbox/Dockerfile.browser",
+      "scripts/docker/sandbox/Dockerfile.common",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
   it("routes live Docker ACP tooling changes through a focused gate", () => {
     const result = detectChangedLanes([
       "scripts/lib/live-docker-auth.sh",
@@ -261,6 +404,7 @@ describe("scripts/changed-lanes", () => {
       "changelog attributions",
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
+      "duplicate scan target coverage",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -550,6 +694,7 @@ describe("scripts/changed-lanes", () => {
       "check:changelog-attributions",
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
+      "dup:check:coverage",
       "release-metadata:check",
       "ios:version:check",
       "config:schema:check",
@@ -629,7 +774,10 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("routes root test/support changes to the tooling test lane instead of all lanes", () => {
-    const result = detectChangedLanes(["test/git-hooks-pre-commit.test.ts"]);
+    const result = detectChangedLanes([
+      "test/git-hooks-pre-commit.test.ts",
+      "test-fixtures/legacy-root-fixture.json",
+    ]);
     const plan = createChangedCheckPlan(result);
 
     expect(result.lanes).toMatchObject({
@@ -638,6 +786,32 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+  });
+
+  it("routes legacy Swabble deletions as app surface during the app move", () => {
+    const result = detectChangedLanes(["Swabble/Sources/SwabbleKit/WakeWordGate.swift"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      apps: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
+  it("routes legacy root asset deletions as tooling during root cleanup", () => {
+    const result = detectChangedLanes([
+      "assets/avatar-placeholder.svg",
+      "assets/chrome-extension/icons/icon128.png",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
   it("keeps shared Vitest wiring changes out of check test execution", () => {
@@ -702,6 +876,7 @@ describe("scripts/changed-lanes", () => {
         name: "plugin-sdk wildcard re-exports",
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
+      { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
     ]);
   });
 
@@ -721,6 +896,7 @@ describe("scripts/changed-lanes", () => {
         name: "plugin-sdk wildcard re-exports",
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
+      { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
     ]);
   });
 });

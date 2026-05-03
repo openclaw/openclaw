@@ -24,6 +24,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
+  resolveSlackAccountAllowFrom,
   resolveSlackReplyToMode,
   type ResolvedSlackAccount,
 } from "./accounts.js";
@@ -371,7 +372,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         resolveAccount: resolveSlackAccount,
         normalize: ({ cfg, accountId, values }) =>
           slackConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-        resolveDmAllowFrom: (account) => account.config.allowFrom ?? account.config.dm?.allowFrom,
+        resolveDmAllowFrom: (account, { cfg }) =>
+          resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId }),
         resolveGroupPolicy: (account) => account.groupPolicy,
         resolveGroupOverrides: resolveSlackAllowlistGroupOverrides,
       }),
@@ -383,6 +385,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       resolveToolPolicy: resolveSlackGroupToolPolicy,
     },
     messaging: {
+      targetPrefixes: ["slack"],
       normalizeTarget: normalizeSlackMessagingTarget,
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();
@@ -431,6 +434,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         (await loadSlackDirectoryConfigModule()).listSlackDirectoryGroupsFromConfig(params),
       ...createRuntimeDirectoryLiveAdapter({
         getRuntime: loadSlackDirectoryLiveModule,
+        self: (runtime) => runtime.getSlackDirectorySelfLive,
         listPeersLive: (runtime) => runtime.listSlackDirectoryPeersLive,
         listGroupsLive: (runtime) => runtime.listSlackDirectoryGroupsLive,
       }),

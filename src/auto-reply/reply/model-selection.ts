@@ -16,6 +16,7 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ThinkLevel } from "./directives.js";
 export {
   resolveModelDirectiveSelection,
@@ -31,6 +32,7 @@ type ModelSelectionState = {
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
+  resetModelOverrideRef?: string;
   resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
@@ -49,6 +51,7 @@ export function createFastTestModelSelectionState(params: {
     allowedModelKeys: new Set<string>(),
     allowedModelCatalog: [],
     resetModelOverride: false,
+    resetModelOverrideRef: undefined,
     resolveThinkingCatalog: async () => [],
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
@@ -60,21 +63,19 @@ function shouldLogModelSelectionTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
 
-let modelCatalogRuntimePromise:
-  | Promise<typeof import("../../agents/model-catalog.runtime.js")>
-  | undefined;
-let sessionStoreRuntimePromise:
-  | Promise<typeof import("../../config/sessions/store.runtime.js")>
-  | undefined;
+const modelCatalogRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/model-catalog.runtime.js"),
+);
+const sessionStoreRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/store.runtime.js"),
+);
 
 function loadModelCatalogRuntime() {
-  modelCatalogRuntimePromise ??= import("../../agents/model-catalog.runtime.js");
-  return modelCatalogRuntimePromise;
+  return modelCatalogRuntimeLoader.load();
 }
 
 function loadSessionStoreRuntime() {
-  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
-  return sessionStoreRuntimePromise;
+  return sessionStoreRuntimeLoader.load();
 }
 
 export async function createModelSelectionState(params: {
@@ -129,6 +130,7 @@ export async function createModelSelectionState(params: {
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
+  let resetModelOverrideRef: string | undefined;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
   const directStoredOverride = resolvePersistedOverrideModelRef({
     defaultProvider,
@@ -192,6 +194,9 @@ export async function createModelSelectionState(params: {
         }
       }
       resetModelOverride = updated;
+      if (updated) {
+        resetModelOverrideRef = key;
+      }
     }
   }
 
@@ -309,6 +314,7 @@ export async function createModelSelectionState(params: {
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
+    resetModelOverrideRef,
     resolveThinkingCatalog,
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,

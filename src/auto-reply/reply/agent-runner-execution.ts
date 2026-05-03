@@ -44,6 +44,7 @@ import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   hasNonEmptyString,
@@ -807,6 +808,66 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
   );
 }
 
+function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessionKey?: string }) {
+  let terminalEmitted = false;
+  let startedAt: number | undefined;
+
+  const note = (evt: { stream: string; data: Record<string, unknown> }) => {
+    if (evt.stream !== "lifecycle") {
+      return;
+    }
+    const phase = readStringValue(evt.data.phase);
+    if (phase === "start" && typeof evt.data.startedAt === "number") {
+      startedAt = evt.data.startedAt;
+    }
+    if (phase === "end" || phase === "error") {
+      terminalEmitted = true;
+    }
+  };
+
+  const emit = (phase: "end" | "error", resultOrError: unknown) => {
+    if (terminalEmitted) {
+      return;
+    }
+    terminalEmitted = true;
+    const data: Record<string, unknown> = {
+      phase,
+      endedAt: Date.now(),
+      ...(startedAt !== undefined ? { startedAt } : {}),
+    };
+    if (phase === "error") {
+      data.error = formatErrorMessage(resultOrError);
+    } else {
+      const meta =
+        resultOrError && typeof resultOrError === "object" && "meta" in resultOrError
+          ? (resultOrError as { meta?: Record<string, unknown> }).meta
+          : undefined;
+      if (meta?.aborted === true) {
+        data.aborted = true;
+      }
+      const stopReason = readStringValue(meta?.stopReason);
+      if (stopReason) {
+        data.stopReason = stopReason;
+      }
+      const livenessState = readStringValue(meta?.livenessState);
+      if (livenessState) {
+        data.livenessState = livenessState;
+      }
+      if (meta?.replayInvalid === true) {
+        data.replayInvalid = true;
+      }
+    }
+    emitAgentEvent({
+      runId: params.runId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      stream: "lifecycle",
+      data,
+    });
+  };
+
+  return { emit, note };
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -904,6 +965,31 @@ export async function runAgentTurnWithFallback(params: {
       // Non-critical notice delivery failure should not bubble out of the
       // fire-and-forget event handler.
       logVerbose(`compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`);
+    }
+  };
+  const readCompactionHookMessages = (value: unknown): string[] => {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  };
+  const sendCompactionHookMessages = async (messages: string[]) => {
+    if (!params.opts?.onBlockReply || messages.length === 0) {
+      return;
+    }
+    const noticePayload = params.applyReplyToMode({
+      text: messages.join("\n\n"),
+      replyToId: currentMessageId,
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    try {
+      await params.opts.onBlockReply(noticePayload);
+    } catch (err) {
+      logVerbose(`compaction hook notice delivery failed (non-fatal): ${String(err)}`);
     }
   };
   const shouldSurfaceToControlUi = isInternalMessageChannel(
@@ -1127,9 +1213,12 @@ export async function runAgentTurnWithFallback(params: {
         : undefined;
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
+      const runLane = CommandLane.Main;
       const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
         ...resolveModelFallbackOptions(effectiveRun, runtimeConfig),
         runId,
+        sessionId: params.followupRun.run.sessionId,
+        lane: runLane,
         classifyResult: async ({ result, provider, model }) => {
           const classification = outcomePlan.classifyRunResult({
             result,
@@ -1222,11 +1311,13 @@ export async function runAgentTurnWithFallback(params: {
                   config: runtimeConfig,
                   prompt: params.commandBody,
                   transcriptPrompt: params.transcriptCommandBody,
+                  inputProvenance: params.followupRun.run.inputProvenance,
                   provider: cliExecutionProvider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
                   timeoutMs: params.followupRun.run.timeoutMs,
                   runId,
+                  lane: runLane,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                   sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                   silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
@@ -1247,6 +1338,7 @@ export async function runAgentTurnWithFallback(params: {
                   messageProvider: hookMessageProvider,
                   agentAccountId: params.followupRun.run.agentAccountId,
                   senderIsOwner: params.followupRun.run.senderIsOwner,
+                  disableTools: params.opts?.disableTools,
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
@@ -1332,6 +1424,10 @@ export async function runAgentTurnWithFallback(params: {
           );
           return (async () => {
             let attemptCompactionCount = 0;
+            const lifecycleBackstop = createEmbeddedLifecycleTerminalBackstop({
+              runId,
+              sessionKey: params.sessionKey,
+            });
             try {
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
@@ -1353,8 +1449,11 @@ export async function runAgentTurnWithFallback(params: {
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
+                currentTurnContext: params.followupRun.currentTurnContext,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+                forceMessageTool:
+                  params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
@@ -1367,6 +1466,9 @@ export async function runAgentTurnWithFallback(params: {
                   return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
                 })(),
                 suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+                disableTools: params.opts?.disableTools,
+                enableHeartbeatTool: params.opts?.enableHeartbeatTool,
+                forceHeartbeatTool: params.opts?.forceHeartbeatTool,
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                 images: params.opts?.images,
@@ -1404,11 +1506,13 @@ export async function runAgentTurnWithFallback(params: {
                     : undefined,
                 onReasoningEnd: params.opts?.onReasoningEnd,
                 onAgentEvent: async (evt) => {
+                  lifecycleBackstop.note(evt);
                   if (evt.stream.startsWith("codex_app_server.")) {
                     emitAgentEvent({
                       runId,
                       stream: evt.stream,
                       data: evt.data,
+                      ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
                     });
                   }
                   // Signal run start only after the embedded agent emits real activity.
@@ -1515,12 +1619,19 @@ export async function runAgentTurnWithFallback(params: {
                   // Track auto-compaction and notify higher layers.
                   if (evt.stream === "compaction") {
                     const phase = readStringValue(evt.data.phase) ?? "";
+                    const hookMessages = readCompactionHookMessages(evt.data.messages);
                     if (phase === "start") {
                       // Keep custom compaction callbacks active, but gate the
                       // fallback user-facing notice behind explicit opt-in.
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
-                      } else if (shouldNotifyUserAboutCompaction) {
+                      }
+                      if (hookMessages.length > 0) {
+                        await sendCompactionHookMessages(hookMessages);
+                      } else if (
+                        !params.opts?.onCompactionStart &&
+                        shouldNotifyUserAboutCompaction
+                      ) {
                         // Send directly via opts.onBlockReply (bypassing the
                         // pipeline) so the notice does not cause final payloads
                         // to be discarded on non-streaming model paths.
@@ -1533,9 +1644,17 @@ export async function runAgentTurnWithFallback(params: {
                         attemptCompactionCount += 1;
                         if (params.opts?.onCompactionEnd) {
                           await params.opts.onCompactionEnd();
-                        } else if (shouldNotifyUserAboutCompaction) {
+                        }
+                        if (hookMessages.length > 0) {
+                          await sendCompactionHookMessages(hookMessages);
+                        } else if (
+                          !params.opts?.onCompactionEnd &&
+                          shouldNotifyUserAboutCompaction
+                        ) {
                           await sendCompactionNotice("end");
                         }
+                      } else if (hookMessages.length > 0) {
+                        await sendCompactionHookMessages(hookMessages);
                       } else if (shouldNotifyUserAboutCompaction) {
                         await sendCompactionNotice("incomplete");
                       }
@@ -1596,6 +1715,7 @@ export async function runAgentTurnWithFallback(params: {
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,
               );
+              lifecycleBackstop.emit("end", result);
               const resultCompactionCount = Math.max(
                 0,
                 result.meta?.agentMeta?.compactionCount ?? 0,
@@ -1613,6 +1733,7 @@ export async function runAgentTurnWithFallback(params: {
                   );
                 }
               }
+              lifecycleBackstop.emit("error", err);
               throw err;
             } finally {
               autoCompactionCount += attemptCompactionCount;

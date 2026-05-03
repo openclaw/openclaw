@@ -43,14 +43,6 @@ vi.mock("../channels/config-presence.js", () => ({
   hasMeaningfulChannelConfig,
 }));
 
-vi.mock("./manifest-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./manifest-registry.js")>();
-  return {
-    ...actual,
-    loadPluginManifestRegistry,
-  };
-});
-
 vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./manifest-registry-installed.js")>();
   return {
@@ -59,20 +51,19 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./plugin-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-registry.js")>();
+vi.mock("./plugin-registry-snapshot.js", () => ({
+  loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata: (params: unknown) => ({
+    snapshot: loadPluginRegistrySnapshot(params),
+    diagnostics: [],
+  }),
+}));
+
+vi.mock("./plugin-registry-contributions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-registry-contributions.js")>();
   return {
     ...actual,
     loadPluginManifestRegistryForPluginRegistry,
-    loadPluginRegistrySnapshot,
-  };
-});
-
-vi.mock("./installed-plugin-index-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
-  return {
-    ...actual,
-    readPersistedInstalledPluginIndexSync: vi.fn(() => null),
   };
 });
 
@@ -81,13 +72,16 @@ import {
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,
+  loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPresencePolicy,
   resolveConfiguredDeferredChannelPluginIds,
   resolveConfiguredChannelPluginIds,
   resolveGatewayStartupPluginIds,
 } from "./channel-plugin-ids.js";
 
-function withManifestLoadPaths<T extends { id: string }>(plugin: T): T {
+function withManifestLoadPaths<T extends { id: string }>(
+  plugin: T,
+): T & Pick<PluginManifestRecord, "rootDir" | "source" | "manifestPath" | "skills" | "hooks"> {
   return {
     rootDir: `/tmp/plugins/${plugin.id}`,
     source: `/tmp/plugins/${plugin.id}/index.ts`,
@@ -98,7 +92,7 @@ function withManifestLoadPaths<T extends { id: string }>(plugin: T): T {
   };
 }
 
-function createManifestRegistryFixture() {
+function createManifestRegistryFixture(): PluginManifestRegistry {
   return {
     plugins: [
       {
@@ -121,6 +115,7 @@ function createManifestRegistryFixture() {
         id: "browser",
         channels: [],
         activation: {
+          onStartup: true,
           onConfigPaths: ["browser"],
         },
         origin: "bundled",
@@ -135,6 +130,24 @@ function createManifestRegistryFixture() {
         enabledByDefault: undefined,
         providers: ["demo-provider"],
         cliBackends: ["demo-cli"],
+      },
+      {
+        id: "microsoft",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+        contracts: { speechProviders: ["microsoft"] },
+      },
+      {
+        id: "tts-local-cli",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+        contracts: { speechProviders: ["tts-local-cli", "cli"] },
       },
       {
         id: "anthropic",
@@ -229,6 +242,9 @@ function createManifestRegistryFixture() {
       {
         id: "voice-call",
         channels: [],
+        activation: {
+          onStartup: true,
+        },
         origin: "bundled",
         enabledByDefault: undefined,
         providers: [],
@@ -255,6 +271,9 @@ function createManifestRegistryFixture() {
       {
         id: "demo-global-sidecar",
         channels: [],
+        activation: {
+          onStartup: true,
+        },
         origin: "global",
         enabledByDefault: undefined,
         providers: [],
@@ -282,18 +301,49 @@ function createManifestRegistryFixture() {
         providers: [],
         cliBackends: [],
       },
-    ].map(withManifestLoadPaths),
+      {
+        id: "external-hook-capability",
+        channels: [],
+        activation: {
+          onCapabilities: ["hook"],
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "external-hook-policy",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "lossless-claw",
+        kind: "context-engine",
+        channels: [],
+        // No activation.onStartup — this is the bug scenario (#76576):
+        // external context-engine plugins do not set onStartup but must be
+        // included in gateway startup when selected via plugins.slots.contextEngine.
+        origin: "installed",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+    ].map(withManifestLoadPaths) as PluginManifestRecord[],
     diagnostics: [],
   };
 }
 
-function createManifestRegistryFixtureWithWorkspaceDemoChannel() {
+function createManifestRegistryFixtureWithWorkspaceDemoChannel(): PluginManifestRegistry {
   const fixture = createManifestRegistryFixture();
   return {
     ...fixture,
     plugins: [
       ...fixture.plugins,
-      {
+      withManifestLoadPaths({
         id: "workspace-demo-channel-plugin",
         channels: ["demo-channel"],
         startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
@@ -301,8 +351,8 @@ function createManifestRegistryFixtureWithWorkspaceDemoChannel() {
         enabledByDefault: undefined,
         providers: [],
         cliBackends: [],
-      },
-    ].map(withManifestLoadPaths),
+      }),
+    ],
   };
 }
 
@@ -310,10 +360,6 @@ function normalizeStartupAgentHarnesses(record: PluginManifestRecord): readonly 
   return [
     ...new Set([...(record.activation?.onAgentHarnesses ?? []), ...(record.cliBackends ?? [])]),
   ].toSorted((left, right) => left.localeCompare(right));
-}
-
-function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
-  return record.providers.length > 0 || record.cliBackends.length > 0;
 }
 
 function hasPluginKind(record: PluginManifestRecord, kind: string): boolean {
@@ -334,12 +380,7 @@ function createInstalledPluginRecordFixture(
     enabled: true,
     ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
     startup: {
-      sidecar:
-        record.activation?.onStartup === true ||
-        (record.activation?.onStartup === undefined &&
-          record.channels.length === 0 &&
-          !hasRuntimeContractSurface(record) &&
-          !memory),
+      sidecar: record.activation?.onStartup === true,
       memory,
       deferConfiguredChannelFullLoadUntilAfterListen:
         record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
@@ -377,6 +418,15 @@ function filterManifestRegistryForInstalledIndex(params: {
       ? registry.plugins.filter((plugin) => pluginIdSet.has(plugin.id))
       : registry.plugins,
   };
+}
+
+function useManifestRegistryFixture(
+  registry: PluginManifestRegistry = createManifestRegistryFixture(),
+) {
+  const index = createInstalledPluginIndexFixture(registry);
+  loadPluginManifestRegistry.mockReset().mockReturnValue(registry);
+  loadPluginRegistrySnapshot.mockReset().mockReturnValue(index);
+  return { registry, index };
 }
 
 function expectStartupPluginIds(params: {
@@ -417,7 +467,13 @@ function createStartupConfig(params: {
   allowPluginIds?: string[];
   noConfiguredChannels?: boolean;
   memorySlot?: string;
+  contextEngine?: string;
 }) {
+  const slotsConfig = {
+    ...(params.memorySlot ? { memory: params.memorySlot } : {}),
+    ...(params.contextEngine ? { contextEngine: params.contextEngine } : {}),
+  };
+  const hasSlots = Object.keys(slotsConfig).length > 0;
   return {
     ...(params.noConfiguredChannels
       ? {
@@ -434,7 +490,7 @@ function createStartupConfig(params: {
       ? {
           plugins: {
             ...(params.allowPluginIds?.length ? { allow: params.allowPluginIds } : {}),
-            ...(params.memorySlot ? { slots: { memory: params.memorySlot } } : {}),
+            ...(hasSlots ? { slots: slotsConfig } : {}),
             entries: Object.fromEntries(
               params.enabledPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
             ),
@@ -446,12 +502,10 @@ function createStartupConfig(params: {
               allow: params.allowPluginIds,
             },
           }
-        : params.memorySlot
+        : hasSlots
           ? {
               plugins: {
-                slots: {
-                  memory: params.memorySlot,
-                },
+                slots: slotsConfig,
               },
             }
           : {}),
@@ -544,10 +598,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       }
       return true;
     });
-    loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
-    loadPluginRegistrySnapshot
-      .mockReset()
-      .mockImplementation(() => createInstalledPluginIndexFixture());
+    useManifestRegistryFixture();
     loadPluginManifestRegistryForInstalledIndex
       .mockReset()
       .mockImplementation(filterManifestRegistryForInstalledIndex);
@@ -576,6 +627,132 @@ describe("resolveGatewayStartupPluginIds", () => {
         providerIds: ["demo-provider"],
       }),
       ["demo-channel", "browser", "memory-core"],
+    ],
+    [
+      "includes configured bundled speech providers at startup",
+      {
+        channels: {},
+        messages: { tts: { provider: "microsoft" } },
+      } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes bundled speech providers configured by provider block",
+      {
+        channels: {},
+        messages: { tts: { providers: { "tts-local-cli": { command: "say" } } } },
+      } as OpenClawConfig,
+      ["browser", "tts-local-cli", "memory-core"],
+    ],
+    [
+      "maps legacy edge TTS selection to the Microsoft speech plugin",
+      {
+        channels: {},
+        messages: { tts: { provider: "edge" } },
+      } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes active persona speech providers at startup",
+      {
+        channels: {},
+        messages: {
+          tts: {
+            persona: "narrator",
+            personas: {
+              narrator: {
+                label: "Narrator",
+                provider: "microsoft",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes agent-inherited active persona speech providers at startup",
+      {
+        channels: {},
+        messages: {
+          tts: {
+            personas: {
+              narrator: {
+                label: "Narrator",
+                provider: "microsoft",
+              },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "reader", tts: { persona: "narrator" } }],
+        },
+      } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes channel-inherited active persona speech providers at startup",
+      {
+        channels: {
+          "demo-channel": { tts: { persona: "narrator" } },
+        },
+        messages: {
+          tts: {
+            personas: {
+              narrator: {
+                label: "Narrator",
+                provider: "microsoft",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["demo-channel", "browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes account-inherited active persona speech providers at startup",
+      {
+        channels: {
+          "demo-channel": {
+            accounts: {
+              primary: { tts: { persona: "narrator" } },
+            },
+          },
+        },
+        messages: {
+          tts: {
+            personas: {
+              narrator: {
+                label: "Narrator",
+                provider: "microsoft",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["demo-channel", "browser", "microsoft", "memory-core"],
+    ],
+    [
+      "honors disabled speech provider config blocks at startup",
+      {
+        channels: {},
+        messages: {
+          tts: {
+            provider: "microsoft",
+            providers: { microsoft: { enabled: false } },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "honors explicit plugin disablement for configured speech providers",
+      {
+        channels: {},
+        messages: { tts: { provider: "microsoft" } },
+        plugins: { entries: { microsoft: { enabled: false } } },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
     ],
     [
       "includes explicitly enabled non-channel sidecars in startup scope",
@@ -665,35 +842,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("keeps deprecated implicit startup sidecar fallback for legacy plugins", () => {
-    expectStartupPluginIdsCase({
-      config: createStartupConfig({
-        enabledPluginIds: ["demo-global-sidecar"],
-        allowPluginIds: ["demo-global-sidecar"],
-        noConfiguredChannels: true,
-        memorySlot: "none",
-      }),
-      expected: ["demo-global-sidecar"],
-    });
-  });
-
-  it("can disable deprecated implicit startup sidecar fallback for future-mode testing", () => {
-    expectStartupPluginIdsCase({
-      config: createStartupConfig({
-        enabledPluginIds: ["demo-global-sidecar"],
-        allowPluginIds: ["demo-global-sidecar"],
-        noConfiguredChannels: true,
-        memorySlot: "none",
-      }),
-      env: {
-        ...process.env,
-        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
-      },
-      expected: [],
-    });
-  });
-
-  it("skips deprecated implicit startup sidecar fallback when activation.onStartup is false", () => {
+  it("skips startup when activation.onStartup is false", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         enabledPluginIds: ["demo-global-startup-opt-out"],
@@ -713,11 +862,174 @@ describe("resolveGatewayStartupPluginIds", () => {
         noConfiguredChannels: true,
         memorySlot: "none",
       }),
-      env: {
-        ...process.env,
-        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
-      },
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads explicit hook-capability plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-hook-capability"],
+        allowPluginIds: ["external-hook-capability"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-hook-capability"],
+    });
+  });
+
+  it("does not ambient-load hook-capability plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["browser"],
+    });
+  });
+
+  it("blocks hook-capability plugins when plugins are globally disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          enabled: false,
+          allow: ["external-hook-capability"],
+          slots: { memory: "none" },
+          entries: {
+            "external-hook-capability": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      expected: [],
+    });
+  });
+
+  it("blocks hook-capability plugins when explicitly denied", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["external-hook-capability"],
+          deny: ["external-hook-capability"],
+          slots: { memory: "none" },
+          entries: {
+            "external-hook-capability": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      expected: [],
+    });
+  });
+
+  it("loads explicit hook-policy plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            browser: {
+              enabled: false,
+            },
+            "external-hook-policy": {
+              hooks: {
+                allowConversationAccess: true,
+                allowPromptInjection: true,
+              },
+            },
+          },
+        },
+      },
+      expected: ["external-hook-policy"],
+    });
+  });
+
+  it.each([
+    ["conversation access", { allowConversationAccess: true }],
+    ["prompt injection", { allowPromptInjection: true }],
+  ] as const)("loads hook-policy plugins with only %s enabled", (_name, hooks) => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            browser: {
+              enabled: false,
+            },
+            "external-hook-policy": {
+              hooks,
+            },
+          },
+        },
+      },
+      expected: ["external-hook-policy"],
+    });
+  });
+
+  it("keeps hook-policy plugins behind restrictive allowlists", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["browser"],
+          slots: { memory: "none" },
+          entries: {
+            browser: {
+              enabled: false,
+            },
+            "external-hook-policy": {
+              hooks: {
+                allowPromptInjection: true,
+              },
+            },
+          },
+        },
+      },
+      expected: [],
+    });
+  });
+
+  it("does not let effective-only hook policy bypass the authored startup allowlist", () => {
+    const activationSourceConfig = {
+      channels: {},
+      plugins: {
+        allow: ["browser"],
+        slots: { memory: "none" },
+        entries: {
+          browser: {
+            enabled: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      channels: {},
+      plugins: {
+        allow: ["browser", "external-hook-policy"],
+        slots: { memory: "none" },
+        entries: {
+          browser: {
+            enabled: false,
+          },
+          "external-hook-policy": {
+            hooks: {
+              allowPromptInjection: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: runtimeConfig,
+      activationSourceConfig,
+      expected: [],
     });
   });
 
@@ -778,9 +1090,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   });
 
   it("does not let weak channel presence start untrusted workspace channel owners", () => {
-    loadPluginManifestRegistry
-      .mockReset()
-      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+    useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
     listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
     listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
       { channelId: "demo-channel", source: "env" },
@@ -807,9 +1117,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   });
 
   it("keeps explicitly trusted deferred channel owners eligible at startup", () => {
-    loadPluginManifestRegistry
-      .mockReset()
-      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+    useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
     expect(
       resolveConfiguredDeferredChannelPluginIds({
         config: {
@@ -879,9 +1187,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   });
 
   it("does not treat persisted auth alone as deferred channel startup intent", () => {
-    loadPluginManifestRegistry
-      .mockReset()
-      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+    useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
     listPotentialConfiguredChannelIds.mockImplementation(
       (
         _config: OpenClawConfig,
@@ -905,10 +1211,33 @@ describe("resolveGatewayStartupPluginIds", () => {
     ).toEqual([]);
   });
 
+  it("loads channel, deferred, and startup plugin ids from one manifest registry", () => {
+    const registry = createManifestRegistryFixture();
+    const index = createInstalledPluginIndexFixture(registry);
+    loadPluginRegistrySnapshot.mockReset().mockReturnValue(index);
+    loadPluginManifestRegistryForInstalledIndex.mockReset().mockReturnValue(registry);
+
+    const plan = loadGatewayStartupPluginPlan({
+      config: {
+        channels: {
+          "demo-channel": {
+            token: "configured",
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp",
+      env: {},
+    });
+
+    expect(plan.channelPluginIds).toContain("demo-channel");
+    expect(plan.pluginIds).toContain("demo-channel");
+    expect(plan.configuredDeferredChannelPluginIds).toEqual([]);
+    expect(loadPluginRegistrySnapshot).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+  });
+
   it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {
-    loadPluginManifestRegistry
-      .mockReset()
-      .mockReturnValue(createManifestRegistryFixtureWithWorkspaceDemoChannel());
+    useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
 
     expect(
       resolveConfiguredDeferredChannelPluginIds({
@@ -965,6 +1294,44 @@ describe("resolveGatewayStartupPluginIds", () => {
         enabledPluginIds: ["memory-lancedb"],
       }),
       expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("includes the selected context-engine slot plugin in startup scope even without activation.onStartup (#76576)", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["lossless-claw"],
+        contextEngine: "lossless-claw",
+      }),
+      expected: ["demo-channel", "browser", "memory-core", "lossless-claw"],
+    });
+  });
+
+  it("does not include context-engine plugins not selected via the slot", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["lossless-claw"],
+      }),
+      expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("does not include the context-engine slot plugin when it is the built-in legacy engine", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        contextEngine: "legacy",
+      }),
+      expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("normalizes the context-engine slot id before startup filtering", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["lossless-claw"],
+        contextEngine: "Lossless-Claw",
+      }),
+      expected: ["demo-channel", "browser", "memory-core", "lossless-claw"],
     });
   });
 
@@ -1090,7 +1457,7 @@ describe("resolveConfiguredChannelPluginIds", () => {
       }
       return false;
     });
-    loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
+    useManifestRegistryFixture();
   });
 
   it("uses manifest activation channel ownership before falling back to direct channel lists", () => {
@@ -1268,7 +1635,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     listPotentialConfiguredChannelPresenceSignals.mockReset().mockReturnValue([]);
     hasPotentialConfiguredChannels.mockReset().mockReturnValue(false);
     hasMeaningfulChannelConfig.mockClear();
-    loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
+    useManifestRegistryFixture();
   });
 
   it("filters bundled ambient channel triggers through effective activation", () => {

@@ -8,6 +8,7 @@ import {
   loadExecApprovals,
   maxAsk,
   minSecurity,
+  requireValidExecTarget,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
@@ -17,6 +18,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -38,7 +40,6 @@ import {
   applyShellPath,
   normalizeExecAsk,
   normalizeExecSecurity,
-  normalizeExecTarget,
   normalizePathPrepend,
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
@@ -127,11 +128,12 @@ function getNodeErrorCode(error: unknown): string | undefined {
 
 type FsSafeModule = typeof import("../infra/fs-safe.js");
 
-let fsSafeModulePromise: Promise<FsSafeModule> | undefined;
+const fsSafeModuleLoader = createLazyImportLoader<FsSafeModule>(
+  () => import("../infra/fs-safe.js"),
+);
 
 async function loadFsSafeModule(): Promise<FsSafeModule> {
-  fsSafeModulePromise ??= import("../infra/fs-safe.js");
-  return await fsSafeModulePromise;
+  return await fsSafeModuleLoader.load();
 }
 
 function shouldSkipScriptPreflightPathError(
@@ -1464,6 +1466,10 @@ export function createExecTool(
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
+      const approvalWarningText = normalizeOptionalString(defaults?.approvalWarningText);
+      if (approvalWarningText) {
+        warnings.push(approvalWarningText);
+      }
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
@@ -1539,9 +1545,10 @@ export function createExecTool(
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
+      const requestedTarget = requireValidExecTarget(params.host);
       const target = resolveExecTarget({
         configuredTarget: defaults?.host,
-        requestedTarget: normalizeExecTarget(params.host),
+        requestedTarget,
         elevatedRequested,
         sandboxAvailable: Boolean(defaults?.sandbox),
       });
@@ -1729,6 +1736,9 @@ export function createExecTool(
           turnSourceAccountId: defaults?.accountId,
           turnSourceThreadId: defaults?.currentThreadTs,
           scopeKey: defaults?.scopeKey,
+          approvalFollowupText: defaults?.approvalFollowupText,
+          approvalFollowup: defaults?.approvalFollowup,
+          approvalFollowupMode: defaults?.approvalFollowupMode,
           warnings,
           notifySessionKey,
           approvalRunningNoticeMs,

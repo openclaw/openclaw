@@ -8,9 +8,11 @@ import { logVerbose } from "../globals.js";
 import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderToolDefinition,
-} from "../plugins/web-provider-types.js";
-import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+} from "../plugins/types.js";
+import {
+  resolvePluginWebSearchProviders,
+  resolveRuntimeWebSearchProviders,
+} from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
@@ -74,6 +76,7 @@ function hasEntryCredential(
     | "id"
     | "envVars"
     | "getConfiguredCredentialValue"
+    | "getConfiguredCredentialFallback"
     | "getCredentialValue"
     | "requiresCredential"
   >,
@@ -86,6 +89,8 @@ function hasEntryCredential(
     toolConfig: search as Record<string, unknown> | undefined,
     resolveRawValue: ({ provider: currentProvider, config: currentConfig }) =>
       currentProvider.getConfiguredCredentialValue?.(currentConfig),
+    resolveFallbackRawValue: ({ provider: currentProvider, config: currentConfig }) =>
+      currentProvider.getConfiguredCredentialFallback?.(currentConfig)?.value,
     resolveEnvValue: ({ provider: currentProvider, configuredEnvVarId }) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
       readWebProviderEnvValue(currentProvider.envVars),
@@ -99,6 +104,7 @@ export function isWebSearchProviderConfigured(params: {
     | "id"
     | "envVars"
     | "getConfiguredCredentialValue"
+    | "getConfiguredCredentialFallback"
     | "getCredentialValue"
     | "requiresCredential"
   >;
@@ -311,6 +317,14 @@ function hasExplicitWebSearchSelection(params: {
   return false;
 }
 
+function isStructuredAvailabilityError(result: unknown): result is { error: string } {
+  if (!result || typeof result !== "object" || !("error" in result)) {
+    return false;
+  }
+  const error = (result as { error?: unknown }).error;
+  return typeof error === "string" && /^missing_[a-z0-9_]*api_key$/i.test(error);
+}
+
 export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
   const config = resolveWebSearchRuntimeConfig(params.config);
   const search = resolveSearchConfig(config);
@@ -347,9 +361,14 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         sawUnavailableProvider = true;
         continue;
       }
+      const executed = await definition.execute(params.args, { signal: params.signal });
+      if (allowFallback && isStructuredAvailabilityError(executed)) {
+        lastError = new Error(`web_search provider "${candidate.id}" returned ${executed.error}`);
+        continue;
+      }
       return {
         provider: candidate.id,
-        result: await definition.execute(params.args),
+        result: executed,
       };
     } catch (error) {
       lastError = error;

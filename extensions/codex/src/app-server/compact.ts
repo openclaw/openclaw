@@ -74,6 +74,7 @@ export async function maybeCompactCodexAppServerSession(
           sessionFile: params.sessionFile,
           reason: "compaction",
           runtimeContext: params.contextEngineRuntimeContext,
+          config: params.config,
         });
       } catch (error) {
         embeddedAgentLog.warn(
@@ -125,6 +126,7 @@ async function compactCodexNativeThread(
   const client = await clientFactory(
     appServer.start,
     requestedAuthProfileId ?? binding.authProfileId,
+    params.agentDir,
   );
   const waiter = createCodexNativeCompactionWaiter(client, binding.threadId);
   let completion: CodexNativeCompactionCompletion;

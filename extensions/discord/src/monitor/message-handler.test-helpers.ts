@@ -9,7 +9,6 @@ export function createDiscordHandlerParams(overrides?: {
   botUserId?: string;
   setStatus?: (patch: Record<string, unknown>) => void;
   abortSignal?: AbortSignal;
-  workerRunTimeoutMs?: number;
 }): Parameters<typeof createDiscordMessageHandler>[0] {
   const cfg: OpenClawConfig = {
     channels: {
@@ -44,11 +43,11 @@ export function createDiscordHandlerParams(overrides?: {
     textLimit: 2_000,
     replyToMode: "off" as const,
     dmEnabled: true,
+    dmPolicy: "pairing",
     groupDmEnabled: false,
     threadBindings: createNoopThreadBindingManager("default"),
     setStatus: overrides?.setStatus,
     abortSignal: overrides?.abortSignal,
-    workerRunTimeoutMs: overrides?.workerRunTimeoutMs,
   };
 }
 

@@ -153,6 +153,17 @@ export type SessionThreadBindingsConfig = {
    * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
    */
   maxAgeHours?: number;
+  /**
+   * Allow channel integrations to create thread-bound work sessions from
+   * sessions_spawn or native ACP spawn flows. Channel/account keys can override.
+   * Default: true when thread bindings are enabled.
+   */
+  spawnSessions?: boolean;
+  /**
+   * Default context mode for native subagents spawned into a bound thread.
+   * Default: "fork" so the child starts from the requester transcript.
+   */
+  defaultSpawnContext?: "isolated" | "fork";
 };
 
 export type SessionConfig = {
@@ -170,14 +181,10 @@ export type SessionConfig = {
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
-  /**
-   * Max parent transcript token count allowed for thread/session forking.
-   * If parent totalTokens is above this value, OpenClaw skips parent fork and
-   * starts a fresh thread session instead. Set to 0 to disable this guard.
-   */
-  parentForkMaxTokens?: number;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
+  /** Session transcript write-lock acquisition policy. */
+  writeLock?: SessionWriteLockConfig;
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
@@ -188,6 +195,11 @@ export type SessionConfig = {
   maintenance?: SessionMaintenanceConfig;
 };
 
+export type SessionWriteLockConfig = {
+  /** How long to wait while acquiring a session transcript write lock. Default: 60000. */
+  acquireTimeoutMs?: number;
+};
+
 export type SessionMaintenanceMode = "enforce" | "warn";
 
 export type SessionMaintenanceConfig = {
@@ -195,11 +207,11 @@ export type SessionMaintenanceConfig = {
   mode?: SessionMaintenanceMode;
   /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
   pruneAfter?: string | number;
-  /** Deprecated. Use pruneAfter instead. */
+  /** @deprecated Use pruneAfter instead. */
   pruneDays?: number;
   /** Maximum number of session entries to keep. Default: 500. */
   maxEntries?: number;
-  /** Deprecated and ignored. Run `openclaw doctor --fix` to remove. */
+  /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
   rotateBytes?: number | string;
   /**
    * Retention for archived reset transcripts (`*.reset.<timestamp>`).
@@ -276,7 +288,7 @@ export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
   flags?: string[];
-  /** Threshold in ms before a processing session logs "stuck session" diagnostics. */
+  /** Threshold in ms before a processing session with no observed progress logs diagnostics. */
   stuckSessionWarnMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
@@ -290,11 +302,21 @@ export type WebReconnectConfig = {
   maxAttempts?: number; // 0 = unlimited
 };
 
+export type WebWhatsAppConfig = {
+  /** Baileys application ping interval in milliseconds. Default: 25000. */
+  keepAliveIntervalMs?: number;
+  /** WebSocket opening handshake timeout in milliseconds. Default: 60000. */
+  connectTimeoutMs?: number;
+  /** Baileys query timeout in milliseconds. Default: 60000. */
+  defaultQueryTimeoutMs?: number;
+};
+
 export type WebConfig = {
   /** If false, do not start the WhatsApp web provider. Default: true. */
   enabled?: boolean;
   heartbeatSeconds?: number;
   reconnect?: WebReconnectConfig;
+  whatsapp?: WebWhatsAppConfig;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

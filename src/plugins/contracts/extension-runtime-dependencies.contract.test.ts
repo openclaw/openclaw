@@ -16,9 +16,19 @@ const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
 ]);
 const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
   [
+    "extensions/browser",
+    // The MCP SDK loads zod through its server/zod-compat runtime path.
+    new Set(["zod"]),
+  ],
+  [
     "extensions/whatsapp",
     // Baileys loads jimp as an optional peer when it needs media thumbnails.
     new Set(["jimp"]),
+  ],
+  [
+    "extensions/tlon",
+    // The Tlon plugin manifest exposes the bundled skill from this package path.
+    new Set(["@tloncorp/tlon-skill"]),
   ],
 ]);
 
@@ -89,6 +99,11 @@ function listRuntimeFiles(root: string): string[] {
   };
   visit(root);
   return files.toSorted();
+}
+
+function readManifestText(root: string): string {
+  const manifestPath = path.join(root, "openclaw.plugin.json");
+  return fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath, "utf8") : "";
 }
 
 function packageNameForSpecifier(specifier: string): string | null {
@@ -163,7 +178,6 @@ function allDependencyNames(manifest: PackageManifest): string[] {
 
 function isDiscordPackageDependency(dependencyName: string): boolean {
   return (
-    dependencyName === "@buape/carbon" ||
     dependencyName === "discord-api-types" ||
     dependencyName === "opusscript" ||
     dependencyName.startsWith("@discordjs/") ||
@@ -235,6 +249,7 @@ describe("extension runtime dependency manifests", () => {
       const allowedIndirect = INDIRECT_RUNTIME_DEPENDENCIES.get(extensionDir) ?? new Set<string>();
       const runtimeText = listRuntimeFiles(extensionDir)
         .map((filePath) => fs.readFileSync(filePath, "utf8"))
+        .concat(readManifestText(extensionDir))
         .join("\n");
 
       const unused = declared.filter(
