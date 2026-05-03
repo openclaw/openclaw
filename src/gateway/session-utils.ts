@@ -1597,15 +1597,15 @@ export function buildGatewaySessionRow(params: {
   const rowModel = rowModelIdentity.model;
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
-    : resolveEstimatedSessionCostUsd({
+    : (resolveEstimatedSessionCostUsd({
         cfg,
         provider: rowModelProvider,
         model: rowModel,
         entry,
-      }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
+      }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
   const contextTokens = lightweight
     ? resolvePositiveNumber(entry?.contextTokens)
-    : resolvePositiveNumber(entry?.contextTokens) ??
+    : (resolvePositiveNumber(entry?.contextTokens) ??
       resolvePositiveNumber(transcriptUsage?.contextTokens) ??
       resolvePositiveNumber(
         resolveContextTokensForModel({
@@ -1614,7 +1614,7 @@ export function buildGatewaySessionRow(params: {
           model: rowModel,
           allowAsyncLoad: false,
         }),
-      );
+      ));
 
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
