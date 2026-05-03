@@ -203,8 +203,7 @@ function formatFallbackTurns(
     lines.push(line);
     consumed += line.length + 1;
   }
-  lines.reverse();
-  return { text: lines.join("\n"), consumed };
+  return { text: lines.toReversed().join("\n"), consumed };
 }
 
 /**

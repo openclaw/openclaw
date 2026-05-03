@@ -164,7 +164,7 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
     }
     uris.push(match[1]);
   }
-  return uris.reverse();
+  return uris.toReversed();
 }
 
 export function splitPromptAndAttachmentRefs(params: {
