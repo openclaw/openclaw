@@ -541,21 +541,22 @@ function resolveContextWindowForHint(params: {
   ref: ModelRefLike;
   activeSessionEntry?: SessionEntry;
 }) {
+  const modelContextWindow = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.ref.provider,
+    model: params.ref.model,
+    allowAsyncLoad: false,
+  });
+  if (modelContextWindow != null && modelContextWindow > 0) {
+    return modelContextWindow;
+  }
   const activeContextTokens =
     typeof params.activeSessionEntry?.contextTokens === "number" &&
     Number.isFinite(params.activeSessionEntry.contextTokens) &&
     params.activeSessionEntry.contextTokens > 0
       ? Math.floor(params.activeSessionEntry.contextTokens)
       : undefined;
-  return (
-    activeContextTokens ??
-    resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: params.ref.provider,
-      model: params.ref.model,
-      allowAsyncLoad: false,
-    })
-  );
+  return activeContextTokens ?? undefined;
 }
 
 function resolveHeartbeatBleedHint(params: {
