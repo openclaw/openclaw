@@ -198,11 +198,15 @@ vi.mock("../plugins/marketplace.js", () => ({
 }));
 
 vi.mock("../plugins/enable.js", () => ({
-  enablePluginInConfig: ((cfg: OpenClawConfig, pluginId: string) =>
-    invokeMock<[OpenClawConfig, string], unknown>(
+  enablePluginInConfig: ((
+    ...args: Parameters<(typeof import("../plugins/enable.js"))["enablePluginInConfig"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/enable.js"))["enablePluginInConfig"]>,
+      unknown
+    >(
       enablePluginInConfig,
-      cfg,
-      pluginId,
+      ...args,
     )) as (typeof import("../plugins/enable.js"))["enablePluginInConfig"],
 }));
 

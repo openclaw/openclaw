@@ -126,7 +126,9 @@ export function registerPluginsCli(program: Command) {
       if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
         return reportMissingPlugin(id);
       }
-      const enableResult = enablePluginInConfig(cfg, id);
+      const enableResult = enablePluginInConfig(cfg, id, {
+        updateChannelConfig: false,
+      });
       let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
       next = slotResult.config;
@@ -171,7 +173,9 @@ export function registerPluginsCli(program: Command) {
       if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
         return reportMissingPlugin(id);
       }
-      const next = setPluginEnabledInConfig(cfg, id, false);
+      const next = setPluginEnabledInConfig(cfg, id, false, {
+        updateChannelConfig: false,
+      });
       await replaceConfigFile({
         nextConfig: next,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
