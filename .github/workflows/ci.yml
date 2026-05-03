@@ -1998,8 +1998,8 @@ jobs:
 
       - name: Swift lint
         run: |
-          swiftlint --config .swiftlint.yml
-          swiftformat --lint apps/macos/Sources --config .swiftformat
+          swiftlint lint --config config/swiftlint.yml
+          swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
 
       - name: Swift build (release)
         run: |
