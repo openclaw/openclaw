@@ -59,6 +59,9 @@ function writePublishablePluginPackage(repoDir: string): string {
     openclaw: {
       extensions: ["./index.ts"],
       setupEntry: "./setup-entry.ts",
+      compat: {
+        pluginApi: ">=2026.4.30",
+      },
       release: {
         publishToNpm: true,
       },
@@ -127,6 +130,14 @@ describe("plugin npm package manifest staging", () => {
     expect(resolved.changed).toBe(true);
     expect(resolved.packageJson).toMatchObject({
       files: ["dist/**", "openclaw.plugin.json", "README.md", "SKILL.md", "skills/**"],
+      peerDependencies: {
+        openclaw: ">=2026.4.30",
+      },
+      peerDependenciesMeta: {
+        openclaw: {
+          optional: true,
+        },
+      },
       openclaw: {
         runtimeExtensions: ["./dist/index.js"],
         runtimeSetupEntry: "./dist/setup-entry.js",
@@ -141,6 +152,8 @@ describe("plugin npm package manifest staging", () => {
       expect(stagedPackageJson.openclaw.runtimeSetupEntry).toBe("./dist/setup-entry.js");
       expect(stagedPackageJson.files).toContain("dist/**");
       expect(stagedPackageJson.files).toContain("skills/**");
+      expect(stagedPackageJson.peerDependencies.openclaw).toBe(">=2026.4.30");
+      expect(stagedPackageJson.peerDependenciesMeta.openclaw.optional).toBe(true);
     });
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
   });

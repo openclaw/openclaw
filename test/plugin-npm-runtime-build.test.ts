@@ -26,6 +26,10 @@ describe("plugin npm runtime build planning", () => {
       expect(plan?.runtimeExtensions.every((entry) => entry.startsWith("./dist/"))).toBe(true);
       expect(plan?.runtimeBuildOutputs.every((entry) => entry.startsWith("./dist/"))).toBe(true);
       expect(plan?.packageFiles).toContain("dist/**");
+      expect(plan?.packagePeerMetadata.peerDependencies.openclaw).toBe(
+        plan?.packageJson.openclaw.compat.pluginApi,
+      );
+      expect(plan?.packagePeerMetadata.peerDependenciesMeta.openclaw.optional).toBe(true);
     }
   });
 

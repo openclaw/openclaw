@@ -43,6 +43,21 @@ function collectExternalDependencyNames(packageJson) {
   );
 }
 
+function getStringRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([, entryValue]) => typeof entryValue === "string" && entryValue.trim().length > 0,
+    ),
+  );
+}
+
+function getRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
 function createNeverBundleDependencyMatcher(packageJson) {
   const externalDependencies = collectExternalDependencyNames(packageJson);
   return (id) => {
@@ -116,6 +131,51 @@ export function resolvePluginNpmRuntimePackageFiles(plan) {
   return [...merged];
 }
 
+function normalizeOpenClawPeerRange(value) {
+  const normalized = normalizePackageEntry(value);
+  if (!normalized) {
+    return "";
+  }
+  return /^[<>=~^*]|^(?:workspace|npm|file|link|portal|catalog):/u.test(normalized)
+    ? normalized
+    : `>=${normalized}`;
+}
+
+function resolveOpenClawPeerRange(packageJson, rootPackageJson) {
+  return (
+    normalizeOpenClawPeerRange(packageJson.openclaw?.compat?.pluginApi) ||
+    normalizeOpenClawPeerRange(packageJson.peerDependencies?.openclaw) ||
+    normalizeOpenClawPeerRange(packageJson.openclaw?.build?.openclawVersion) ||
+    normalizeOpenClawPeerRange(rootPackageJson?.version) ||
+    normalizeOpenClawPeerRange(packageJson.version)
+  );
+}
+
+export function resolvePluginNpmRuntimePackagePeerMetadata(plan) {
+  const openclawPeerRange = resolveOpenClawPeerRange(plan.packageJson, plan.rootPackageJson);
+  if (!openclawPeerRange) {
+    throw new Error(
+      `cannot infer openclaw peerDependency range for ${plan.pluginDir}; set openclaw.compat.pluginApi or package version`,
+    );
+  }
+  const existingPeerDependencies = getStringRecord(plan.packageJson.peerDependencies);
+  const existingPeerDependenciesMeta = getRecord(plan.packageJson.peerDependenciesMeta);
+  const existingOpenClawMeta = getRecord(existingPeerDependenciesMeta.openclaw);
+  return {
+    peerDependencies: {
+      ...existingPeerDependencies,
+      openclaw: openclawPeerRange,
+    },
+    peerDependenciesMeta: {
+      ...existingPeerDependenciesMeta,
+      openclaw: {
+        ...existingOpenClawMeta,
+        optional: true,
+      },
+    },
+  };
+}
+
 export function resolvePluginNpmRuntimeBuildPlan(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -124,6 +184,10 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
     return null;
   }
   const packageJson = readJsonFile(packageJsonPath);
+  const rootPackageJsonPath = path.join(repoRoot, "package.json");
+  const rootPackageJson = fs.existsSync(rootPackageJsonPath)
+    ? readJsonFile(rootPackageJsonPath)
+    : undefined;
   if (!isPublishablePluginPackage(packageJson)) {
     return null;
   }
@@ -153,6 +217,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
     packageDir,
     pluginDir,
     packageJson,
+    rootPackageJson,
     sourceEntries,
     entry,
     outDir: path.join(packageDir, "dist"),
@@ -171,6 +236,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
     ...plan,
     runtimeBuildOutputs: listPluginNpmRuntimeBuildOutputs(plan),
     packageFiles: resolvePluginNpmRuntimePackageFiles(plan),
+    packagePeerMetadata: resolvePluginNpmRuntimePackagePeerMetadata(plan),
   };
 }
 
