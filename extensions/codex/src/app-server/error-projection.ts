@@ -19,9 +19,14 @@
 // `extractProviderRateLimitMessage` recognise the message and prefix it with
 // the warning glyph the channel reply pipeline already renders.
 
-// Inline Codex app-server protocol shapes. The upstream `protocol-generated/typescript/*`
-// barrels are not part of this checkout; mirror the minimum surface we read from the
-// `account/rateLimits/updated` snapshot and `error` notification payloads.
+// Inline type definitions mirroring the upstream Codex app-server protocol
+// surface this projector consumes. The upstream TypeScript bindings under
+// `protocol-generated/typescript/**` are not committed to this repo (only the
+// JSON schemas live in `protocol-generated/json/**`), so we declare the
+// narrow shapes the projector reads here and re-export them for the
+// notification-handling code in `event-projector.ts`.
+
+/** Closed enum of ChatGPT plan slugs surfaced by `account/rateLimits/updated`. */
 export type PlanType =
   | "free"
   | "go"
@@ -36,6 +41,12 @@ export type PlanType =
   | "edu"
   | "unknown";
 
+/**
+ * Discriminator string the Codex app-server emits on error notifications.
+ * The known simple-string variants are listed explicitly; less-common variants
+ * (e.g. `{ httpConnectionFailed: { httpStatusCode } }`) arrive as tagged
+ * objects so we allow arbitrary records through as well.
+ */
 export type CodexErrorInfo =
   | "contextWindowExceeded"
   | "usageLimitExceeded"
@@ -47,28 +58,24 @@ export type CodexErrorInfo =
   | "threadRollbackFailed"
   | "sandboxError"
   | "other"
-  // Tagged-object variants (e.g. `{ httpConnectionFailed: { httpStatusCode } }`) come
-  // through verbatim; the projector only special-cases simple string variants.
-  | Record<string, unknown>;
+  | { readonly [key: string]: unknown };
 
+/** Per-bucket rate-limit window from `account/rateLimits/updated`. */
 export type RateLimitWindow = {
   usedPercent: number;
   windowDurationMins: number | null;
   resetsAt: number | null;
 };
 
+/** Snapshot payload from `account/rateLimits/updated`. */
 export type RateLimitSnapshot = {
+  limitId: string | null;
+  limitName: string | null;
   primary: RateLimitWindow | null;
   secondary: RateLimitWindow | null;
+  credits: unknown;
   planType: PlanType | null;
-  // The shipped Codex app-server snapshot carries a few more fields the
-  // projector does not currently consult. They are reserved here so tests and
-  // future call sites can populate the full shape without diverging from the
-  // generated protocol.
-  limitId?: string | null;
-  limitName?: string | null;
-  credits?: number | null;
-  rateLimitReachedType?: string | null;
+  rateLimitReachedType: unknown;
 };
 
 export type CodexProjectedErrorParams = {

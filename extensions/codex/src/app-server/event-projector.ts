@@ -21,12 +21,12 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
-import {
-  projectCodexAppServerError,
-  type CodexErrorInfo,
-  type PlanType,
-  type RateLimitSnapshot,
-  type RateLimitWindow,
+import { projectCodexAppServerError } from "./error-projection.js";
+import type {
+  CodexErrorInfo,
+  PlanType,
+  RateLimitSnapshot,
+  RateLimitWindow,
 } from "./error-projection.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
@@ -1523,7 +1523,13 @@ export class CodexAppServerEventProjector {
       additionalDetails: input.additionalDetails,
       rateLimits: this.latestRateLimitSnapshot,
     });
-    const finalMessage = projected ?? input.message?.trim() ?? input.fallbackMessage;
+    // `??` only short-circuits on null/undefined, so a whitespace-only
+    // `input.message` (which trims to `""`) would otherwise become the prompt
+    // error string and silently disable downstream `Boolean(promptError)`
+    // structured-error checks. Treat empty trims as absent.
+    const trimmed = input.message?.trim();
+    const trimmedMessage = trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
+    const finalMessage = projected ?? trimmedMessage ?? input.fallbackMessage;
     this.promptError = finalMessage;
     this.promptErrorSource = "prompt";
     if (input.codexErrorInfo !== null || projected !== undefined) {

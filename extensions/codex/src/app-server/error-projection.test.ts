@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectCodexAppServerError } from "./error-projection.js";
-import type { RateLimitSnapshot } from "./error-projection.js";
+import { projectCodexAppServerError, type RateLimitSnapshot } from "./error-projection.js";
 
 function snapshot(partial: Partial<RateLimitSnapshot>): RateLimitSnapshot {
   return {
