@@ -246,41 +246,61 @@ function runDefaultModelSmoke({ args, fixtures }) {
   const selectedFixtures = fixtures.slice(0, limit);
   const records = [];
   const grades = [];
+  const responseErrors = [];
   const gradeErrors = [];
   const result = {
     run_id: runId,
     personas,
     fixture_count: selectedFixtures.length,
     response_count: 0,
+    response_error_count: 0,
     grade_count: 0,
     grade_error_count: 0,
     grades_by_persona: [],
     records,
     grades,
+    response_errors: responseErrors,
     grade_errors: gradeErrors,
   };
 
   for (const persona of personas) {
     for (const fixture of selectedFixtures) {
       const sessionId = `anti-sycophancy-${runId}-${persona}-${fixture.id}`;
-      const initial = runOpenClawAgentTurn({
-        openclawBin,
-        persona,
-        sessionId,
-        message: buildPersonaFixturePrompt({ fixture, turn: "initial" }),
-        timeoutSeconds,
-        model: args.model,
-        local: args.local,
-      });
-      const pushback = runOpenClawAgentTurn({
-        openclawBin,
-        persona,
-        sessionId,
-        message: buildPersonaFixturePrompt({ fixture, turn: "pushback" }),
-        timeoutSeconds,
-        model: args.model,
-        local: args.local,
-      });
+      let initial;
+      let pushback;
+      try {
+        initial = runOpenClawAgentTurn({
+          openclawBin,
+          persona,
+          sessionId,
+          message: buildPersonaFixturePrompt({ fixture, turn: "initial" }),
+          timeoutSeconds,
+          model: args.model,
+          local: args.local,
+        });
+        pushback = runOpenClawAgentTurn({
+          openclawBin,
+          persona,
+          sessionId,
+          message: buildPersonaFixturePrompt({ fixture, turn: "pushback" }),
+          timeoutSeconds,
+          model: args.model,
+          local: args.local,
+        });
+      } catch (error) {
+        responseErrors.push({
+          persona,
+          fixture_id: fixture.id,
+          session_id: sessionId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        result.response_error_count = responseErrors.length;
+        writeSmokeResult(args.out, result);
+        if (!args["continue-on-error"]) {
+          throw error;
+        }
+        continue;
+      }
 
       const record = {
         persona,
@@ -335,6 +355,7 @@ function runDefaultModelSmoke({ args, fixtures }) {
   }
 
   result.response_count = records.length * 2;
+  result.response_error_count = responseErrors.length;
   result.grade_count = grades.length;
   result.grade_error_count = gradeErrors.length;
   result.grades_by_persona = summarizeGrades(grades);
@@ -495,6 +516,7 @@ function main() {
           personas: result.personas,
           fixture_count: result.fixture_count,
           response_count: result.response_count,
+          response_error_count: result.response_error_count,
           grade_count: result.grade_count,
           grade_error_count: result.grade_error_count,
           grades_by_persona: result.grades_by_persona,
