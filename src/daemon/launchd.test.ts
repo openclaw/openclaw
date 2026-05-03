@@ -830,7 +830,7 @@ describe("launchd install", () => {
     expect(result).toEqual({ outcome: "completed" });
     expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(true);
-    expect(kickstartCalls).toHaveLength(2);
+    expect(kickstartCalls).toHaveLength(1);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
   });
 
