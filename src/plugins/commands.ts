@@ -182,6 +182,7 @@ export async function executePluginCommand(params: {
   sessionKey?: PluginCommandContext["sessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
   sessionFile?: PluginCommandContext["sessionFile"];
+  agentId?: PluginCommandContext["agentId"];
   commandBody: string;
   config: OpenClawConfig;
   from?: PluginCommandContext["from"];
@@ -278,6 +279,7 @@ export async function executePluginCommand(params: {
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,
+    agentId: params.agentId,
     args: sanitizedArgs,
     commandBody,
     config,
