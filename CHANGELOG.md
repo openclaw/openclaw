@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/tools: stop treating `tools.deny: ["write"]` as an implicit `apply_patch` deny; operators who want to block patch writes should deny `apply_patch` or `group:fs` explicitly. Fixes #76749. (#76795) Thanks @Nek-12 and @hclsys.
+- Plugins/release: verify published plugin npm tarballs expose compiled runtime entries after publish, catching TS-only package artifacts before release closeout. Thanks @vincentkoc.
 - Gateway/update: recover an installed-but-unloaded macOS LaunchAgent after package updates, rerun Gateway health/version/channel readiness checks, and print restart, reinstall, and rollback guidance before reporting update failure. (#76790) Thanks @jonathanlindsay.
 - CLI/plugins: explain when a missing plugin command alias belongs to a bundled plugin that is disabled by default, including the `openclaw plugins enable <plugin>` repair command. (#76835)
 - Google Meet: route stateful CLI session commands through the gateway-owned runtime so joined realtime sessions survive after the starting CLI process exits. Fixes #76344. Thanks @coltonharris-wq.
