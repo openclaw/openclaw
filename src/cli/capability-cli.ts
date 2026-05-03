@@ -664,6 +664,10 @@ async function runModelRun(params: {
       auth: prepared.auth,
       cfg,
       context: {
+        // Some providers (openai-codex-responses) require a non-empty system prompt
+        // (mapped to `instructions`). Inject a minimal default so local model probes
+        // succeed without the agent session context that normally supplies it.
+        systemPrompt: "You are a helpful assistant.",
         messages: [
           {
             role: "user",

@@ -406,14 +406,15 @@ describe("capability cli", () => {
     );
     expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        context: {
+        context: expect.objectContaining({
+          systemPrompt: "You are a helpful assistant.",
           messages: [
             expect.objectContaining({
               role: "user",
               content: "hello",
             }),
           ],
-        },
+        }),
       }),
     );
   });
@@ -438,7 +439,8 @@ describe("capability cli", () => {
 
     expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        context: {
+        context: expect.objectContaining({
+          systemPrompt: "You are a helpful assistant.",
           messages: [
             expect.objectContaining({
               role: "user",
@@ -448,7 +450,7 @@ describe("capability cli", () => {
               ],
             }),
           ],
-        },
+        }),
       }),
     );
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
