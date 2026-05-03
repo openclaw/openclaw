@@ -6,6 +6,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
+import { resolveTelegramInlineButtons } from "./button-types.js";
 import { isTelegramExecApprovalClientEnabled } from "./exec-approvals.js";
 
 export function shouldSuppressTelegramExecApprovalForwardingFallback(params: {
@@ -30,7 +31,7 @@ export function buildTelegramExecApprovalPendingPayload(params: {
   request: ExecApprovalRequest;
   nowMs: number;
 }) {
-  return buildExecApprovalPendingReplyPayload({
+  const payload = buildExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     approvalCommandId: params.request.id.slice(0, 8),
@@ -42,4 +43,18 @@ export function buildTelegramExecApprovalPendingPayload(params: {
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
   });
+  const buttons = resolveTelegramInlineButtons({ interactive: payload.interactive });
+  if (!buttons) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    channelData: {
+      ...(payload.channelData ?? {}),
+      telegram: {
+        buttons,
+      },
+    },
+  };
 }
