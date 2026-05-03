@@ -9,6 +9,7 @@ import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
 import * as modelDiscovery from "../pi-model-discovery.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
+import * as pdfModelConfigModule from "./pdf-tool.model-config.js";
 import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
@@ -23,11 +24,13 @@ vi.mock("@mariozechner/pi-ai", async () => {
 
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
+let clearPdfToolModelConfigCache: PdfToolModule["clearPdfToolModelConfigCache"];
 let PdfToolSchema: PdfToolModule["PdfToolSchema"];
 
 async function loadCreatePdfTool() {
   if (!createPdfTool || !PdfToolSchema) {
-    ({ createPdfTool, PdfToolSchema } = await import("./pdf-tool.js"));
+    ({ clearPdfToolModelConfigCache, createPdfTool, PdfToolSchema } =
+      await import("./pdf-tool.js"));
   }
   return createPdfTool;
 }
@@ -68,6 +71,12 @@ async function withConfiguredPdfTool(
 function withPdfModel(primary: string): OpenClawConfig {
   return {
     agents: { defaults: { pdfModel: { primary } } },
+  } as OpenClawConfig;
+}
+
+function withDefaultModel(primary: string): OpenClawConfig {
+  return {
+    agents: { defaults: { model: { primary } } },
   } as OpenClawConfig;
 }
 
@@ -136,6 +145,7 @@ describe("createPdfTool", () => {
   });
 
   afterEach(() => {
+    clearPdfToolModelConfigCache?.();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     global.fetch = priorFetch;
@@ -157,6 +167,60 @@ describe("createPdfTool", () => {
       expect(tool.label).toBe("PDF");
       expect(tool.description).toContain("PDF documents");
     });
+  });
+
+  it("caches model config resolution across repeated createPdfTool calls with matching dependencies (#76644)", async () => {
+    const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
+    const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+    const authProfileStore = { version: 1, profiles: {} };
+    const createTool = await loadCreatePdfTool();
+    await withTempPdfAgentDir(async (agentDir) => {
+      createTool({ config: cfg, agentDir, authProfileStore });
+      createTool({ config: cfg, agentDir, authProfileStore });
+      createTool({ config: cfg, agentDir, authProfileStore });
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+    });
+    resolveSpy.mockRestore();
+  });
+
+  it("does not reuse cached PDF model config after config changes for the same agentDir", async () => {
+    const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
+    const createTool = await loadCreatePdfTool();
+    const authProfileStore = { version: 1, profiles: {} };
+    await withTempPdfAgentDir(async (agentDir) => {
+      expect(
+        createTool({ config: withPdfModel(ANTHROPIC_PDF_MODEL), agentDir, authProfileStore })?.name,
+      ).toBe("pdf");
+      expect(
+        createTool({ config: withPdfModel(OPENAI_PDF_MODEL), agentDir, authProfileStore })?.name,
+      ).toBe("pdf");
+      expect(resolveSpy).toHaveBeenCalledTimes(2);
+    });
+    resolveSpy.mockRestore();
+  });
+
+  it("does not cache an unavailable PDF tool after auth profiles become available", async () => {
+    const resolveSpy = vi
+      .spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool")
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce({ primary: ANTHROPIC_PDF_MODEL });
+    const createTool = await loadCreatePdfTool();
+    const cfg = withDefaultModel("openai/gpt-5.4");
+    const authProfileStore = { version: 1, profiles: {} } as {
+      version: 1;
+      profiles: Record<string, { type: "api_key"; provider: string; key: string }>;
+    };
+    await withTempPdfAgentDir(async (agentDir) => {
+      expect(createTool({ config: cfg, agentDir, authProfileStore })).toBeNull();
+      authProfileStore.profiles.anthropic = {
+        type: "api_key",
+        provider: "anthropic",
+        key: "test-key",
+      };
+      expect(createTool({ config: cfg, agentDir, authProfileStore })?.name).toBe("pdf");
+    });
+    expect(resolveSpy).toHaveBeenCalledTimes(2);
+    resolveSpy.mockRestore();
   });
 
   it("rejects when no pdf input provided", async () => {

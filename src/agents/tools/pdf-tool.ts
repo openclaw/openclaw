@@ -1,5 +1,6 @@
 import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
+import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   classifyMediaReferenceSource,
@@ -13,6 +14,8 @@ import {
 } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { listKnownProviderEnvApiKeyNames } from "../model-auth-env-vars.js";
+import { stableStringify } from "../stable-stringify.js";
 import { type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
@@ -76,6 +79,71 @@ export const PdfToolSchema = Type.Object({
 // ---------------------------------------------------------------------------
 
 export { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
+
+const knownProviderEnvAuthKeys = listKnownProviderEnvApiKeyNames();
+const pdfModelConfigCache = new Map<string, ImageModelConfig | null>();
+
+/** @internal — exposed for test teardown only */
+export function clearPdfToolModelConfigCache(): void {
+  pdfModelConfigCache.clear();
+}
+
+function resolveAuthProfileAvailabilityCacheKey(authStore: AuthProfileStore): string {
+  const profiles = Object.entries(authStore.profiles)
+    .map(([id, credential]) => ({
+      id,
+      provider: credential.provider,
+      type: credential.type,
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  return stableStringify({ profiles });
+}
+
+function resolveEnvAuthPresenceCacheKey(): string {
+  return stableStringify(
+    knownProviderEnvAuthKeys.map((key) => [key, Boolean(process.env[key]?.trim())]),
+  );
+}
+
+function resolvePdfModelConfigCacheKey(params: {
+  agentDir: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  authStore: AuthProfileStore;
+}): string {
+  return stableStringify({
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir ?? "",
+    config: params.config ? resolveRuntimeConfigCacheKey(params.config) : "none",
+    authStore: resolveAuthProfileAvailabilityCacheKey(params.authStore),
+    envAuth: resolveEnvAuthPresenceCacheKey(),
+  });
+}
+
+function resolveCachedPdfModelConfig(params: {
+  cfg?: OpenClawConfig;
+  agentDir: string;
+  workspaceDir?: string;
+  authStore?: AuthProfileStore;
+}): ImageModelConfig | null {
+  const authStore = params.authStore;
+  if (!authStore) {
+    return resolvePdfModelConfigForTool(params);
+  }
+  const cacheKey = resolvePdfModelConfigCacheKey({
+    agentDir: params.agentDir,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    authStore,
+  });
+  const cached = pdfModelConfigCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const resolved = resolvePdfModelConfigForTool(params);
+  pdfModelConfigCache.set(cacheKey, resolved);
+  return resolved;
+}
 
 // ---------------------------------------------------------------------------
 // Build context for extraction fallback path
@@ -259,7 +327,7 @@ export function createPdfTool(options?: {
     return null;
   }
 
-  const pdfModelConfig = resolvePdfModelConfigForTool({
+  const pdfModelConfig = resolveCachedPdfModelConfig({
     cfg: options?.config,
     agentDir,
     workspaceDir: options?.workspaceDir,
