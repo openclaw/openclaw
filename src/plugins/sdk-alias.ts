@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { existsSyncCached } from "../shared/cached-fs.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 
@@ -79,7 +80,7 @@ function hasTrustedOpenClawRootIndicator(params: {
     (typeof params.packageJson.bin === "object" &&
       params.packageJson.bin !== null &&
       typeof params.packageJson.bin.openclaw === "string");
-  const hasOpenClawEntrypoint = fs.existsSync(path.join(params.packageRoot, "openclaw.mjs"));
+  const hasOpenClawEntrypoint = existsSyncCached(path.join(params.packageRoot, "openclaw.mjs"));
   return hasCliEntryExport || hasOpenClawBin || hasOpenClawEntrypoint;
 }
 
@@ -248,7 +249,7 @@ export function resolvePluginSdkAliasFile(params: {
       moduleUrl: params.moduleUrl,
       pluginSdkResolution: params.pluginSdkResolution,
     })) {
-      if (fs.existsSync(candidate)) {
+      if (existsSyncCached(candidate)) {
         return candidate;
       }
     }
@@ -278,7 +279,7 @@ const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
   /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
 
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {
-  if (!fs.existsSync(candidate)) {
+  if (!existsSyncCached(candidate)) {
     return false;
   }
   switch (normalizeLowercaseStringOrEmpty(path.extname(candidate))) {
@@ -293,7 +294,7 @@ function isUsableDistPluginSdkArtifact(candidate: string): boolean {
     const source = fs.readFileSync(candidate, "utf-8");
     for (const match of source.matchAll(JS_STATIC_RELATIVE_DEPENDENCY_PATTERN)) {
       const specifier = match[1];
-      if (!specifier || fs.existsSync(path.resolve(path.dirname(candidate), specifier))) {
+      if (!specifier || existsSyncCached(path.resolve(path.dirname(candidate), specifier))) {
         continue;
       }
       return false;
@@ -330,7 +331,7 @@ function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
     return true;
   }
   return PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.some((ext) =>
-    fs.existsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
+    existsSyncCached(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
   );
 }
 
@@ -443,7 +444,7 @@ export function resolvePluginSdkScopedAliasMap(
       }
       for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
         const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
-        if (!fs.existsSync(candidate)) {
+        if (!existsSyncCached(candidate)) {
           continue;
         }
         for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
@@ -476,14 +477,14 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
     for (const kind of orderedKinds) {
       if (kind === "dist") {
         const candidate = path.join(packageRoot, "dist", "extensionAPI.js");
-        if (fs.existsSync(candidate)) {
+        if (existsSyncCached(candidate)) {
           return candidate;
         }
         continue;
       }
       for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
         const candidate = path.join(packageRoot, "src", `extensionAPI${ext}`);
-        if (fs.existsSync(candidate)) {
+        if (existsSyncCached(candidate)) {
           return candidate;
         }
       }
@@ -666,7 +667,7 @@ export function resolvePluginRuntimeModulePath(
           path.join(path.dirname(modulePath), "runtime", "index.js"),
         ];
     for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
+      if (existsSyncCached(candidate)) {
         return candidate;
       }
     }

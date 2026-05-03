@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { existsSyncCached } from "../shared/cached-fs.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -28,10 +29,10 @@ function resolveDisabledBundledPluginsDir(): string {
 
 function isSourceCheckoutRoot(packageRoot: string): boolean {
   return (
-    fs.existsSync(path.join(packageRoot, ".git")) &&
-    fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
-    fs.existsSync(path.join(packageRoot, "src")) &&
-    fs.existsSync(path.join(packageRoot, "extensions"))
+    existsSyncCached(path.join(packageRoot, ".git")) &&
+    existsSyncCached(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+    existsSyncCached(path.join(packageRoot, "src")) &&
+    existsSyncCached(path.join(packageRoot, "extensions"))
   );
 }
 
@@ -50,7 +51,7 @@ function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boole
 }
 
 function hasUsableBundledPluginTree(pluginsDir: string): boolean {
-  if (!fs.existsSync(pluginsDir)) {
+  if (!existsSyncCached(pluginsDir)) {
     return false;
   }
   try {
@@ -60,8 +61,8 @@ function hasUsableBundledPluginTree(pluginsDir: string): boolean {
       }
       const pluginDir = path.join(pluginsDir, entry.name);
       return (
-        fs.existsSync(path.join(pluginDir, "package.json")) ||
-        fs.existsSync(path.join(pluginDir, "openclaw.plugin.json"))
+        existsSyncCached(path.join(pluginDir, "package.json")) ||
+        existsSyncCached(path.join(pluginDir, "openclaw.plugin.json"))
       );
     });
   } catch {
@@ -115,6 +116,8 @@ export function resolveSourceCheckoutDependencyDiagnostic(
     if (!hasUsableBundledPluginTree(extensionsDir)) {
       continue;
     }
+    // Not cached: this diagnostic is re-evaluated after the user runs
+    // `pnpm install`, so the result must reflect the current disk state.
     if (fs.existsSync(path.join(packageRoot, "node_modules", ".pnpm"))) {
       continue;
     }
@@ -173,10 +176,10 @@ function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefin
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
   const hasUsableRuntimeTree = sourceCheckout
     ? hasUsableBundledPluginTree(runtimeExtensionsDir)
-    : fs.existsSync(runtimeExtensionsDir);
+    : existsSyncCached(runtimeExtensionsDir);
   const hasUsableBuiltTree = sourceCheckout
     ? hasUsableBundledPluginTree(builtExtensionsDir)
-    : fs.existsSync(builtExtensionsDir);
+    : existsSyncCached(builtExtensionsDir);
   if (sourceCheckout && hasUsableBuiltTree) {
     return builtExtensionsDir;
   }
@@ -226,7 +229,7 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
   let rejectedExistingOverride: string | null = null;
   if (override) {
     const resolvedOverride = resolveUserPath(override, env);
-    if (fs.existsSync(resolvedOverride)) {
+    if (existsSyncCached(resolvedOverride)) {
       if (shouldTrustTestBundledPluginsDirOverride(env)) {
         return path.resolve(resolvedOverride);
       }
@@ -267,11 +270,11 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
   try {
     const execDir = path.dirname(process.execPath);
     const siblingBuilt = path.join(execDir, "dist", "extensions");
-    if (fs.existsSync(siblingBuilt)) {
+    if (existsSyncCached(siblingBuilt)) {
       return siblingBuilt;
     }
     const sibling = path.join(execDir, "extensions");
-    if (fs.existsSync(sibling)) {
+    if (existsSyncCached(sibling)) {
       return sibling;
     }
   } catch {
@@ -283,7 +286,7 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
     let cursor = path.dirname(fileURLToPath(import.meta.url));
     for (let i = 0; i < 6; i += 1) {
       const candidate = path.join(cursor, "extensions");
-      if (fs.existsSync(candidate)) {
+      if (existsSyncCached(candidate)) {
         return candidate;
       }
       const parent = path.dirname(cursor);

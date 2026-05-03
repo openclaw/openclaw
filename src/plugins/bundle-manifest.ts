@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { existsSyncCached } from "../shared/cached-fs.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -142,7 +143,7 @@ function resolveCodexSkillDirs(raw: Record<string, unknown>, rootDir: string): s
   if (declared.length > 0) {
     return declared;
   }
-  return fs.existsSync(path.join(rootDir, "skills")) ? ["skills"] : [];
+  return existsSyncCached(path.join(rootDir, "skills")) ? ["skills"] : [];
 }
 
 function resolveCodexHookDirs(raw: Record<string, unknown>, rootDir: string): string[] {
@@ -150,18 +151,18 @@ function resolveCodexHookDirs(raw: Record<string, unknown>, rootDir: string): st
   if (declared.length > 0) {
     return declared;
   }
-  return fs.existsSync(path.join(rootDir, "hooks")) ? ["hooks"] : [];
+  return existsSyncCached(path.join(rootDir, "hooks")) ? ["hooks"] : [];
 }
 
 function resolveCursorSkillsRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
   const declared = normalizeBundlePathList(raw.skills);
-  const defaults = fs.existsSync(path.join(rootDir, "skills")) ? ["skills"] : [];
+  const defaults = existsSyncCached(path.join(rootDir, "skills")) ? ["skills"] : [];
   return mergeBundlePathLists(defaults, declared);
 }
 
 function resolveCursorCommandRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
   const declared = normalizeBundlePathList(raw.commands);
-  const defaults = fs.existsSync(path.join(rootDir, ".cursor", "commands"))
+  const defaults = existsSyncCached(path.join(rootDir, ".cursor", "commands"))
     ? [".cursor/commands"]
     : [];
   return mergeBundlePathLists(defaults, declared);
@@ -176,25 +177,29 @@ function resolveCursorSkillDirs(raw: Record<string, unknown>, rootDir: string): 
 
 function resolveCursorAgentDirs(raw: Record<string, unknown>, rootDir: string): string[] {
   const declared = normalizeBundlePathList(raw.subagents ?? raw.agents);
-  const defaults = fs.existsSync(path.join(rootDir, ".cursor", "agents")) ? [".cursor/agents"] : [];
+  const defaults = existsSyncCached(path.join(rootDir, ".cursor", "agents"))
+    ? [".cursor/agents"]
+    : [];
   return mergeBundlePathLists(defaults, declared);
 }
 
 function hasCursorHookCapability(raw: Record<string, unknown>, rootDir: string): boolean {
   return (
     hasInlineCapabilityValue(raw.hooks) ||
-    fs.existsSync(path.join(rootDir, ".cursor", "hooks.json"))
+    existsSyncCached(path.join(rootDir, ".cursor", "hooks.json"))
   );
 }
 
 function hasCursorRulesCapability(raw: Record<string, unknown>, rootDir: string): boolean {
   return (
-    hasInlineCapabilityValue(raw.rules) || fs.existsSync(path.join(rootDir, ".cursor", "rules"))
+    hasInlineCapabilityValue(raw.rules) || existsSyncCached(path.join(rootDir, ".cursor", "rules"))
   );
 }
 
 function hasCursorMcpCapability(raw: Record<string, unknown>, rootDir: string): boolean {
-  return hasInlineCapabilityValue(raw.mcpServers) || fs.existsSync(path.join(rootDir, ".mcp.json"));
+  return (
+    hasInlineCapabilityValue(raw.mcpServers) || existsSyncCached(path.join(rootDir, ".mcp.json"))
+  );
 }
 
 function resolveClaudeComponentPaths(
@@ -205,7 +210,7 @@ function resolveClaudeComponentPaths(
 ): string[] {
   const declared = normalizeBundlePathList(raw[key]);
   const existingDefaults = defaults.filter((candidate) =>
-    fs.existsSync(path.join(rootDir, candidate)),
+    existsSyncCached(path.join(rootDir, candidate)),
   );
   return mergeBundlePathLists(existingDefaults, declared);
 }
@@ -248,7 +253,7 @@ function resolveClaudeOutputStylePaths(raw: Record<string, unknown>, rootDir: st
 }
 
 function resolveClaudeSettingsFiles(_raw: Record<string, unknown>, rootDir: string): string[] {
-  return fs.existsSync(path.join(rootDir, "settings.json")) ? ["settings.json"] : [];
+  return existsSyncCached(path.join(rootDir, "settings.json")) ? ["settings.json"] : [];
 }
 
 function hasClaudeHookCapability(raw: Record<string, unknown>, rootDir: string): boolean {
@@ -263,10 +268,13 @@ function buildCodexCapabilities(raw: Record<string, unknown>, rootDir: string): 
   if (resolveCodexHookDirs(raw, rootDir).length > 0) {
     capabilities.push("hooks");
   }
-  if (hasInlineCapabilityValue(raw.mcpServers) || fs.existsSync(path.join(rootDir, ".mcp.json"))) {
+  if (
+    hasInlineCapabilityValue(raw.mcpServers) ||
+    existsSyncCached(path.join(rootDir, ".mcp.json"))
+  ) {
     capabilities.push("mcpServers");
   }
-  if (hasInlineCapabilityValue(raw.apps) || fs.existsSync(path.join(rootDir, ".app.json"))) {
+  if (hasInlineCapabilityValue(raw.apps) || existsSyncCached(path.join(rootDir, ".app.json"))) {
     capabilities.push("apps");
   }
   return capabilities;
@@ -416,21 +424,21 @@ export function loadBundleManifest(params: {
 }
 
 export function detectBundleManifestFormat(rootDir: string): PluginBundleFormat | null {
-  if (fs.existsSync(path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH))) {
+  if (existsSyncCached(path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH))) {
     return "codex";
   }
-  if (fs.existsSync(path.join(rootDir, CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH))) {
+  if (existsSyncCached(path.join(rootDir, CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH))) {
     return "cursor";
   }
-  if (fs.existsSync(path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH))) {
+  if (existsSyncCached(path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH))) {
     return "claude";
   }
-  if (fs.existsSync(path.join(rootDir, PLUGIN_MANIFEST_FILENAME))) {
+  if (existsSyncCached(path.join(rootDir, PLUGIN_MANIFEST_FILENAME))) {
     return null;
   }
   if (
     DEFAULT_PLUGIN_ENTRY_CANDIDATES.some((candidate) =>
-      fs.existsSync(path.join(rootDir, candidate)),
+      existsSyncCached(path.join(rootDir, candidate)),
     )
   ) {
     return null;
@@ -444,7 +452,7 @@ export function detectBundleManifestFormat(rootDir: string): PluginBundleFormat 
     path.join(rootDir, ".lsp.json"),
     path.join(rootDir, "settings.json"),
   ];
-  if (manifestlessClaudeMarkers.some((candidate) => fs.existsSync(candidate))) {
+  if (manifestlessClaudeMarkers.some((candidate) => existsSyncCached(candidate))) {
     return "claude";
   }
   return null;
