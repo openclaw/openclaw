@@ -483,6 +483,44 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Logging behavior controls for severity, output destinations, formatting, and sensitive-data redaction. Keep levels and redaction strict enough for production while preserving useful diagnostics.",
       },
+      security: {
+        type: "object",
+        properties: {
+          audit: {
+            type: "object",
+            properties: {
+              suppressions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    checkId: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    titleIncludes: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    detailIncludes: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    reason: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                  },
+                  required: ["checkId"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
+      },
       cli: {
         type: "object",
         properties: {
