@@ -671,6 +671,23 @@ describe("device-pair /pair default setup code", () => {
     });
   });
 
+  it("allows command owners to issue setup codes from non-gateway command surfaces", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "telegram",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: undefined,
+        senderIsOwner: true,
+      }),
+    );
+    const text = requireText(result);
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Pairing setup code generated.");
+  });
+
   it("normalizes bare publicUrl host ports before issuing setup codes", async () => {
     const command = registerPairCommand({
       pluginConfig: {
@@ -861,6 +878,25 @@ describe("device-pair /pair approve", () => {
     expect(result).toEqual({
       text: "⚠️ This command requires operator.pairing.",
     });
+  });
+
+  it("allows command owners to approve from non-gateway command surfaces", async () => {
+    mockPendingPairingList();
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce(makeApprovedPairingResult());
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "telegram",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: undefined,
+        senderIsOwner: true,
+      }),
+    );
+
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1");
+    expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
   });
 
   it("fails closed for approvals when internal gateway scopes are absent", async () => {

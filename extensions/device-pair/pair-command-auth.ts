@@ -1,6 +1,7 @@
 type PairingCommandAuthParams = {
   channel: string;
   gatewayClientScopes?: readonly string[] | null;
+  senderIsOwner?: boolean;
 };
 
 type PairingCommandAuthState = {
@@ -17,6 +18,14 @@ export function resolvePairingCommandAuthState(
   params: PairingCommandAuthParams,
 ): PairingCommandAuthState {
   const isInternalGatewayCaller = isInternalGatewayPairingCaller(params);
+  if (params.senderIsOwner === true) {
+    return {
+      isInternalGatewayCaller,
+      isMissingPairingPrivilege: false,
+      approvalCallerScopes: undefined,
+    };
+  }
+
   if (!isInternalGatewayCaller) {
     return {
       isInternalGatewayCaller,

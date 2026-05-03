@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import {
@@ -568,6 +568,59 @@ describe("registerPluginCommand", () => {
     });
 
     expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("allows command owners to run scoped plugin commands without gateway scopes", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    const handler = vi.fn(async (ctx: { senderIsOwner?: boolean }) => {
+      observedOwnerStatus = ctx.senderIsOwner;
+      return { text: "ok" };
+    });
+    registerPluginCommand("demo-plugin", {
+      name: "pairlike",
+      description: "Scoped command",
+      requiredScopes: ["operator.pairing"],
+      handler,
+    });
+    const match = matchPluginCommand("/pairlike");
+    expect(match).toBeTruthy();
+
+    const result = await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/pairlike",
+      config: {},
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(observedOwnerStatus).toBe(true);
+  });
+
+  it("rejects non-owner scoped plugin commands without gateway scopes", async () => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+    registerPluginCommand("demo-plugin", {
+      name: "pairlike",
+      description: "Scoped command",
+      requiredScopes: ["operator.pairing"],
+      handler,
+    });
+    const match = matchPluginCommand("/pairlike");
+    expect(match).toBeTruthy();
+
+    const result = await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: false,
+      commandBody: "/pairlike",
+      config: {},
+    });
+
+    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it("does not allow direct reserved command registrations to claim owner status", () => {

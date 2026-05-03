@@ -15,6 +15,20 @@ describe("device-pair pairing command auth", () => {
     });
   });
 
+  it("accepts command owners on non-gateway channels", () => {
+    expect(
+      resolvePairingCommandAuthState({
+        channel: "telegram",
+        gatewayClientScopes: undefined,
+        senderIsOwner: true,
+      }),
+    ).toEqual({
+      isInternalGatewayCaller: false,
+      isMissingPairingPrivilege: false,
+      approvalCallerScopes: undefined,
+    });
+  });
+
   it("fails closed for webchat when scopes are absent", () => {
     expect(
       resolvePairingCommandAuthState({

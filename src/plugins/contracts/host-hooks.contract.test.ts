@@ -1201,7 +1201,7 @@ describe("host-hook fixture plugin contract", () => {
     expect(validatePluginsUiDescriptorsParams({ pluginId: "host-hook-fixture" })).toBe(false);
   });
 
-  it("enforces command requiredScopes for gateway clients while preserving text command continuations", async () => {
+  it("enforces command requiredScopes for gateway clients and command owners", async () => {
     const handlerCalls: string[] = [];
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -1256,6 +1256,7 @@ describe("host-hook fixture plugin contract", () => {
         senderId: "owner",
         channel: "whatsapp",
         isAuthorizedSender: true,
+        senderIsOwner: true,
         sessionKey: "agent:main:main",
         commandBody: "/approval-fixture resume-text",
         config,
