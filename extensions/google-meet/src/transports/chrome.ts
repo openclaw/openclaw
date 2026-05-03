@@ -350,6 +350,11 @@ function meetStatusScript(params: {
       const label = buttonLabel(button);
       return pattern.test(label) && !button.disabled;
     });
+  const findCallControlButton = (pattern) =>
+    buttons.find((button) => {
+      const label = buttonLabel(button);
+      return pattern.test(label) && !/remotely mute|someone else/i.test(label) && !button.disabled;
+    });
   const input = [...document.querySelectorAll('input')].find((el) =>
     /your name/i.test(el.getAttribute('aria-label') || el.placeholder || '')
   );
@@ -364,7 +369,17 @@ function meetStatusScript(params: {
   const host = location.hostname.toLowerCase();
   const pageUrl = location.href;
   const permissionNeeded = /permission needed|microphone problem|speaker problem|allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera|speaker)/i.test(permissionText);
-  const mic = buttons.find((button) => /turn off microphone|turn on microphone|microphone/i.test(button.getAttribute('aria-label') || text(button)));
+  let mic = findCallControlButton(/^\\s*turn (?:off|on) microphone\\b/i);
+  if (!mic) {
+    const callControls = document.querySelector('[role="region"][aria-label="Call controls"]');
+    mic = [...(callControls?.querySelectorAll('button') || [])].find((button) =>
+      /^\\s*turn (?:off|on) microphone\\b/i.test(buttonLabel(button))
+    );
+  }
+  if (!readOnly && allowMicrophone && mic && /turn on microphone/i.test(buttonLabel(mic))) {
+    mic.click();
+    notes.push("Attempted to turn on the Meet microphone for realtime mode.");
+  }
   if (!readOnly && !allowMicrophone && mic && /turn off microphone/i.test(mic.getAttribute('aria-label') || text(mic))) {
     mic.click();
     notes.push("Muted Meet microphone for observe-only mode.");
@@ -495,7 +510,7 @@ function meetStatusScript(params: {
     clickedJoin: Boolean(join),
     clickedMicrophoneChoice: Boolean(allowMicrophone && microphoneChoice),
     inCall,
-    micMuted: mic ? /turn on microphone/i.test(mic.getAttribute('aria-label') || text(mic)) : undefined,
+    micMuted: mic ? /turn on microphone/i.test(buttonLabel(mic)) : undefined,
     lobbyWaiting,
     leaveReason,
     captioning,
@@ -623,7 +638,7 @@ async function openMeetWithBrowserRequest(params: {
         timeoutMs: Math.min(timeoutMs, 10_000),
       });
       browser = mergeBrowserNotes(parseMeetBrowserStatus(evaluated) ?? browser, permissionNotes);
-      if (browser?.inCall === true) {
+      if (browser?.inCall === true && (params.mode !== "realtime" || browser.micMuted !== true)) {
         return { launched: true, browser };
       }
       if (browser?.manualActionRequired === true) {

@@ -144,6 +144,13 @@ function evaluateSpeechReadiness(session: GoogleMeetSession): {
     };
   }
   if (health?.inCall === true) {
+    if (health.micMuted === true) {
+      return {
+        ready: false,
+        reason: "meet-microphone-muted",
+        message: "Turn on the OpenClaw Google Meet microphone before asking OpenClaw to speak.",
+      };
+    }
     if (session.chrome.audioBridge) {
       return { ready: true };
     }

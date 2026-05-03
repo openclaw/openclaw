@@ -2176,6 +2176,102 @@ describe("google-meet plugin", () => {
     expect(result.manualActionMessage).toContain("Allow microphone/camera/speaker permissions");
   });
 
+  it("uses the local Meet microphone control instead of remote participant mute buttons", () => {
+    const makeButton = (label: string, disabled = false) => ({
+      disabled,
+      innerText: "",
+      textContent: "",
+      click: vi.fn(),
+      getAttribute: vi.fn((name: string) => (name === "aria-label" ? label : null)),
+    });
+    const remoteMute = makeButton("You can't remotely mute Peter Steinberger's microphone", true);
+    const localMic = makeButton("Turn on microphone");
+    const document = {
+      body: { innerText: "", textContent: "" },
+      title: "Meet",
+      querySelector: vi.fn(() => null),
+      querySelectorAll: vi.fn((selector: string) => {
+        if (selector === "button") {
+          return [makeButton("Leave call"), remoteMute, localMic];
+        }
+        if (selector === "input") {
+          return [];
+        }
+        return [];
+      }),
+    };
+    const context = createContext({
+      JSON,
+      document,
+      location: {
+        href: "https://meet.google.com/abc-defg-hij",
+        hostname: "meet.google.com",
+      },
+      window: {},
+    });
+    const inspect = new Script(
+      `(${chromeTransportTesting.meetStatusScriptForTest({
+        allowMicrophone: true,
+        autoJoin: false,
+        captureCaptions: false,
+        guestName: "OpenClaw Agent",
+      })})`,
+    ).runInContext(context) as () => string;
+
+    const result = JSON.parse(inspect()) as { micMuted?: boolean; notes?: string[] };
+
+    expect(result.micMuted).toBe(true);
+    expect(localMic.click).toHaveBeenCalledTimes(1);
+    expect(remoteMute.click).not.toHaveBeenCalled();
+    expect(result.notes).toContain("Attempted to turn on the Meet microphone for realtime mode.");
+  });
+
+  it("blocks realtime speech while the Meet microphone remains muted", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      mockLocalMeetBrowserRequest({
+        inCall: true,
+        micMuted: true,
+        title: "Meet call",
+        url: "https://meet.google.com/abc-defg-hij",
+      });
+      const { methods } = setup({
+        chrome: {
+          audioBridgeCommand: ["bridge", "start"],
+          waitForInCallMs: 1,
+        },
+      });
+      const handler = methods.get("googlemeet.join") as
+        | ((ctx: {
+            params: Record<string, unknown>;
+            respond: ReturnType<typeof vi.fn>;
+          }) => Promise<void>)
+        | undefined;
+      const respond = vi.fn();
+
+      await handler?.({
+        params: { url: "https://meet.google.com/abc-defg-hij" },
+        respond,
+      });
+
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({
+        spoken: false,
+        session: {
+          chrome: {
+            health: {
+              micMuted: true,
+              speechReady: false,
+              speechBlockedReason: "meet-microphone-muted",
+            },
+          },
+        },
+      });
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
   it("joins Chrome on a paired node without local Chrome or BlackHole", async () => {
     const { methods, nodesList, nodesInvoke } = setup(
       {
