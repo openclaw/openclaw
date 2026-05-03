@@ -1,4 +1,5 @@
 import { deliverFinalizableDraftPreview } from "openclaw/plugin-sdk/channel-lifecycle";
+import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-streaming";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -8,7 +9,11 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
+import {
+  resolveMattermostAccount,
+  resolveMattermostReplyToMode,
+  type ResolvedMattermostAccount,
+} from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostMe,
@@ -113,6 +118,14 @@ export type MonitorMattermostOpts = {
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
   webSocketFactory?: MattermostWebSocketFactory;
 };
+
+export function shouldUpdateMattermostDraftToolProgress(
+  account: Pick<ResolvedMattermostAccount, "config" | "streamingMode">,
+): boolean {
+  return (
+    account.streamingMode !== "off" && resolveChannelStreamingPreviewToolProgress(account.config)
+  );
+}
 
 type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
@@ -1634,6 +1647,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
         });
         const draftPreviewEnabled = account.streamingMode !== "off";
+        const draftToolProgressEnabled = shouldUpdateMattermostDraftToolProgress(account);
         const draftStream = draftPreviewEnabled
           ? createMattermostDraftStream({
               client,
@@ -1848,6 +1862,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             }
                           },
                           onToolStart: async (payload) => {
+                            if (!draftToolProgressEnabled) {
+                              return;
+                            }
                             draftStream.update(buildMattermostToolStatusText(payload));
                           },
                         },
