@@ -13,6 +13,7 @@ export function applyLegacyCompatibilityStep(params: {
   state: DoctorConfigMutationState;
   issueLines: string[];
   changeLines: string[];
+  partiallyValid?: boolean;
 } {
   if (params.snapshot.legacyIssues.length === 0) {
     return {
@@ -63,6 +64,7 @@ export function applyLegacyCompatibilityStep(params: {
     },
     issueLines,
     changeLines: changes,
+    partiallyValid: partiallyValid === true ? true : undefined,
   };
 }
 

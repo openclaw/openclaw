@@ -224,6 +224,12 @@ export type ConfigWriteOptions = {
    * Omitted means the observer should use its normal reload plan.
    */
   afterWrite?: ConfigWriteAfterWrite;
+  /**
+   * Skip plugin-aware validation before writing. Use only for safe partial
+   * migrations (e.g. legacy key removal) where the base schema is valid but
+   * an unrelated plugin rule prevents the full write from succeeding.
+   */
+  skipPluginValidation?: boolean;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -2016,7 +2022,10 @@ export function createConfigIO(
 
     persistCandidate = applyUnsetPathsForWrite(persistCandidate as OpenClawConfig, unsetPaths);
 
-    const validated = validateConfigObjectRawWithPlugins(persistCandidate, { env: deps.env });
+    const validated = validateConfigObjectRawWithPlugins(persistCandidate, {
+      env: deps.env,
+      pluginValidation: options.skipPluginValidation ? "skip" : "full",
+    });
     if (!validated.ok) {
       const issue = validated.issues[0];
       const pathLabel = issue?.path ? issue.path : "<root>";
