@@ -121,6 +121,11 @@ import {
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
 import {
+  MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
+  createIdleTimeoutBreakerState,
+  stepIdleTimeoutBreaker,
+} from "./run/idle-timeout-breaker.js";
+import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveAckExecutionFastPathInstruction,
@@ -212,6 +217,16 @@ function normalizeEmbeddedRunAttemptResult(
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
   };
+}
+
+function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForRunner): boolean {
+  return (
+    attempt.assistantTexts.some((text) => text.trim().length > 0) ||
+    attempt.toolMetas.length > 0 ||
+    (attempt.clientToolCalls?.length ?? 0) > 0 ||
+    hasMessagingToolDeliveryEvidence(attempt) ||
+    attempt.itemLifecycle.completedCount > 0
+  );
 }
 
 function createEmptyAuthProfileStore(): AuthProfileStore {
@@ -755,6 +770,13 @@ export async function runEmbeddedPiAgent(
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
+      // Cost-runaway breaker for #76293. State lives at the run-loop level
+      // on purpose so it survives across attempt boundaries and across
+      // profile/auth retries within this embedded run (a wrapper-local
+      // counter would reset on every iteration). The helper is pure and
+      // unit-tested in run/idle-timeout-breaker.test.ts; the run loop just
+      // feeds it the outcome of each attempt.
+      const idleTimeoutBreakerState = createIdleTimeoutBreakerState();
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
@@ -1162,6 +1184,55 @@ export async function runEmbeddedPiAgent(
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
           lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          // Idle-timeout cost-runaway breaker (#76293). Logic lives in the
+          // pure helper below so it stays unit-testable; the run loop just
+          // feeds it the latest attempt outcome and bails through the
+          // existing retry-limit exhaustion path when the cap is hit.
+          const breakerStep = stepIdleTimeoutBreaker(idleTimeoutBreakerState, {
+            idleTimedOut,
+            completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
+            outputTokens: attemptUsage?.output,
+          });
+          if (breakerStep.tripped) {
+            const breakerMessage =
+              `Idle-timeout cost-runaway breaker tripped: ` +
+              `${breakerStep.consecutive} consecutive idle timeouts ` +
+              `without completed model progress ` +
+              `(cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}). ` +
+              `Halting further attempts to bound paid model calls. ` +
+              `See issue #76293.`;
+            log.error(
+              `[idle-timeout-circuit-breaker-tripped] ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `provider=${provider}/${modelId} ` +
+                `consecutive=${breakerStep.consecutive} ` +
+                `cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}`,
+            );
+            const breakerDecision = resolveRunFailoverDecision({
+              stage: "retry_limit",
+              fallbackConfigured,
+              failoverReason: lastRetryFailoverReason,
+            });
+            return handleRetryLimitExhaustion({
+              message: breakerMessage,
+              decision: breakerDecision,
+              provider,
+              model: modelId,
+              profileId: lastProfileId,
+              durationMs: Date.now() - started,
+              agentMeta: buildErrorAgentMeta({
+                sessionId: activeSessionId,
+                provider,
+                model: model.id,
+                contextTokens: ctxInfo.tokens,
+                usageAccumulator,
+                lastRunPromptUsage,
+                lastTurnTotal,
+              }),
+              replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
+              livenessState: "blocked",
+            });
+          }
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
           if (

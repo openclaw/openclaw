@@ -1467,8 +1467,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - check_name: check-additional-boundaries
+          - check_name: check-additional-boundaries-a
             group: boundaries
+            boundary_shard: 1/4
+          - check_name: check-additional-boundaries-b
+            group: boundaries
+            boundary_shard: 2/4
+          - check_name: check-additional-boundaries-c
+            group: boundaries
+            boundary_shard: 3/4
+          - check_name: check-additional-boundaries-d
+            group: boundaries
+            boundary_shard: 4/4
           - check_name: check-additional-extension-channels
             group: extension-channels
           - check_name: check-additional-extension-bundled
@@ -1573,6 +1583,7 @@ jobs:
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
