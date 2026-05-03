@@ -102,10 +102,10 @@ describe("buildOfficialChannelCatalog", () => {
               label: "Yuanbao",
             }),
             install: {
-              npmSpec: "openclaw-plugin-yuanbao@2.11.0",
+              npmSpec: "openclaw-plugin-yuanbao@3.0.1",
               defaultChoice: "npm",
               expectedIntegrity:
-                "sha512-lYmBrU71ox3v7dzRqaltvzTXPcMjjgYrNqpBj5HIBkXgEFkXRRG8wplXg9Fub41/FjsSPn3WAbYpdTc+k+jsHg==",
+                "sha512-dCsAA01aNnt5mtjCB6URzRwBBCbdVRDQWsUlS/5bM4KpgehWvMdc5EF2Tzx5EJOkRujPXW/wIKY9a9BZ1Fq/6w==",
             },
           }),
         }),
