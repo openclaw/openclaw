@@ -87,20 +87,11 @@ function readConfig() {
 
 function configureRuntime() {
   const pluginId = process.env.KITCHEN_SINK_ID;
-  const personality = process.env.KITCHEN_SINK_PERSONALITY;
   const { configPath, config } = readConfig();
   config.plugins = config.plugins || {};
   config.plugins.entries = config.plugins.entries || {};
   config.plugins.entries[pluginId] = {
     ...config.plugins.entries[pluginId],
-    ...(personality
-      ? {
-          config: {
-            ...config.plugins.entries[pluginId]?.config,
-            personality,
-          },
-        }
-      : {}),
     hooks: {
       ...config.plugins.entries[pluginId]?.hooks,
       allowConversationAccess: true,
@@ -210,6 +201,60 @@ function assertClawHubExternalInstallContract(installPath) {
   const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
   if (fs.existsSync(dependencyPackagePath)) {
     assertRealPathInside(installPath, dependencyPackagePath, "kitchen-sink isolated dependency");
+  }
+}
+
+function assertClawHubArtifactMetadata(record) {
+  if (record.artifactKind === "legacy-zip") {
+    if (record.artifactFormat !== "zip") {
+      throw new Error(
+        `missing kitchen-sink legacy ZIP artifact metadata: ${JSON.stringify(record)}`,
+      );
+    }
+    return;
+  }
+
+  if (record.artifactKind !== "npm-pack" || record.artifactFormat !== "tgz") {
+    throw new Error(`missing kitchen-sink ClawHub artifact metadata: ${JSON.stringify(record)}`);
+  }
+  if (!record.clawpackSha256 || typeof record.clawpackSize !== "number") {
+    throw new Error(`missing kitchen-sink ClawPack metadata: ${JSON.stringify(record)}`);
+  }
+  if (!record.npmIntegrity || !record.npmShasum || !record.npmTarballName) {
+    throw new Error(`missing kitchen-sink npm artifact metadata: ${JSON.stringify(record)}`);
+  }
+}
+
+function inferInstallSource(spec) {
+  if (spec?.startsWith("npm:")) {
+    return "npm";
+  }
+  if (spec?.startsWith("clawhub:")) {
+    return "clawhub";
+  }
+  return null;
+}
+
+function assertCutoverPreinstalled() {
+  const pluginId = process.env.KITCHEN_SINK_ID;
+  const preinstallSpec = process.env.KITCHEN_SINK_PREINSTALL_SPEC;
+  const source = inferInstallSource(preinstallSpec);
+  if (!pluginId || !preinstallSpec || !source) {
+    throw new Error(`invalid kitchen-sink cutover preinstall spec: ${preinstallSpec}`);
+  }
+
+  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
+  const index = readJson(indexPath);
+  const record = (index.installRecords ?? index.records ?? {})[pluginId];
+  if (!record) {
+    throw new Error(`missing kitchen-sink cutover preinstall record for ${pluginId}`);
+  }
+  if (record.source !== source) {
+    throw new Error(`expected kitchen-sink preinstall source=${source}, got ${record.source}`);
+  }
+  const expectedSpec = source === "npm" ? preinstallSpec.replace(/^npm:/u, "") : preinstallSpec;
+  if (record.spec !== expectedSpec) {
+    throw new Error(`expected kitchen-sink preinstall spec ${expectedSpec}, got ${record.spec}`);
   }
 }
 
@@ -356,6 +401,7 @@ function assertInstalled() {
     if (!record.version || !record.integrity || !record.resolvedAt) {
       throw new Error(`missing ClawHub resolution metadata: ${JSON.stringify(record)}`);
     }
+    assertClawHubArtifactMetadata(record);
   }
   if (typeof record.installPath !== "string" || record.installPath.length === 0) {
     throw new Error("missing kitchen-sink install path");
@@ -364,7 +410,7 @@ function assertInstalled() {
   if (!fs.existsSync(installPath)) {
     throw new Error(`kitchen-sink install path missing: ${record.installPath}`);
   }
-  if (source === "clawhub") {
+  if (source === "clawhub" && record.artifactKind === "npm-pack") {
     assertClawHubExternalInstallContract(installPath);
   }
   fs.writeFileSync(`/tmp/kitchen-sink-${label}-install-path.txt`, installPath, "utf8");
@@ -412,6 +458,7 @@ const commands = {
   "scan-logs": scanLogs,
   "configure-runtime": configureRuntime,
   "remove-channel-config": removeChannelConfig,
+  "assert-cutover-preinstalled": assertCutoverPreinstalled,
   "assert-installed": assertInstalled,
   "assert-removed": assertRemoved,
 };

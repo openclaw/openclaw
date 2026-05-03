@@ -60,6 +60,7 @@ type WebProviderRuntimeContext = {
   config: PluginLoadOptions["config"];
   activationSourceConfig?: PluginLoadOptions["config"];
   autoEnabledReasons: Record<string, string[]>;
+  loadPluginIds?: string[];
   onlyPluginIds?: string[];
 };
 
@@ -69,13 +70,18 @@ function resolveWebProviderRuntimeContext<TEntry>(
 ): WebProviderRuntimeContext {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const shouldFilterProviders =
+    params.config !== undefined ||
+    params.onlyPluginIds !== undefined ||
+    params.origin !== undefined ||
+    params.bundledAllowlistCompat === true;
   const { config, activationSourceConfig, autoEnabledReasons } =
     deps.resolveBundledResolutionConfig({
       ...params,
       workspaceDir,
       env,
     });
-  const onlyPluginIds = normalizePluginIdScope(
+  const candidatePluginIds = normalizePluginIdScope(
     deps.resolveCandidatePluginIds({
       config,
       workspaceDir,
@@ -84,11 +90,13 @@ function resolveWebProviderRuntimeContext<TEntry>(
       origin: params.origin,
     }),
   );
+  const onlyPluginIds = shouldFilterProviders ? candidatePluginIds : undefined;
   return {
     activationSourceConfig,
     autoEnabledReasons,
     config,
     env,
+    loadPluginIds: candidatePluginIds,
     onlyPluginIds,
     workspaceDir,
   };
@@ -110,8 +118,8 @@ function resolveWebProviderLoadOptions(
     {
       cache: params.cache ?? true,
       activate: params.activate ?? false,
-      ...(hasExplicitPluginIdScope(context.onlyPluginIds)
-        ? { onlyPluginIds: context.onlyPluginIds }
+      ...(hasExplicitPluginIdScope(context.loadPluginIds)
+        ? { onlyPluginIds: context.loadPluginIds }
         : {}),
     },
   );
@@ -176,7 +184,7 @@ export function resolvePluginWebProviders<TEntry>(
     env: context.env,
     loadOptions,
     workspaceDir: context.workspaceDir,
-    requiredPluginIds: context.onlyPluginIds,
+    requiredPluginIds: context.loadPluginIds,
   });
   if (compatible) {
     return deps.mapRegistryProviders({
@@ -192,7 +200,11 @@ export function resolvePluginWebProviders<TEntry>(
   if (hasExplicitEmptyScope) {
     return [];
   }
-  return [];
+  const registry = loadOpenClawPlugins(loadOptions);
+  return deps.mapRegistryProviders({
+    registry,
+    onlyPluginIds: context.onlyPluginIds,
+  });
 }
 
 export function resolveRuntimeWebProviders<TEntry>(

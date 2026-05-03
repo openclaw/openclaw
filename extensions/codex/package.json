@@ -26,9 +26,6 @@
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.5.1-beta.1"
     },
-    "bundle": {
-      "includeInCore": false
-    },
     "compat": {
       "pluginApi": ">=2026.5.2"
     },

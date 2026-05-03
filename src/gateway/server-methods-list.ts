@@ -96,6 +96,7 @@ const BASE_METHODS = [
   "sessions.messages.subscribe",
   "sessions.messages.unsubscribe",
   "sessions.preview",
+  "sessions.describe",
   "sessions.compaction.list",
   "sessions.compaction.get",
   "sessions.compaction.branch",
