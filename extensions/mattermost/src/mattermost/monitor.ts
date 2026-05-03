@@ -174,9 +174,20 @@ function buildMattermostInboundReplayKeys(params: {
   accountId: string;
   messageIds: string[];
 }): string[] {
-  return [...new Set(params.messageIds.map((id) => `${params.accountId}:${id.trim()}`))].filter(
-    (key) => !key.endsWith(":"),
-  );
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const id of params.messageIds) {
+    const trimmed = id.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = `${params.accountId}:${trimmed}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+  return keys;
 }
 
 export async function processMattermostReplayGuardedPost(params: {
@@ -2050,16 +2061,25 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         await handlePost(last.post, last.payload);
         return;
       }
-      const combinedText = entries
-        .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
-        .filter(Boolean)
-        .join("\n");
+      const combinedTextParts: string[] = [];
+      for (const entry of entries) {
+        const text = normalizeOptionalString(entry.post.message);
+        if (text) {
+          combinedTextParts.push(text);
+        }
+      }
+      const combinedText = combinedTextParts.join("\n");
       const mergedPost: MattermostPost = {
         ...last.post,
         message: combinedText,
         file_ids: [],
       };
-      const ids = entries.map((entry) => entry.post.id).filter(Boolean);
+      const ids: string[] = [];
+      for (const entry of entries) {
+        if (entry.post.id) {
+          ids.push(entry.post.id);
+        }
+      }
       await handlePost(mergedPost, last.payload, ids.length > 0 ? ids : undefined);
     },
     onError: (err) => {

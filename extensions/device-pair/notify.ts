@@ -38,7 +38,13 @@ function formatStringList(values?: readonly string[]): string {
   if (!Array.isArray(values) || values.length === 0) {
     return "none";
   }
-  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
+  const normalized: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      normalized.push(trimmed);
+    }
+  }
   return normalized.length > 0 ? normalized.join(", ") : "none";
 }
 
@@ -319,7 +325,10 @@ async function notifyPendingPairingRequests(params: {
   const pairing = await listDevicePairing();
   const pending = pairing.pending as PendingPairingRequest[];
   const now = Date.now();
-  const pendingIds = new Set(pending.map((entry) => entry.requestId));
+  const pendingIds = new Set<string>();
+  for (const entry of pending) {
+    pendingIds.add(entry.requestId);
+  }
   let changed = false;
 
   for (const [requestId, ts] of Object.entries(state.notifiedRequestIds)) {

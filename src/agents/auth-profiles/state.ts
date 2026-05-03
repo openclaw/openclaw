@@ -15,7 +15,13 @@ function normalizeAuthProfileOrder(raw: unknown): AuthProfileState["order"] {
     if (!Array.isArray(value)) {
       return acc;
     }
-    const list = value.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+    const list: string[] = [];
+    for (const entry of value) {
+      const normalized = normalizeOptionalString(entry);
+      if (normalized) {
+        list.push(normalized);
+      }
+    }
     if (list.length > 0) {
       acc[provider] = list;
     }

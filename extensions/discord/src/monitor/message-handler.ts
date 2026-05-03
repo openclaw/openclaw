@@ -158,7 +158,12 @@ export function createDiscordMessageHandler(
       if (!last) {
         return;
       }
-      const replayKeys = entries.map((entry) => entry.replayKey).filter(isNonEmptyString);
+      const replayKeys: string[] = [];
+      for (const entry of entries) {
+        if (isNonEmptyString(entry.replayKey)) {
+          replayKeys.push(entry.replayKey);
+        }
+      }
       const abortSignal = last.abortSignal;
       if (abortSignal?.aborted) {
         releaseDiscordInboundReplay({
@@ -190,12 +195,16 @@ export function createDiscordMessageHandler(
           messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
           return;
         }
-        const combinedBaseText = entries
-          .map((entry) =>
-            resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
-          )
-          .filter(Boolean)
-          .join("\n");
+        const combinedBaseTextParts: string[] = [];
+        for (const entry of entries) {
+          const text = resolveDiscordMessageText(entry.data.message, {
+            includeForwarded: false,
+          });
+          if (text) {
+            combinedBaseTextParts.push(text);
+          }
+        }
+        const combinedBaseText = combinedBaseTextParts.join("\n");
         const syntheticMessage = Object.create(Object.getPrototypeOf(last.data.message), {
           ...Object.getOwnPropertyDescriptors(last.data.message),
           content: { value: combinedBaseText, enumerable: true, configurable: true },
@@ -237,7 +246,13 @@ export function createDiscordMessageHandler(
         }
         applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
         if (entries.length > 1) {
-          const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
+          const ids: string[] = [];
+          for (const entry of entries) {
+            const id = entry.data.message?.id;
+            if (isNonEmptyString(id)) {
+              ids.push(id);
+            }
+          }
           if (ids.length > 0) {
             const ctxBatch = ctx as typeof ctx & {
               MessageSids?: string[];

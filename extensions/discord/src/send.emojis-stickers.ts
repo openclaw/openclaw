@@ -21,7 +21,13 @@ export async function uploadEmojiDiscord(payload: DiscordEmojiUpload, opts: Disc
     throw new Error("Discord emoji uploads require a PNG, JPG, or GIF image");
   }
   const image = `data:${contentType};base64,${media.buffer.toString("base64")}`;
-  const roleIds = (payload.roleIds ?? []).map((id) => id.trim()).filter(Boolean);
+  const roleIds: string[] = [];
+  for (const id of payload.roleIds ?? []) {
+    const trimmed = id.trim();
+    if (trimmed) {
+      roleIds.push(trimmed);
+    }
+  }
   return await createGuildEmoji(rest, payload.guildId, {
     body: {
       name: normalizeEmojiName(payload.name, "Emoji name"),

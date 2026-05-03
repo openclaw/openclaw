@@ -49,9 +49,15 @@ export async function listSpawnedSessionKeys(params: {
         spawnedBy: params.requesterSessionKey,
       },
     });
+    const keys = new Set<string>();
     const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-    const keys = sessions.map((entry) => normalizeOptionalString(entry?.key) ?? "").filter(Boolean);
-    return new Set(keys);
+    for (const entry of sessions) {
+      const key = normalizeOptionalString(entry?.key);
+      if (key) {
+        keys.add(key);
+      }
+    }
+    return keys;
   } catch {
     return new Set();
   }

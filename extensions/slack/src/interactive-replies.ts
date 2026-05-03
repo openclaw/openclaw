@@ -127,17 +127,23 @@ function hasSlackBlocks(payload: ReplyPayload): boolean {
 }
 
 function parseSimpleSlackOptions(raw: string): SlackChoice[] | null {
-  const entries = raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const entries: string[] = [];
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (trimmed) {
+      entries.push(trimmed);
+    }
+  }
   if (entries.length < 2 || entries.length > SLACK_AUTO_SELECT_MAX_ITEMS) {
     return null;
   }
   if (!entries.every((entry) => SLACK_SIMPLE_OPTION_RE.test(entry))) {
     return null;
   }
-  const deduped = new Set(entries.map((entry) => normalizeLowercaseStringOrEmpty(entry)));
+  const deduped = new Set<string>();
+  for (const entry of entries) {
+    deduped.add(normalizeLowercaseStringOrEmpty(entry));
+  }
   if (deduped.size !== entries.length) {
     return null;
   }

@@ -363,22 +363,23 @@ export function createDependentCredentialStatusIssueCollector(options: {
       return Boolean(normalized && normalized !== "none");
     });
 
-  return (accounts: ConfigIssueAccount[]): ChannelStatusIssue[] =>
-    accounts.flatMap((account) => {
+  return (accounts: ConfigIssueAccount[]): ChannelStatusIssue[] => {
+    const issues: ChannelStatusIssue[] = [];
+    for (const account of accounts) {
       if (account.configured !== false) {
-        return [];
+        continue;
       }
-      return [
-        {
-          channel: options.channel,
-          accountId: account.accountId ?? "",
-          kind: "config",
-          message: isDependencyConfigured(account[options.dependencySourceKey])
-            ? options.missingDependentMessage
-            : options.missingPrimaryMessage,
-        },
-      ];
-    });
+      issues.push({
+        channel: options.channel,
+        accountId: account.accountId ?? "",
+        kind: "config",
+        message: isDependencyConfigured(account[options.dependencySourceKey])
+          ? options.missingDependentMessage
+          : options.missingPrimaryMessage,
+      });
+    }
+    return issues;
+  };
 }
 
 /** Convert account runtime errors into the generic channel status issue format. */
@@ -386,18 +387,18 @@ export function collectStatusIssuesFromLastError(
   channel: string,
   accounts: Array<{ accountId: string; lastError?: unknown }>,
 ): ChannelStatusIssue[] {
-  return accounts.flatMap((account) => {
+  const issues: ChannelStatusIssue[] = [];
+  for (const account of accounts) {
     const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
     if (!lastError) {
-      return [];
+      continue;
     }
-    return [
-      {
-        channel,
-        accountId: account.accountId,
-        kind: "runtime",
-        message: `Channel error: ${lastError}`,
-      },
-    ];
-  });
+    issues.push({
+      channel,
+      accountId: account.accountId,
+      kind: "runtime",
+      message: `Channel error: ${lastError}`,
+    });
+  }
+  return issues;
 }
