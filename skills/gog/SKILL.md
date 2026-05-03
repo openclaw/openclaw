@@ -1,6 +1,6 @@
 ---
 name: gog
-description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
+description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, Docs, and Tasks.
 homepage: https://gogcli.sh
 metadata:
   {
@@ -24,12 +24,12 @@ metadata:
 
 # gog
 
-Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
+Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs/Tasks. Requires OAuth setup.
 
 Setup (once)
 
 - `gog auth credentials /path/to/client_secret.json`
-- `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
+- `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets,tasks`
 - `gog auth list`
 
 Common commands
@@ -57,6 +57,21 @@ Common commands
 - Sheets metadata: `gog sheets metadata <sheetId> --json`
 - Docs export: `gog docs export <docId> --format txt --out /tmp/doc.txt`
 - Docs cat: `gog docs cat <docId>`
+- Docs write markdown: `gog docs write <docId> --file ./notes.md --markdown --replace`
+- Docs find/replace: `gog docs edit <docId> "Old text" "New text"`
+- Docs list comments: `gog docs comments list <docId> --json`
+- Docs reply to comment: `gog docs comments reply <docId> <commentId> "Thanks, fixed"`
+- Tasks list task lists: `gog tasks lists --json`
+- Tasks create tasklist: `gog tasks lists create "Sprint Inbox" --json`
+- Tasks list: `gog tasks list <tasklistId> --json`
+- Tasks list completed: `gog tasks list <tasklistId> --show-completed --show-hidden --json`
+- Tasks get: `gog tasks get <tasklistId> <taskId> --json`
+- Tasks add: `gog tasks add <tasklistId> --title "Title" --notes "Description" --due 2026-04-26`
+- Tasks update: `gog tasks update <tasklistId> <taskId> --title "New title" --status completed`
+- Tasks done: `gog tasks done <tasklistId> <taskId>`
+- Tasks undo: `gog tasks undo <tasklistId> <taskId>`
+- Tasks delete: `gog tasks delete <tasklistId> <taskId>`
+- Tasks clear completed: `gog tasks clear <tasklistId>`
 
 Calendar Colors
 
@@ -100,6 +115,7 @@ Email Formatting
   ```
 
 - Example (HTML list):
+
   ```bash
   gog gmail send --to recipient@example.com \
     --subject "Meeting Follow-up" \
@@ -111,6 +127,6 @@ Notes
 - Set `GOG_ACCOUNT=you@gmail.com` to avoid repeating `--account`.
 - For scripting, prefer `--json` plus `--no-input`.
 - Sheets values can be passed via `--values-json` (recommended) or as inline rows.
-- Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).
+- Docs also supports native create/copy/write/edit/find-replace/clear flows; use `gog docs --help` to inspect the full command set.
 - Confirm before sending mail or creating events.
 - `gog gmail search` returns one row per thread; use `gog gmail messages search` when you need every individual email returned separately.
