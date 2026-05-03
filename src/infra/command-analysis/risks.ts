@@ -100,8 +100,37 @@ function optionName(token: string): string {
   return token.split("=", 1)[0] ?? token;
 }
 
-function hasInlineShortOptionValue(token: string): boolean {
-  return /^-[A-Za-z].+/u.test(token) && token.length > 2;
+type ParsedCarrierOption = {
+  name: string;
+  hasInlineValue: boolean;
+};
+
+function parseCarrierOptionToken(
+  token: string,
+  optionsWithValue: ReadonlySet<string>,
+): ParsedCarrierOption {
+  if (token.startsWith("--")) {
+    return { name: optionName(token), hasInlineValue: token.includes("=") };
+  }
+  const shortName = token.slice(0, 2);
+  if (/^-[A-Za-z]/u.test(shortName) && token.length > 2 && optionsWithValue.has(shortName)) {
+    return { name: shortName, hasInlineValue: true };
+  }
+  return { name: token, hasInlineValue: false };
+}
+
+function knownCarrierOptionConsumesNextValue(
+  option: ParsedCarrierOption,
+  standaloneOptions: ReadonlySet<string>,
+  optionsWithValue: ReadonlySet<string>,
+): boolean | null {
+  if (standaloneOptions.has(option.name)) {
+    return false;
+  }
+  if (optionsWithValue.has(option.name)) {
+    return !option.hasInlineValue;
+  }
+  return null;
 }
 
 function resolveEnvSplitPayload(payload: string, depth: number): string[] | null {
@@ -138,17 +167,18 @@ function resolveEnvCarriedArgv(argv: string[], depth = 0): string[] | null {
       return resolveEnvSplitPayload(token.slice(2), depth);
     }
     if (token.startsWith("-")) {
-      const normalized = optionName(token);
-      if (ENV_STANDALONE_OPTIONS.has(normalized)) {
-        continue;
+      const consumeNextValue = knownCarrierOptionConsumesNextValue(
+        parseCarrierOptionToken(token, ENV_OPTIONS_WITH_VALUE),
+        ENV_STANDALONE_OPTIONS,
+        ENV_OPTIONS_WITH_VALUE,
+      );
+      if (consumeNextValue === null) {
+        return null;
       }
-      if (ENV_OPTIONS_WITH_VALUE.has(normalized)) {
-        if (!token.includes("=") && !hasInlineShortOptionValue(token)) {
-          index += 1;
-        }
-        continue;
+      if (consumeNextValue) {
+        index += 1;
       }
-      return null;
+      continue;
     }
     return argv.slice(index);
   }
@@ -204,20 +234,22 @@ function resolveSudoLikeCarriedArgv(argv: string[]): string[] | null {
     if (!token.startsWith("-")) {
       return argv.slice(index);
     }
-    const normalized = optionName(token);
-    if (executable === "sudo" && SUDO_NON_EXEC_OPTIONS.has(normalized)) {
+    const option = parseCarrierOptionToken(token, optionsWithValue);
+    if (executable === "sudo" && SUDO_NON_EXEC_OPTIONS.has(option.name)) {
       return null;
     }
-    if (standaloneOptions.has(normalized)) {
-      continue;
+    const consumeNextValue = knownCarrierOptionConsumesNextValue(
+      option,
+      standaloneOptions,
+      optionsWithValue,
+    );
+    if (consumeNextValue === null) {
+      return null;
     }
-    if (optionsWithValue.has(normalized)) {
-      if (!token.includes("=") && !hasInlineShortOptionValue(token)) {
-        index += 1;
-      }
-      continue;
+    if (consumeNextValue) {
+      index += 1;
     }
-    return null;
+    continue;
   }
   return null;
 }
@@ -259,17 +291,18 @@ function resolveExecCarriedArgv(argv: string[]): string[] | null {
     if (!token.startsWith("-")) {
       return argv.slice(index);
     }
-    const normalized = optionName(token);
-    if (EXEC_STANDALONE_OPTIONS.has(normalized)) {
-      continue;
+    const consumeNextValue = knownCarrierOptionConsumesNextValue(
+      parseCarrierOptionToken(token, EXEC_OPTIONS_WITH_VALUE),
+      EXEC_STANDALONE_OPTIONS,
+      EXEC_OPTIONS_WITH_VALUE,
+    );
+    if (consumeNextValue === null) {
+      return null;
     }
-    if (EXEC_OPTIONS_WITH_VALUE.has(normalized)) {
-      if (!token.includes("=") && !hasInlineShortOptionValue(token)) {
-        index += 1;
-      }
-      continue;
+    if (consumeNextValue) {
+      index += 1;
     }
-    return null;
+    continue;
   }
   return null;
 }

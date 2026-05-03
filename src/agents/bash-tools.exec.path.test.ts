@@ -342,6 +342,8 @@ describe("exec host env validation", () => {
     "exec -a openclaw /approve abc123 deny",
     "sudo /approve abc123 allow-once",
     "sudo -E /approve abc123 allow-once",
+    "sudo -uroot bash -lc '/approve abc123 allow-once'",
+    "doas -uroot bash -lc '/approve abc123 deny'",
     "bash -lc '/approve abc123 deny'",
     "bash -c 'sudo /approve abc123 allow-once'",
     "sh -c '/approve abc123 allow-once'",
