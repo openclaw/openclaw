@@ -438,7 +438,7 @@ export function describeChannelPluginCatalogEntriesContract() {
             }),
           );
           return {
-            channelId: "openclaw-plugin-yuanbao",
+            channelId: "yuanbao",
             catalogPaths: [catalogPath],
             expected: {
               id: "yuanbao",
