@@ -191,6 +191,21 @@ function isValidMedia(
   return false;
 }
 
+function isValidContinuationMedia(candidate: string, wasQuoted: boolean): boolean {
+  const hasSpaces = /\s/.test(candidate);
+  const allowSpaces =
+    wasQuoted || /^https?:\/\//i.test(candidate) || looksLikeLocalFilePath(candidate);
+
+  if (hasSpaces && !allowSpaces) {
+    return false;
+  }
+
+  return isValidMedia(candidate, {
+    allowSpaces,
+    allowBareFilename: wasQuoted || !hasSpaces,
+  });
+}
+
 function unwrapQuoted(value: string): string | undefined {
   const trimmed = value.trim();
   if (trimmed.length < 2) {
@@ -525,7 +540,8 @@ export function splitMediaFromOutput(
   const keptLines: string[] = [];
 
   let lineOffset = 0; // Track character offset for fence checking
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
     // Skip MEDIA extraction if this line is inside a fenced code block
     if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
       keptLines.push(line);
@@ -560,7 +576,29 @@ export function splitMediaFromOutput(
     }
 
     const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
-    if (matches.length === 0) {
+    const isEmptyMediaDirective = matches.every((match) => (match[1] ?? "").trim() === "");
+    if (isEmptyMediaDirective) {
+      let nextLineOffset = lineOffset + line.length + 1;
+      const nextLine = lines[lineIndex + 1];
+      if (
+        nextLine !== undefined &&
+        !(hasFenceMarkers && isInsideFence(fenceSpans, nextLineOffset))
+      ) {
+        const candidateText = nextLine.trim();
+        if (candidateText) {
+          const unwrapped = unwrapQuoted(candidateText);
+          const candidate = normalizeMediaSource(cleanCandidate(unwrapped ?? candidateText));
+          if (isValidContinuationMedia(candidate, unwrapped !== undefined)) {
+            media.push(candidate);
+            foundMediaToken = true;
+            segments.push({ type: "media", url: candidate });
+            lineIndex += 1;
+            lineOffset = nextLineOffset + nextLine.length + 1;
+            continue;
+          }
+        }
+      }
+
       keptLines.push(line);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
