@@ -13,6 +13,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { __testing, createOpenClawTools } from "./openclaw-tools.js";
+import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
 
 function createAuthStore(providers: string[] = []): AuthProfileStore {
   return {
@@ -283,6 +284,21 @@ describe("optional media tool factory planning", () => {
       musicGenerate: true,
       pdf: true,
     });
+  });
+
+  it("defers PDF model resolution from the tool-prep hot path", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, []);
+    const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
+
+    const tools = createOpenClawTools({
+      config,
+      agentDir: "/tmp/openclaw-agent-main",
+      authProfileStore: createAuthStore(["anthropic"]),
+    });
+
+    expect(tools.map((tool) => tool.name)).toContain("pdf");
+    expect(resolveSpy).not.toHaveBeenCalled();
   });
 
   it("keeps enabled external manifest capability providers on the factory path", () => {
