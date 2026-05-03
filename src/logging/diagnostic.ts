@@ -461,6 +461,7 @@ export function logMessageQueued(params: {
   state.queueDepth += 1;
   state.lastActivity = Date.now();
   state.lastStuckWarnAgeMs = undefined;
+  state.lastLongRunningWarnAgeMs = undefined;
   if (diag.isEnabled("debug")) {
     diag.debug(
       `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
@@ -540,6 +541,7 @@ export function logSessionStateChange(
   state.state = params.state;
   state.lastActivity = Date.now();
   state.lastStuckWarnAgeMs = undefined;
+  state.lastLongRunningWarnAgeMs = undefined;
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
   }
@@ -571,6 +573,7 @@ export function markDiagnosticSessionProgress(params: SessionRef) {
   const state = getDiagnosticSessionState(params);
   state.lastActivity = Date.now();
   state.lastStuckWarnAgeMs = undefined;
+  state.lastLongRunningWarnAgeMs = undefined;
   markActivity();
 }
 
@@ -634,6 +637,19 @@ export function logSessionAttention(
       return undefined;
     }
     state.lastStuckWarnAgeMs = params.ageMs;
+  }
+  if (classification.eventType === "session.long_running") {
+    const nextWarnAgeMs =
+      state.lastLongRunningWarnAgeMs === undefined
+        ? params.thresholdMs
+        : Math.max(
+            state.lastLongRunningWarnAgeMs + params.thresholdMs,
+            state.lastLongRunningWarnAgeMs * 2,
+          );
+    if (params.ageMs < nextWarnAgeMs) {
+      return undefined;
+    }
+    state.lastLongRunningWarnAgeMs = params.ageMs;
   }
   const label =
     classification.eventType === "session.stuck"

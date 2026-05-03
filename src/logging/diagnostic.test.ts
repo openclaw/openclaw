@@ -320,7 +320,7 @@ describe("stuck session diagnostics threshold", () => {
       expect(events).toHaveLength(1);
       expect(recoverStuckSession).toHaveBeenCalledTimes(1);
 
-      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(31_000);
     } finally {
       unsubscribe();
     }
@@ -439,6 +439,48 @@ describe("stuck session diagnostics threshold", () => {
       reason: "active_work",
       activeWorkKind: "embedded_run",
     });
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("throttles repeated long-running active-work warnings", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      vi.advanceTimersByTime(45_000);
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      vi.advanceTimersByTime(16_000);
+
+      expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(1);
+
+      vi.advanceTimersByTime(28_000);
+      emitDiagnosticEvent({
+        type: "run.progress",
+        sessionId: "s1",
+        sessionKey: "main",
+        reason: "stream",
+      });
+      vi.advanceTimersByTime(2_000);
+
+      expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(1);
+    } finally {
+      unsubscribe();
+    }
+
+    const longRunningEvents = events.filter((event) => event.type === "session.long_running");
+    expect(longRunningEvents).toHaveLength(1);
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
