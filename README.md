@@ -107,6 +107,87 @@ openclaw onboard --install-daemon
 
 OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so it stays running.
 
+## Docker setup (optional)
+
+Use Docker if you want a containerized gateway, are validating the Docker flow, or want to reuse an existing OpenClaw config/workspace on the same machine without keeping the host-managed gateway service.
+
+Full runbook: [Docker guide](https://docs.openclaw.ai/install/docker)
+
+### Quick setup
+
+Prerequisites:
+
+- Docker Desktop (or Docker Engine) with Docker Compose v2
+- Enough RAM/disk for the image build and logs
+
+From the repo root:
+
+```bash
+./scripts/docker/setup.sh
+```
+
+To use a published image instead of building locally:
+
+```bash
+export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
+./scripts/docker/setup.sh
+```
+
+The setup script runs onboarding, writes the gateway token to `.env`, and starts `openclaw-gateway` with Docker Compose. After startup, open `http://127.0.0.1:18789/` and use the configured shared secret from `.env`.
+
+### Reuse an existing host install
+
+If OpenClaw already runs as a host-managed gateway on the same machine, stop that service first so it does not reclaim the gateway port:
+
+```bash
+openclaw gateway stop
+openclaw gateway uninstall
+```
+
+Then point Docker at the existing config and workspace before running setup:
+
+```bash
+export OPENCLAW_CONFIG_DIR="$HOME/.openclaw"
+export OPENCLAW_WORKSPACE_DIR="$HOME/.openclaw/workspace"
+
+# Optional: preserve absolute-path workspace mounts from an existing config
+export OPENCLAW_EXTRA_MOUNTS="$HOME/.openclaw/workspace:$HOME/.openclaw/workspace"
+
+./scripts/docker/setup.sh
+```
+
+`OPENCLAW_EXTRA_MOUNTS` is the compatibility path for configs that already pin `agents.defaults.workspace` or another runtime path to an absolute host location.
+
+### Local Docker configuration files
+
+- `.env` stores local runtime environment variables such as `OPENCLAW_GATEWAY_TOKEN`
+- `docker-compose.extra.yml` is generated when setup needs extra bind mounts or a named home volume
+- Both files are local deployment artifacts and should not be committed
+
+If `docker-compose.extra.yml` exists, include it in future Compose commands:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml up -d openclaw-gateway
+docker compose -f docker-compose.yml -f docker-compose.extra.yml logs -f openclaw-gateway
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm openclaw-cli gateway probe
+```
+
+### Common Docker environment variables
+
+- `OPENCLAW_CONFIG_DIR`: host directory mounted at `/home/node/.openclaw`
+- `OPENCLAW_WORKSPACE_DIR`: host directory mounted at `/home/node/.openclaw/workspace`
+- `OPENCLAW_IMAGE`: use a remote image instead of building locally
+- `OPENCLAW_EXTRA_MOUNTS`: extra bind mounts as `source:target[:opts]`
+
+For the full variable list, manual container flow, and VM/runtime persistence notes, see the [Docker guide](https://docs.openclaw.ai/install/docker).
+
+### Health checks
+
+```bash
+curl -fsS http://127.0.0.1:18789/healthz
+curl -fsS http://127.0.0.1:18789/readyz
+```
+
 ## Quick start (TL;DR)
 
 Runtime: **Node 24 (recommended) or Node 22.14+**.
