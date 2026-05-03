@@ -46,6 +46,13 @@ When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
+- Runtime performance reports: dispatch `OpenClaw Performance` with
+  `live_gpt54=true` for a real `openai/gpt-5.4` agent turn or
+  `deep_profile=true` for Kova CPU/heap/trace artifacts. Daily scheduled runs
+  publish mock-provider, deep-profile, and GPT 5.4 lane artifacts to
+  `openclaw/clawgrit-reports` when `CLAWGRIT_REPORTS_TOKEN` is configured. The
+  mock-provider report also includes source-level gateway boot, memory,
+  plugin-pressure, repeated fake-model hello-loop, and CLI startup numbers.
 - Docker live model sweep: `pnpm test:docker:live-models`
   - Each selected model now runs a text turn plus a small file-read-style probe.
     Models whose metadata advertises `image` input also run a tiny image turn.
@@ -102,18 +109,21 @@ When you only need one failing case, prefer narrowing live tests via the allowli
 
 These commands sit beside the main test suites when you need QA-lab realism:
 
-CI runs QA Lab in dedicated workflows. `Parity gate` runs on matching PRs and
-from manual dispatch with mock providers. `QA-Lab - All Lanes` runs nightly on
-`main` and from manual dispatch with the mock parity gate, live Matrix lane,
-Convex-managed live Telegram lane, and Convex-managed live Discord lane as
-parallel jobs. Scheduled QA and release checks pass Matrix `--profile fast`
-explicitly, while the Matrix CLI and manual workflow input default remain
-`all`; manual dispatch can shard `all` into `transport`, `media`, `e2ee-smoke`,
-`e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` runs parity plus
-the fast Matrix and Telegram lanes before release approval, using
-`mock-openai/gpt-5.5` for release transport checks so they stay deterministic
-and avoid normal provider-plugin startup. These live transport gateways disable
-memory search; memory behavior stays covered by the QA parity suites.
+CI runs QA Lab in dedicated workflows. Agentic parity is nested under
+`QA-Lab - All Lanes` and release validation, not a standalone PR workflow.
+Broad validation should use `Full Release Validation` with
+`rerun_group=qa-parity` or the release-checks QA group. `QA-Lab - All Lanes`
+runs nightly on `main` and from manual dispatch with the mock parity lane, live
+Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
+lane as parallel jobs. Scheduled QA and release checks pass Matrix
+`--profile fast` explicitly, while the Matrix CLI and manual workflow input
+default remain `all`; manual dispatch can shard `all` into `transport`,
+`media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release
+Checks` runs parity plus the fast Matrix and Telegram lanes before release
+approval, using `mock-openai/gpt-5.5` for release transport checks so they stay
+deterministic and avoid normal provider-plugin startup. These live transport
+gateways disable memory search; memory behavior stays covered by the QA parity
+suites.
 
 Full release live media shards use
 `ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, which already has
@@ -620,7 +630,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Npm tarball onboarding/channel/agent smoke: `pnpm test:docker:npm-onboard-channel-agent` installs the packed OpenClaw tarball globally in Docker, configures OpenAI via env-ref onboarding plus Telegram by default, runs doctor, and runs one mocked OpenAI agent turn. Reuse a prebuilt tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host rebuild with `OPENCLAW_NPM_ONBOARD_HOST_BUILD=0`, or switch channel with `OPENCLAW_NPM_ONBOARD_CHANNEL=discord`.
 - Update channel switch smoke: `pnpm test:docker:update-channel-switch` installs the packed OpenClaw tarball globally in Docker, switches from package `stable` to git `dev`, verifies the persisted channel and plugin post-update work, then switches back to package `stable` and checks update status.
 - Upgrade survivor smoke: `pnpm test:docker:upgrade-survivor` installs the packed OpenClaw tarball over a dirty old-user fixture with agents, channel config, plugin allowlists, stale plugin dependency state, and existing workspace/session files. It runs package update plus non-interactive doctor without live provider or channel keys, then starts a loopback Gateway and checks config/state preservation plus startup/status budgets.
-- Published upgrade survivor smoke: `pnpm test:docker:published-upgrade-survivor` installs `openclaw@latest` by default, seeds realistic existing-user files, configures that baseline with a baked command recipe, validates the resulting config, updates that published install to the candidate tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, then starts a loopback Gateway and checks configured intents, state preservation, startup, `/healthz`, `/readyz`, and RPC status budgets. Override one baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, ask the aggregate scheduler to expand exact baselines with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, and expand issue-shaped fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` such as `reported-issues`; Package Acceptance exposes those as `published_upgrade_survivor_baseline`, `published_upgrade_survivor_baselines`, and `published_upgrade_survivor_scenarios`.
+- Published upgrade survivor smoke: `pnpm test:docker:published-upgrade-survivor` installs `openclaw@latest` by default, seeds realistic existing-user files, configures that baseline with a baked command recipe, validates the resulting config, updates that published install to the candidate tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, then starts a loopback Gateway and checks configured intents, state preservation, startup, `/healthz`, `/readyz`, and RPC status budgets. Override one baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, ask the aggregate scheduler to expand exact baselines with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS` such as `all-since-2026.4.23`, and expand issue-shaped fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` such as `reported-issues`; the reported-issues set includes `configured-plugin-installs` for automatic external OpenClaw plugin install repair. Package Acceptance exposes those as `published_upgrade_survivor_baseline`, `published_upgrade_survivor_baselines`, and `published_upgrade_survivor_scenarios`.
 - Session runtime context smoke: `pnpm test:docker:session-runtime-context` verifies hidden runtime context transcript persistence plus doctor repair of affected duplicated prompt-rewrite branches.
 - Bun global install smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g` in an isolated home, and verifies `openclaw infer image providers --json` returns bundled image providers instead of hanging. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
 - Installer Docker smoke: `bash scripts/test-install-sh-docker.sh` shares one npm cache across its root, update, and direct-npm containers. Update smoke defaults to npm `latest` as the stable baseline before upgrading to the candidate tarball. Override with `OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE=2026.4.22` locally, or with the Install Smoke workflow's `update_baseline_version` input on GitHub. Non-root installer checks keep an isolated npm cache so root-owned cache entries do not mask user-local install behavior. Set `OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR=/path/to/cache` to reuse the root/update/direct-npm cache across local reruns.

@@ -1685,9 +1685,10 @@ export type PluginPackageChannelCliOption = {
 };
 
 export type PluginPackageInstall = {
+  clawhubSpec?: string;
   npmSpec?: string;
   localPath?: string;
-  defaultChoice?: "npm" | "local";
+  defaultChoice?: "clawhub" | "npm" | "local";
   minHostVersion?: string;
   expectedIntegrity?: string;
   allowInvalidConfigRecovery?: boolean;
@@ -1707,10 +1708,6 @@ export type OpenClawPackageSetupFeatures = {
   legacySessionSurfaces?: boolean;
 };
 
-export type OpenClawPackageBundle = {
-  includeInCore?: boolean;
-};
-
 export type OpenClawPackageManifest = {
   extensions?: string[];
   runtimeExtensions?: string[];
@@ -1719,7 +1716,6 @@ export type OpenClawPackageManifest = {
   setupFeatures?: OpenClawPackageSetupFeatures;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
-  bundle?: OpenClawPackageBundle;
   startup?: OpenClawPackageStartup;
 };
 
@@ -1741,6 +1737,8 @@ export type PackageManifest = {
   name?: string;
   version?: string;
   description?: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
 } & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
 
 export function getPackageManifestMetadata(
@@ -1750,12 +1748,6 @@ export function getPackageManifestMetadata(
     return undefined;
   }
   return manifest[MANIFEST_KEY];
-}
-
-export function isPackageIncludedInCoreBundle(
-  manifest: OpenClawPackageManifest | undefined,
-): boolean {
-  return manifest?.bundle?.includeInCore !== false;
 }
 
 export function resolvePackageExtensionEntries(

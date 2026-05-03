@@ -15,6 +15,7 @@
       "./index.ts"
     ],
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/diagnostics-prometheus",
       "npmSpec": "@openclaw/diagnostics-prometheus",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.25"

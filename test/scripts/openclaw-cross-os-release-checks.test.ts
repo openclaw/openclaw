@@ -56,6 +56,7 @@ import {
   shouldStopManagedGatewayBeforeManualFallback,
   shouldRunMainChannelDevUpdate,
   shouldRetryCrossOsAgentTurnError,
+  shouldSkipOptionalCrossOsAgentTurnError,
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
@@ -122,6 +123,47 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         new Error("Command timed out and could not be terminated cleanly"),
       ),
     ).toBe(true);
+  });
+
+  it("skips optional live agent turns only for model availability failures", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-skip-"));
+    try {
+      const logPath = join(dir, "agent.log");
+      writeFileSync(
+        logPath,
+        JSON.stringify({
+          status: "timeout",
+          result: {
+            payloads: [
+              {
+                text: "Request timed out before a response was generated.",
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(
+        shouldSkipOptionalCrossOsAgentTurnError(
+          new Error("Agent output did not contain the expected OK marker."),
+          logPath,
+        ),
+      ).toBe(true);
+      expect(
+        shouldSkipOptionalCrossOsAgentTurnError(
+          new Error("document-extract: failed to install bundled runtime deps"),
+          logPath,
+        ),
+      ).toBe(false);
+      expect(
+        shouldSkipOptionalCrossOsAgentTurnError(
+          new Error("Agent output did not contain the expected OK marker."),
+          join(dir, "missing.log"),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("allows cross-OS provider smoke models to use faster CI overrides", () => {
@@ -191,6 +233,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(looksLikeReleaseVersionRef("2026.4.5")).toBe(true);
     expect(looksLikeReleaseVersionRef("refs/tags/v2026.4.5-beta.1")).toBe(true);
     expect(looksLikeReleaseVersionRef("v2026.4.5-beta.1")).toBe(true);
+    expect(looksLikeReleaseVersionRef("refs/tags/v2026.4.5-alpha.1")).toBe(true);
+    expect(looksLikeReleaseVersionRef("v2026.4.5-alpha.1")).toBe(true);
     expect(looksLikeReleaseVersionRef("v2026.4.7-1")).toBe(true);
     expect(looksLikeReleaseVersionRef("main")).toBe(false);
     expect(looksLikeReleaseVersionRef("codex/cross-os-release-checks")).toBe(false);

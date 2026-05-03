@@ -104,7 +104,7 @@ function scanStalePluginConfigWithState(
       continue;
     }
     const pluginId = normalizePluginId(rawPluginId);
-    if (!pluginId || knownIds.has(pluginId)) {
+    if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
       continue;
     }
     hits.push({
@@ -119,7 +119,7 @@ function scanStalePluginConfigWithState(
   if (entries) {
     for (const rawPluginId of Object.keys(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
-      if (!pluginId || knownIds.has(pluginId)) {
+      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
         continue;
       }
       hits.push({
