@@ -145,9 +145,34 @@ export function listBundledPluginBuildEntries(params = {}) {
   );
 }
 
+export function collectRootPackageExcludedExtensionDirs(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const packageJsonPath = path.join(cwd, "package.json");
+  const excluded = new Set();
+  if (!fs.existsSync(packageJsonPath)) {
+    return excluded;
+  }
+
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  for (const entry of packageJson.files ?? []) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
+    if (match?.[1]) {
+      excluded.add(match[1]);
+    }
+  }
+  return excluded;
+}
+
 export function listBundledPluginPackArtifacts(params = {}) {
+  const excludedPackageDirs =
+    params.includeRootPackageExcludedDirs === true
+      ? new Set()
+      : collectRootPackageExcludedExtensionDirs(params);
   const entries = collectBundledPluginBuildEntries(params).filter(
-    ({ id }) => !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id),
+    ({ id }) => !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id) && !excludedPackageDirs.has(id),
   );
   const artifacts = new Set();
 

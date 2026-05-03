@@ -338,6 +338,23 @@ async function main() {
     response.writeHead(status, { "content-type": "application/json" });
     response.end(`${JSON.stringify(value)}\n`);
   };
+  const artifactResolverDetail = {
+    package: versionDetail.package ?? {
+      name: packageName,
+      displayName: packageDetail.package?.displayName ?? "OpenClaw Kitchen Sink",
+      family: packageDetail.package?.family ?? "code-plugin",
+    },
+    version: versionDetail.version,
+    artifact: {
+      source: "clawhub",
+      artifactKind: "npm-pack",
+      packageName,
+      version: fixture.version,
+      artifactSha256: clawpack.clawpackSha256,
+      npmIntegrity: clawpack.npmIntegrity,
+      npmShasum: clawpack.npmShasum,
+    },
+  };
 
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -355,6 +372,13 @@ async function main() {
       `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}`
     ) {
       json(response, versionDetail);
+      return;
+    }
+    if (
+      url.pathname ===
+      `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/artifact`
+    ) {
+      json(response, artifactResolverDetail);
       return;
     }
     if (

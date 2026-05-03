@@ -837,6 +837,46 @@ export function reconcileInspectableTasks(): TaskRecord[] {
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
+export type ActiveTaskRestartBlocker = {
+  taskId: string;
+  status: Extract<TaskStatus, "queued" | "running">;
+  runtime: TaskRecord["runtime"];
+  runId?: string;
+  label?: string;
+  title?: string;
+};
+
+function isActiveTaskRestartBlockerStatus(
+  status: TaskStatus,
+): status is ActiveTaskRestartBlocker["status"] {
+  return status === "queued" || status === "running";
+}
+
+export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[] {
+  const blockers: ActiveTaskRestartBlocker[] = [];
+  for (const task of reconcileInspectableTasks()) {
+    if (!isActiveTaskRestartBlockerStatus(task.status)) {
+      continue;
+    }
+    const blocker: ActiveTaskRestartBlocker = {
+      taskId: task.taskId,
+      status: task.status,
+      runtime: task.runtime,
+    };
+    if (task.runId) {
+      blocker.runId = task.runId;
+    }
+    if (task.label) {
+      blocker.label = task.label;
+    }
+    if (task.task) {
+      blocker.title = task.task;
+    }
+    blockers.push(blocker);
+  }
+  return blockers;
+}
+
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
   return summarizeTaskRecords(reconcileInspectableTasks());
 }

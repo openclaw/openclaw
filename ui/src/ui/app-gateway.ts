@@ -156,6 +156,15 @@ function isTerminalChatState(
   return state === "final" || state === "aborted" || state === "error";
 }
 
+function isSessionMessagePhasePayload(payload: unknown): boolean {
+  return (
+    Boolean(payload) &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    (payload as { phase?: unknown }).phase === "message"
+  );
+}
+
 type ConnectGatewayOptions = {
   reason?: "initial" | "seq-gap";
 };
@@ -740,7 +749,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    const applyResult = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    if (
+      applyResult.applied &&
+      applyResult.change === "updated" &&
+      isSessionMessagePhasePayload(evt.payload)
+    ) {
+      return;
+    }
     void loadSessions(host as unknown as SessionsState);
     return;
   }

@@ -36,6 +36,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
+      "npm-onboard-discord-channel-agent",
       "doctor-switch",
       "update-channel-switch",
       "plugins-offline",
@@ -98,14 +99,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         stateScenario: "empty",
       }),
     );
-    expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
-    expect(script).toContain("npm-latest-conformance");
-    expect(script).toContain("npm-latest-adversarial");
+    expect(script).toContain("npm:@openclaw/kitchen-sink@0.1.5");
+    expect(script).toContain("npm-pinned-conformance");
+    expect(script).toContain("npm-pinned-adversarial");
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
     expect(script).toContain(
-      "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||npm:@openclaw/kitchen-sink@latest",
+      "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
     );
     expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
@@ -173,6 +174,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(assertionsScript).toContain('node_modules", "openclaw');
     expect(fixtureServer).toContain('"is-number": "7.0.0"');
     expect(fixtureServer).toContain('openclaw: ">=2026.4.11"');
+    expect(fixtureServer).toContain("/versions/${fixture.version}/artifact");
   });
 
   it("wires the full plugin prerelease plan into its release workflow", () => {

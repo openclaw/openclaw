@@ -917,6 +917,7 @@ async function compactEmbeddedPiSessionDirectOnce(
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
+        debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
       await prewarmSessionFile(params.sessionFile);

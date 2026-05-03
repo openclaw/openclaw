@@ -5,6 +5,8 @@ type LoadOpenClawProviderIndex =
 type LoadPluginRegistrySnapshot = typeof import("./plugin-registry.js").loadPluginRegistrySnapshot;
 type ResolveManifestProviderAuthChoices =
   typeof import("./provider-auth-choices.js").resolveManifestProviderAuthChoices;
+type ListOfficialExternalProviderCatalogEntries =
+  typeof import("./official-external-plugin-catalog.js").listOfficialExternalProviderCatalogEntries;
 
 const loadOpenClawProviderIndex = vi.hoisted(() =>
   vi.fn<LoadOpenClawProviderIndex>(() => ({ version: 1, providers: {} })),
@@ -43,6 +45,19 @@ vi.mock("./provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoices,
 }));
 
+const listOfficialExternalProviderCatalogEntries = vi.hoisted(() =>
+  vi.fn<ListOfficialExternalProviderCatalogEntries>(() => []),
+);
+vi.mock("./official-external-plugin-catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("./official-external-plugin-catalog.js")>(
+    "./official-external-plugin-catalog.js",
+  );
+  return {
+    ...actual,
+    listOfficialExternalProviderCatalogEntries,
+  };
+});
+
 import {
   resolveProviderInstallCatalogEntries,
   resolveProviderInstallCatalogEntry,
@@ -64,6 +79,7 @@ describe("provider install catalog", () => {
       diagnostics: [],
     });
     resolveManifestProviderAuthChoices.mockReturnValue([]);
+    listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
   });
 
   it("merges manifest auth-choice metadata with registry install metadata", () => {
@@ -494,6 +510,57 @@ describe("provider install catalog", () => {
           pinState: "exact-with-integrity",
         },
         warnings: [],
+      },
+    });
+  });
+
+  it("surfaces official external provider install metadata when the provider plugin is not installed", () => {
+    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        name: "@openclaw/codex",
+        source: "official",
+        kind: "provider",
+        openclaw: {
+          plugin: { id: "codex", label: "Codex" },
+          providers: [
+            {
+              id: "codex",
+              name: "Codex",
+              authChoices: [
+                {
+                  method: "app-server",
+                  choiceId: "codex",
+                  choiceLabel: "Codex app-server",
+                  choiceHint: "Use the Codex app-server runtime.",
+                  groupId: "codex",
+                  groupLabel: "Codex",
+                  onboardingScopes: ["text-inference"],
+                },
+              ],
+            },
+          ],
+          install: {
+            npmSpec: "@openclaw/codex",
+            defaultChoice: "npm",
+          },
+        },
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntry("codex")).toMatchObject({
+      pluginId: "codex",
+      providerId: "codex",
+      methodId: "app-server",
+      choiceId: "codex",
+      choiceLabel: "Codex app-server",
+      choiceHint: "Use the Codex app-server runtime.",
+      groupId: "codex",
+      groupLabel: "Codex",
+      onboardingScopes: ["text-inference"],
+      label: "Codex",
+      install: {
+        npmSpec: "@openclaw/codex",
+        defaultChoice: "npm",
       },
     });
   });

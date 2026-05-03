@@ -112,8 +112,14 @@ export type EmbeddedRunAttemptResult = {
   promptCache?: ContextEnginePromptCacheInfo;
   compactionCount?: number;
   compactionTokensAfter?: number;
-  /** Client tool call detected (OpenResponses hosted tools). */
-  clientToolCall?: { name: string; params: Record<string, unknown> };
+  /**
+   * Client tool calls detected during this attempt (OpenResponses hosted
+   * tools), in the order the underlying LLM emitted them. Field is
+   * `undefined` when no client tools were called so existing truthiness
+   * checks across the runner pipeline (`attempt.clientToolCalls ? ...`)
+   * keep their meaning. When set, the array always has at least one entry.
+   */
+  clientToolCalls?: Array<{ name: string; params: Record<string, unknown> }>;
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
   replayMetadata: EmbeddedRunReplayMetadata;

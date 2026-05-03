@@ -15,6 +15,7 @@ import {
   downloadClawHubPackageArchive,
   fetchClawHubPackageArtifact,
   fetchClawHubPackageDetail,
+  fetchClawHubPackageVersion,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
@@ -328,6 +329,50 @@ function mapClawHubRequestError(
     );
   }
   return buildClawHubInstallFailure(formatErrorMessage(error));
+}
+
+function isMissingArtifactResolverRoute(error: unknown): boolean {
+  return (
+    error instanceof ClawHubRequestError &&
+    error.status === 404 &&
+    error.requestPath.endsWith("/artifact")
+  );
+}
+
+function buildArtifactResolverResponseFromVersion(params: {
+  detail: ClawHubPackageDetail;
+  versionDetail: ClawHubPackageVersion;
+}): ClawHubPackageArtifactResolverResponse {
+  const packageDetail = params.detail.package;
+  const versionPackage = params.versionDetail.package;
+  return {
+    package: versionPackage
+      ? {
+          name: versionPackage.name,
+          displayName: versionPackage.displayName,
+          family: versionPackage.family,
+        }
+      : packageDetail
+        ? {
+            name: packageDetail.name,
+            displayName: packageDetail.displayName,
+            family: packageDetail.family,
+          }
+        : null,
+    version: params.versionDetail.version,
+  };
+}
+
+function formatClawHubClawPackDownloadError(params: {
+  error: unknown;
+  packageName: string;
+  version: string;
+}): string {
+  const message = formatErrorMessage(params.error);
+  if (!(params.error instanceof ClawHubRequestError)) {
+    return message;
+  }
+  return `ClawHub artifact download for "${params.packageName}@${params.version}" is not available yet (${message}). Use "npm:${params.packageName}@${params.version}" for launch installs while ClawHub artifact routing is being rolled out.`;
 }
 
 function resolveRequestedVersion(params: {
@@ -771,7 +816,7 @@ async function resolveCompatiblePackageVersion(params: {
       CLAWHUB_INSTALL_ERROR_CODE.NO_INSTALLABLE_VERSION,
     );
   }
-  let artifactResponse;
+  let artifactResponse: ClawHubPackageArtifactResolverResponse;
   try {
     artifactResponse = await fetchClawHubPackageArtifact({
       name: params.detail.package?.name ?? "",
@@ -781,11 +826,33 @@ async function resolveCompatiblePackageVersion(params: {
       timeoutMs: params.timeoutMs,
     });
   } catch (error) {
-    return mapClawHubRequestError(error, {
-      stage: "version",
-      name: params.detail.package?.name ?? "unknown",
-      version: requestedVersion,
-    });
+    if (isMissingArtifactResolverRoute(error)) {
+      try {
+        const versionDetail = await fetchClawHubPackageVersion({
+          name: params.detail.package?.name ?? "",
+          version: requestedVersion,
+          baseUrl: params.baseUrl,
+          token: params.token,
+          timeoutMs: params.timeoutMs,
+        });
+        artifactResponse = buildArtifactResolverResponseFromVersion({
+          detail: params.detail,
+          versionDetail,
+        });
+      } catch (versionError) {
+        return mapClawHubRequestError(versionError, {
+          stage: "version",
+          name: params.detail.package?.name ?? "unknown",
+          version: requestedVersion,
+        });
+      }
+    } else {
+      return mapClawHubRequestError(error, {
+        stage: "version",
+        name: params.detail.package?.name ?? "unknown",
+        version: requestedVersion,
+      });
+    }
   }
   const artifactVersion = readArtifactResolverVersion(artifactResponse, requestedVersion);
   const resolvedVersion = normalizeOptionalString(artifactVersion.version) ?? requestedVersion;
@@ -1037,7 +1104,17 @@ export async function installPluginFromClawHub(
       timeoutMs: params.timeoutMs,
     });
   } catch (error) {
-    return buildClawHubInstallFailure(formatErrorMessage(error));
+    // Fix-me(clawhub): remove this npm hint once ClawHub ClawPack artifact
+    // routing is live for official package installs.
+    return buildClawHubInstallFailure(
+      expectedClawPackSha256
+        ? formatClawHubClawPackDownloadError({
+            error,
+            packageName: canonicalPackageName,
+            version: versionState.version,
+          })
+        : formatErrorMessage(error),
+    );
   }
   try {
     if (expectedClawPackSha256) {

@@ -425,8 +425,19 @@ function pushProviderAuthEnvVarsCompatDiagnostic(params: {
   if (params.record.origin === "bundled" || !params.record.providerAuthEnvVars) {
     return;
   }
+  const setupProviderEnvVars = new Map(
+    (params.record.setup?.providers ?? []).map(
+      (provider) => [provider.id, new Set(provider.envVars ?? [])] as const,
+    ),
+  );
   const providerIds = Object.entries(params.record.providerAuthEnvVars)
-    .filter(([providerId, envVars]) => providerId.trim() && envVars.length > 0)
+    .filter(([providerId, envVars]) => {
+      if (!providerId.trim() || envVars.length === 0) {
+        return false;
+      }
+      const mirroredEnvVars = setupProviderEnvVars.get(providerId);
+      return !mirroredEnvVars || envVars.some((envVar) => !mirroredEnvVars.has(envVar));
+    })
     .map(([providerId]) => providerId)
     .toSorted((left, right) => left.localeCompare(right));
   if (providerIds.length === 0) {

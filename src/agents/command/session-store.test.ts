@@ -388,6 +388,63 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("preserves terminal lifecycle state when caller has a stale running snapshot", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-lifecycle-preserve";
+      const sessionId = "test-lifecycle-preserve-session";
+      const terminalEntry: SessionEntry = {
+        sessionId,
+        updatedAt: 2_000,
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 1_900,
+        runtimeMs: 900,
+      };
+      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: terminalEntry }, null, 2));
+
+      const staleInMemory: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1_100,
+          status: "running",
+          startedAt: 1_000,
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore: staleInMemory,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          payloads: [],
+          meta: {
+            aborted: false,
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        } as never,
+      });
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted).toMatchObject({
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 1_900,
+        runtimeMs: 900,
+        modelProvider: "openai",
+        model: "gpt-5.4",
+      });
+      expect(staleInMemory[sessionKey]?.status).toBe("done");
+    });
+  });
+
   it("persists latest systemPromptReport for downstream warning dedupe", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:codex:report:test-system-prompt-report";
