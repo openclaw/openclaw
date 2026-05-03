@@ -109,6 +109,14 @@ export async function setupSkills(
       );
     }
   }
+  // #74382: env-only skills (no missing bins, just missing env) are still
+  // configurable in the multiselect — but the API-key prompt below must only
+  // fire for skills the user explicitly selected.
+  const envOnlyConfigurable = missing.filter(
+    (skill) =>
+      Boolean(skill.primaryEnv) && skill.missing.env.length > 0 && skill.missing.bins.length === 0,
+  );
+  const configurable = [...installable, ...envOnlyConfigurable];
   let next: OpenClawConfig = cfg;
   if (installable.length === 0 && missing.length === 0) {
     await prompter.note(
@@ -122,7 +130,7 @@ export async function setupSkills(
     return next;
   }
   const installSelected = new Set<string>();
-  if (installable.length > 0) {
+  if (configurable.length > 0) {
     const toInstall = await prompter.multiselect({
       message: t("wizard.skills.installDeps"),
       options: [
@@ -131,11 +139,16 @@ export async function setupSkills(
           label: t("common.skipForNow"),
           hint: t("wizard.skills.skipDepsHint"),
         },
-        ...installable.map((skill) => ({
-          value: skill.name,
-          label: `${skill.emoji ?? "🧩"} ${skill.name}`,
-          hint: formatSkillHint(skill),
-        })),
+        ...configurable.map((skill) => {
+          const isEnvOnly = skill.missing.bins.length === 0;
+          return {
+            value: skill.name,
+            label: `${skill.emoji ?? "🧩"} ${skill.name}`,
+            hint: isEnvOnly
+              ? `Configure ${skill.primaryEnv ?? "credentials"}`
+              : formatSkillHint(skill),
+          };
+        }),
       ],
     });
 
@@ -254,7 +267,7 @@ export async function setupSkills(
     }
     // API keys entered here patch the skill entry, not process.env, so future
     // agent sessions can resolve the same skill configuration.
-    if (skill.missing.bins.length > 0 && !installSelected.has(skill.name)) {
+    if (!installSelected.has(skill.name)) {
       continue;
     }
     const wantsKey = await prompter.confirm({
