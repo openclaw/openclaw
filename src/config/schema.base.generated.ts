@@ -7388,8 +7388,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       maximum: 9007199254740991,
                     },
                     visibleReplies: {
-                      type: "string",
-                      enum: ["automatic", "message_tool"],
+                      anyOf: [
+                        {
+                          type: "string",
+                          enum: ["automatic", "message_tool"],
+                        },
+                        {
+                          type: "boolean",
+                        },
+                      ],
                     },
                   },
                   additionalProperties: false,
@@ -19019,8 +19026,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
           },
           visibleReplies: {
-            type: "string",
-            enum: ["automatic", "message_tool"],
+            anyOf: [
+              {
+                type: "string",
+                enum: ["automatic", "message_tool"],
+              },
+              {
+                type: "boolean",
+              },
+            ],
             title: "Visible Replies",
             description:
               'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
@@ -19052,8 +19066,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
               },
               visibleReplies: {
-                type: "string",
-                enum: ["automatic", "message_tool"],
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["automatic", "message_tool"],
+                  },
+                  {
+                    type: "boolean",
+                  },
+                ],
                 title: "Group Visible Replies",
                 description:
                   'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
