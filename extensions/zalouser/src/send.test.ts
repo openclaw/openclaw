@@ -233,6 +233,29 @@ describe("zalouser send helpers", () => {
     expect(result).toEqual({ ok: true, messageId: "mid-2d-4" });
   });
 
+  it("splits at a paragraph boundary by default instead of cutting mid-word", async () => {
+    // 398 "word " groups + "word" = 1990 + 4 = 1994 chars, then "\n\n" puts the break at 1996.
+    // Total with "second paragraph" = 2012 chars, which exceeds the 2000-char limit.
+    // The default "newline" mode finds the paragraph break inside the window and splits there,
+    // while "length" mode would blindly cut at position 2000 (mid-word).
+    const firstParagraph = "word ".repeat(398) + "word";
+    const text = firstParagraph + "\n\nsecond paragraph";
+    mockSendText
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-newline-1" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-newline-2" });
+
+    const result = await sendMessageZalouser("thread-newline", text, {
+      profile: "default",
+    });
+
+    expect(text.length).toBeGreaterThan(2000);
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    const [firstCall, secondCall] = mockSendText.mock.calls;
+    expect(firstCall[1]).toBe(firstParagraph + "\n\n");
+    expect(secondCall[1]).toBe("second paragraph");
+    expect(result).toEqual({ ok: true, messageId: "mid-newline-2" });
+  });
+
   it("respects an explicit text chunk limit when splitting formatted markdown", async () => {
     const text = `**${"a".repeat(1501)}**`;
     mockSendText

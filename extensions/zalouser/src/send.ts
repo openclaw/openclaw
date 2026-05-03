@@ -14,7 +14,7 @@ type ZalouserSendOptions = ZaloSendOptions;
 type ZalouserSendResult = ZaloSendResult;
 
 const ZALO_TEXT_LIMIT = 2000;
-const DEFAULT_TEXT_CHUNK_MODE = "length";
+const DEFAULT_TEXT_CHUNK_MODE = "newline";
 
 type StyledTextChunk = {
   text: string;
