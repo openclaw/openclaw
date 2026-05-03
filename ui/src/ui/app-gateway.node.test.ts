@@ -1158,6 +1158,37 @@ describe("connectGateway", () => {
 
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
   });
+
+  it("clears stale hasActiveRun on the session row when a terminal chat event fires (#76874)", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "run-stop-stale";
+    // Simulate a session row that has hasActiveRun: true from a prior sessions.list refresh.
+    (host as unknown as Record<string, unknown>).sessionsResult = {
+      ts: 0,
+      count: 1,
+      sessions: [{ key: "main", hasActiveRun: true, kind: "agent", updatedAt: null }],
+    };
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "run-stop-stale",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    const sessionsResult = (host as unknown as Record<string, unknown>).sessionsResult as {
+      sessions: Array<{ key: string; hasActiveRun?: boolean }>;
+    };
+    const row = sessionsResult?.sessions.find((s) => s.key === "main");
+    expect(row?.hasActiveRun).toBe(false);
+  });
 });
 
 describe("resolveControlUiClientVersion", () => {

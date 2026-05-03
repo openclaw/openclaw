@@ -578,6 +578,15 @@ function handleTerminalChatEvent(
     host as unknown as Parameters<typeof clearPendingQueueItemsForRun>[0],
     payload?.runId,
   );
+  // Clear stale hasActiveRun on the session row so the Stop button returns to
+  // Send without waiting for a sessions.changed event that may omit the field.
+  const sessionKeyForRun = payload?.sessionKey?.trim() ?? host.sessionKey;
+  if (sessionKeyForRun) {
+    applySessionsChangedEvent(host as unknown as SessionsState, {
+      key: sessionKeyForRun,
+      hasActiveRun: false,
+    });
+  }
   const runId = payload?.runId;
   if (runId && host.refreshSessionsAfterChat.has(runId)) {
     host.refreshSessionsAfterChat.delete(runId);
