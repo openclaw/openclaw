@@ -765,12 +765,19 @@ export async function attachWebInboxToSocket(
             continue;
           }
         } else {
-          // Skip messages older than the configured threshold.
+          // Reject untimestamped/invalid appends so they cannot bypass the age cap.
           const maxAgeMs = (options.offlineMessageMaxAgeSeconds ?? 300) * 1000;
           const msgTsRaw = msg.messageTimestamp;
           const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
-          const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
-          if (msgTsMs && Date.now() - msgTsMs > maxAgeMs) {
+          if (!Number.isFinite(msgTsNum)) {
+            logWhatsAppVerbose(
+              options.verbose,
+              `Skipping offline message ${inbound.id ?? "unknown"} (missing or invalid timestamp)`,
+            );
+            continue;
+          }
+          const msgTsMs = msgTsNum * 1000;
+          if (Date.now() - msgTsMs > maxAgeMs) {
             logWhatsAppVerbose(
               options.verbose,
               `Skipping offline message ${inbound.id ?? "unknown"} (age ${Math.floor((Date.now() - msgTsMs) / 1000)}s > ${options.offlineMessageMaxAgeSeconds ?? 300}s)`,
