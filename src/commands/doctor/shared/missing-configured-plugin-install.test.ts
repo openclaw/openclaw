@@ -629,6 +629,83 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
+  it.each([
+    [
+      "npm",
+      {
+        source: "npm",
+        spec: "@openclaw/matrix-fork",
+        resolvedName: "@openclaw/matrix-fork",
+        resolvedSpec: "@openclaw/matrix-fork@1.2.3",
+        installPath: "/missing/matrix-fork",
+      },
+    ],
+    [
+      "clawhub",
+      {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/matrix-fork@stable",
+        clawhubPackage: "@openclaw/matrix-fork",
+        installPath: "/missing/matrix-fork",
+      },
+    ],
+  ])(
+    "keeps %s install records whose package names only share a bundled prefix",
+    async (_, record) => {
+      const records = { matrix: record };
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+      mocks.listChannelPluginCatalogEntries.mockReturnValue([
+        {
+          id: "matrix",
+          pluginId: "matrix",
+          origin: "bundled",
+          meta: { label: "Matrix" },
+          install: {
+            npmSpec: "@openclaw/matrix",
+          },
+        },
+      ]);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        plugins: [
+          {
+            id: "matrix",
+            origin: "bundled",
+            packageName: "@openclaw/matrix",
+            channels: ["matrix"],
+          },
+        ],
+        diagnostics: [
+          {
+            pluginId: "matrix",
+            message: "manifest without channelConfigs metadata",
+          },
+        ],
+      });
+
+      const { repairMissingConfiguredPluginInstalls } =
+        await import("./missing-configured-plugin-install.js");
+      const result = await repairMissingConfiguredPluginInstalls({
+        cfg: {
+          plugins: {
+            entries: {
+              matrix: { enabled: true },
+            },
+          },
+          channels: {
+            matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+          },
+        },
+        env: {},
+      });
+
+      expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+      expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+      expect(result).toEqual({ changes: [], warnings: [] });
+    },
+  );
+
   it("defers missing external payload repair during the package update doctor pass", async () => {
     const records = {
       discord: {
