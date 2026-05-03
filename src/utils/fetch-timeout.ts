@@ -87,7 +87,9 @@ function abortDueToTimeout(
     ...(operation ? { operation } : {}),
     ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
   });
-  controller.abort();
+  const error = new Error("request timed out");
+  error.name = "TimeoutError";
+  controller.abort(error);
 }
 
 export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
