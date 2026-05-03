@@ -369,20 +369,30 @@ export async function prepareSlackMessage(params: {
       `slack: routed via bound conversation ${runtimeBinding.conversation.conversationId} -> ${runtimeBinding.targetSessionKey}`,
     );
   }
-  const implicitMentionKinds =
-    isDirectMessage || !ctx.botUserId || !message.thread_ts
-      ? []
-      : [
-          ...implicitMentionKindWhen("reply_to_bot", message.parent_user_id === ctx.botUserId),
-          ...implicitMentionKindWhen(
+  let implicitMentionKinds: ReturnType<typeof implicitMentionKindWhen> = [];
+  if (
+    !isDirectMessage &&
+    ctx.botUserId &&
+    message.thread_ts &&
+    !ctx.threadRequireExplicitMention &&
+    !wasMentioned
+  ) {
+    const replyToBotKinds = implicitMentionKindWhen(
+      "reply_to_bot",
+      message.parent_user_id === ctx.botUserId,
+    );
+    implicitMentionKinds =
+      replyToBotKinds.length > 0
+        ? replyToBotKinds
+        : implicitMentionKindWhen(
             "bot_thread_participant",
             await hasSlackThreadParticipationWithPersistence({
               accountId: account.accountId,
               channelId: message.channel,
               threadTs: message.thread_ts,
             }),
-          ),
-        ];
+          );
+  }
 
   let resolvedSenderName = normalizeOptionalString(message.username);
   const resolveSenderName = async (): Promise<string> => {
