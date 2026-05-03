@@ -8,6 +8,7 @@ import type {
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionStore,
+  mergeSessionEntry,
   resolveStorePath,
   type SessionEntry,
   updateSessionStore,
@@ -135,6 +136,27 @@ function resolveStoreScopedRequesterKey(params: {
     return params.requesterKey;
   }
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
+}
+
+function synthesizeImplicitCurrentSessionEntry(): SessionEntry {
+  return {
+    sessionId: "",
+    updatedAt: Date.now(),
+  };
+}
+
+function resolveImplicitCurrentSessionFallback(params: {
+  allowFallback: boolean;
+  storeScopedRequesterKey: string;
+}): { key: string; entry: SessionEntry } | null {
+  const requesterKey = params.storeScopedRequesterKey.trim();
+  if (!params.allowFallback || !requesterKey) {
+    return null;
+  }
+  return {
+    key: requesterKey,
+    entry: synthesizeImplicitCurrentSessionEntry(),
+  };
 }
 
 function listImplicitDefaultDirectFallbackKeys(params: {
@@ -462,6 +484,17 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved) {
+        const fallback = resolveImplicitCurrentSessionFallback({
+          allowFallback: requestedKeyRaw === "current" || requestedKeyParam === undefined,
+          storeScopedRequesterKey,
+        });
+        if (fallback) {
+          resolved = fallback;
+          resolvedViaImplicitCurrentFallback = true;
+        }
+      }
+
+      if (!resolved) {
         const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
@@ -507,11 +540,22 @@ export function createSessionStatusTool(opts?: {
           markLiveSwitchPending: true,
         });
         if (applied.updated) {
-          store[resolved.key] = nextEntry;
+          const persistedEntry = nextEntry.sessionId.trim()
+            ? nextEntry
+            : (() => {
+                const persistedEntryPatch: Partial<SessionEntry> = { ...nextEntry };
+                delete persistedEntryPatch.sessionId;
+                const existingEntry = store[resolved.key];
+                const existingWithValidSessionId = existingEntry?.sessionId?.trim()
+                  ? existingEntry
+                  : undefined;
+                return mergeSessionEntry(existingWithValidSessionId, persistedEntryPatch);
+              })();
+          store[resolved.key] = persistedEntry;
           await updateSessionStore(storePath, (nextStore) => {
-            nextStore[resolved.key] = nextEntry;
+            nextStore[resolved.key] = persistedEntry;
           });
-          resolved.entry = nextEntry;
+          resolved.entry = persistedEntry;
           changedModel = true;
         }
       }

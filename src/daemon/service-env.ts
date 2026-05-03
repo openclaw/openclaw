@@ -28,6 +28,7 @@ export { isNodeVersionManagerRuntime, resolveLinuxSystemCaBundle };
 type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
   extraDirs?: string[];
+  includeUserDirs?: boolean;
   home?: string;
   cwd?: string;
   env?: Record<string, string | undefined>;
@@ -221,7 +222,7 @@ function addNixProfileBinDirs(
 
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   if (platform === "darwin") {
-    return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+    return ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
   }
   if (platform === "linux") {
     return ["/usr/local/bin", "/usr/bin", "/bin"];
@@ -330,15 +331,16 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const parts: string[] = [];
   const extraDirs = options.extraDirs ?? [];
   const systemDirs = resolveSystemPathDirs(platform);
+  const includeUserDirs = options.includeUserDirs ?? platform !== "darwin";
 
-  // Add user bin directories for version managers (npm global, nvm, fnm, volta, etc.)
   const existsSync = options.existsSync ?? fs.existsSync;
-  const userDirs =
-    platform === "linux"
+  const userDirs = includeUserDirs
+    ? platform === "linux"
       ? resolveLinuxUserBinDirs(options.home, options.env, existsSync, options)
       : platform === "darwin"
         ? resolveDarwinUserBinDirs(options.home, options.env, existsSync, options)
-        : [];
+        : []
+    : [];
 
   const add = (dir: string) => {
     if (!dir) {
@@ -352,7 +354,6 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   for (const dir of extraDirs) {
     add(dir);
   }
-  // User dirs first so user-installed binaries take precedence
   for (const dir of userDirs) {
     add(dir);
   }

@@ -41,6 +41,165 @@ describe("RequestClient", () => {
     expect(client.queueSize).toBe(0);
   });
 
+  it("dispatches critical interaction callbacks before older background requests", async () => {
+    const firstResponse = createDeferred<Response>();
+    const responses = new Map<string, Promise<Response>>([
+      ["/guilds/g1/roles", firstResponse.promise],
+      ["/interactions/123/token/callback", Promise.resolve(createJsonResponse({ ok: "critical" }))],
+      ["/guilds/g2/roles", Promise.resolve(createJsonResponse({ ok: "background" }))],
+    ]);
+    const fetchSpy = vi.fn(async (input: string | URL | Request) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const path = new URL(url).pathname.replace(/^\/api\/v\d+/, "");
+      const response = responses.get(path);
+      if (!response) {
+        throw new Error(`unexpected request ${path}`);
+      }
+      return await response;
+    });
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: { maxConcurrency: 1 },
+    });
+
+    const first = client.get("/guilds/g1/roles");
+    const background = client.get("/guilds/g2/roles");
+    const critical = client.post("/interactions/123/token/callback", { body: { type: 5 } });
+
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    firstResponse.resolve(createJsonResponse({ ok: "first" }));
+
+    await expect(first).resolves.toEqual({ ok: "first" });
+    await expect(critical).resolves.toEqual({ ok: "critical" });
+    await expect(background).resolves.toEqual({ ok: "background" });
+    expect(fetchSpy.mock.calls.map(([input]) => new URL(readRequestUrl(input)).pathname)).toEqual([
+      "/api/v10/guilds/g1/roles",
+      "/api/v10/interactions/123/token/callback",
+      "/api/v10/guilds/g2/roles",
+    ]);
+  });
+
+  it("drops stale background requests instead of replaying obsolete reads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const firstResponse = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () => await firstResponse.promise);
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: {
+        maxConcurrency: 1,
+        lanes: { background: { staleAfterMs: 50 } },
+      },
+    });
+
+    const first = client.get("/guilds/g1/roles");
+    const stale = client.get("/guilds/g2/roles");
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(51);
+    firstResponse.resolve(createJsonResponse({ ok: "first" }));
+
+    await expect(first).resolves.toEqual({ ok: "first" });
+    await expect(stale).rejects.toThrow(/Dropped stale background request/);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(client.getSchedulerMetrics()).toEqual(
+      expect.objectContaining({
+        droppedByLane: expect.objectContaining({ background: 1 }),
+        queueSize: 0,
+      }),
+    );
+  });
+
+  it("keeps standard mutations queued until Discord accepts or rejects them", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const firstResponse = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () =>
+      fetchSpy.mock.calls.length === 1
+        ? await firstResponse.promise
+        : createJsonResponse({ ok: true }),
+    );
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: {
+        maxConcurrency: 1,
+        lanes: {
+          background: { staleAfterMs: 50 },
+          standard: { staleAfterMs: 50 },
+        },
+      },
+    });
+
+    const requests = [
+      client.post("/channels/c1/messages", { body: { content: "send" } }),
+      client.patch("/channels/c1/messages/m1", { body: { content: "edit" } }),
+      client.delete("/channels/c1/messages/m2"),
+      client.post("/webhooks/app/token", { body: { content: "webhook send" } }),
+      client.patch("/webhooks/app/token/messages/@original", {
+        body: { content: "webhook edit" },
+      }),
+      client.delete("/webhooks/app/token/messages/@original"),
+      client.post("/applications/app/commands", { body: { name: "ping" } }),
+    ];
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(51);
+    firstResponse.resolve(createJsonResponse({ ok: true }));
+
+    await expect(Promise.all(requests)).resolves.toEqual([
+      { ok: true },
+      { ok: true },
+      { ok: true },
+      { ok: true },
+      { ok: true },
+      { ok: true },
+      { ok: true },
+    ]);
+    expect(fetchSpy).toHaveBeenCalledTimes(requests.length);
+    expect(client.getSchedulerMetrics()).toEqual(
+      expect.objectContaining({
+        droppedByLane: expect.objectContaining({ standard: 0 }),
+        queueSize: 0,
+      }),
+    );
+  });
+
+  it("drains same-bucket requests when the active request finishes without polling", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const firstResponse = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () =>
+      fetchSpy.mock.calls.length === 1
+        ? await firstResponse.promise
+        : createJsonResponse({ id: "second" }),
+    );
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: { maxConcurrency: 2 },
+    });
+
+    const first = client.get("/channels/c1/messages");
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const second = client.get("/channels/c1/messages");
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    firstResponse.resolve(createJsonResponse({ id: "first" }));
+
+    await expect(first).resolves.toEqual({ id: "first" });
+    await expect(second).resolves.toEqual({ id: "second" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("runs independent route buckets concurrently", async () => {
     const channelResponse = createDeferred<Response>();
     const guildResponse = createDeferred<Response>();
@@ -508,3 +667,7 @@ describe("RequestClient", () => {
     expect(form.get("payload_json")).toBeNull();
   });
 });
+
+function readRequestUrl(input: string | URL | Request): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+}

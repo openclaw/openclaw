@@ -1182,4 +1182,38 @@ describe("config io write", () => {
       }
     });
   });
+
+  it("preserves authored tilde paths when runtime-shaped writes hand back absolute paths", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            logging: { file: "~/openclaw-upgrade-survivor/gateway.jsonl" },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      const io = createFastConfigIO(home);
+      const snapshot = await io.readConfigFileSnapshot();
+
+      await io.writeConfigFile(
+        {
+          logging: {
+            file: path.join(home, "openclaw-upgrade-survivor", "gateway.jsonl"),
+            level: "debug",
+          },
+        },
+        { baseSnapshot: snapshot },
+      );
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+      expect(persisted.logging?.file).toBe("~/openclaw-upgrade-survivor/gateway.jsonl");
+      expect(persisted.logging?.level).toBe("debug");
+    });
+  });
 });

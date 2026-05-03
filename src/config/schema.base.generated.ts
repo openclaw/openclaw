@@ -20829,6 +20829,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
           },
+          writeLock: {
+            type: "object",
+            properties: {
+              acquireTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Session Write Lock Acquire Timeout",
+                description:
+                  "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+              },
+            },
+            additionalProperties: false,
+            title: "Session Write Lock",
+            description:
+              "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+          },
           agentToAgent: {
             type: "object",
             properties: {
@@ -21824,6 +21841,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       ],
                     },
+                    artifactKind: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "legacy-zip",
+                        },
+                        {
+                          type: "string",
+                          const: "npm-pack",
+                        },
+                      ],
+                    },
+                    artifactFormat: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "zip",
+                        },
+                        {
+                          type: "string",
+                          const: "tgz",
+                        },
+                      ],
+                    },
+                    npmIntegrity: {
+                      type: "string",
+                    },
+                    npmShasum: {
+                      type: "string",
+                    },
+                    npmTarballName: {
+                      type: "string",
+                    },
                     clawpackSha256: {
                       type: "string",
                     },
@@ -22288,6 +22338,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Allow External Control UI Embed URLs",
                 description:
                   "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+              },
+              chatMessageMaxWidth: {
+                title: "Control UI Chat Message Max Width",
+                description:
+                  'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
               },
               allowedOrigins: {
                 type: "array",
@@ -25989,6 +26044,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
       tags: ["security", "access", "network", "advanced"],
     },
+    "gateway.controlUi.chatMessageMaxWidth": {
+      label: "Control UI Chat Message Max Width",
+      help: 'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
+      tags: ["advanced"],
+    },
     "gateway.controlUi.allowedOrigins": {
       label: "Control UI Allowed Origins",
       help: 'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
@@ -27917,6 +27977,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
       tags: ["access", "storage"],
     },
+    "session.writeLock": {
+      label: "Session Write Lock",
+      help: "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+      tags: ["storage"],
+    },
+    "session.writeLock.acquireTimeoutMs": {
+      label: "Session Write Lock Acquire Timeout",
+      help: "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+      tags: ["performance", "storage"],
+    },
     "session.agentToAgent": {
       label: "Session Agent-to-Agent",
       help: "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
@@ -29289,6 +29359,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.30",
+  version: "2026.5.2",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

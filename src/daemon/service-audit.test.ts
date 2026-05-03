@@ -123,18 +123,10 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(false);
   });
 
-  it("does not require missing unconfigured user-bin defaults in gateway service PATH", async () => {
+  it("accepts canonical macOS gateway service PATH without user-bin defaults", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
     try {
-      const localBin = path.join(home, ".local/bin");
-      await fs.mkdir(localBin, { recursive: true });
-      const servicePath = [
-        localBin,
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-      ].join(":");
+      const servicePath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
       const audit = await auditGatewayServiceConfig({
         env: { HOME: home },
@@ -165,6 +157,36 @@ describe("auditGatewayServiceConfig", () => {
       (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
     );
     expect(issue?.message).toContain("/opt/pnpm");
+  });
+
+  it("flags stale Linux version-manager and package-manager PATH entries", async () => {
+    const env = { HOME: "/tmp/openclaw-testuser-nonminimal" };
+    const minimalPath = buildMinimalServicePath({ platform: "linux", env });
+    const staleEntries = [
+      `${env.HOME}/.volta/bin`,
+      `${env.HOME}/.asdf/shims`,
+      `${env.HOME}/.nvm/current/bin`,
+      `${env.HOME}/.local/share/fnm/current/bin`,
+      `${env.HOME}/.fnm/current/bin`,
+      `${env.HOME}/.local/share/pnpm`,
+      "/opt/pnpm/bin",
+    ];
+    const audit = await auditGatewayServiceConfig({
+      env,
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: [minimalPath, ...staleEntries].join(":") },
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal,
+    );
+    expect(issue?.detail).toContain(`${env.HOME}/.volta/bin`);
+    expect(issue?.detail).toContain(`${env.HOME}/.local/share/fnm/current/bin`);
+    expect(issue?.detail).toContain(`${env.HOME}/.local/share/pnpm`);
+    expect(issue?.detail).toContain("/opt/pnpm/bin");
   });
 
   it("accepts Linux fnm aliases/default without requiring the legacy current symlink", async () => {
