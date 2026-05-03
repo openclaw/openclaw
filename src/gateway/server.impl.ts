@@ -42,7 +42,6 @@ import {
   clearCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
-import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import {
   pinActivePluginChannelRegistry,
@@ -959,16 +958,11 @@ export async function startGatewayServer(
           runtimeState.skillsRefreshTimer = timer;
         },
         getRuntimeConfig,
+        startupTrace,
       }),
     );
     runtimeState.bonjourStop = earlyRuntime.bonjourStop;
     runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
-    if (earlyRuntime.maintenance) {
-      runtimeState.tickInterval = earlyRuntime.maintenance.tickInterval;
-      runtimeState.healthInterval = earlyRuntime.maintenance.healthInterval;
-      runtimeState.dedupeCleanup = earlyRuntime.maintenance.dedupeCleanup;
-      runtimeState.mediaCleanup = earlyRuntime.maintenance.mediaCleanup;
-    }
 
     Object.assign(
       runtimeState,
@@ -1355,6 +1349,7 @@ export async function startGatewayServer(
                 baseMethods,
                 startupPluginIds,
                 pluginLookUpTable,
+                startupTrace,
               }),
         onStartupPluginsLoading: () => {
           startupPendingReason = "startup-sidecars";
@@ -1426,6 +1421,13 @@ export async function startGatewayServer(
       log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });
     if (!minimalTestGateway) {
+      const maintenance = await earlyRuntime.startMaintenance();
+      if (maintenance) {
+        runtimeState.tickInterval = maintenance.tickInterval;
+        runtimeState.healthInterval = maintenance.healthInterval;
+        runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
+        runtimeState.mediaCleanup = maintenance.mediaCleanup;
+      }
       startGatewayCronWithLogging({
         cron: runtimeState.cronState.cron,
         logCron,
@@ -1442,6 +1444,7 @@ export async function startGatewayServer(
     close: async (opts) => {
       try {
         // Run gateway_stop plugin hook before shutdown
+        const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
         await runGlobalGatewayStopSafely({
           event: { reason: opts?.reason ?? "gateway stopping" },
           ctx: { port },
