@@ -7,6 +7,10 @@ import {
   resolveCustomCommands,
 } from "../shared/custom-command-config.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  findInvalidTelegramReactionSemanticsKeys,
+  findTelegramReactionSemanticsCollisions,
+} from "./telegram-reaction-semantics.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
@@ -107,6 +111,40 @@ const SlackCapabilitiesSchema = z.union([
 ]);
 
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
+const TelegramReactionSemanticEntrySchema = z.union([
+  z.string(),
+  z
+    .object({
+      meaning: z.string().optional(),
+      instruction: z.string().optional(),
+      action: z.enum(["wake", "queue", "ignore"]).optional(),
+    })
+    .strict(),
+]);
+const TelegramReactionSemanticsSchema = z
+  .record(z.string(), TelegramReactionSemanticEntrySchema)
+  .optional()
+  .superRefine((value, ctx) => {
+    if (!value) {
+      return;
+    }
+
+    for (const invalid of findInvalidTelegramReactionSemanticsKeys(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [invalid.rawKey],
+        message: `invalid Telegram reactionSemantics key "${invalid.rawKey.trim() || invalid.rawKey}"`,
+      });
+    }
+
+    for (const collision of findTelegramReactionSemanticsCollisions(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [collision.duplicateRawKey],
+        message: `Telegram reactionSemantics key "${collision.duplicateRawKey}" duplicates "${collision.firstRawKey}" after normalization to "${collision.normalizedKey}"`,
+      });
+    }
+  });
 const TelegramCommandNamePattern = /^[a-z0-9_]{1,32}$/;
 const TelegramCustomCommandConfig = {
   label: "Telegram",
@@ -340,6 +378,7 @@ export const TelegramAccountSchemaBase = z
       .strict()
       .optional(),
     reactionNotifications: z.enum(["off", "own", "all"]).optional(),
+    reactionSemantics: TelegramReactionSemanticsSchema,
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,

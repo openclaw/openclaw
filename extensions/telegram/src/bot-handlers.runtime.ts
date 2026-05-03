@@ -1,4 +1,4 @@
-import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import type { Message } from "@grammyjs/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
@@ -26,8 +26,11 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import {
+  resolveAgentRoute,
+  resolveThreadSessionKeys,
+  scopedHeartbeatWakeOptions,
+} from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
@@ -108,6 +111,11 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import {
+  buildTelegramReactionSystemEventText,
+  collectAddedTelegramReactions,
+  resolveTelegramReactionSemantic,
+} from "./reaction-events.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
@@ -946,16 +954,10 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      // Detect added reactions.
-      const oldEmojis = new Set(
-        reaction.old_reaction
-          .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
-          .map((r) => r.emoji),
-      );
-      const addedReactions = reaction.new_reaction
-        .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
-        .filter((r) => !oldEmojis.has(r.emoji));
-
+      const addedReactions = collectAddedTelegramReactions({
+        oldReactions: reaction.old_reaction,
+        newReactions: reaction.new_reaction,
+      });
       if (addedReactions.length === 0) {
         return;
       }
@@ -994,15 +996,44 @@ export const registerTelegramHandlers = ({
       });
       const sessionKey = route.sessionKey;
 
-      // Enqueue system event for each added reaction.
-      for (const r of addedReactions) {
-        const emoji = r.emoji;
-        const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
-        telegramDeps.enqueueSystemEvent(text, {
-          sessionKey,
-          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
+      let requestedWake = false;
+      let enqueuedCount = 0;
+      for (const reactionEntry of addedReactions) {
+        const semantic = resolveTelegramReactionSemantic({
+          reaction: reactionEntry,
+          semantics: telegramCfg.reactionSemantics,
         });
+        if (semantic?.action === "ignore") {
+          logVerbose(`telegram: ignored reaction event ${reactionEntry.key} by ${senderLabel}`);
+          continue;
+        }
+
+        const text = buildTelegramReactionSystemEventText({
+          reaction: reactionEntry,
+          actorLabel: senderLabel,
+          messageId,
+          semantic,
+        });
+        const enqueued = telegramDeps.enqueueSystemEvent(text, {
+          sessionKey,
+          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${reactionEntry.key}`,
+        });
+        if (!enqueued) {
+          logVerbose(`telegram: skipped duplicate reaction event: ${text}`);
+          continue;
+        }
+        enqueuedCount += 1;
+        if (semantic?.action === "wake") {
+          requestedWake = true;
+        }
         logVerbose(`telegram: reaction event enqueued: ${text}`);
+      }
+      if (requestedWake && enqueuedCount > 0) {
+        telegramDeps.requestHeartbeat({
+          source: "notifications-event",
+          intent: "immediate",
+          ...scopedHeartbeatWakeOptions(sessionKey, { reason: "telegram-reaction" }),
+        });
       }
     } catch (err) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
