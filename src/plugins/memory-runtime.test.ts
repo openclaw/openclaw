@@ -265,6 +265,40 @@ describe("memory runtime auto-enable loading", () => {
     expectNoMemoryRuntimeBootstrap();
   });
 
+  it.each([
+    {
+      name: "denied",
+      plugins: {
+        deny: ["memory-core"],
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    },
+    {
+      name: "entry-disabled",
+      plugins: {
+        entries: {
+          "memory-core": { enabled: false },
+        },
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    },
+  ] as const)("does not standalone-load a $name memory slot plugin", async ({ plugins }) => {
+    getMemoryRuntimeMock.mockReturnValue(undefined);
+
+    await expect(
+      getActiveMemorySearchManager({
+        cfg: { plugins } as never,
+        agentId: "main",
+      }),
+    ).resolves.toEqual({ manager: null, error: "memory plugin unavailable" });
+
+    expectNoMemoryRuntimeBootstrap();
+  });
+
   it("does not standalone-load plugins when the memory runtime is already registered", () => {
     const rawConfig = {
       plugins: {
