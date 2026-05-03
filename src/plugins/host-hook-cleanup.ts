@@ -150,6 +150,42 @@ async function clearPluginOwnedSessionStores(params: {
   return cleared;
 }
 
+async function clearPromotedSessionEntrySlotStores(params: {
+  cfg: OpenClawConfig;
+  pluginId?: string;
+  sessionKey?: string;
+  sessionEntrySlotKeys: ReadonlySet<string>;
+}): Promise<number> {
+  if ((!params.pluginId && !params.sessionKey) || params.sessionEntrySlotKeys.size === 0) {
+    return 0;
+  }
+  const storePaths = new Set(
+    resolveAllAgentSessionStoreTargetsSync(params.cfg)
+      .map((target) => target.storePath)
+      .filter((storePath) => fs.existsSync(storePath)),
+  );
+  let cleared = 0;
+  for (const storePath of storePaths) {
+    cleared += await updateSessionStore(storePath, (store) => {
+      let clearedInStore = 0;
+      const now = Date.now();
+      for (const [entryKey, entry] of Object.entries(store)) {
+        if (
+          !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
+          !hasPromotedSessionEntrySlot(entry, params.sessionEntrySlotKeys)
+        ) {
+          continue;
+        }
+        clearPromotedSessionEntrySlots(entry, params.sessionEntrySlotKeys);
+        entry.updatedAt = now;
+        clearedInStore += 1;
+      }
+      return clearedInStore;
+    });
+  }
+  return cleared;
+}
+
 function collectSessionEntrySlotKeys(
   registry: PluginRegistry | null | undefined,
   pluginId?: string,
@@ -192,14 +228,22 @@ export async function runPluginHostCleanup(params: {
     params.pluginId,
   );
   let persistentCleanupCount = 0;
-  if (params.reason !== "restart" && shouldCleanup()) {
+  if (shouldCleanup()) {
     try {
-      persistentCleanupCount = await clearPluginOwnedSessionStores({
-        cfg: params.cfg ?? getRuntimeConfig(),
-        pluginId: params.pluginId,
-        sessionKey: params.sessionKey,
-        sessionEntrySlotKeys,
-      });
+      persistentCleanupCount =
+        params.reason === "restart"
+          ? await clearPromotedSessionEntrySlotStores({
+              cfg: params.cfg ?? getRuntimeConfig(),
+              pluginId: params.pluginId,
+              sessionKey: params.sessionKey,
+              sessionEntrySlotKeys,
+            })
+          : await clearPluginOwnedSessionStores({
+              cfg: params.cfg ?? getRuntimeConfig(),
+              pluginId: params.pluginId,
+              sessionKey: params.sessionKey,
+              sessionEntrySlotKeys,
+            });
     } catch (error) {
       failures.push({
         pluginId: params.pluginId ?? "plugin-host",
