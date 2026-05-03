@@ -2827,6 +2827,53 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
   });
 
+  it("logs chat.send attachment parse failures with stack details", async () => {
+    createTranscriptFixture("openclaw-chat-send-attachment-parse-stack-");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-chat-send-attachment-parse-stack",
+      message: "inspect this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "broken.png",
+            content: "not-base64",
+          },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("attachment broken.png: invalid base64 content"),
+      }),
+    );
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      "chat.send attachment parse/stage failed",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "chat.send attachment parse/stage failed: Error: attachment broken.png",
+        ),
+        error: expect.stringContaining("Error: attachment broken.png: invalid base64 content"),
+      }),
+    );
+    const logMeta = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[1] as { error?: string } | undefined;
+    expect(logMeta?.error).toContain("\n    at ");
+  });
+
   it("surfaces partial non-image staging failures as 5xx UNAVAILABLE", async () => {
     // Regression: stageSandboxMedia keeps unstaged entries as their original
     // absolute path, so a simple `stagedPaths.length === nonImage.length`
