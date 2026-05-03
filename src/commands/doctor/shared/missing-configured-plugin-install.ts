@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -24,6 +26,7 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
+import { resolveUserPath } from "../../../utils.js";
 import { asObjectRecord } from "./object.js";
 
 type DownloadableInstallCandidate = {
@@ -290,6 +293,18 @@ function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
   return stalePluginIds;
 }
 
+function isInstalledRecordMissingOnDisk(
+  record: PluginInstallRecord | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const installPath = record?.installPath?.trim();
+  if (!installPath) {
+    return true;
+  }
+  const resolved = resolveUserPath(installPath, env);
+  return !existsSync(path.join(resolved, "package.json"));
+}
+
 async function installCandidate(params: {
   candidate: DownloadableInstallCandidate;
   records: Record<string, PluginInstallRecord>;
@@ -445,7 +460,8 @@ async function repairMissingPluginInstalls(params: {
   const records = await loadInstalledPluginIndexInstallRecords({ env });
   const missingRecordedPluginIds = Object.keys(records).filter(
     (pluginId) =>
-      (params.pluginIds.has(pluginId) && !knownIds.has(pluginId)) ||
+      (params.pluginIds.has(pluginId) &&
+        (!knownIds.has(pluginId) || isInstalledRecordMissingOnDisk(records[pluginId], env))) ||
       configuredPluginIdsWithStaleDescriptors.has(pluginId),
   );
   const changes: string[] = [];

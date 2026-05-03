@@ -791,6 +791,79 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual(['Repaired missing configured plugin "demo".']);
   });
 
+  it("reinstalls a known configured plugin when its recorded install path is missing", async () => {
+    const records = {
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/tmp/openclaw-missing-discord-install-record",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          channels: ["discord"],
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      changed: true,
+      config: {
+        plugins: {
+          installs: {
+            discord: {
+              source: "npm",
+              spec: "@openclaw/discord",
+              installPath: "/tmp/openclaw-plugins/discord",
+            },
+          },
+        },
+      },
+      outcomes: [
+        {
+          pluginId: "discord",
+          status: "updated",
+          message: "Updated discord.",
+        },
+      ],
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["discord"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({ installs: records }),
+        }),
+      }),
+    );
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      expect.objectContaining({
+        discord: expect.objectContaining({ installPath: "/tmp/openclaw-plugins/discord" }),
+      }),
+      { env: {} },
+    );
+    expect(result.changes).toEqual(['Repaired missing configured plugin "discord".']);
+  });
+
   it("updates a configured plugin when its installed manifest lacks channel config descriptors", async () => {
     const records = {
       discord: {
