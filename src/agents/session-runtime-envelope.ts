@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { URL } from "node:url";
 import { minimatch } from "minimatch";
 import { getRuntimeConfig } from "../config/io.js";
 import {
@@ -8,6 +9,9 @@ import {
   type SessionRuntimeEnvelope,
 } from "../config/sessions.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
+import { isWindowsDrivePath } from "../infra/archive-path.js";
+import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
+import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -15,6 +19,10 @@ export type SessionRuntimeEnvelopeDecision = { allowed: true } | { allowed: fals
 export type SessionRuntimeEnvelopeReadResult =
   | { ok: true; envelope?: SessionRuntimeEnvelope }
   | { ok: false; reason: string };
+type EnvelopePathContext = {
+  workspaceDir?: string;
+  containerWorkdir?: string;
+};
 
 const PATH_KEYS = new Set([
   "path",
@@ -37,25 +45,99 @@ function nonEmptyList(values?: string[]): string[] {
   return Array.isArray(values) ? values.map((value) => value.trim()).filter(Boolean) : [];
 }
 
-function canonicalizePathForEnvelope(value: string): string {
+function normalizeFileUrlPathCandidate(value: string): string {
+  if (!/^file:\/\//i.test(value)) {
+    return value;
+  }
+  const safePath = trySafeFileURLToPath(value);
+  if (safePath) {
+    return safePath;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "file:") {
+      return value;
+    }
+    const host = parsed.hostname.trim().toLowerCase();
+    if (host && host !== "localhost") {
+      return value;
+    }
+    if (hasEncodedFileUrlSeparator(parsed.pathname)) {
+      return value;
+    }
+    return decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+  } catch {
+    return value;
+  }
+}
+
+function mapContainerPathToWorkspaceRoot(value: string, context: EnvelopePathContext): string {
+  const workspaceDir = context.workspaceDir?.trim();
+  const containerWorkdir = context.containerWorkdir?.trim();
+  if (!workspaceDir || !containerWorkdir) {
+    return value;
+  }
+  const normalizedWorkdir = containerWorkdir.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalizedWorkdir.startsWith("/")) {
+    return value;
+  }
+  const rawCandidate = normalizeFileUrlPathCandidate(
+    value.startsWith("@") ? value.slice(1) : value,
+  );
+  const normalizedCandidate = rawCandidate.replace(/\\/g, "/");
+  if (normalizedCandidate === normalizedWorkdir) {
+    return path.resolve(workspaceDir);
+  }
+  const prefix = `${normalizedWorkdir}/`;
+  if (!normalizedCandidate.startsWith(prefix)) {
+    return value;
+  }
+  return path.resolve(workspaceDir, ...normalizedCandidate.slice(prefix.length).split("/"));
+}
+
+function expandTildeLikeHostFileTools(value: string): string {
+  const osHome = resolveOsHomeDir();
+  return osHome ? expandHomePrefix(value, { home: osHome }) : value;
+}
+
+function canonicalizePathForEnvelope(value: string, context: EnvelopePathContext = {}): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return trimmed;
   }
-  return path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.normalize(trimmed);
+  const mapped = mapContainerPathToWorkspaceRoot(trimmed, context);
+  const candidate = normalizeFileUrlPathCandidate(
+    mapped.startsWith("@") ? mapped.slice(1) : mapped,
+  );
+  const expanded = expandTildeLikeHostFileTools(candidate);
+  if (isWindowsDrivePath(expanded)) {
+    return path.win32.normalize(expanded);
+  }
+  if (path.isAbsolute(expanded)) {
+    return path.resolve(expanded);
+  }
+  const workspaceDir = context.workspaceDir?.trim();
+  if (workspaceDir) {
+    return path.resolve(workspaceDir, expanded || ".");
+  }
+  return path.normalize(expanded);
 }
 
-function matchesGlob(value: string, pattern: string): boolean {
-  const canonicalValue = canonicalizePathForEnvelope(value);
-  const canonicalPattern = canonicalizePathForEnvelope(pattern);
+function matchesGlob(value: string, pattern: string, context: EnvelopePathContext): boolean {
+  const canonicalValue = canonicalizePathForEnvelope(value, context);
+  const canonicalPattern = canonicalizePathForEnvelope(pattern, context);
   return (
     canonicalValue === canonicalPattern ||
     minimatch(canonicalValue, canonicalPattern, { dot: true })
   );
 }
 
-function matchesAny(value: string, patterns?: string[]): boolean {
-  return nonEmptyList(patterns).some((pattern) => matchesGlob(value, pattern));
+function matchesAny(
+  value: string,
+  patterns: string[] | undefined,
+  context: EnvelopePathContext,
+): boolean {
+  return nonEmptyList(patterns).some((pattern) => matchesGlob(value, pattern, context));
 }
 
 function matchesToolName(toolName: string, tools?: string[]): boolean {
@@ -200,6 +282,8 @@ export function evaluateSessionRuntimeEnvelope(params: {
   envelope?: SessionRuntimeEnvelope;
   toolName: string;
   toolParams: unknown;
+  workspaceDir?: string;
+  containerWorkdir?: string;
 }): SessionRuntimeEnvelopeDecision {
   const envelope = params.envelope;
   if (!envelope) {
@@ -215,17 +299,21 @@ export function evaluateSessionRuntimeEnvelope(params: {
     return { allowed: false, reason: `Tool not allowed by session envelope: ${toolName}` };
   }
 
+  const pathContext = {
+    workspaceDir: params.workspaceDir,
+    containerWorkdir: params.containerWorkdir,
+  };
   const pathValues = collectStringsByKey(params.toolParams, PATH_KEYS, PATH_ARRAY_KEYS).map(
-    canonicalizePathForEnvelope,
+    (value) => canonicalizePathForEnvelope(value, pathContext),
   );
   for (const value of pathValues) {
-    if (matchesAny(value, envelope.deniedPaths)) {
+    if (matchesAny(value, envelope.deniedPaths, pathContext)) {
       return { allowed: false, reason: `Path blocked by session envelope: ${value}` };
     }
   }
   const allowedPaths = nonEmptyList(envelope.allowedPaths);
   if (allowedPaths.length > 0) {
-    const blocked = pathValues.find((value) => !matchesAny(value, allowedPaths));
+    const blocked = pathValues.find((value) => !matchesAny(value, allowedPaths, pathContext));
     if (blocked) {
       return { allowed: false, reason: `Path outside session envelope: ${blocked}` };
     }

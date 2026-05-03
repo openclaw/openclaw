@@ -157,6 +157,101 @@ describe("session runtime envelope", () => {
     });
   });
 
+  it("resolves relative tool paths against the active workspace before envelope matching", () => {
+    expect(
+      evaluateSessionRuntimeEnvelope({
+        envelope: { deniedPaths: ["/repo/secrets/**"] },
+        toolName: "Read",
+        toolParams: { path: "secrets/token.txt" },
+        workspaceDir: "/repo",
+      }),
+    ).toMatchObject({
+      allowed: false,
+      reason: "Path blocked by session envelope: /repo/secrets/token.txt",
+    });
+
+    expect(
+      evaluateSessionRuntimeEnvelope({
+        envelope: { allowedPaths: ["/repo/src/**"] },
+        toolName: "Write",
+        toolParams: { path: "src/index.ts" },
+        workspaceDir: "/repo",
+      }),
+    ).toEqual({ allowed: true });
+
+    expect(
+      evaluateSessionRuntimeEnvelope({
+        envelope: { allowedPaths: ["/repo/src/**"] },
+        toolName: "Write",
+        toolParams: { path: "secrets/token.txt" },
+        workspaceDir: "/repo",
+      }),
+    ).toMatchObject({
+      allowed: false,
+      reason: "Path outside session envelope: /repo/secrets/token.txt",
+    });
+  });
+
+  it("expands home-relative tool paths before envelope matching", () => {
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    process.env.HOME = "/home/openclaw-test";
+    delete process.env.USERPROFILE;
+    try {
+      expect(
+        evaluateSessionRuntimeEnvelope({
+          envelope: { deniedPaths: ["/home/openclaw-test/secrets/**"] },
+          toolName: "Read",
+          toolParams: { path: "~/secrets/token.txt" },
+          workspaceDir: "/repo",
+        }),
+      ).toMatchObject({
+        allowed: false,
+        reason: "Path blocked by session envelope: /home/openclaw-test/secrets/token.txt",
+      });
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = originalUserProfile;
+      }
+    }
+  });
+
+  it("maps sandbox container workspace paths onto the active workspace for matching", () => {
+    expect(
+      evaluateSessionRuntimeEnvelope({
+        envelope: { deniedPaths: ["/repo/secrets/**"] },
+        toolName: "Read",
+        toolParams: { path: "/workspace/secrets/token.txt" },
+        workspaceDir: "/repo",
+        containerWorkdir: "/workspace",
+      }),
+    ).toMatchObject({
+      allowed: false,
+      reason: "Path blocked by session envelope: /repo/secrets/token.txt",
+    });
+  });
+
+  it("canonicalizes local file URLs before envelope matching", () => {
+    expect(
+      evaluateSessionRuntimeEnvelope({
+        envelope: { deniedPaths: ["/repo/secrets/**"] },
+        toolName: "Read",
+        toolParams: { path: "file:///repo/secrets/token.txt" },
+        workspaceDir: "/repo",
+      }),
+    ).toMatchObject({
+      allowed: false,
+      reason: "Path blocked by session envelope: /repo/secrets/token.txt",
+    });
+  });
+
   it("enforces bash command allowlists", () => {
     expect(
       evaluateSessionRuntimeEnvelope({

@@ -58,6 +58,33 @@ describe("before_tool_call session envelopes", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("uses hook workspace context for relative session envelope path checks", async () => {
+    envelopeMocks.readSessionRuntimeEnvelope.mockReturnValue({
+      ok: true,
+      envelope: { deniedPaths: ["/repo/secrets/**"] },
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as never, {
+      sessionKey: "agent:main:main",
+      workspaceDir: "/repo",
+    });
+    const onUpdate = vi.fn();
+
+    await expect(
+      tool.execute("call-envelope-relative", { path: "secrets/token.txt" }, undefined, onUpdate),
+    ).resolves.toEqual({
+      content: [
+        { type: "text", text: "Path blocked by session envelope: /repo/secrets/token.txt" },
+      ],
+      details: {
+        status: "blocked",
+        deniedReason: "session-envelope",
+        reason: "Path blocked by session envelope: /repo/secrets/token.txt",
+      },
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("fails closed when the session envelope cannot be loaded", async () => {
     envelopeMocks.readSessionRuntimeEnvelope.mockReturnValue({
       ok: false,

@@ -39,6 +39,10 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  /** Host workspace root used by file tools for resolving relative paths. */
+  workspaceDir?: string;
+  /** Container-visible workspace path, when tools run through a sandbox bridge. */
+  containerWorkdir?: string;
   trace?: DiagnosticTraceContext;
   loopDetection?: ToolLoopDetectionConfig;
 };
@@ -426,6 +430,8 @@ export async function runBeforeToolCallHook(args: {
       envelope: envelopeRead.envelope,
       toolName,
       toolParams,
+      workspaceDir: args.ctx?.workspaceDir,
+      containerWorkdir: args.ctx?.containerWorkdir,
     });
     if (!envelopeDecision.allowed) {
       return {

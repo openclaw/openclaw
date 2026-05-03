@@ -814,6 +814,8 @@ export function createOpenClawCodingTools(options?: {
       sessionKey: options?.sessionKey,
       sessionId: options?.sessionId,
       runId: options?.runId,
+      workspaceDir: workspaceRoot,
+      ...(sandbox?.containerWorkdir ? { containerWorkdir: sandbox.containerWorkdir } : {}),
       ...(options?.trace ? { trace: options.trace } : {}),
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     }),
