@@ -909,8 +909,6 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
     'main',
     '--session-id',
     $sessionId,
-    '--model',
-    ${psSingleQuote(this.auth.modelId)},
     '--message',
     'Reply with exact ASCII text OK only.',
     '--thinking',

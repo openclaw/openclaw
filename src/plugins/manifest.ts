@@ -1714,6 +1714,10 @@ export type OpenClawPackageManifest = {
   setupEntry?: string;
   runtimeSetupEntry?: string;
   setupFeatures?: OpenClawPackageSetupFeatures;
+  plugin?: {
+    id?: string;
+    label?: string;
+  };
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
   startup?: OpenClawPackageStartup;

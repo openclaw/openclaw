@@ -1172,6 +1172,7 @@ export type ProviderSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
+  trigger?: "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 };
 
 export type ProviderTransformSystemPromptContext = ProviderSystemPromptContributionContext & {

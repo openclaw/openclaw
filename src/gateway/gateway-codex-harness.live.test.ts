@@ -204,7 +204,7 @@ async function writeLiveGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspace,
-        agentRuntime: { id: "codex", fallback: "none" },
+        agentRuntime: { id: "codex" },
         skipBootstrap: true,
         timeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
         model: { primary: params.modelKey },
@@ -711,7 +711,6 @@ describeLive("gateway live (Codex harness)", () => {
 
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_AGENT_RUNTIME = "codex";
-      process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
       // Keep the runtime fixed on the plugin-owned Codex app-server harness.
       // CI can opt into API-key auth to avoid stale OAuth refresh secrets,
       // while local maintainer runs can continue exercising staged ~/.codex auth.

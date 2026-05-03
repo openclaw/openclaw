@@ -19,16 +19,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  posix,
-  relative,
-  resolve as pathResolve,
-} from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
@@ -400,145 +393,6 @@ export function pruneLegacyPluginRuntimeDepsState(params = {}) {
   return removed;
 }
 
-const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
-
-function stripSpecifierSuffix(value) {
-  return value.replace(/[?#].*$/u, "");
-}
-
-function resolveDistImportPath(importerPath, specifier) {
-  if (!specifier.startsWith(".")) {
-    return null;
-  }
-  const stripped = stripSpecifierSuffix(specifier);
-  if (!stripped) {
-    return null;
-  }
-  return posix.normalize(posix.join(posix.dirname(importerPath), stripped));
-}
-
-function findStatementStart(source, index) {
-  return (
-    Math.max(
-      source.lastIndexOf(";", index),
-      source.lastIndexOf("{", index),
-      source.lastIndexOf("}", index),
-      source.lastIndexOf("\n", index),
-      source.lastIndexOf("\r", index),
-    ) + 1
-  );
-}
-
-function isImportSpecifierContext(source, index) {
-  const dynamicPrefix = source.slice(Math.max(0, index - 32), index);
-  if (/\bimport\s*\(\s*$/u.test(dynamicPrefix)) {
-    return true;
-  }
-  const statementPrefix = source.slice(findStatementStart(source, index), index).trimStart();
-  return (
-    /^(?:import|export)\b[\s\S]*\bfrom\s*$/u.test(statementPrefix) ||
-    /^import\s*$/u.test(statementPrefix)
-  );
-}
-
-function collectImportSpecifiers(source) {
-  const specifiers = [];
-  let inBlockComment = false;
-  let inLineComment = false;
-  for (let index = 0; index < source.length; index += 1) {
-    if (inBlockComment) {
-      if (source[index] === "*" && source[index + 1] === "/") {
-        inBlockComment = false;
-        index += 1;
-      }
-      continue;
-    }
-    if (inLineComment) {
-      if (source[index] === "\n" || source[index] === "\r") {
-        inLineComment = false;
-      }
-      continue;
-    }
-    if (source[index] === "/" && source[index + 1] === "*") {
-      inBlockComment = true;
-      index += 1;
-      continue;
-    }
-    if (source[index] === "/" && source[index + 1] === "/") {
-      inLineComment = true;
-      index += 1;
-      continue;
-    }
-
-    const quote = source[index];
-    if (quote !== '"' && quote !== "'") {
-      continue;
-    }
-
-    let cursor = index + 1;
-    let value = "";
-    while (cursor < source.length) {
-      const char = source[cursor];
-      if (char === "\\") {
-        value += source.slice(cursor, cursor + 2);
-        cursor += 2;
-        continue;
-      }
-      if (char === quote) {
-        break;
-      }
-      value += char;
-      cursor += 1;
-    }
-    if (cursor >= source.length) {
-      break;
-    }
-
-    if (value.startsWith(".") && isImportSpecifierContext(source, index)) {
-      specifiers.push(value);
-    }
-    index = cursor;
-  }
-  return specifiers;
-}
-
-function expandInstalledDistImportClosure(params) {
-  const files = [...new Set(params.files)];
-  const fileSet = new Set(files);
-  const expectedSet = new Set(params.seedFiles);
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    for (const importerPath of [...expectedSet]
-      .filter((file) => fileSet.has(file))
-      .toSorted((left, right) => left.localeCompare(right))) {
-      if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
-        continue;
-      }
-      let source;
-      try {
-        source = params.readText(importerPath);
-      } catch (error) {
-        if (error?.code === "ENOENT") {
-          continue;
-        }
-        throw error;
-      }
-      for (const specifier of collectImportSpecifiers(source)) {
-        const importedPath = resolveDistImportPath(importerPath, specifier);
-        if (!importedPath || !fileSet.has(importedPath) || expectedSet.has(importedPath)) {
-          continue;
-        }
-        expectedSet.add(importedPath);
-        changed = true;
-      }
-    }
-  }
-
-  return [...expectedSet].toSorted((left, right) => left.localeCompare(right));
-}
-
 export function pruneInstalledPackageDist(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const removeFile = params.unlinkSync ?? unlinkSync;
@@ -569,11 +423,18 @@ export function pruneInstalledPackageDist(params = {}) {
   const installedFiles = listInstalledDistFiles(params);
   const readFile = params.readFileSync ?? readFileSync;
   expectedFiles = new Set(
-    expandInstalledDistImportClosure({
+    expandPackageDistImportClosure({
       files: installedFiles,
       seedFiles: [...expectedFiles],
       readText(relativePath) {
-        return readFile(join(packageRoot, relativePath), "utf8");
+        try {
+          return readFile(join(packageRoot, relativePath), "utf8");
+        } catch (error) {
+          if (error?.code === "ENOENT") {
+            return "";
+          }
+          throw error;
+        }
       },
     }),
   );

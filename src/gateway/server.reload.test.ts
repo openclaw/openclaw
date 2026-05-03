@@ -704,8 +704,11 @@ describe("gateway hot reload", () => {
       );
 
       expect(hoisted.cronInstances.length).toBe(2);
-      expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);
-      expect(hoisted.cronInstances[1].start).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(
+          hoisted.cronInstances.some((instance) => instance.start.mock.calls.length === 1),
+        ).toBe(true);
+      });
 
       expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(5);

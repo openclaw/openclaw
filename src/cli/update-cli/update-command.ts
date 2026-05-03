@@ -21,9 +21,14 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceState,
+  resolveGatewayService,
+  type GatewayService,
+} from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
+import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
@@ -67,10 +72,12 @@ import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
 import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
+import { recoverInstalledLaunchAgent } from "../daemon-cli/launchd-recovery.js";
 import {
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
+  type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
 import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
@@ -231,13 +238,138 @@ export function shouldUseLegacyProcessRestartAfterUpdate(params: {
   return !isPackageManagerUpdateMode(params.updateMode);
 }
 
+type PostUpdateLaunchAgentRecoveryResult =
+  | { attempted: false; recovered: false }
+  | { attempted: true; recovered: true; message: string }
+  | { attempted: true; recovered: false; detail: string };
+
+type PostUpdateLaunchAgentRecoveryDeps = {
+  platform?: NodeJS.Platform;
+  readState?: typeof readGatewayServiceState;
+  recover?: typeof recoverInstalledLaunchAgent;
+};
+
+export async function recoverInstalledLaunchAgentAfterUpdate(params: {
+  service?: GatewayService;
+  env?: NodeJS.ProcessEnv;
+  deps?: PostUpdateLaunchAgentRecoveryDeps;
+}): Promise<PostUpdateLaunchAgentRecoveryResult> {
+  const platform = params.deps?.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return { attempted: false, recovered: false };
+  }
+
+  const service = params.service ?? resolveGatewayService();
+  const readState = params.deps?.readState ?? readGatewayServiceState;
+  const recover = params.deps?.recover ?? recoverInstalledLaunchAgent;
+  const state = await readState(service, { env: params.env }).catch(() => null);
+  if (state?.loaded) {
+    return { attempted: false, recovered: false };
+  }
+  if (state && !state.installed && !state.runtime?.missingSupervision) {
+    return { attempted: false, recovered: false };
+  }
+
+  const recovered = await recover({ result: "restarted", env: state?.env ?? params.env }).catch(
+    () => null,
+  );
+  if (!recovered) {
+    return {
+      attempted: true,
+      recovered: false,
+      detail:
+        "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
+    };
+  }
+
+  return {
+    attempted: true,
+    recovered: true,
+    message: recovered.message,
+  };
+}
+
+type PostUpdateGatewayHealthRecoveryDeps = {
+  recoverLaunchAgent?: typeof recoverInstalledLaunchAgentAfterUpdate;
+  waitForHealthy?: typeof waitForGatewayHealthyRestart;
+};
+
+export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
+  health: GatewayRestartSnapshot;
+  service: GatewayService;
+  port: number;
+  expectedVersion?: string;
+  env?: NodeJS.ProcessEnv;
+  deps?: PostUpdateGatewayHealthRecoveryDeps;
+}): Promise<{
+  health: GatewayRestartSnapshot;
+  launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
+}> {
+  if (params.health.healthy) {
+    return { health: params.health, launchAgentRecovery: null };
+  }
+
+  const recoverLaunchAgent =
+    params.deps?.recoverLaunchAgent ?? recoverInstalledLaunchAgentAfterUpdate;
+  const launchAgentRecovery = await recoverLaunchAgent({
+    service: params.service,
+    env: params.env,
+  });
+  if (!launchAgentRecovery.recovered) {
+    return { health: params.health, launchAgentRecovery };
+  }
+
+  const waitForHealthy = params.deps?.waitForHealthy ?? waitForGatewayHealthyRestart;
+  const health = await waitForHealthy({
+    service: params.service,
+    port: params.port,
+    expectedVersion: params.expectedVersion,
+    env: params.env,
+  });
+  return { health, launchAgentRecovery };
+}
+
+function formatPostUpdateGatewayRecoveryInstructions(result: UpdateRunResult): string[] {
+  const lines = [
+    `Recovery: run \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`; if macOS reports the LaunchAgent is installed but not loaded, run \`${replaceCliName(formatCliCommand("openclaw gateway install --force"), CLI_NAME)}\` from the logged-in user session, then rerun \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\`.`,
+  ];
+  const beforeVersion = normalizeOptionalString(result.before?.version);
+  if (isPackageManagerUpdateMode(result.mode) && beforeVersion) {
+    lines.push(
+      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${replaceCliName(formatCliCommand("openclaw gateway install --force"), CLI_NAME)}\`.`,
+    );
+  }
+  return lines;
+}
+
 type PrePackageServiceStop = {
   stopped: boolean;
   inspected: boolean;
   runtimeInspected: boolean;
   running: boolean;
+  blockMessage?: string;
   serviceEnv?: NodeJS.ProcessEnv;
 };
+
+function formatGatewayAncestryBlockMessage(pid: number): string {
+  return `openclaw update detected it is running inside the gateway process tree.
+Gateway PID ${pid} is an ancestor of this process, so this updater cannot safely stop or restart the gateway that owns it.
+Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`;
+}
+
+function isGatewayAncestorPid(pid: unknown): pid is number {
+  return typeof pid === "number" && pid > 0 && getSelfAndAncestorPidsSync().has(pid);
+}
+
+function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
+  return isGatewayAncestorPid(pid) ? formatGatewayAncestryBlockMessage(pid) : undefined;
+}
+
+function gatewayRuntimeAncestryBlockMessage(
+  runtime: { pid?: unknown } | null | undefined,
+): string | undefined {
+  return gatewayAncestryBlockMessage(runtime?.pid);
+}
 
 async function maybeStopManagedServiceBeforePackageUpdate(params: {
   shouldRestart: boolean;
@@ -297,6 +429,18 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
       inspected: true,
       runtimeInspected: true,
       running: false,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  const blockMessage = gatewayRuntimeAncestryBlockMessage(serviceState.runtime);
+  if (blockMessage) {
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      running: true,
+      blockMessage,
       serviceEnv: serviceState.env,
     };
   }
@@ -1150,6 +1294,7 @@ async function maybeRestartService(params: {
       service,
       port: params.gatewayPort,
       expectedVersion: expectedGatewayVersion,
+      env: params.serviceEnv,
     });
     if (!health.healthy && health.staleGatewayPids.length > 0) {
       if (!params.opts.json) {
@@ -1165,7 +1310,31 @@ async function maybeRestartService(params: {
         service,
         port: params.gatewayPort,
         expectedVersion: expectedGatewayVersion,
+        env: params.serviceEnv,
       });
+    }
+
+    const recoveryVerification = await recoverLaunchAgentAndRecheckGatewayHealth({
+      health,
+      service,
+      port: params.gatewayPort,
+      expectedVersion: expectedGatewayVersion,
+      env: params.serviceEnv,
+    });
+    health = recoveryVerification.health;
+    const launchAgentRecovery = recoveryVerification.launchAgentRecovery;
+    if (launchAgentRecovery?.attempted) {
+      if (!params.opts.json) {
+        defaultRuntime.log(
+          launchAgentRecovery.recovered
+            ? theme.warn(launchAgentRecovery.message)
+            : theme.warn(launchAgentRecovery.detail),
+        );
+      } else {
+        defaultRuntime.error(
+          launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
+        );
+      }
     }
 
     if (health.healthy) {
@@ -1175,8 +1344,16 @@ async function maybeRestartService(params: {
     const diagnosticLines = [
       "Gateway did not become healthy after restart.",
       ...renderRestartDiagnostics(health),
+      ...(launchAgentRecovery?.attempted
+        ? [
+            launchAgentRecovery.recovered
+              ? `LaunchAgent recovery: ${launchAgentRecovery.message}`
+              : `LaunchAgent recovery failed: ${launchAgentRecovery.detail}`,
+          ]
+        : []),
       `Restart log: ${resolveGatewayRestartLogPath(params.serviceEnv ?? process.env)}`,
       `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
+      ...formatPostUpdateGatewayRecoveryInstructions(params.result),
     ];
     if (params.opts.json) {
       defaultRuntime.error(diagnosticLines.join("\n"));
@@ -1813,6 +1990,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } catch (err) {
       stop();
       defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
+      defaultRuntime.exit(1);
+      return;
+    }
+
+    if (prePackageServiceStop?.blockMessage) {
+      stop();
+      defaultRuntime.error(prePackageServiceStop.blockMessage);
       defaultRuntime.exit(1);
       return;
     }

@@ -562,22 +562,27 @@ export function createAgentEventHandler({
   const resolveToolVerboseLevel = (runId: string, sessionKey?: string) => {
     const runContext = getAgentRunContext(runId);
     const runVerbose = normalizeVerboseLevel(runContext?.verboseLevel);
-    if (runVerbose) {
-      return runVerbose;
-    }
     if (!sessionKey) {
-      return "off";
+      return runVerbose ?? "off";
     }
     try {
       const { cfg, entry } = loadSessionEntry(sessionKey);
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
-      if (sessionVerbose) {
+      const sessionUpdatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : undefined;
+      const sessionChangedAfterRunStarted =
+        sessionUpdatedAt !== undefined &&
+        runContext?.registeredAt !== undefined &&
+        sessionUpdatedAt >= runContext.registeredAt;
+      if (sessionVerbose && (!runVerbose || sessionChangedAfterRunStarted)) {
         return sessionVerbose;
+      }
+      if (runVerbose) {
+        return runVerbose;
       }
       const defaultVerbose = normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
       return defaultVerbose ?? "off";
     } catch {
-      return "off";
+      return runVerbose ?? "off";
     }
   };
 

@@ -308,12 +308,12 @@ describe("loadPluginManifestRegistry", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
-    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default function () {}", "utf-8");
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify({
         name: "@openclaw/cached-manifest",
-        openclaw: { extensions: ["./index.ts"] },
+        openclaw: { extensions: ["./index.js"] },
       }),
       "utf-8",
     );

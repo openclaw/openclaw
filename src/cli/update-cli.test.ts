@@ -8,8 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { writePackageDistInventory } from "../infra/package-dist-inventory.js";
+import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { VERSION } from "../version.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 import { isOwningNpmCommand } from "./update-cli.test-helpers.js";
 
@@ -29,6 +31,7 @@ const runRestartScript = vi.fn();
 const mockedRunDaemonInstall = vi.fn();
 const serviceReadCommand = vi.fn();
 const serviceReadRuntime = vi.fn();
+const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid]));
 const inspectPortUsage = vi.fn();
 const classifyPortListener = vi.fn();
 const formatPortDiagnostics = vi.fn();
@@ -126,6 +129,10 @@ vi.mock("../infra/runtime-guard.js", () => ({
       patch: Number.parseInt(match[3] ?? "0", 10),
     };
   },
+}));
+
+vi.mock("../infra/restart-stale-pids.js", () => ({
+  getSelfAndAncestorPidsSync: () => mockGetSelfAndAncestorPidsSync(),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -498,6 +505,7 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
     prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
     runRestartScript.mockResolvedValue(undefined);
     inspectPortUsage.mockResolvedValue({
@@ -1121,7 +1129,7 @@ describe("update-cli", () => {
         expect(last).toBeDefined();
         const parsed = last as Record<string, unknown>;
         const channel = parsed.channel as { value?: unknown };
-        expect(channel.value).toBe("stable");
+        expect(channel.value).toBe(isBetaTag(VERSION) ? "beta" : "stable");
       },
     },
   ] as const)("updateStatusCommand rendering: $name", runUpdateCliScenario);
@@ -1419,6 +1427,26 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
     expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  });
+
+  it("refuses package updates from inside the active gateway process tree", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    serviceLoaded.mockResolvedValue(true);
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 4242]));
+
+    await updateCommand({ yes: true });
+
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain(
+      "openclaw update detected it is running inside the gateway process tree.",
+    );
+    expect(errors.join("\n")).toContain("Gateway PID 4242 is an ancestor");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(serviceStop).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
       ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
       expect.any(Object),
