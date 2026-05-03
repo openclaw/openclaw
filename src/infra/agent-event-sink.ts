@@ -36,6 +36,7 @@ export type AgentEventSinkEvent =
       event: "reply_stream";
       runId: string;
       delta: string;
+      replace?: true;
       timestamp: number;
     }
   | {
@@ -141,13 +142,17 @@ export function startAgentEventSink(params: {
         timestamp: evt.ts,
       });
     }
-    const delta =
+    const isReplace = (evt.data as { replace?: unknown }).replace === true;
+    const rawDelta =
       typeof (evt.data as { delta?: unknown }).delta === "string"
         ? (evt.data as { delta: string }).delta
-        : typeof (evt.data as { text?: unknown }).text === "string"
-          ? (evt.data as { text: string }).text
-          : undefined;
-    if (!delta) {
+        : undefined;
+    const text =
+      typeof (evt.data as { text?: unknown }).text === "string"
+        ? (evt.data as { text: string }).text
+        : undefined;
+    const content = isReplace ? (text || rawDelta) : (rawDelta || text);
+    if (!content) {
       return;
     }
     if (!state.replyStarted) {
@@ -162,7 +167,8 @@ export function startAgentEventSink(params: {
     enqueue({
       event: "reply_stream",
       runId: evt.runId,
-      delta,
+      delta: content,
+      ...(isReplace ? { replace: true as const } : {}),
       timestamp: evt.ts,
     });
   }

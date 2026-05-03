@@ -5,7 +5,6 @@ import type {
   GroupPolicy,
   MarkdownConfig,
   OutboundRetryConfig,
-  ReasoningStreamSinkConfig,
   ReplyToMode,
   SessionThreadBindingsConfig,
 } from "./types.base.js";
@@ -221,8 +220,6 @@ export type TelegramAccountConfig = {
   trustedLocalFileRoots?: string[];
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
-  /** @deprecated Use top-level agentEventSink instead. */
-  reasoningStreamSink?: ReasoningStreamSinkConfig;
 };
 
 export type TelegramDmThreadReplies = "off" | "inbound" | "always";

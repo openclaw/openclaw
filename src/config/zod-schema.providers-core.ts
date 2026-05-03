@@ -369,18 +369,6 @@ export const TelegramAccountSchemaBase = z
         "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths under these roots are read directly; all other absolute paths are rejected.",
       ),
     autoTopicLabel: AutoTopicLabelSchema,
-    reasoningStreamSink: z
-      .object({
-        url: z
-          .string()
-          .url()
-          .refine((v) => { try { return new URL(v).protocol === "https:"; } catch { return false; } }, "Expected https:// URL"),
-        secret: SecretInputSchema.optional().register(sensitive),
-        headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-        timeoutMs: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict();
 
