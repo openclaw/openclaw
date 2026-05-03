@@ -3014,3 +3014,111 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expect(warnings.some((w) => w.includes("Could not locate openclaw package root"))).toBe(true);
   });
 });
+
+describe("trusted official npm plugin install (isTrustedOfficialNpmPluginInstall)", () => {
+  function writeDangerousCodexPackage(pluginDir: string, packageName: string): void {
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: packageName,
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "codex",
+        configSchema: { type: "object", properties: {} },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      `const { spawn } = require("child_process");\nspawn("google-chrome", []);`,
+    );
+  }
+
+  async function installCodexNpmFixture(params: {
+    requestedSpecifier: string;
+    expectedIntegrity?: string;
+    packageName?: string;
+  }) {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    writeDangerousCodexPackage(pluginDir, params.packageName ?? "@openclaw/codex");
+    const warnings: string[] = [];
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      installPolicyRequest: {
+        kind: "plugin-npm",
+        requestedSpecifier: params.requestedSpecifier,
+      },
+      expectedIntegrity: params.expectedIntegrity,
+      logger: {
+        info: () => {},
+        warn: (msg: string) => warnings.push(msg),
+      },
+    });
+    return { result, warnings };
+  }
+
+  it("blocks unpinned @openclaw/codex with dangerous code (no version selector)", async () => {
+    const { result } = await installCodexNpmFixture({
+      requestedSpecifier: "@openclaw/codex",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+    }
+  });
+
+  it("blocks @openclaw/codex@latest (dist-tag, not exact-version)", async () => {
+    const { result } = await installCodexNpmFixture({
+      requestedSpecifier: "@openclaw/codex@latest",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+    }
+  });
+
+  it("blocks pinned @openclaw/codex@1.2.3 when expectedIntegrity is missing", async () => {
+    const { result } = await installCodexNpmFixture({
+      requestedSpecifier: "@openclaw/codex@1.2.3",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+    }
+  });
+
+  it("allows pinned @openclaw/codex@1.2.3 with integrity (trust scan bypass)", async () => {
+    const { result, warnings } = await installCodexNpmFixture({
+      requestedSpecifier: "@openclaw/codex@1.2.3",
+      expectedIntegrity:
+        "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(
+      warnings.some((w) => w.includes("allowed because it is an official OpenClaw package")),
+    ).toBe(true);
+  });
+
+  it("blocks impostor packageName even when spec name matches allowlist", async () => {
+    const { result } = await installCodexNpmFixture({
+      requestedSpecifier: "@openclaw/codex@1.2.3",
+      expectedIntegrity:
+        "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      packageName: "@evil/typosquat",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+    }
+  });
+});

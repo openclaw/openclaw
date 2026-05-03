@@ -200,12 +200,24 @@ function isTrustedOfficialNpmPluginInstall(params: {
   installPolicyRequest?: PluginInstallPolicyRequest;
   packageName: string;
   pluginId: string;
+  expectedIntegrity?: string;
 }): boolean {
   if (params.installPolicyRequest?.kind !== "plugin-npm") {
     return false;
   }
   const requested = parseRegistryNpmSpec(params.installPolicyRequest.requestedSpecifier ?? "");
   if (!requested) {
+    return false;
+  }
+  // Match the policy enforced for trusted catalog installs in
+  // src/plugins/provider-install-catalog.ts (require exact-version pin and
+  // a non-empty expectedIntegrity hash). Without these, a name-only spec
+  // would resolve to npm's "latest" tag and bypass the security scan if the
+  // upstream package is ever compromised.
+  if (requested.selectorKind !== "exact-version") {
+    return false;
+  }
+  if (!params.expectedIntegrity?.trim()) {
     return false;
   }
   const expectedPluginId = TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES.get(requested.name);
@@ -289,6 +301,7 @@ type PackageInstallCommonParams = InstallSafetyOverrides & {
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
+  expectedIntegrity?: string;
 };
 
 type FileInstallCommonParams = Pick<
@@ -317,6 +330,7 @@ function pickPackageInstallCommonParams(
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     installPolicyRequest: params.installPolicyRequest,
+    expectedIntegrity: params.expectedIntegrity,
   };
 }
 
@@ -659,6 +673,7 @@ async function validatePackagePluginInstallSource(params: {
   dangerouslyForceUnsafeInstall?: boolean;
   trustedSourceLinkedOfficialInstall?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
+  expectedIntegrity?: string;
   logger: PluginInstallLogger;
   mode: "install" | "update";
   resolveEffectiveMode?: (pluginId: string) => Promise<"install" | "update">;
@@ -783,6 +798,7 @@ async function validatePackagePluginInstallSource(params: {
       installPolicyRequest: params.installPolicyRequest,
       packageName: pkgName,
       pluginId,
+      expectedIntegrity: params.expectedIntegrity,
     });
   const scanResult = await runInstallSourceScan({
     subject: `Plugin "${pluginId}"`,
@@ -864,6 +880,7 @@ export async function installPluginFromInstalledPackageDir(
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     installPolicyRequest: params.installPolicyRequest,
+    expectedIntegrity: params.expectedIntegrity,
     logger,
     mode: params.mode ?? "install",
   });
@@ -926,6 +943,7 @@ async function installPluginFromPackageDir(
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     installPolicyRequest: params.installPolicyRequest,
+    expectedIntegrity: params.expectedIntegrity,
     logger,
     mode,
     resolveEffectiveMode: async (pluginId) =>
@@ -1284,6 +1302,7 @@ export async function installPluginFromNpmSpec(
       kind: "plugin-npm",
       requestedSpecifier: spec,
     },
+    expectedIntegrity: params.expectedIntegrity,
   });
   if (!result.ok) {
     await rollbackManagedNpmPluginInstall({
