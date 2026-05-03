@@ -1,9 +1,7 @@
 /**
- * Cron session reaper — prunes completed isolated cron run sessions
- * from the session store after a configurable retention period.
- *
- * Pattern: sessions keyed as `...:cron:<jobId>:run:<uuid>` are ephemeral
- * run records. The base session (`...:cron:<jobId>`) is kept as-is.
+ * Cron session reaper — prunes expired cron sessions (both base sessions
+ * `...:cron:<jobId>` and run sessions `...:cron:<jobId>:run:<uuid>`) from
+ * the session store after a configurable retention period.
  */
 
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -42,7 +40,7 @@ type ReaperResult = {
 };
 
 /**
- * Sweep the session store and prune expired cron run sessions.
+ * Sweep the session store and prune expired cron sessions (base + run).
  * Designed to be called from the cron timer tick — self-throttles via
  * MIN_SWEEP_INTERVAL_MS to avoid excessive I/O.
  *
@@ -136,7 +134,7 @@ export async function sweepCronRunSessions(params: {
   if (pruned > 0) {
     params.log.info(
       { pruned, retentionMs },
-      `cron-reaper: pruned ${pruned} expired cron run session(s)`,
+      `cron-reaper: pruned ${pruned} expired cron session(s)`,
     );
   }
 
