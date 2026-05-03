@@ -582,29 +582,32 @@ describe("stuck session diagnostics threshold", () => {
     expect(events.filter((event) => event === "diagnostic.liveness.warning")).toHaveLength(2);
   });
 
-  it("suppresses liveness warnings during startupGraceMs window (#76365)", () => {
+  it("suppresses liveness warnings during startupGraceMs window but still calls sampler (#76365)", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const events: string[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+    const sampleLiveness = vi.fn(() => ({
+      reasons: ["event_loop_delay"] as const,
+      intervalMs: 30_000,
+      eventLoopDelayP99Ms: 1_500,
+      eventLoopDelayMaxMs: 2_000,
+    }));
 
     try {
       startDiagnosticHeartbeat(
         { diagnostics: { enabled: true } },
         {
           emitMemorySample: createEmitMemorySampleMock(),
-          sampleLiveness: () => ({
-            reasons: ["event_loop_delay"],
-            intervalMs: 30_000,
-            eventLoopDelayP99Ms: 1_500,
-            eventLoopDelayMaxMs: 2_000,
-          }),
+          sampleLiveness,
           startupGraceMs: 60_000,
         },
       );
 
       logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
-      // Still within the 60s grace window — no liveness warning should fire
+      // Still within the 60s grace window — sampler must be called (for metric resets)
+      // but no liveness warning should be emitted
       vi.advanceTimersByTime(30_000);
+      expect(sampleLiveness).toHaveBeenCalled();
       expect(events.filter((e) => e === "diagnostic.liveness.warning")).toHaveLength(0);
       expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
 

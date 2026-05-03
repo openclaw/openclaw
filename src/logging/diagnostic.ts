@@ -758,10 +758,13 @@ export function startDiagnosticHeartbeat(
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot();
+    // Always run the sampler so it can reset event-loop-delay metrics and update
+    // baselines; suppressing it during grace would let startup spikes carry over
+    // into the first post-grace sample. Discard the result during grace so that
+    // liveness events/warnings are not emitted while the startup window is open.
     const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
-    const livenessSample = inStartupGrace
-      ? null
-      : (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
+    const rawLivenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
+    const livenessSample = inStartupGrace ? null : rawLivenessSample;
     const shouldEmitLivenessEvent =
       livenessSample !== null && shouldEmitDiagnosticLivenessEvent(now);
     const shouldEmitLivenessWarning =
