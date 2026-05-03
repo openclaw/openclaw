@@ -70,6 +70,7 @@ vi.mock("../../infra/json-files.js", async () => {
 });
 
 import {
+  migrateLegacySandboxRegistryFiles,
   readBrowserRegistry,
   readRegistry,
   readRegistryEntry,
@@ -172,7 +173,15 @@ async function seedContainerRegistry(entries: SandboxRegistryEntry[]) {
 }
 
 describe("registry race safety", () => {
-  it("normalizes legacy registry entries on read", async () => {
+  it("does not migrate legacy registry files from runtime reads", async () => {
+    await seedContainerRegistry([containerEntry({ containerName: "legacy-container" })]);
+
+    await expect(readRegistry()).resolves.toEqual({ entries: [] });
+    await expect(readRegistryEntry("legacy-container")).resolves.toBeNull();
+    await expect(fs.access(SANDBOX_REGISTRY_PATH)).resolves.toBeUndefined();
+  });
+
+  it("normalizes legacy registry entries after explicit migration", async () => {
     await seedContainerRegistry([
       {
         containerName: "legacy-container",
@@ -183,6 +192,7 @@ describe("registry race safety", () => {
       },
     ]);
 
+    await migrateLegacySandboxRegistryFiles();
     const registry = await readRegistry();
     expect(registry.entries).toEqual([
       expect.objectContaining({
@@ -192,6 +202,33 @@ describe("registry race safety", () => {
         configLabelKind: "Image",
       }),
     ]);
+  });
+
+  it("does not overwrite newer sharded entries during legacy migration", async () => {
+    await updateRegistry(
+      containerEntry({
+        containerName: "container-a",
+        sessionKey: "new-session",
+        lastUsedAtMs: 10,
+      }),
+    );
+    await seedContainerRegistry([
+      containerEntry({
+        containerName: "container-a",
+        sessionKey: "legacy-session",
+        lastUsedAtMs: 1,
+      }),
+    ]);
+
+    await migrateLegacySandboxRegistryFiles();
+
+    const entry = await readRegistryEntry("container-a");
+    expect(entry).toEqual(
+      expect.objectContaining({
+        sessionKey: "new-session",
+        lastUsedAtMs: 10,
+      }),
+    );
   });
 
   it("reads a single sharded entry without scanning the full registry", async () => {
@@ -241,7 +278,7 @@ describe("registry race safety", () => {
   });
 
   it("stores unsafe container names as encoded shard filenames", async () => {
-    await seedContainerRegistry([containerEntry({ containerName: "../escape" })]);
+    await updateRegistry(containerEntry({ containerName: "../escape" }));
 
     const registry = await readRegistry();
 
@@ -299,24 +336,23 @@ describe("registry race safety", () => {
   it("quarantines malformed legacy registry files during migration", async () => {
     await seedMalformedContainerRegistry("{bad json");
     await seedMalformedBrowserRegistry("{bad json");
-    await expect(updateRegistry(containerEntry())).resolves.toBeUndefined();
-    await expect(updateBrowserRegistry(browserEntry())).resolves.toBeUndefined();
+    const results = await migrateLegacySandboxRegistryFiles();
 
     await expect(fs.access(SANDBOX_REGISTRY_PATH)).rejects.toThrow();
     await expect(fs.access(SANDBOX_BROWSER_REGISTRY_PATH)).rejects.toThrow();
-    await expect(readRegistry()).resolves.toEqual({
-      entries: [expect.objectContaining({ containerName: "container-a" })],
-    });
-    await expect(readBrowserRegistry()).resolves.toEqual({
-      entries: [expect.objectContaining({ containerName: "browser-a" })],
-    });
+    expect(results.map((result) => result.status)).toEqual([
+      "quarantined-invalid",
+      "quarantined-invalid",
+    ]);
   });
 
   it("quarantines legacy registry files with invalid entries during migration", async () => {
     const invalidEntries = `{"entries":[{"sessionKey":"agent:main"}]}`;
     await seedMalformedContainerRegistry(invalidEntries);
     await seedMalformedBrowserRegistry(invalidEntries);
-    await expect(updateRegistry(containerEntry())).resolves.toBeUndefined();
-    await expect(updateBrowserRegistry(browserEntry())).resolves.toBeUndefined();
+    await expect(migrateLegacySandboxRegistryFiles()).resolves.toEqual([
+      expect.objectContaining({ kind: "containers", status: "quarantined-invalid" }),
+      expect.objectContaining({ kind: "browsers", status: "quarantined-invalid" }),
+    ]);
   });
 });
