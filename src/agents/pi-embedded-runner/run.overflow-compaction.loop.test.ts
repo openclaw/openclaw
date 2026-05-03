@@ -132,6 +132,7 @@ it("uses continuation prompt on compaction retry when currentMessageId is unchan
     expect(secondCallArgs?.suppressNextUserMessagePersistence).toBe(true);
     expect(result.meta.error).toBeUndefined();
   });
+
   it("retries after successful compaction on likely-overflow promptError variants", async () => {
     const overflowHintError = new Error("Context window exceeded: requested 12000 tokens");
 
