@@ -8198,6 +8198,101 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
           enum: ["length", "newline"],
         },
+        streaming: {
+          anyOf: [
+            {
+              type: "string",
+              enum: ["off", "partial", "block", "progress"],
+            },
+            {
+              type: "boolean",
+            },
+            {
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  enum: ["off", "partial", "block", "progress"],
+                },
+                chunkMode: {
+                  type: "string",
+                  enum: ["length", "newline"],
+                },
+                preview: {
+                  type: "object",
+                  properties: {
+                    toolProgress: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+                progress: {
+                  type: "object",
+                  properties: {
+                    label: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "boolean",
+                          const: false,
+                        },
+                      ],
+                    },
+                    labels: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    maxLines: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    toolProgress: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+                block: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    coalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              additionalProperties: false,
+            },
+          ],
+        },
         blockStreaming: {
           type: "boolean",
         },
@@ -8499,6 +8594,101 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               chunkMode: {
                 type: "string",
                 enum: ["length", "newline"],
+              },
+              streaming: {
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["off", "partial", "block", "progress"],
+                  },
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      mode: {
+                        type: "string",
+                        enum: ["off", "partial", "block", "progress"],
+                      },
+                      chunkMode: {
+                        type: "string",
+                        enum: ["length", "newline"],
+                      },
+                      preview: {
+                        type: "object",
+                        properties: {
+                          toolProgress: {
+                            type: "boolean",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                      progress: {
+                        type: "object",
+                        properties: {
+                          label: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "boolean",
+                                const: false,
+                              },
+                            ],
+                          },
+                          labels: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          maxLines: {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          toolProgress: {
+                            type: "boolean",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                      block: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          coalesce: {
+                            type: "object",
+                            properties: {
+                              minChars: {
+                                type: "integer",
+                                exclusiveMinimum: 0,
+                                maximum: 9007199254740991,
+                              },
+                              maxChars: {
+                                type: "integer",
+                                exclusiveMinimum: 0,
+                                maximum: 9007199254740991,
+                              },
+                              idleMs: {
+                                type: "integer",
+                                minimum: 0,
+                                maximum: 9007199254740991,
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
               },
               blockStreaming: {
                 type: "boolean",
