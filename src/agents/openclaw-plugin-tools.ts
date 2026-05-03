@@ -2,6 +2,7 @@ import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { listProfilesForProvider } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -44,12 +45,21 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     threadId: params.options?.agentThreadId,
   });
 
+  // Use config-only snapshot helpers for the one-shot runtimeConfig to avoid
+  // expensive structuredClone of the full secrets runtime snapshot (see #76295).
+  // Keep getRuntimeConfig as a live getter to observe runtime refreshes
+  // (long-lived plugin tool callbacks depend on live refresh semantics).
+  const runtimeConfig = selectApplicableRuntimeConfig({
+    inputConfig: params.resolvedConfig ?? params.options?.config,
+    runtimeConfig: getRuntimeConfigSnapshot() ?? undefined,
+    runtimeSourceConfig: getRuntimeConfigSourceSnapshot() ?? undefined,
+  });
   const resolveCurrentRuntimeConfig = () => {
-    const currentRuntimeSnapshot = getActiveSecretsRuntimeSnapshot();
+    const liveSnapshot = getActiveSecretsRuntimeSnapshot();
     return selectApplicableRuntimeConfig({
       inputConfig: params.resolvedConfig ?? params.options?.config,
-      runtimeConfig: currentRuntimeSnapshot?.config,
-      runtimeSourceConfig: currentRuntimeSnapshot?.sourceConfig,
+      runtimeConfig: liveSnapshot?.config,
+      runtimeSourceConfig: liveSnapshot?.sourceConfig,
     });
   };
   const authProfileStore = params.options?.authProfileStore;
@@ -57,7 +67,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     ...resolveOpenClawPluginToolInputs({
       options: params.options,
       resolvedConfig: params.resolvedConfig,
-      runtimeConfig: resolveCurrentRuntimeConfig(),
+      runtimeConfig,
       getRuntimeConfig: resolveCurrentRuntimeConfig,
     }),
     existingToolNames: params.existingToolNames ?? new Set<string>(),

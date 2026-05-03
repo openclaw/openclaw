@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/tools: use `getRuntimeConfigSnapshot()` for one-shot runtimeConfig to avoid expensive structuredClone of the full secrets runtime snapshot on the core-plugin-tools prep hot path, eliminating ~8 s of constant-stage latency on each tool invocation. Fixes #76295.
 - Google Meet: use the local call-control microphone button instead of disabled remote participant mute buttons, and block realtime speech when the OpenClaw Meet microphone remains muted.
 - Google Meet: refresh realtime browser state during status and retry delayed speech after Meet finishes joining, so a just-opened in-call tab no longer leaves speech stuck behind stale `not-in-call` health.
 - Plugins/install: recover the install ledger from the managed npm root when `plugins/installs.json` is empty or partial, so reinstalling Discord and Codex no longer makes the other installed plugin disappear.
