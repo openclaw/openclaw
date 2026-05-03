@@ -76,12 +76,23 @@ function compareFindings(left: TaskFlowAuditFinding, right: TaskFlowAuditFinding
   return (left.flow?.createdAt ?? 0) - (right.flow?.createdAt ?? 0);
 }
 
-function getReferenceAt(flow: TaskFlowRecord): number {
-  return flow.updatedAt ?? flow.createdAt;
-}
-
 function getLinkedTasks(flowId: string): TaskRecord[] {
   return listTasksForFlowId(flowId);
+}
+
+function getTaskActivityAt(task: TaskRecord): number {
+  return task.lastEventAt ?? task.startedAt ?? task.createdAt;
+}
+
+function getReferenceAt(flow: TaskFlowRecord, linkedTasks: TaskRecord[]): number {
+  let referenceAt = flow.updatedAt ?? flow.createdAt;
+  for (const task of linkedTasks) {
+    const taskActivityAt = getTaskActivityAt(task);
+    if (taskActivityAt > referenceAt) {
+      referenceAt = taskActivityAt;
+    }
+  }
+  return referenceAt;
 }
 
 function hasBlockingMetadata(flow: TaskFlowRecord): boolean {
@@ -159,9 +170,9 @@ export function listTaskFlowAuditFindings(
   }
 
   for (const flow of flows) {
-    const referenceAt = getReferenceAt(flow);
-    const ageMs = Math.max(0, now - referenceAt);
     const linkedTasks = getLinkedTasks(flow.flowId);
+    const referenceAt = getReferenceAt(flow, linkedTasks);
+    const ageMs = Math.max(0, now - referenceAt);
     const activeTasks = linkedTasks.filter(
       (task) => task.status === "queued" || task.status === "running",
     );
