@@ -534,7 +534,16 @@ function extractDirectShellScriptTargetFromArgv(
     return null;
   }
   const commandName = normalizeCommandBaseName(command);
-  if (!/\.(?:bash|command|fish|ksh|sh|zsh)$/iu.test(commandName)) {
+  const isAbsoluteShellWrapperPath =
+    OPENCLAW_CONTROL_SHELL_WRAPPERS.has(commandName) &&
+    (path.isAbsolute(command) || /^[A-Za-z]:[\\/]/u.test(command) || command.startsWith("\\\\"));
+  if (isAbsoluteShellWrapperPath) {
+    return null;
+  }
+  const hasShellScriptSuffix = /\.(?:bash|command|fish|ksh|sh|zsh)$/iu.test(commandName);
+  const isPathLikeExtensionlessCommand =
+    !commandName.includes(".") && (command.includes("/") || command.includes("\\"));
+  if (!hasShellScriptSuffix && !isPathLikeExtensionlessCommand) {
     return null;
   }
   return { kind: "shell", relOrAbsPaths: [command] };

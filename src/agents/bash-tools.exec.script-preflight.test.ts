@@ -1072,6 +1072,23 @@ describeNonWin("exec script preflight", () => {
           workdir: tmp,
         }),
       ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+
+      await fs.writeFile(
+        path.join(tmp, "send-message"),
+        [
+          "#!/usr/bin/env bash",
+          'openclaw message send --channel whatsapp --target +1555 --message "hello"',
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.chmod(path.join(tmp, "send-message"), 0o755);
+      await expect(
+        tool.execute("call-direct-extensionless-shell-script-send", {
+          command: "./send-message",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec cannot run OpenClaw message delivery commands/);
+
       await expect(
         tool.execute("call-source-shell-script-send", {
           command: "source ./send.sh",
