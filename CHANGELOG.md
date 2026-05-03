@@ -38,6 +38,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/externalization: repair missing configured plugin installs from npm by default, reserve ClawHub downloads for explicit `clawhubSpec` metadata, and cover agent-runtime/env-selected plugin repair. Thanks @vincentkoc.
 - Plugins/install: allow official catalog-matched npm channel plugins such as Feishu to pass the trusted install scanner path while keeping spoofed package names blocked. Thanks @vincentkoc.
 - Feishu: keep timeout env parsing separate from the HTTP client wrapper so package security scans no longer report a false env-harvesting hit during install. Thanks @vincentkoc.
+- Feishu: accept nested `operator.user_id` identity fields in Schema 2.0 card action callbacks while preserving Schema 2 `context.open_chat_id` routing, so button callbacks no longer drop as malformed. Refs #71670. Thanks @rubencu.
 - Upgrade/config: validate configured web-search providers and statically suppressed model/provider pairs against the active plugin set at config load, so stale plugin state fails loud before runtime fallback.
 - Status/update: resolve beta update-channel checks from the installed version when config still says `stable`, and let `status --deep` reuse live gateway channel credential state instead of warning on command-path-only token misses.
 - Doctor/plugins: preserve unmanaged third-party plugin `node_modules` during `doctor --fix`, while still pruning OpenClaw-managed runtime dependency caches.
@@ -1696,7 +1697,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/discovery: ignore stale `plugins.load.paths` aliases that point back at packaged bundled plugin directories and have doctor remove them, keeping bundled plugins on the runtime-deps staging path.
 - Models/LM Studio: preserve `@iq*` quant suffixes in model refs and provider matching so `/model lmstudio/...@iq3_xxs` keeps the exact LM Studio variant. Fixes #71474. (#71486) Thanks @Bartok9, @XinwuC, and @Sanjays2402.
 - Matrix/cron: preserve the live Matrix delivery target when creating implicit announce reminder jobs so mixed-case room IDs are not reconstructed from lowercased session keys. Fixes #71798.
-- Feishu: accept Schema 2.0 card action callbacks that report `context.open_chat_id` instead of legacy `context.chat_id`, including nested `operator.user_id` identity fields, so button callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068 and @rubencu.
+- Feishu: accept Schema 2.0 card action callbacks that report `context.open_chat_id` instead of legacy `context.chat_id`, so button callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068.
 - Feishu: keep synthetic card-action and bot-menu ids out of platform reply targets, using the real card callback message id when Feishu provides one and plain-sending otherwise. Fixes #71673. Thanks @eddy1068.
 - Plugins/QQ Bot: prefer an installed QQ Bot plugin that declares it replaces the bundled `qqbot` channel, preventing duplicate `qqbot_channel_api` and `qqbot_remind` tool registration noise. Fixes #63102.
 - Browser automation: keep stable tab ids and labels attached when Chromium replaces the raw target after form submissions or other action-triggered navigations, and return the replacement `targetId` from `/act` when the match is provable. Fixes #46137.
