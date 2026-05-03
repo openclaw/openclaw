@@ -33,7 +33,6 @@ const runtimePostBuildWatchedPaths = [
   "scripts/runtime-postbuild-stamp.mjs",
   "scripts/runtime-postbuild-shared.mjs",
   "scripts/runtime-postbuild.mjs",
-  "scripts/stage-bundled-plugin-runtime-deps.mjs",
   "scripts/stage-bundled-plugin-runtime.mjs",
   "scripts/windows-cmd-helpers.mjs",
   "scripts/write-official-channel-catalog.mjs",
@@ -433,6 +432,7 @@ const isSignalKey = (signal) => Object.hasOwn(SIGNAL_EXIT_CODES, signal);
 const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[signal] : 1);
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
+const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
 const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
 const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
 const RUN_NODE_BUILD_LOCK_STALE_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_STALE_MS";
@@ -505,6 +505,35 @@ const logRunner = (message, deps) => {
   deps.outputTee?.write(line);
 };
 
+const sanitizeCpuProfileNamePart = (value) => {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "command";
+};
+
+const resolveRunNodeCpuProfileArgs = (deps) => {
+  const profileDir = deps.env[RUN_NODE_CPU_PROF_DIR_ENV]?.trim();
+  if (!profileDir) {
+    return [];
+  }
+
+  const absoluteProfileDir = path.resolve(deps.cwd, profileDir);
+  deps.fs.mkdirSync(absoluteProfileDir, { recursive: true });
+  deps.env[RUN_NODE_CPU_PROF_DIR_ENV] = absoluteProfileDir;
+
+  const commandName = sanitizeCpuProfileNamePart(deps.args[0]);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const pid = Number.isInteger(deps.process.pid) && deps.process.pid > 0 ? deps.process.pid : "pid";
+  const profileName = `openclaw-${commandName}-${pid}-${timestamp}.cpuprofile`;
+  const profilePath = path.join(absoluteProfileDir, profileName);
+  const relativeProfilePath = path.relative(deps.cwd, profilePath) || profilePath;
+  logRunner(`Writing Node CPU profile to ${relativeProfilePath}.`, deps);
+  return ["--cpu-prof", `--cpu-prof-dir=${absoluteProfileDir}`, `--cpu-prof-name=${profileName}`];
+};
+
 const waitForSpawnedProcess = async (childProcess, deps) => {
   let forwardedSignal = null;
   let onSigInt;
@@ -575,7 +604,8 @@ const getInterruptedSpawnExitCode = (res) => {
 };
 
 const runOpenClaw = async (deps) => {
-  const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
+  const cpuProfileArgs = resolveRunNodeCpuProfileArgs(deps);
+  const nodeProcess = deps.spawn(deps.execPath, [...cpuProfileArgs, "openclaw.mjs", ...deps.args], {
     cwd: deps.cwd,
     env: deps.env,
     stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
@@ -798,7 +828,10 @@ const writeBuildStamp = (deps) => {
   }
 };
 
-const shouldSkipCleanWatchRuntimeSync = (deps) => deps.env.OPENCLAW_WATCH_MODE === "1";
+const shouldSkipWatchRuntimeSync = (deps, requirement) =>
+  deps.env.OPENCLAW_WATCH_MODE === "1" &&
+  requirement.reason === "missing_runtime_postbuild_stamp" &&
+  hasDirtyRuntimePostBuildInputs(deps) !== true;
 
 const isGatewayClientCommand = (args) =>
   args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
@@ -885,9 +918,12 @@ export async function runNodeMain(params = {}) {
       return await closeRunNodeOutputTee(deps, exitCode);
     }
     if (!buildRequirement.shouldBuild) {
-      if (!useExistingGatewayClientDist && !shouldSkipCleanWatchRuntimeSync(deps)) {
+      if (!useExistingGatewayClientDist) {
         const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
-        if (runtimePostBuildRequirement.shouldSync) {
+        if (
+          runtimePostBuildRequirement.shouldSync &&
+          !shouldSkipWatchRuntimeSync(deps, runtimePostBuildRequirement)
+        ) {
           const synced = await withRunNodeBuildLock(deps, async () => {
             const lockedRuntimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
             if (!lockedRuntimePostBuildRequirement.shouldSync) {

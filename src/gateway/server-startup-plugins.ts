@@ -3,14 +3,6 @@ import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
-import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import {
-  pruneUnknownBundledRuntimeDepsRoots,
-  repairBundledRuntimeDepsInstallRootAsync,
-  resolveBundledRuntimeDependencyPackageInstallRoot,
-  scanBundledPluginRuntimeDeps,
-} from "../plugins/bundled-runtime-deps.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -40,99 +32,6 @@ export function resolveGatewayStartupMaintenanceConfig(params: {
     : params.cfgAtStart;
 }
 
-async function prestageGatewayBundledRuntimeDeps(params: {
-  cfg: OpenClawConfig;
-  pluginIds: readonly string[];
-  log: GatewayPluginBootstrapLog;
-}): Promise<void> {
-  await measureDiagnosticsTimelineSpan(
-    "runtimeDeps.stage",
-    () => prestageGatewayBundledRuntimeDepsImpl(params),
-    {
-      phase: "startup",
-      config: params.cfg,
-      attributes: {
-        pluginCount: params.pluginIds.length,
-      },
-    },
-  );
-}
-
-async function prestageGatewayBundledRuntimeDepsImpl(params: {
-  cfg: OpenClawConfig;
-  pluginIds: readonly string[];
-  log: GatewayPluginBootstrapLog;
-}): Promise<void> {
-  if (params.pluginIds.length === 0) {
-    return;
-  }
-  const packageRoot = resolveOpenClawPackageRootSync({
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-    moduleUrl: import.meta.url,
-  });
-  if (!packageRoot) {
-    return;
-  }
-  const pruned = pruneUnknownBundledRuntimeDepsRoots({
-    env: process.env,
-    warn: (message) => params.log.warn(`[plugins] ${message}`),
-  });
-  if (pruned.removed > 0) {
-    params.log.info(
-      `[plugins] pruned stale bundled runtime deps roots (${pruned.removed} removed, ${pruned.skippedLocked} locked, ${pruned.scanned} scanned)`,
-    );
-  }
-  let scanResult: ReturnType<typeof scanBundledPluginRuntimeDeps>;
-  try {
-    scanResult = scanBundledPluginRuntimeDeps({
-      packageRoot,
-      config: params.cfg,
-      selectedPluginIds: [...params.pluginIds],
-      env: process.env,
-    });
-  } catch (error) {
-    params.log.warn(
-      `[plugins] failed to scan bundled runtime deps before gateway startup; gateway startup will continue with per-plugin runtime-deps installs: ${String(error)}`,
-    );
-    return;
-  }
-  const { deps, missing, conflicts } = scanResult;
-  if (conflicts.length > 0) {
-    params.log.warn(
-      `[plugins] bundled runtime deps have version conflicts: ${conflicts.map((conflict) => `${conflict.name} (${conflict.versions.join(", ")})`).join("; ")}`,
-    );
-  }
-  if (missing.length === 0) {
-    return;
-  }
-  const installSpecs = deps.map((dep) => `${dep.name}@${dep.version}`);
-  const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
-    env: process.env,
-  });
-  const startedAt = Date.now();
-  params.log.info(
-    `[plugins] staging bundled runtime deps before gateway startup (${installSpecs.length} specs): ${installSpecs.join(", ")}`,
-  );
-  try {
-    await repairBundledRuntimeDepsInstallRootAsync({
-      installRoot,
-      missingSpecs: installSpecs,
-      installSpecs,
-      env: process.env,
-      warn: (message) => params.log.warn(`[plugins] ${message}`),
-    });
-  } catch (error) {
-    params.log.warn(
-      `[plugins] failed to stage bundled runtime deps before gateway startup after ${Date.now() - startedAt}ms; gateway startup will continue with per-plugin runtime-deps installs: ${String(error)}`,
-    );
-    return;
-  }
-  params.log.info(
-    `[plugins] installed bundled runtime deps before gateway startup in ${Date.now() - startedAt}ms: ${installSpecs.join(", ")}`,
-  );
-}
-
 export async function prepareGatewayPluginBootstrap(params: {
   cfgAtStart: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -140,6 +39,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
+  loadRuntimePlugins?: boolean;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
@@ -205,27 +105,26 @@ export async function prepareGatewayPluginBootstrap(params: {
   const emptyPluginRegistry = createEmptyPluginRegistry();
   let pluginRegistry = emptyPluginRegistry;
   let baseGatewayMethods = baseMethods;
+  const shouldLoadRuntimePlugins = params.loadRuntimePlugins !== false;
 
-  if (!params.minimalTestGateway) {
-    await prestageGatewayBundledRuntimeDeps({
-      cfg: gatewayPluginConfig,
-      pluginIds: startupPluginIds,
-      log: params.log,
-    });
-    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayStartupPlugins({
-      cfg: gatewayPluginConfig,
-      activationSourceConfig,
-      workspaceDir: defaultWorkspaceDir,
-      log: params.log,
-      coreGatewayMethodNames: baseMethods,
-      baseMethods,
-      pluginIds: startupPluginIds,
-      pluginLookUpTable,
-      preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
-      suppressPluginInfoLogs: deferredConfiguredChannelPluginIds.length > 0,
-    }));
+  if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
+    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
+      {
+        cfg: gatewayPluginConfig,
+        activationSourceConfig,
+        workspaceDir: defaultWorkspaceDir,
+        log: params.log,
+        baseMethods,
+        startupPluginIds,
+        pluginLookUpTable,
+        preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
+        suppressPluginInfoLogs: deferredConfiguredChannelPluginIds.length > 0,
+      },
+    ));
   } else {
-    pluginRegistry = getActivePluginRegistry() ?? emptyPluginRegistry;
+    pluginRegistry = params.minimalTestGateway
+      ? (getActivePluginRegistry() ?? emptyPluginRegistry)
+      : emptyPluginRegistry;
     setActivePluginRegistry(pluginRegistry);
   }
 
@@ -238,5 +137,31 @@ export async function prepareGatewayPluginBootstrap(params: {
     baseMethods,
     pluginRegistry,
     baseGatewayMethods,
+    runtimePluginsLoaded: !params.minimalTestGateway && shouldLoadRuntimePlugins,
   };
+}
+
+export async function loadGatewayStartupPluginRuntime(params: {
+  cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  workspaceDir: string;
+  log: GatewayPluginBootstrapLog;
+  baseMethods: string[];
+  startupPluginIds: string[];
+  pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
+  preferSetupRuntimeForChannelPlugins?: boolean;
+  suppressPluginInfoLogs?: boolean;
+}) {
+  return loadGatewayStartupPlugins({
+    cfg: params.cfg,
+    activationSourceConfig: params.activationSourceConfig,
+    workspaceDir: params.workspaceDir,
+    log: params.log,
+    coreGatewayMethodNames: params.baseMethods,
+    baseMethods: params.baseMethods,
+    pluginIds: params.startupPluginIds,
+    pluginLookUpTable: params.pluginLookUpTable,
+    preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    suppressPluginInfoLogs: params.suppressPluginInfoLogs,
+  });
 }

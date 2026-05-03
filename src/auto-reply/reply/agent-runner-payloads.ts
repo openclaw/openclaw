@@ -2,6 +2,8 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -16,13 +18,12 @@ import {
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { applyReplyThreading, isRenderablePayload } from "./reply-payloads-base.js";
 
-let replyPayloadsDedupeRuntimePromise: Promise<
-  typeof import("./reply-payloads-dedupe.runtime.js")
-> | null = null;
+const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
+  () => import("./reply-payloads-dedupe.runtime.js"),
+);
 
 function loadReplyPayloadsDedupeRuntime() {
-  replyPayloadsDedupeRuntimePromise ??= import("./reply-payloads-dedupe.runtime.js");
-  return replyPayloadsDedupeRuntimePromise;
+  return replyPayloadsDedupeRuntimeLoader.load();
 }
 
 async function normalizeReplyPayloadMedia(params: {
@@ -91,6 +92,19 @@ function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
   return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
+function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
+  const text = payload.text;
+  if (!text) {
+    return payload;
+  }
+  const cleaned = stripLegacyBracketToolCallBlocks(text);
+  if (cleaned === text) {
+    return payload;
+  }
+  logVerbose("Stripped legacy tool-call block from heartbeat reply");
+  return { ...payload, text: cleaned };
+}
+
 export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;
@@ -116,7 +130,7 @@ export async function buildReplyPayloads(params: {
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads = params.isHeartbeat
-    ? params.payloads
+    ? params.payloads.map((payload) => sanitizeHeartbeatPayload(payload))
     : params.payloads.flatMap((payload) => {
         let text = payload.text;
 
@@ -188,26 +202,23 @@ export async function buildReplyPayloads(params: {
   const dedupeRuntime = shouldCheckMessagingToolDedupe
     ? await loadReplyPayloadsDedupeRuntime()
     : null;
-  const suppressMessagingToolReplies =
-    dedupeRuntime?.shouldSuppressMessagingToolReplies({
-      messageProvider: resolveOriginMessageProvider({
-        originatingChannel: params.originatingChannel,
-        provider: params.messageProvider,
-      }),
-      messagingToolSentTargets,
-      originatingTo: resolveOriginMessageTo({
-        originatingTo: params.originatingTo,
-      }),
-      accountId: resolveOriginAccountId({
-        originatingAccountId: params.accountId,
-      }),
-    }) ?? false;
-  // Only dedupe against messaging tool sends for the same origin target.
-  // Cross-target sends (for example posting to another channel) must not
-  // suppress the current conversation's final reply.
-  // If target metadata is unavailable, keep legacy dedupe behavior.
-  const dedupeMessagingToolPayloads =
-    suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+  const messagingToolPayloadDedupe = dedupeRuntime?.resolveMessagingToolPayloadDedupe({
+    messageProvider: resolveOriginMessageProvider({
+      originatingChannel: params.originatingChannel,
+      provider: params.messageProvider,
+    }),
+    messagingToolSentTargets,
+    originatingTo: resolveOriginMessageTo({
+      originatingTo: params.originatingTo,
+    }),
+    accountId: resolveOriginAccountId({
+      originatingAccountId: params.accountId,
+    }),
+  }) ?? {
+    shouldDedupePayloads: shouldCheckMessagingToolDedupe && messagingToolSentTargets.length === 0,
+    suppressReplies: false,
+  };
+  const dedupeMessagingToolPayloads = messagingToolPayloadDedupe.shouldDedupePayloads;
   const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
@@ -284,7 +295,7 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
-  const replyPayloads = suppressMessagingToolReplies
+  const replyPayloads = messagingToolPayloadDedupe.suppressReplies
     ? []
     : filteredPayloads.filter(isRenderablePayload);
 

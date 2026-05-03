@@ -285,6 +285,22 @@ function injectBedrockCachePoints(
   }
 }
 
+function patchOpus47MaxThinkingEffort(payload: Record<string, unknown>): void {
+  const fieldsValue = payload.additionalModelRequestFields;
+  const fields =
+    fieldsValue && typeof fieldsValue === "object" && !Array.isArray(fieldsValue)
+      ? (fieldsValue as Record<string, unknown>)
+      : {};
+  const outputConfigValue = fields.output_config;
+  const outputConfig =
+    outputConfigValue && typeof outputConfigValue === "object" && !Array.isArray(outputConfigValue)
+      ? (outputConfigValue as Record<string, unknown>)
+      : {};
+  outputConfig.effort = "max";
+  fields.output_config = outputConfig;
+  payload.additionalModelRequestFields = fields;
+}
+
 export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // Keep registration-local constants inside the function so partial module
   // initialization during test bootstrap cannot trip TDZ reads.
@@ -441,7 +457,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     ...anthropicByModelReplayHooks,
-    wrapStreamFn: ({ modelId, config, model, streamFn }) => {
+    wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel }) => {
       const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;
       // Apply cache + guardrail wrapping.
       const wrapped =
@@ -452,12 +468,13 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !piAiWouldInjectCachePoints(modelId);
       const shouldOmitTemperature = isOpus47BedrockModelRef(modelId);
+      const shouldPatchMaxThinking = shouldOmitTemperature && thinkingLevel === "max";
 
       // For known Anthropic models (heuristic match), enable injection immediately.
       // For opaque profile IDs, we'll resolve via GetInferenceProfile on first call.
       const heuristicMatch = needsCachePointInjection(modelId);
 
-      if (!region && !mayNeedCacheInjection && !shouldOmitTemperature) {
+      if (!region && !mayNeedCacheInjection && !shouldOmitTemperature && !shouldPatchMaxThinking) {
         return wrapped;
       }
 
@@ -471,8 +488,24 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           Object.assign({}, options, region ? { region } : {}),
         );
 
+        const originalOnPayload = merged.onPayload as
+          | ((payload: unknown, model: unknown) => unknown)
+          | undefined;
+
         if (!mayNeedCacheInjection) {
-          return underlying(streamModel, context, merged);
+          return underlying(streamModel, context, {
+            ...merged,
+            ...(shouldPatchMaxThinking
+              ? {
+                  onPayload: (payload: unknown, payloadModel: unknown) => {
+                    if (payload && typeof payload === "object") {
+                      patchOpus47MaxThinkingEffort(payload as Record<string, unknown>);
+                    }
+                    return originalOnPayload?.(payload, payloadModel);
+                  },
+                }
+              : {}),
+          });
         }
 
         // Use the cacheRetention from options if explicitly set.
@@ -485,10 +518,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         // want caching enabled, so defaulting to "short" is the safer behavior.
         const cacheRetention =
           typeof merged.cacheRetention === "string" ? merged.cacheRetention : "short";
-        const originalOnPayload = merged.onPayload as
-          | ((payload: unknown, model: unknown) => unknown)
-          | undefined;
-
         if (heuristicMatch) {
           // Fast path: ARN heuristic already identified this as Claude, but the
           // concrete target may still need profile traits for Opus 4.7 payloads.
@@ -499,6 +528,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
               if (payload && typeof payload === "object") {
                 const payloadRecord = payload as Record<string, unknown>;
                 injectBedrockCachePoints(payloadRecord, cacheRetention);
+                if (shouldPatchMaxThinking) {
+                  patchOpus47MaxThinkingEffort(payloadRecord);
+                }
                 if (mayNeedTemperatureTrait) {
                   const traits = await resolveAppProfileTraits(modelId, region);
                   if (traits.omitTemperature) {
@@ -521,6 +553,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
               const payloadRecord = payload as Record<string, unknown>;
               if (traits.cacheEligible) {
                 injectBedrockCachePoints(payloadRecord, cacheRetention);
+              }
+              if (shouldPatchMaxThinking) {
+                patchOpus47MaxThinkingEffort(payloadRecord);
               }
               if (traits.omitTemperature) {
                 omitDeprecatedOpus47PayloadTemperature(payloadRecord);

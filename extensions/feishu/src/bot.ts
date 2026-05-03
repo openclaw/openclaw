@@ -42,6 +42,7 @@ import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sende
 import { getChatInfo } from "./chat.js";
 import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
+import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
 import {
@@ -409,9 +410,10 @@ export async function handleFeishuMessage(params: {
   const error = runtime?.error ?? console.error;
 
   const messageId = event.message.message_id;
+  const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
   if (
     !(await finalizeFeishuMessageProcessing({
-      messageId,
+      messageId: messageDedupeKey,
       namespace: account.accountId,
       log,
       claimHeld: processingClaimHeld,
@@ -859,6 +861,19 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
+    // Skip messages with no text content and no media attachments. Feishu can
+    // deliver empty-text events (e.g. `{"text":""}`) when a user sends a blank
+    // message or when media parsing produces an empty string. Writing a blank
+    // user turn to the session causes downstream LLM providers (e.g. MiniMax)
+    // to reject the request with "messages must not be empty" errors. Logging
+    // the skip avoids silent loss without polluting the agent session.
+    if (!ctx.content.trim() && mediaList.length === 0) {
+      log(
+        `feishu[${account.accountId}]: skipping empty message (no text, no media) from ${ctx.senderOpenId}`,
+      );
+      return;
+    }
+
     const mediaPayload = buildAgentMediaPayload(mediaList);
     const audioTranscript = await resolveFeishuAudioPreflightTranscript({
       cfg: effectiveCfg,
@@ -1238,7 +1253,9 @@ export async function handleFeishuMessage(params: {
       // broadcast dispatch to avoid duplicate agent sessions and race conditions.
       // Uses a shared "broadcast" namespace (not per-account) so the first handler
       // to reach this point claims the message; subsequent accounts skip.
-      if (!(await tryRecordMessagePersistent(ctx.messageId, "broadcast", log))) {
+      if (
+        !(await tryRecordMessagePersistent(messageDedupeKey ?? ctx.messageId, "broadcast", log))
+      ) {
         log(
           `feishu[${account.accountId}]: broadcast already claimed by another account for message ${ctx.messageId}; skipping`,
         );

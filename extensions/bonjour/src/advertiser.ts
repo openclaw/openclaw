@@ -89,6 +89,7 @@ const CONFLICT_SETTLE_MS = 30_000;
 // See https://github.com/openclaw/openclaw/issues/72481
 const STUCK_ANNOUNCING_MS = 20_000;
 const MAX_CONSECUTIVE_RESTARTS = 3;
+const MAX_CONSECUTIVE_STUCK_STATE_RESTARTS = 1;
 // A flapping advertiser can briefly reach "announced" between probing
 // failures, which resets the consecutive counter. Bound total restarts too.
 const RESTART_WINDOW_MS = 30 * 60_000;
@@ -405,7 +406,11 @@ export async function startGatewayBonjourAdvertiser(
         );
       } else {
         const label =
-          classification.kind === "netmask-assertion" ? "netmask assertion" : "interface assertion";
+          classification.kind === "netmask-assertion"
+            ? "netmask assertion"
+            : classification.kind === "self-probe"
+              ? "self-probe race"
+              : "interface assertion";
         logger.warn(`bonjour: suppressing ciao ${label}: ${classification.formatted}`);
         requestCiaoRecovery?.(classification);
       }
@@ -574,6 +579,7 @@ export async function startGatewayBonjourAdvertiser(
     let recreatePromise: Promise<void> | null = null;
     let disabled = false;
     let consecutiveRestarts = 0;
+    let consecutiveStuckStateRestarts = 0;
     const restartTimestamps: number[] = [];
     let cycle: BonjourCycle | null = createCycle();
     const stateTracker = new Map<string, ServiceStateTracker>();
@@ -601,7 +607,7 @@ export async function startGatewayBonjourAdvertiser(
       }
     };
 
-    const recreateAdvertiser = async (reason: string) => {
+    const recreateAdvertiser = async (reason: string, opts?: { stuckState?: boolean }) => {
       if (stopped || disabled) {
         return;
       }
@@ -610,6 +616,7 @@ export async function startGatewayBonjourAdvertiser(
       }
       recreatePromise = (async () => {
         consecutiveRestarts += 1;
+        consecutiveStuckStateRestarts = opts?.stuckState ? consecutiveStuckStateRestarts + 1 : 0;
         const now = Date.now();
         while (
           restartTimestamps.length > 0 &&
@@ -619,14 +626,18 @@ export async function startGatewayBonjourAdvertiser(
         }
         restartTimestamps.push(now);
         const tooManyConsecutive = consecutiveRestarts > MAX_CONSECUTIVE_RESTARTS;
+        const tooManyStuckStates =
+          consecutiveStuckStateRestarts > MAX_CONSECUTIVE_STUCK_STATE_RESTARTS;
         const tooManyInWindow = restartTimestamps.length >= MAX_RESTARTS_IN_WINDOW;
-        if (tooManyConsecutive || tooManyInWindow) {
+        if (tooManyConsecutive || tooManyStuckStates || tooManyInWindow) {
           disabled = true;
           const detail = tooManyConsecutive
             ? `${MAX_CONSECUTIVE_RESTARTS} failed restarts`
-            : `${MAX_RESTARTS_IN_WINDOW} restarts within ${Math.round(
-                RESTART_WINDOW_MS / 60_000,
-              )} minutes`;
+            : tooManyStuckStates
+              ? `${MAX_CONSECUTIVE_STUCK_STATE_RESTARTS} stuck-state restart`
+              : `${MAX_RESTARTS_IN_WINDOW} restarts within ${Math.round(
+                  RESTART_WINDOW_MS / 60_000,
+                )} minutes`;
           logger.warn(
             `bonjour: disabling advertiser after ${detail} (${reason}); set discovery.mdns.mode="off" or OPENCLAW_DISABLE_BONJOUR=1 to disable mDNS discovery`,
           );
@@ -675,6 +686,7 @@ export async function startGatewayBonjourAdvertiser(
         }
         if (stateUnknown === "announced") {
           consecutiveRestarts = 0;
+          consecutiveStuckStateRestarts = 0;
           conflictTracker.delete(label);
         }
         const lastConflictAt = conflictTracker.get(label);
@@ -695,6 +707,7 @@ export async function startGatewayBonjourAdvertiser(
               label,
               svc,
             )})`,
+            { stuckState: true },
           );
           return;
         }

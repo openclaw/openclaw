@@ -17,7 +17,7 @@ export type GatewayMemoryProbe = {
    * unavailable gateway. Renderers should suppress warnings only for skipped
    * probes, not for transport failures.
    */
-  skipped?: boolean;
+  skipped: boolean;
 };
 
 function isGatewayCallTimeout(message: string): boolean {
