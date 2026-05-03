@@ -33,7 +33,6 @@ env:
   PNPM_VERSION: "10.33.0"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-  HAS_MANTIS_GITHUB_APP: ${{ secrets.MANTIS_GITHUB_APP_ID != '' && secrets.MANTIS_GITHUB_APP_PRIVATE_KEY != '' }}
 
 jobs:
   authorize_actor:
@@ -269,7 +268,7 @@ jobs:
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token
-        if: ${{ always() && inputs.pr_number != '' && env.HAS_MANTIS_GITHUB_APP == 'true' }}
+        if: ${{ always() && inputs.pr_number != '' }}
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
@@ -283,11 +282,12 @@ jobs:
       - name: Comment PR with inline QA screenshots
         if: ${{ always() && inputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
         env:
-          GH_TOKEN: ${{ steps.mantis_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
           TARGET_PR: ${{ inputs.pr_number }}
           ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
           BASELINE_SHA: ${{ needs.validate_refs.outputs.baseline_revision }}
           CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
+          MANTIS_COMMENT_BOT_LOGIN: openclaw-mantis-qa[bot]
         shell: bash
         run: |
           set -euo pipefail
@@ -366,7 +366,7 @@ jobs:
 
           comment_id="$(
             gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TARGET_PR}/comments" \
-              --jq '.[] | select(.body | contains("<!-- mantis-discord-status-reactions -->")) | .id' \
+              --jq ".[] | select(.body | contains(\"<!-- mantis-discord-status-reactions -->\")) | select(.user.login == \"${MANTIS_COMMENT_BOT_LOGIN}\") | .id" \
               | tail -n 1
           )"
 
