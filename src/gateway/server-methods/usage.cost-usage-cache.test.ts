@@ -65,7 +65,7 @@ describe("costUsageCache bounded growth", () => {
   });
 
   it("does not grow without bound when (startMs, endMs) varies across day rollover and range switches", async () => {
-    const config = {} as OpenClawConfig;
+    const config = { agents: { list: [{ id: "ops", default: true }] } } as OpenClawConfig;
 
     // 600 distinct (startMs, endMs) pairs — larger than the 256 caps used by
     // the smallest sibling caches (RUN_LOOKUP_CACHE_LIMIT,
@@ -76,7 +76,7 @@ describe("costUsageCache bounded growth", () => {
     for (let i = 0; i < ITERATIONS; i++) {
       const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
       const endMs = startMs + (i % 3 === 0 ? DAY_MS : 7 * DAY_MS) - 1;
-      await __test.loadCostUsageSummaryCached({ startMs, endMs, config });
+      await __test.loadCostUsageSummaryCached({ startMs, endMs, config, agentId: "ops" });
     }
 
     // Primary: map must be bounded. Pre-fix this equals ITERATIONS (600).
@@ -86,19 +86,19 @@ describe("costUsageCache bounded growth", () => {
     // oldest-first, never the newest.
     const lastStartMs = Date.UTC(2026, 0, 1) + (ITERATIONS - 1) * DAY_MS;
     const lastEndMs = lastStartMs + ((ITERATIONS - 1) % 3 === 0 ? DAY_MS : 7 * DAY_MS) - 1;
-    const lastCacheKey = `${lastStartMs}-${lastEndMs}`;
+    const lastCacheKey = `${lastStartMs}-${lastEndMs}-ops`;
     expect(__test.costUsageCache.has(lastCacheKey)).toBe(true);
 
     // Tertiary: the oldest entry must have been evicted once the cap was
     // exceeded. Pre-fix all 600 entries remain and this fails too.
     const firstStartMs = Date.UTC(2026, 0, 1);
     const firstEndMs = firstStartMs + DAY_MS - 1;
-    const firstCacheKey = `${firstStartMs}-${firstEndMs}`;
+    const firstCacheKey = `${firstStartMs}-${firstEndMs}-ops`;
     expect(__test.costUsageCache.has(firstCacheKey)).toBe(false);
   });
 
   it("evicts settled entries before in-flight entries when possible", async () => {
-    const config = {} as OpenClawConfig;
+    const config = { agents: { list: [{ id: "ops", default: true }] } } as OpenClawConfig;
     const pending = new Promise<ReturnType<typeof createSummary>>(() => {});
     mocks.loadCostUsageSummary.mockReturnValueOnce(pending);
 
@@ -106,6 +106,7 @@ describe("costUsageCache bounded growth", () => {
       startMs: 1,
       endMs: 2,
       config,
+      agentId: "ops",
     });
     await Promise.resolve();
 
@@ -115,6 +116,7 @@ describe("costUsageCache bounded growth", () => {
         startMs,
         endMs: startMs + DAY_MS - 1,
         config,
+        agentId: "ops",
       });
     }
 
@@ -122,10 +124,11 @@ describe("costUsageCache bounded growth", () => {
       startMs: 1,
       endMs: 2,
       config,
+      agentId: "ops",
     });
     await Promise.resolve();
 
-    expect(__test.costUsageCache.has("1-2")).toBe(true);
+    expect(__test.costUsageCache.has("1-2-ops")).toBe(true);
     expect(mocks.loadCostUsageSummary).toHaveBeenCalledTimes(257);
     void inFlight.catch(() => {});
     void repeated.catch(() => {});

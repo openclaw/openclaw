@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -138,20 +142,104 @@ describe("gateway usage helpers", () => {
     expect(def.startMs).toBe(Date.UTC(2026, 1, 5) - 29 * dayMs);
   });
 
+  it("resolveCostUsageAgentIds uses an explicit agentId as the full scope", () => {
+    const config = {
+      agents: {
+        list: [{ id: "ops", default: true }, { id: "research" }],
+      },
+    } as OpenClawConfig;
+
+    expect(__test.resolveCostUsageAgentIds(config, "research")).toEqual(["research"]);
+  });
+
+  it("resolveCostUsageAgentIds rejects explicit agentIds outside the visible scope", () => {
+    const config = {
+      agents: {
+        list: [{ id: "ops", default: true }, { id: "research" }],
+      },
+    } as OpenClawConfig;
+
+    expect(() => __test.resolveCostUsageAgentIds(config, "retired")).toThrow(
+      'unknown agent id "retired"',
+    );
+  });
+
+  it("resolveCostUsageAgentIds rejects invalid explicit agentIds before path normalization", () => {
+    const config = {
+      agents: {
+        list: [{ id: "ops", default: true }],
+      },
+    } as OpenClawConfig;
+
+    expect(() => __test.resolveCostUsageAgentIds(config, "ops!")).toThrow(
+      'unknown agent id "ops!"',
+    );
+  });
+
+  it("resolveCostUsageAgentIds supports a configured default agent that is not main", () => {
+    const config = {
+      agents: {
+        list: [{ id: "ops", default: true }, { id: "research" }],
+      },
+    } as OpenClawConfig;
+
+    expect(__test.resolveCostUsageAgentIds(config)).toEqual(["ops", "research"]);
+  });
+
+  it("resolveCostUsageAgentIds uses the first configured agent when no default is marked", () => {
+    const config = {
+      agents: {
+        list: [{ id: "support" }, { id: "research" }],
+      },
+    } as OpenClawConfig;
+
+    expect(__test.resolveCostUsageAgentIds(config)).toEqual(["support", "research"]);
+  });
+
+  it("resolveCostUsageAgentIds falls back to main when no agents exist", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-agents-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        expect(__test.resolveCostUsageAgentIds({} as OpenClawConfig)).toEqual(["main"]);
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveCostUsageAgentIds includes discovered disk agents when no list is configured", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-agents-"));
+    try {
+      fs.mkdirSync(path.join(stateDir, "agents", "coding"), { recursive: true });
+      fs.mkdirSync(path.join(stateDir, "agents", "research"), { recursive: true });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        expect(__test.resolveCostUsageAgentIds({} as OpenClawConfig)).toEqual([
+          "main",
+          "coding",
+          "research",
+        ]);
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("loadCostUsageSummaryCached caches within TTL", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
 
-    const config = {} as OpenClawConfig;
+    const config = { agents: { list: [{ id: "ops", default: true }] } } as OpenClawConfig;
     const a = await __test.loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
+      agentId: "ops",
     });
     const b = await __test.loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
+      agentId: "ops",
     });
 
     expect(a.totals.totalTokens).toBe(1);

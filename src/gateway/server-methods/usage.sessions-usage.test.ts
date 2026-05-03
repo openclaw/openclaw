@@ -8,7 +8,7 @@ vi.mock("../../config/config.js", () => {
   return {
     getRuntimeConfig: vi.fn(() => ({
       agents: {
-        list: [{ id: "main" }, { id: "opus" }],
+        list: [{ id: "ops", default: true }, { id: "opus" }],
       },
       session: {},
     })),
@@ -30,11 +30,11 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   return {
     ...actual,
     discoverAllSessions: vi.fn(async (params?: { agentId?: string }) => {
-      if (params?.agentId === "main") {
+      if (params?.agentId === "ops") {
         return [
           {
-            sessionId: "s-main",
-            sessionFile: "/tmp/agents/main/sessions/s-main.jsonl",
+            sessionId: "s-ops",
+            sessionFile: "/tmp/agents/ops/sessions/s-ops.jsonl",
             mtime: 100,
             firstUserMessage: "hello",
           },
@@ -69,22 +69,41 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       sessionId: "s-opus",
       points: [],
     })),
+    loadCostUsageSummary: vi.fn(async () => ({
+      updatedAt: Date.now(),
+      days: 2,
+      daily: [],
+      totals: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
+    })),
     loadSessionLogs: vi.fn(async () => []),
   };
 });
 
 import {
   discoverAllSessions,
+  loadCostUsageSummary,
   loadSessionCostSummary,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
-import { usageHandlers } from "./usage.js";
+import { __test, usageHandlers } from "./usage.js";
 
 const TEST_RUNTIME_CONFIG = {
   agents: {
-    list: [{ id: "main" }, { id: "opus" }],
+    list: [{ id: "ops", default: true }, { id: "opus" }],
   },
   session: {},
 };
@@ -119,11 +138,60 @@ async function runSessionsUsageLogs(params: Record<string, unknown>) {
   return respond;
 }
 
+async function runUsageCost(params: Record<string, unknown>) {
+  const respond = vi.fn();
+  await usageHandlers["usage.cost"]({
+    respond,
+    params,
+    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
+  } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+  return respond;
+}
+
 const BASE_USAGE_RANGE = {
   startDate: "2026-02-01",
   endDate: "2026-02-02",
   limit: 10,
 } as const;
+
+function createCostTotals(params: { totalTokens: number; totalCost: number }) {
+  return {
+    input: params.totalTokens,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: params.totalTokens,
+    totalCost: params.totalCost,
+    inputCost: params.totalCost,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
+function createCostSummary(
+  entries: Array<{ date: string; totalTokens: number; totalCost: number }>,
+) {
+  const totals = createCostTotals({ totalTokens: 0, totalCost: 0 });
+  const daily = entries.map((entry) => {
+    const dayTotals = createCostTotals({
+      totalTokens: entry.totalTokens,
+      totalCost: entry.totalCost,
+    });
+    totals.input += dayTotals.input;
+    totals.totalTokens += dayTotals.totalTokens;
+    totals.totalCost += dayTotals.totalCost;
+    totals.inputCost += dayTotals.inputCost;
+    return { date: entry.date, ...dayTotals };
+  });
+  return {
+    updatedAt: Date.now(),
+    days: 2,
+    daily,
+    totals,
+  };
+}
 
 function expectSuccessfulSessionsUsage(
   respond: ReturnType<typeof vi.fn>,
@@ -136,6 +204,96 @@ function expectSuccessfulSessionsUsage(
   return result.sessions;
 }
 
+describe("usage.cost", () => {
+  beforeEach(() => {
+    __test.costUsageCache.clear();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("aggregates cost usage across configured agents when no agentId is requested", async () => {
+    vi.mocked(loadCostUsageSummary).mockImplementation(async (params) => {
+      if (params?.agentId === "ops") {
+        return createCostSummary([{ date: "2026-02-01", totalTokens: 10, totalCost: 1 }]);
+      }
+      if (params?.agentId === "opus") {
+        return createCostSummary([
+          { date: "2026-02-01", totalTokens: 20, totalCost: 2 },
+          { date: "2026-02-02", totalTokens: 5, totalCost: 0.5 },
+        ]);
+      }
+      return createCostSummary([]);
+    });
+
+    const respond = await runUsageCost(BASE_USAGE_RANGE);
+
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(loadCostUsageSummary).mock.calls.map((call) => call[0]?.agentId)).toEqual([
+      "ops",
+      "opus",
+    ]);
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    const summary = respond.mock.calls[0]?.[1] as ReturnType<typeof createCostSummary>;
+    expect(summary.daily).toEqual([
+      expect.objectContaining({ date: "2026-02-01", totalTokens: 30, totalCost: 3 }),
+      expect.objectContaining({ date: "2026-02-02", totalTokens: 5, totalCost: 0.5 }),
+    ]);
+    expect(summary.days).toBe(2);
+    expect(summary.totals.totalTokens).toBe(35);
+    expect(summary.totals.totalCost).toBe(3.5);
+  });
+
+  it("keeps aggregated cost usage available when one configured agent scan fails", async () => {
+    vi.mocked(loadCostUsageSummary).mockImplementation(async (params) => {
+      if (params?.agentId === "ops") {
+        throw new Error("unreadable transcript");
+      }
+      return createCostSummary([{ date: "2026-02-02", totalTokens: 5, totalCost: 0.5 }]);
+    });
+
+    const respond = await runUsageCost(BASE_USAGE_RANGE);
+
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(2);
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    const summary = respond.mock.calls[0]?.[1] as ReturnType<typeof createCostSummary>;
+    expect(summary.daily).toEqual([
+      expect.objectContaining({ date: "2026-02-02", totalTokens: 5, totalCost: 0.5 }),
+    ]);
+    expect(summary.totals.totalTokens).toBe(5);
+    expect(summary.totals.totalCost).toBe(0.5);
+  });
+
+  it("keeps cost usage scoped to the requested agentId", async () => {
+    vi.mocked(loadCostUsageSummary).mockResolvedValue(
+      createCostSummary([{ date: "2026-02-01", totalTokens: 20, totalCost: 2 }]),
+    );
+
+    const respond = await runUsageCost({ ...BASE_USAGE_RANGE, agentId: "opus" });
+
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(loadCostUsageSummary).mock.calls[0]?.[0]?.agentId).toBe("opus");
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    const summary = respond.mock.calls[0]?.[1] as ReturnType<typeof createCostSummary>;
+    expect(summary.totals.totalTokens).toBe(20);
+    expect(summary.totals.totalCost).toBe(2);
+  });
+
+  it("rejects explicit agentIds outside the configured gateway scope", async () => {
+    const respond = await runUsageCost({ ...BASE_USAGE_RANGE, agentId: "retired" });
+
+    expect(vi.mocked(loadCostUsageSummary)).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: 'unknown agent id "retired"',
+    });
+  });
+});
+
 describe("sessions.usage", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -146,7 +304,7 @@ describe("sessions.usage", () => {
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.agentId).toBe("main");
+    expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.agentId).toBe("ops");
     expect(vi.mocked(discoverAllSessions).mock.calls[1]?.[0]?.agentId).toBe("opus");
 
     const sessions = expectSuccessfulSessionsUsage(respond);
@@ -155,8 +313,8 @@ describe("sessions.usage", () => {
     // Sorted by most recent first (mtime=200 -> opus first).
     expect(sessions[0].key).toBe("agent:opus:s-opus");
     expect(sessions[0].agentId).toBe("opus");
-    expect(sessions[1].key).toBe("agent:main:s-main");
-    expect(sessions[1].agentId).toBe("main");
+    expect(sessions[1].key).toBe("agent:ops:s-ops");
+    expect(sessions[1].agentId).toBe("ops");
   });
 
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
