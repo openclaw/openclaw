@@ -2661,7 +2661,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
     });
 
-    it("does not drop user-authored self-chat prompts without a confirmed assistant outbound", async () => {
+    it("drops reflected self-chat prompts after an explicit fromMe copy", async () => {
       setupWebhookTarget();
 
       const timestamp = Date.now();
@@ -2686,10 +2686,10 @@ describe("BlueBubbles webhook monitor", () => {
 
       await dispatchWebhookPayload(reflectedPayload);
 
-      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
 
-    it("does not treat a pending text-only match as confirmed assistant outbound", async () => {
+    it("drops reflected self-chat copies when the send result only confirmed a pending text match", async () => {
       setupWebhookTarget();
 
       const { sendMessageBlueBubbles } = await import("./send.js");
@@ -2731,7 +2731,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       await dispatchWebhookPayload(reflectedPayload);
 
-      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
 
     it("does not treat chatGuid-inferred sender ids as self-chat evidence", async () => {

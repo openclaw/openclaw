@@ -16,7 +16,9 @@ type SelfChatLookup = SelfChatCacheKeyParts & {
 };
 
 const SELF_CHAT_TTL_MS = 10_000;
+const SELF_CHAT_TIMESTAMP_BUCKET_MS = 5_000;
 const MAX_SELF_CHAT_CACHE_ENTRIES = 512;
+const MAX_SELF_CHAT_CACHE_KEYS = MAX_SELF_CHAT_CACHE_ENTRIES * 3;
 const CLEANUP_MIN_INTERVAL_MS = 1_000;
 const MAX_SELF_CHAT_BODY_CHARS = 32_768;
 const cache = new Map<string, number>();
@@ -80,7 +82,7 @@ function cleanupExpired(now = Date.now()): void {
 }
 
 function enforceSizeCap(): void {
-  while (cache.size > MAX_SELF_CHAT_CACHE_ENTRIES) {
+  while (cache.size > MAX_SELF_CHAT_CACHE_KEYS) {
     const oldestKey = cache.keys().next().value;
     if (typeof oldestKey !== "string") {
       break;
@@ -89,32 +91,39 @@ function enforceSizeCap(): void {
   }
 }
 
-function buildKey(lookup: SelfChatLookup): string | null {
+function buildKeyForBucket(lookup: SelfChatLookup, bucket: number): string | null {
   const body = normalizeBody(lookup.body);
-  if (!body || !isUsableTimestamp(lookup.timestamp)) {
+  if (!body) {
     return null;
   }
-  return `${buildScope(lookup)}:${lookup.timestamp}:${digestText(body)}`;
+  return `${buildScope(lookup)}:${bucket}:${digestText(body)}`;
+}
+
+function buildKeys(lookup: SelfChatLookup): string[] {
+  if (!isUsableTimestamp(lookup.timestamp)) {
+    return [];
+  }
+  const bucket = Math.floor(lookup.timestamp / SELF_CHAT_TIMESTAMP_BUCKET_MS);
+  return [bucket - 1, bucket, bucket + 1]
+    .map((candidate) => buildKeyForBucket(lookup, candidate))
+    .filter((candidate): candidate is string => typeof candidate === "string");
 }
 
 export function rememberBlueBubblesSelfChatCopy(lookup: SelfChatLookup): void {
   cleanupExpired();
-  const key = buildKey(lookup);
-  if (!key) {
-    return;
+  const keys = buildKeys(lookup);
+  for (const key of keys) {
+    cache.set(key, Date.now());
   }
-  cache.set(key, Date.now());
   enforceSizeCap();
 }
 
 export function hasBlueBubblesSelfChatCopy(lookup: SelfChatLookup): boolean {
   cleanupExpired();
-  const key = buildKey(lookup);
-  if (!key) {
-    return false;
-  }
-  const seenAt = cache.get(key);
-  return typeof seenAt === "number" && Date.now() - seenAt <= SELF_CHAT_TTL_MS;
+  return buildKeys(lookup).some((key) => {
+    const seenAt = cache.get(key);
+    return typeof seenAt === "number" && Date.now() - seenAt <= SELF_CHAT_TTL_MS;
+  });
 }
 
 export function resetBlueBubblesSelfChatCache(): void {
