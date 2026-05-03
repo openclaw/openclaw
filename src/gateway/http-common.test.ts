@@ -18,6 +18,7 @@ import {
   sendUnauthorized,
   setDefaultSecurityHeaders,
   setSseHeaders,
+  startSseHeartbeat,
   watchClientDisconnect,
   writeDone,
 } from "./http-common.js";
@@ -294,6 +295,173 @@ describe("setSseHeaders", () => {
     expect((res as unknown as { flushHeaders?: () => void }).flushHeaders).toBeUndefined();
     expect(() => setSseHeaders(res)).not.toThrow();
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream; charset=utf-8");
+  });
+});
+
+describe("startSseHeartbeat", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  it("writes an SSE comment on each interval tick", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    const stop = startSseHeartbeat(res, { intervalMs: 1000 });
+    expect(write).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledWith(": ping\n\n");
+    vi.advanceTimersByTime(2000);
+    expect(write).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
+  it("stops writing after the returned stop() is called", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    const stop = startSseHeartbeat(res, { intervalMs: 1000 });
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+    stop();
+    vi.advanceTimersByTime(5000);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-stops when the response emits finish", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    startSseHeartbeat(res, { intervalMs: 1000 });
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+    res.emit("finish");
+    vi.advanceTimersByTime(5000);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-stops when the response emits close", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    startSseHeartbeat(res, { intervalMs: 1000 });
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+    res.emit("close");
+    vi.advanceTimersByTime(5000);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips writing when the response has already ended", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    // Simulate a completed response where the interval tick fires between
+    // res.end() and the `finish` event (the listener removes the interval,
+    // but the check inside the tick guards against write-after-end).
+    Object.defineProperty(res, "writableEnded", { value: true, configurable: true });
+    startSseHeartbeat(res, { intervalMs: 1000 });
+    vi.advanceTimersByTime(5000);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("clamps sub-second intervals to 1000ms", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    const stop = startSseHeartbeat(res, { intervalMs: 10 });
+    vi.advanceTimersByTime(999);
+    expect(write).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(write).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("uses a 30-second default interval", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    const stop = startSseHeartbeat(res);
+    vi.advanceTimersByTime(29_999);
+    expect(write).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(write).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("pauses heartbeats when res.write() returns false (backpressure)", () => {
+    const { res } = makeMockHttpResponse();
+    // Simulate a slow client: write returns false, indicating the internal
+    // buffer has exceeded highWaterMark and the kernel socket is congested.
+    const write = vi.spyOn(res, "write").mockReturnValue(false);
+    const stop = startSseHeartbeat(res, { intervalMs: 1000 });
+
+    // First tick writes and triggers backpressure.
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    // Subsequent ticks must not write while waiting for drain, even though
+    // the interval keeps firing. This prevents unbounded memory growth from
+    // slow readers (CWE-400 amplification via many concurrent connections).
+    vi.advanceTimersByTime(10_000);
+    expect(write).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("resumes heartbeats after the response emits drain", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write").mockReturnValue(false);
+    const stop = startSseHeartbeat(res, { intervalMs: 1000 });
+
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    // Socket drains: kernel buffer has room again, Node emits drain.
+    write.mockReturnValue(true);
+    res.emit("drain");
+
+    // Next tick should resume heartbeat writes now that backpressure cleared.
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
+  it("stops gracefully when res.write() throws synchronously", () => {
+    const { res } = makeMockHttpResponse();
+    // Simulate the write-after-end race: the underlying socket closes
+    // between the writableEnded check and the actual write, causing Node to
+    // throw ERR_STREAM_WRITE_AFTER_END synchronously.
+    const write = vi.spyOn(res, "write").mockImplementation(() => {
+      throw new Error("write after end");
+    });
+    startSseHeartbeat(res, { intervalMs: 1000 });
+
+    // First tick triggers the throw — must not escape the interval callback.
+    expect(() => vi.advanceTimersByTime(1000)).not.toThrow();
+    expect(write).toHaveBeenCalledTimes(1);
+
+    // Subsequent ticks must not attempt another write (helper has stopped).
+    vi.advanceTimersByTime(10_000);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops gracefully when res emits an async error event", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    startSseHeartbeat(res, { intervalMs: 1000 });
+
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    // Simulate an async socket failure: Node emits 'error' on the response.
+    // Without a listener, this would crash the process; the helper registers
+    // one that stops the heartbeat.
+    expect(() => res.emit("error", new Error("ECONNRESET"))).not.toThrow();
+    vi.advanceTimersByTime(10_000);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not leak the error listener after stop()", () => {
+    const { res } = makeMockHttpResponse();
+    const stop = startSseHeartbeat(res, { intervalMs: 1000 });
+    expect(res.listenerCount("error")).toBe(1);
+    stop();
+    expect(res.listenerCount("error")).toBe(0);
   });
 });
 
