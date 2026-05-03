@@ -202,8 +202,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 158
   },
   "dynamicToolsJson": {
-    "chars": 50872,
-    "roughTokens": 12718
+    "chars": 51271,
+    "roughTokens": 12818
   },
   "openClawDeveloperInstructions": {
     "chars": 7733,
@@ -214,8 +214,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7656
   },
   "totalWithDynamicToolsJson": {
-    "chars": 81497,
-    "roughTokens": 20375
+    "chars": 81896,
+    "roughTokens": 20474
   },
   "userInputText": {
     "chars": 608,
@@ -941,6 +941,14 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
         },
         "topic": {
           "type": "string"
+        },
+        "track_tool_calls": {
+          "description": "snake_case alias of trackToolCalls.",
+          "type": "boolean"
+        },
+        "trackToolCalls": {
+          "description": "When true for a reaction to the current inbound message, use that reacted message as the status-reaction target for subsequent tool progress when the channel supports it.",
+          "type": "boolean"
         },
         "type": {
           "type": "number"

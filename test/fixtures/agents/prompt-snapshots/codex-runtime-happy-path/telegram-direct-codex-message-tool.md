@@ -201,8 +201,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 158
   },
   "dynamicToolsJson": {
-    "chars": 49749,
-    "roughTokens": 12438
+    "chars": 50148,
+    "roughTokens": 12537
   },
   "openClawDeveloperInstructions": {
     "chars": 7733,
@@ -213,8 +213,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7597
   },
   "totalWithDynamicToolsJson": {
-    "chars": 80136,
-    "roughTokens": 20034
+    "chars": 80535,
+    "roughTokens": 20134
   },
   "userInputText": {
     "chars": 370,
@@ -939,6 +939,14 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "topic": {
           "type": "string"
+        },
+        "track_tool_calls": {
+          "description": "snake_case alias of trackToolCalls.",
+          "type": "boolean"
+        },
+        "trackToolCalls": {
+          "description": "When true for a reaction to the current inbound message, use that reacted message as the status-reaction target for subsequent tool progress when the channel supports it.",
+          "type": "boolean"
         },
         "type": {
           "type": "number"
