@@ -164,7 +164,7 @@ Current source-of-truth:
     - `/skill <name> [input]` runs a skill by name.
     - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
     - `/approve <id> <decision>` resolves exec approval prompts.
-    - `/btw <question>` asks a side question without changing future session context. See [BTW](/tools/btw).
+    - `/btw <question>` asks a side question without changing future session context. Alias: `/side`. See [BTW](/tools/btw).
 
   </Accordion>
   <Accordion title="Subagents and ACP">
@@ -457,7 +457,7 @@ Examples:
 
 ## BTW side questions
 
-`/btw` is a quick **side question** about the current session.
+`/btw` is a quick **side question** about the current session. `/side` is an alias.
 
 Unlike normal chat:
 
@@ -473,6 +473,7 @@ Example:
 
 ```text
 /btw what are we doing right now?
+/side what changed while the main run continued?
 ```
 
 See [BTW Side Questions](/tools/btw) for the full behavior and client UX details.
