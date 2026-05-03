@@ -44,6 +44,7 @@ import {
   sendTelegramText,
   sendTelegramWithThreadFallback,
 } from "./delivery.send.js";
+import type { TelegramChatSendLimiter } from "../bot.types.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./native-quote.js";
 import {
@@ -175,6 +176,7 @@ async function deliverTextReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  rateLimiter?: TelegramChatSendLimiter;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.replyText));
@@ -187,6 +189,7 @@ async function deliverTextReply(params: {
     replyQuoteText: params.replyQuoteText,
     markDelivered,
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
+      await params.rateLimiter?.acquire();
       const messageId = await sendTelegramText(
         params.bot,
         params.chatId,
@@ -227,6 +230,7 @@ async function sendPendingFollowUpText(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  rateLimiter?: TelegramChatSendLimiter;
 }): Promise<void> {
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.text));
   await sendChunkedTelegramReplyText({
@@ -237,6 +241,7 @@ async function sendPendingFollowUpText(params: {
     replyMarkup: params.replyMarkup,
     markDelivered,
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup }) => {
+      await params.rateLimiter?.acquire();
       await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
         replyToMessageId,
         thread: params.thread,
@@ -333,6 +338,7 @@ async function deliverMediaReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  rateLimiter?: TelegramChatSendLimiter;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   let first = true;
@@ -383,6 +389,7 @@ async function deliverMediaReply(params: {
       }),
     };
     if (isGif) {
+      await params.rateLimiter?.acquire();
       const result = await sendTelegramWithThreadFallback({
         operation: "sendAnimation",
         runtime: params.runtime,
@@ -396,6 +403,7 @@ async function deliverMediaReply(params: {
       }
       markDelivered(params.progress);
     } else if (kind === "image") {
+      await params.rateLimiter?.acquire();
       const result = await sendTelegramWithThreadFallback({
         operation: "sendPhoto",
         runtime: params.runtime,
@@ -409,6 +417,7 @@ async function deliverMediaReply(params: {
       }
       markDelivered(params.progress);
     } else if (kind === "video") {
+      await params.rateLimiter?.acquire();
       const result = await sendTelegramWithThreadFallback({
         operation: "sendVideo",
         runtime: params.runtime,
@@ -433,6 +442,7 @@ async function deliverMediaReply(params: {
           requestParams: typeof mediaParams,
           shouldLog?: (err: unknown) => boolean,
         ) => {
+          await params.rateLimiter?.acquire();
           const result = await sendTelegramWithThreadFallback({
             operation: "sendVoice",
             runtime: params.runtime,
@@ -516,6 +526,7 @@ async function deliverMediaReply(params: {
           throw voiceErr;
         }
       } else {
+        await params.rateLimiter?.acquire();
         const result = await sendTelegramWithThreadFallback({
           operation: "sendAudio",
           runtime: params.runtime,
@@ -530,6 +541,7 @@ async function deliverMediaReply(params: {
         markDelivered(params.progress);
       }
     } else {
+      await params.rateLimiter?.acquire();
       const result = await sendTelegramWithThreadFallback({
         operation: "sendDocument",
         runtime: params.runtime,
@@ -558,6 +570,7 @@ async function deliverMediaReply(params: {
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,
         progress: params.progress,
+        rateLimiter: params.rateLimiter,
       });
       pendingFollowUpText = undefined;
     }
@@ -702,6 +715,8 @@ export async function deliverReplies(params: {
   replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
+  /** Per-chat send limiter shared with draft stream lanes. */
+  rateLimiter?: TelegramChatSendLimiter;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -839,6 +854,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          rateLimiter: params.rateLimiter,
         });
       } else {
         firstDeliveredMessageId = await deliverMediaReply({
@@ -863,6 +879,7 @@ export async function deliverReplies(params: {
           replyToId,
           replyToMode: params.replyToMode,
           progress,
+          rateLimiter: params.rateLimiter,
         });
       }
       await maybePinFirstDeliveredMessage({
