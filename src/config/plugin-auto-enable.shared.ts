@@ -280,7 +280,7 @@ function collectPluginIdsForConfiguredChannel(
   }
 
   if (claims.length === 0) {
-    return [];
+    return builtInId ? [builtInId] : [];
   }
 
   const claimIds = new Set(claims.map((claim) => claim.plugin.id));
@@ -645,8 +645,9 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
+  const webSearchConfig = params.config.tools?.web?.search;
   const webSearchProvider =
-    typeof params.config.tools?.web?.search?.provider === "string"
+    webSearchConfig?.enabled !== false && typeof webSearchConfig?.provider === "string"
       ? params.config.tools.web.search.provider
       : undefined;
   const webSearchPluginId = resolvePluginIdForConfiguredWebSearchProvider(
