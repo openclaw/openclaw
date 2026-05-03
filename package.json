@@ -1770,7 +1770,6 @@
       "uuid": "14.0.0"
     },
     "onlyBuiltDependencies": [
-      "@discordjs/opus",
       "@google/genai",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
@@ -1784,6 +1783,7 @@
       "sharp"
     ],
     "ignoredBuiltDependencies": [
+      "@discordjs/opus",
       "koffi"
     ],
     "packageExtensions": {
