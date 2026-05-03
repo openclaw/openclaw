@@ -162,6 +162,25 @@ describe("sessions-list-tool", () => {
     });
   });
 
+  it("passes an explicit gateway timeout to sessions.list (default-10s would 500 on large stores)", async () => {
+    let observedOpts: { method?: string; timeoutMs?: number } | undefined;
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; timeoutMs?: number };
+      if (request.method === "sessions.list") {
+        observedOpts = request;
+        return { path: "/tmp/sessions.json", sessions: [] };
+      }
+      return {};
+    });
+    const tool = createSessionsListTool({ config: {} as never });
+
+    await tool.execute("call-timeout", {});
+
+    expect(observedOpts?.method).toBe("sessions.list");
+    expect(typeof observedOpts?.timeoutMs).toBe("number");
+    expect((observedOpts?.timeoutMs ?? 0) >= 30_000).toBe(true);
+  });
+
   it("keeps live session setting metadata in sessions_list results", async () => {
     mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
