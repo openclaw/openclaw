@@ -22,6 +22,7 @@ type MemoryBackend = "builtin" | "qmd";
 let backend: MemoryBackend = "builtin";
 let workspaceDir = "/workspace";
 let customStatus: Record<string, unknown> | undefined;
+let managerError: string | undefined;
 let searchImpl: SearchImpl = async () => [];
 let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
   text: "",
@@ -52,7 +53,9 @@ const stubManager = {
   close: vi.fn(),
 };
 
-const getMemorySearchManagerMock = vi.fn(async () => ({ manager: stubManager }));
+const getMemorySearchManagerMock = vi.fn(async () =>
+  managerError ? { manager: null, error: managerError } : { manager: stubManager },
+);
 const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
@@ -82,6 +85,10 @@ export function setMemoryStatusCustom(next: Record<string, unknown> | undefined)
   customStatus = next;
 }
 
+export function setMemoryManagerError(next: string | undefined): void {
+  managerError = next;
+}
+
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
@@ -100,6 +107,7 @@ export function resetMemoryToolMockState(overrides?: {
   backend = overrides?.backend ?? "builtin";
   workspaceDir = "/workspace";
   customStatus = undefined;
+  managerError = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);
   readFileImpl =
     overrides?.readFileImpl ??

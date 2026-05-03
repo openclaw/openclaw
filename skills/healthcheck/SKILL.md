@@ -174,6 +174,11 @@ After OpenClaw install or first hardening pass, run at least one baseline audit 
 - `openclaw security audit --deep`
 - `openclaw update status`
 
+For an install-level report that also checks daemon reachability, local launchd metadata on macOS, repo dirtiness, and redacts likely secrets, prefer the repo wrapper when available:
+
+- `pnpm audit:install-maintenance`
+- `node scripts/openclaw-install-maintenance.mjs --json`
+
 Ongoing monitoring is recommended. Use the OpenClaw cron tool/CLI to schedule periodic audits (Gateway scheduler). Do not create scheduled tasks without explicit approval. Store outputs in a user-approved location and avoid secrets in logs.
 When scheduling headless cron runs, include a note in the output that instructs the user to call `healthcheck` so issues can be fixed.
 
@@ -210,6 +215,7 @@ Use only supported commands and flags:
 - `openclaw health --json`
 - `openclaw update status`
 - `openclaw cron add|list|runs|run`
+- `node scripts/openclaw-install-maintenance.mjs [--json] [--skip-deep]`
 
 Do not invent CLI flags or imply OpenClaw enforces host firewall/SSH policies.
 

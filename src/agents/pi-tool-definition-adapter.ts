@@ -169,6 +169,26 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
+/**
+ * Parse stringified JSON object tool params when providers deliver streamed
+ * argument deltas as a final string instead of a parsed record.
+ */
+function parseToolParamObject(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return value;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return isPlainObject(parsed) ? parsed : value;
+  } catch {
+    return value;
+  }
+}
+
 export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 export function findClientToolNameConflicts(params: {
@@ -238,6 +258,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
             executeParams = hookOutcome.params;
           }
+          executeParams = parseToolParamObject(executeParams);
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,

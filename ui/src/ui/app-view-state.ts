@@ -44,6 +44,11 @@ import type {
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import type {
+  CockpitToolEntry,
+  CockpitErrorBanner,
+  CockpitRightPaneTab,
+} from "./views/chat-cockpit.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
 export type AppViewState = {
@@ -360,6 +365,12 @@ export type AppViewState = {
     paletteQuery: string;
     paletteActiveIndex: number;
     streamMode: boolean;
+    cockpitToolTimeline: CockpitToolEntry[];
+    cockpitErrors: CockpitErrorBanner[];
+    cockpitRightPaneTab: CockpitRightPaneTab;
+    cockpitRightPaneOpen: boolean;
+    cockpitComposerPaletteOpen: boolean;
+    cockpitMemoryEntries: string[];
     overviewShowGatewayToken: boolean;
     overviewShowGatewayPassword: boolean;
     overviewLogLines: string[];

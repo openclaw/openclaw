@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "updatedAt": "2026-04-24T00:00:00.000Z",
+  "models": [
+    {
+      "id": "gemma4:e4b",
+      "provider": "ollama",
+      "source": "Analytics Vidhya Gemma 4 local workflow",
+      "localMemoryGbRequired": 16,
+      "recommendedUse": "private summarization, classification, RAG drafts",
+      "status": "candidate"
+    },
+    {
+      "id": "minimax/minimax-m2.7",
+      "provider": "lm-studio",
+      "source": "LM Studio announcement",
+      "localMemoryGbRequired": 138,
+      "recommendedUse": "agentic tool-calling evaluation on remote or high-memory hosts",
+      "status": "remote-or-watchlist"
+    }
+  ]
+}

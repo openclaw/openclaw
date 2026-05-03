@@ -1,0 +1,23 @@
+{
+  "name": "openclaw-dashboard-smoke",
+  "description": "Smoke-check the local OpenClaw dashboard with a real browser. Override PLAYWRIGHT_BASE_URL or --base-url for another target.",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "steps": [
+    {
+      "action": "goto",
+      "url": "/"
+    },
+    {
+      "action": "screenshot",
+      "name": "dashboard"
+    },
+    {
+      "action": "assertText",
+      "selector": "body",
+      "text": "OpenClaw"
+    }
+  ]
+}

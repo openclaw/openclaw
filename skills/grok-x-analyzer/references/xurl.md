@@ -1,0 +1,1 @@
+Full xurl skill reference copied for quick access. Key shortcuts: xurl read POST_ID, xurl replies POST_ID -n 20, xurl search QUERY. Auth required via manual xurl auth oauth2 (user-only). Fallback: web_search/web_fetch. Never read ~/.xurl.

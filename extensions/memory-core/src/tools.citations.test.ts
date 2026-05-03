@@ -10,6 +10,7 @@ import {
   getReadAgentMemoryFileMockCalls,
   resetMemoryToolMockState,
   setMemoryBackend,
+  setMemoryManagerError,
   setMemoryReadFileImpl,
   setMemorySearchImpl,
   setMemoryWorkspaceDir,
@@ -188,6 +189,30 @@ describe("memory tools", () => {
     });
     expect(getReadAgentMemoryFileMockCalls()).toBe(1);
     expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("falls back to direct workspace file reads for memory_get when the manager is unavailable", async () => {
+    setMemoryBackend("qmd");
+    setMemoryManagerError("embedding provider timeout");
+    setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
+      path: params.relPath,
+      text: "Recovered from markdown fallback.",
+      from: params.from ?? 1,
+      lines: params.lines ?? 120,
+    }));
+
+    const tool = createMemoryGetToolOrThrow();
+
+    const result = await tool.execute("call_qmd_read_fallback", { path: "memory/2026-02-19.md" });
+
+    expect(result.details).toEqual({
+      path: "memory/2026-02-19.md",
+      text: "Recovered from markdown fallback.",
+      from: 1,
+      lines: 120,
+    });
+    expect(getMemorySearchManagerMockCalls()).toBe(1);
+    expect(getReadAgentMemoryFileMockCalls()).toBe(1);
   });
 
   it("returns truncation metadata and a continuation notice for partial memory_get results", async () => {

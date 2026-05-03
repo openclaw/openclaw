@@ -1,0 +1,50 @@
+{
+  "name": "human-checkpoint-review",
+  "description": "Static graph for read-only agent review followed by human approval before any external state change.",
+  "start": "collect_context",
+  "states": [
+    {
+      "id": "collect_context",
+      "mode": "deterministic",
+      "instruction": "Read relevant repo files, workflow prompts, and generated reports.",
+      "next": [
+        {
+          "to": "draft_plan",
+          "when": "context_collected"
+        }
+      ]
+    },
+    {
+      "id": "draft_plan",
+      "mode": "llm",
+      "instruction": "Draft a bounded change plan with verification commands and risk notes.",
+      "canChangeExternalState": false,
+      "next": [
+        {
+          "to": "human_review",
+          "when": "plan_ready"
+        }
+      ]
+    },
+    {
+      "id": "human_review",
+      "mode": "human",
+      "instruction": "Approve, reject, or revise the proposed change.",
+      "requiresApproval": true,
+      "next": [
+        {
+          "to": "apply_after_approval",
+          "when": "approved"
+        }
+      ]
+    },
+    {
+      "id": "apply_after_approval",
+      "mode": "deterministic",
+      "instruction": "Apply only the approved change and run the listed verification commands.",
+      "requiresApproval": true,
+      "canChangeExternalState": true,
+      "next": []
+    }
+  ]
+}

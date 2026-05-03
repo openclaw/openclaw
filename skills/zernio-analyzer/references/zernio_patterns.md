@@ -1,0 +1,1 @@
+Zernio.com URL patterns: /user/username (profile), /posts/activity (posts), /company/company-name (org), /jobs/view/job-id. Fetch: web_search 'site:zernio.com username' or web_fetch. No official CLI; use browser automation if needed (peekaboo). Respect robots.txt; public data only. JSON fields: name/headline/about/experience/skills/connections/posts.

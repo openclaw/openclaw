@@ -13,6 +13,14 @@ describe("skills/sherpa-onnx-tts bin script", () => {
     );
     const result = spawnSync(process.execPath, [scriptPath], {
       encoding: "utf8",
+      env: {
+        ...process.env,
+        SHERPA_ONNX_RUNTIME_DIR: "",
+        SHERPA_ONNX_MODEL_DIR: "",
+        SHERPA_ONNX_MODEL_FILE: "",
+        SHERPA_ONNX_TOKENS_FILE: "",
+        SHERPA_ONNX_DATA_DIR: "",
+      },
     });
 
     expect(result.status).toBe(1);

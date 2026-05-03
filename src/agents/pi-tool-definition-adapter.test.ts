@@ -33,13 +33,13 @@ async function executeThrowingTool(name: string, callId: string) {
   return await def.execute(callId, {}, undefined, undefined, extensionContext);
 }
 
-async function executeTool(tool: AgentTool, callId: string) {
+async function executeTool(tool: AgentTool, callId: string, params: unknown = {}) {
   const defs = toToolDefinitions([tool]);
   const def = defs[0];
   if (!def) {
     throw new Error("missing tool definition");
   }
-  return await def.execute(callId, {}, undefined, undefined, extensionContext);
+  return await def.execute(callId, params, undefined, undefined, extensionContext);
 }
 
 describe("pi tool definition adapter", () => {
@@ -104,6 +104,40 @@ describe("pi tool definition adapter", () => {
     });
     expect(result.content[0]).toMatchObject({ type: "text" });
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
+  });
+
+  it("parses stringified JSON params before executing local tools", async () => {
+    let captured: unknown;
+    const tool = {
+      name: "memory_query_args",
+      label: "Memory Query Args",
+      description: "captures params",
+      parameters: Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()) }),
+      execute: (async (_toolCallId: string, params: unknown) => {
+        captured = params;
+        return { ok: true };
+      }) as unknown as AgentTool["execute"],
+    } satisfies AgentTool;
+
+    await executeTool(tool, "call5", '{"query":"hello","limit":2}');
+    expect(captured).toEqual({ query: "hello", limit: 2 });
+  });
+
+  it("leaves invalid string params untouched for local tools", async () => {
+    let captured: unknown;
+    const tool = {
+      name: "memory_query_bad_args",
+      label: "Memory Query Bad Args",
+      description: "captures invalid params",
+      parameters: Type.Object({ query: Type.String() }),
+      execute: (async (_toolCallId: string, params: unknown) => {
+        captured = params;
+        return { ok: true };
+      }) as unknown as AgentTool["execute"],
+    } satisfies AgentTool;
+
+    await executeTool(tool, "call6", "not-json");
+    expect(captured).toBe("not-json");
   });
 });
 

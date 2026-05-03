@@ -1,0 +1,1 @@
+<skill><name>openclaw-factory</name><description>Zero-human agent factory: intent → PRs/deploy (gh-issues + coding-agent). Test PRs, background cron factories.</description><location>~/workspace/git/openclaw-mono/skills/openclaw-factory/SKILL.md</location></skill>

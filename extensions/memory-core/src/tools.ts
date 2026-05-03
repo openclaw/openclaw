@@ -30,6 +30,7 @@ import {
   MemoryGetSchema,
   MemorySearchSchema,
   searchMemoryCorpusSupplements,
+  searchWorkspaceMemoryFilesFallback,
 } from "./tools.shared.js";
 
 function buildRecallKey(
@@ -203,9 +204,6 @@ export function createMemorySearchTool(options: {
         const shouldQueryMemory = requestedCorpus !== "wiki";
         const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
         const memory = shouldQueryMemory ? await getMemoryManagerContext({ cfg, agentId }) : null;
-        if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
-          return jsonResult(buildMemorySearchUnavailableResult(memory.error));
-        }
         try {
           const citationsMode = resolveMemoryCitationsMode(cfg);
           const includeCitations = shouldIncludeCitations({
@@ -220,6 +218,8 @@ export function createMemorySearchTool(options: {
           let provider: string | undefined;
           let model: string | undefined;
           let fallback: unknown;
+          let warning: string | undefined;
+          let action: string | undefined;
           let searchMode: string | undefined;
           let searchDebug:
             | {
@@ -231,58 +231,89 @@ export function createMemorySearchTool(options: {
                 hits: number;
               }
             | undefined;
+          let memoryError: string | undefined;
           if (shouldQueryMemory && memory && !("error" in memory)) {
             const runtimeDebug: MemorySearchRuntimeDebug[] = [];
             const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
               cfg,
               options.agentSessionKey,
             );
-            rawResults = await memory.manager.search(query, {
+            try {
+              rawResults = await memory.manager.search(query, {
+                maxResults,
+                minScore,
+                sessionKey: options.agentSessionKey,
+                qmdSearchModeOverride,
+                onDebug: (debug) => {
+                  runtimeDebug.push(debug);
+                },
+              });
+              const status = memory.manager.status();
+              const decorated = decorateCitations(rawResults, includeCitations);
+              const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+              const memoryResults =
+                status.backend === "qmd"
+                  ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
+                  : decorated;
+              surfacedMemoryResults = memoryResults.map((result) => ({
+                ...result,
+                corpus: "memory" as const,
+              }));
+              const sleepTimezone = resolveMemoryDeepDreamingConfig({
+                pluginConfig: resolveMemoryCorePluginConfig(cfg),
+                cfg,
+              }).timezone;
+              queueShortTermRecallTracking({
+                workspaceDir: status.workspaceDir,
+                query,
+                rawResults,
+                surfacedResults: memoryResults,
+                timezone: sleepTimezone,
+              });
+              provider = status.provider;
+              model = status.model;
+              fallback = status.fallback;
+              const latestDebug = runtimeDebug.at(-1);
+              searchMode = latestDebug?.effectiveMode;
+              searchDebug = {
+                backend: status.backend,
+                configuredMode: latestDebug?.configuredMode,
+                effectiveMode:
+                  status.backend === "qmd"
+                    ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
+                    : "n/a",
+                fallback: latestDebug?.fallback,
+                searchMs: Math.max(0, Date.now() - searchStartedAt),
+                hits: rawResults.length,
+              };
+            } catch (err) {
+              memoryError = formatErrorMessage(err);
+            }
+          } else if (shouldQueryMemory && memory && "error" in memory) {
+            memoryError = memory.error;
+          }
+          if (shouldQueryMemory && memoryError) {
+            const unavailable = buildMemorySearchUnavailableResult(memoryError);
+            const fallbackResults = await searchWorkspaceMemoryFilesFallback({
+              cfg,
+              agentId,
+              query,
               maxResults,
               minScore,
-              sessionKey: options.agentSessionKey,
-              qmdSearchModeOverride,
-              onDebug: (debug) => {
-                runtimeDebug.push(debug);
-              },
             });
-            const status = memory.manager.status();
-            const decorated = decorateCitations(rawResults, includeCitations);
-            const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-            const memoryResults =
-              status.backend === "qmd"
-                ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
-                : decorated;
-            surfacedMemoryResults = memoryResults.map((result) => ({
+            const decoratedFallbackResults = decorateCitations(fallbackResults, includeCitations);
+            surfacedMemoryResults = decoratedFallbackResults.map((result) => ({
               ...result,
               corpus: "memory" as const,
             }));
-            const sleepTimezone = resolveMemoryDeepDreamingConfig({
-              pluginConfig: resolveMemoryCorePluginConfig(cfg),
-              cfg,
-            }).timezone;
-            queueShortTermRecallTracking({
-              workspaceDir: status.workspaceDir,
-              query,
-              rawResults,
-              surfacedResults: memoryResults,
-              timezone: sleepTimezone,
-            });
-            provider = status.provider;
-            model = status.model;
-            fallback = status.fallback;
-            const latestDebug = runtimeDebug.at(-1);
-            searchMode = latestDebug?.effectiveMode;
+            fallback = { from: "filesystem", reason: memoryError };
+            warning = unavailable.warning;
+            action = unavailable.action;
             searchDebug = {
-              backend: status.backend,
-              configuredMode: latestDebug?.configuredMode,
-              effectiveMode:
-                status.backend === "qmd"
-                  ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
-                  : "n/a",
-              fallback: latestDebug?.fallback,
+              backend: "filesystem",
+              fallback: "memory-manager-unavailable",
               searchMs: Math.max(0, Date.now() - searchStartedAt),
-              hits: rawResults.length,
+              hits: fallbackResults.length,
             };
           }
           const supplementResults = shouldQuerySupplements
@@ -301,11 +332,16 @@ export function createMemorySearchTool(options: {
               return left.path.localeCompare(right.path);
             })
             .slice(0, Math.max(1, maxResults ?? 10));
+          if (results.length === 0 && memoryError) {
+            return jsonResult(buildMemorySearchUnavailableResult(memoryError));
+          }
           return jsonResult({
             results,
             provider,
             model,
             fallback,
+            warning,
+            action,
             citations: citationsMode,
             mode: searchMode,
             debug: searchDebug,
@@ -382,7 +418,21 @@ export function createMemoryGetTool(options: {
           purpose: "status",
         });
         if ("error" in memory) {
-          return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
+          return await executeMemoryReadResult({
+            read: async () =>
+              await readAgentMemoryFile({
+                cfg,
+                agentId,
+                relPath,
+                from: from ?? undefined,
+                lines: lines ?? undefined,
+              }),
+            requestedCorpus,
+            relPath,
+            from: from ?? undefined,
+            lines: lines ?? undefined,
+            agentSessionKey: options.agentSessionKey,
+          });
         }
         return await executeMemoryReadResult({
           read: async () =>

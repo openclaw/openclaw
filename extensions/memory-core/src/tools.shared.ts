@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
@@ -8,6 +11,7 @@ import {
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 type MemoryToolRuntime = typeof import("./tools.runtime.js");
@@ -186,4 +190,155 @@ export async function getMemoryCorpusSupplementResult(params: {
     }
   }
   return null;
+}
+
+function tokenizeFallbackQuery(query: string): string[] {
+  const terms = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}_-]+/u)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 2);
+  return terms.length > 0
+    ? Array.from(new Set(terms))
+    : [query.trim().toLowerCase()].filter(Boolean);
+}
+
+function countOccurrences(text: string, term: string): number {
+  if (!term) {
+    return 0;
+  }
+  let count = 0;
+  let from = 0;
+  while (from < text.length) {
+    const index = text.indexOf(term, from);
+    if (index < 0) {
+      break;
+    }
+    count += 1;
+    from = index + Math.max(1, term.length);
+  }
+  return count;
+}
+
+function buildFallbackSearchResult(params: {
+  relPath: string;
+  lines: string[];
+  terms: string[];
+  wholeQuery: string;
+  minScore?: number;
+}): MemorySearchResult | null {
+  const loweredLines = params.lines.map((line) => line.toLowerCase());
+  let best:
+    | {
+        score: number;
+        startLine: number;
+        endLine: number;
+      }
+    | undefined;
+  for (let index = 0; index < loweredLines.length; index += 1) {
+    const startIndex = Math.max(0, index - 1);
+    const endIndex = Math.min(loweredLines.length - 1, index + 1);
+    const windowText = loweredLines.slice(startIndex, endIndex + 1).join("\n");
+    const matchedTerms = params.terms.filter((term) => windowText.includes(term));
+    if (matchedTerms.length === 0 && !windowText.includes(params.wholeQuery)) {
+      continue;
+    }
+    const hitCount = params.terms.reduce(
+      (sum, term) => sum + countOccurrences(windowText, term),
+      0,
+    );
+    const score = Math.min(
+      1,
+      (matchedTerms.length / Math.max(1, params.terms.length)) * 0.8 +
+        (windowText.includes(params.wholeQuery) ? 0.15 : 0) +
+        Math.min(0.05, hitCount * 0.01),
+    );
+    if (params.minScore !== undefined && score < params.minScore) {
+      continue;
+    }
+    const candidate = {
+      score,
+      startLine: startIndex + 1,
+      endLine: endIndex + 1,
+    };
+    if (
+      !best ||
+      candidate.score > best.score ||
+      (candidate.score === best.score && candidate.startLine < best.startLine)
+    ) {
+      best = candidate;
+    }
+  }
+  if (!best) {
+    return null;
+  }
+  const snippet = params.lines
+    .slice(best.startLine - 1, best.endLine)
+    .join("\n")
+    .trim();
+  if (!snippet) {
+    return null;
+  }
+  return {
+    path: params.relPath,
+    startLine: best.startLine,
+    endLine: best.endLine,
+    score: best.score,
+    snippet,
+    source: "memory",
+  };
+}
+
+export async function searchWorkspaceMemoryFilesFallback(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  query: string;
+  maxResults?: number;
+  minScore?: number;
+}): Promise<MemorySearchResult[]> {
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const candidates = [path.join(workspaceDir, "MEMORY.md")];
+  try {
+    const memoryDirEntries = await fs.readdir(path.join(workspaceDir, "memory"), {
+      withFileTypes: true,
+    });
+    for (const entry of memoryDirEntries) {
+      if (entry.isFile() && entry.name.endsWith(".md")) {
+        candidates.push(path.join(workspaceDir, "memory", entry.name));
+      }
+    }
+  } catch {}
+  const terms = tokenizeFallbackQuery(params.query);
+  const wholeQuery = params.query.trim().toLowerCase();
+  const results: MemorySearchResult[] = [];
+  for (const absPath of candidates) {
+    let content: string;
+    try {
+      content = await fs.readFile(absPath, "utf-8");
+    } catch {
+      continue;
+    }
+    const relPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
+    const result = buildFallbackSearchResult({
+      relPath,
+      lines: content.split(/\r?\n/),
+      terms,
+      wholeQuery,
+      minScore: params.minScore,
+    });
+    if (result) {
+      results.push(result);
+    }
+  }
+  return results
+    .toSorted((left, right) => {
+      if (left.score !== right.score) {
+        return right.score - left.score;
+      }
+      if (left.path !== right.path) {
+        return left.path.localeCompare(right.path);
+      }
+      return left.startLine - right.startLine;
+    })
+    .slice(0, Math.max(1, params.maxResults ?? 10));
 }

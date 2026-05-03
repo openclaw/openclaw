@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "updatedAt": "2026-04-24T00:00:00.000Z",
+  "defaultDeny": true,
+  "channels": [
+    {
+      "name": "telegram",
+      "enabled": false,
+      "allowedUserIds": [],
+      "allowedUsernames": [],
+      "allowedChats": []
+    }
+  ],
+  "loops": {
+    "enabled": false,
+    "minIntervalMinutes": 60,
+    "maxRuntimeMinutes": 15,
+    "requireStopCommand": true
+  },
+  "permissions": {
+    "allowFileEdits": true,
+    "allowShell": false,
+    "allowNetwork": false,
+    "allowPublicPosting": false,
+    "allowMergeOrDeploy": false,
+    "allowCredentialChanges": false
+  },
+  "checkpoints": {
+    "requireHumanForExternalState": true,
+    "requireHumanForSecrets": true,
+    "requireHumanForCronEnable": true,
+    "requireReviewFolder": true
+  }
+}
