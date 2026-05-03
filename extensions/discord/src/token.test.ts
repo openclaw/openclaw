@@ -91,7 +91,8 @@ describe("resolveDiscordToken", () => {
     expect(res.source).toBe("config");
   });
 
-  it("throws when token is an unresolved SecretRef object", () => {
+  it("resolves env-backed SecretRefs from process.env", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "secretref-env-token");
     const cfg = {
       channels: {
         discord: {
@@ -100,8 +101,23 @@ describe("resolveDiscordToken", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(() => resolveDiscordToken(cfg)).toThrow(
-      /channels\.discord\.token: unresolved SecretRef/i,
-    );
+    expect(resolveDiscordToken(cfg)).toEqual({
+      token: "secretref-env-token",
+      source: "config",
+    });
+  });
+
+  it("does not fall back when an explicit env SecretRef is configured but unavailable", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "fallback-env-token");
+    vi.stubEnv("DISCORD_REF_TOKEN", "");
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_REF_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveDiscordToken(cfg)).toEqual({ token: "", source: "none" });
   });
 });
