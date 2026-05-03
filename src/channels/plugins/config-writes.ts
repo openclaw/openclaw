@@ -1,3 +1,4 @@
+import type { PathSegment } from "../../config/config-paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
@@ -41,7 +42,7 @@ export function resolveExplicitConfigWriteTarget(scope: ConfigWriteScope): Confi
   return resolveExplicitConfigWriteTargetShared(scope);
 }
 
-export function resolveConfigWriteTargetFromPath(path: string[]): ConfigWriteTarget {
+export function resolveConfigWriteTargetFromPath(path: PathSegment[]): ConfigWriteTarget {
   return resolveConfigWriteTargetFromPathShared({
     path,
     normalizeChannelId: (raw) => normalizeLowercaseStringOrEmpty(raw) as ChannelId,

@@ -831,6 +831,183 @@ describe("config paths", () => {
     expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
     expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
   });
+
+  describe("array index parsing", () => {
+    it("parses simple array index syntax", () => {
+      const result = parseConfigPath("agents.list[1]");
+      expect(result.ok).toBe(true);
+      expect(result.path).toEqual(["agents", "list", 1]);
+    });
+
+    it("parses nested array indices", () => {
+      const result = parseConfigPath("agents.list[0].models[2]");
+      expect(result.ok).toBe(true);
+      expect(result.path).toEqual(["agents", "list", 0, "models", 2]);
+    });
+
+    it("parses array index at the end of a path", () => {
+      const result = parseConfigPath("items[5]");
+      expect(result.ok).toBe(true);
+      expect(result.path).toEqual(["items", 5]);
+    });
+
+    it("rejects blocked keys with array indices", () => {
+      expect(parseConfigPath("__proto__[0]").ok).toBe(false);
+      expect(parseConfigPath("constructor[1]").ok).toBe(false);
+    });
+
+    it("rejects malformed array index syntax", () => {
+      // Missing closing bracket
+      expect(parseConfigPath("agents.list[1").ok).toBe(false);
+      // Non-numeric index
+      expect(parseConfigPath("agents.list[abc]").ok).toBe(false);
+      // Empty index
+      expect(parseConfigPath("agents.list[]").ok).toBe(false);
+    });
+  });
+
+  describe("array index unset", () => {
+    it("removes single array element without truncating", () => {
+      const root: Record<string, unknown> = {
+        agents: {
+          list: [{ id: "agent-a" }, { id: "agent-b" }, { id: "agent-c" }],
+        },
+      };
+      const parsed = parseConfigPath("agents.list[1]");
+      if (!parsed.ok || !parsed.path) {
+        throw new Error("path parse failed");
+      }
+
+      const result = unsetConfigValueAtPath(root, parsed.path);
+      expect(result).toBe(true);
+      expect(root.agents?.list).toEqual([{ id: "agent-a" }, { id: "agent-c" }]);
+    });
+
+    it("removes first array element correctly", () => {
+      const root: Record<string, unknown> = {
+        items: ["first", "second", "third"],
+      };
+      const parsed = parseConfigPath("items[0]");
+      if (!parsed.ok || !parsed.path) {
+        throw new Error("path parse failed");
+      }
+
+      expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
+      expect(root.items).toEqual(["second", "third"]);
+    });
+
+    it("removes last array element correctly", () => {
+      const root: Record<string, unknown> = {
+        items: ["first", "second", "third"],
+      };
+      const parsed = parseConfigPath("items[2]");
+      if (!parsed.ok || !parsed.path) {
+        throw new Error("path parse failed");
+      }
+
+      expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
+      expect(root.items).toEqual(["first", "second"]);
+    });
+
+    it("returns false for out-of-bounds index", () => {
+      const root: Record<string, unknown> = {
+        items: ["first", "second"],
+      };
+      const parsed = parseConfigPath("items[5]");
+      if (!parsed.ok || !parsed.path) {
+        throw new Error("path parse failed");
+      }
+
+      expect(unsetConfigValueAtPath(root, parsed.path)).toBe(false);
+      expect(root.items).toEqual(["first", "second"]);
+    });
+
+    it("removes nested array element", () => {
+      const root: Record<string, unknown> = {
+        agents: {
+          list: [
+            { id: "agent-a", models: ["model1", "model2", "model3"] },
+            { id: "agent-b", models: ["model4", "model5"] },
+          ],
+        },
+      };
+      const parsed = parseConfigPath("agents.list[0].models[1]");
+      if (!parsed.ok || !parsed.path) {
+        throw new Error("path parse failed");
+      }
+
+      expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
+      expect(root.agents?.list?.[0]?.models).toEqual(["model1", "model3"]);
+      expect(root.agents?.list?.[1]?.models).toEqual(["model4", "model5"]);
+    });
+
+    it("cleans up empty parent array after removal", () => {
+      const root: Record<string, unknown> = {
+        agents: {
+          list: [{ id: "only-agent" }],
+        },
+      };
+      const parsed = parseConfigPath("agents.list[0]");
+      if (!parsed.ok || !parsed.path) {
+        throw new Error("path parse failed");
+      }
+
+      expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
+      expect(root.agents?.list).toEqual([]);
+    });
+  });
+
+  describe("array index set and get", () => {
+    it("sets value at array index", () => {
+      const root: Record<string, unknown> = {
+        items: ["first", "second", "third"],
+      };
+      const parsed = parseConfigPath("items[1]");
+      if (!parsed.ok || !parsed.path) {
+        throw new Error("path parse failed");
+      }
+
+      setConfigValueAtPath(root, parsed.path, "replaced");
+      expect(root.items).toEqual(["first", "replaced", "third"]);
+    });
+
+    it("gets value at array index", () => {
+      const root: Record<string, unknown> = {
+        agents: {
+          list: [{ id: "agent-a" }, { id: "agent-b" }],
+        },
+      };
+      const parsed = parseConfigPath("agents.list[1]");
+      if (!parsed.ok || !parsed.path) {
+        throw new Error("path parse failed");
+      }
+
+      expect(getConfigValueAtPath(root, parsed.path)).toEqual({ id: "agent-b" });
+    });
+
+    it("returns undefined for out-of-bounds get", () => {
+      const root: Record<string, unknown> = {
+        items: ["first", "second"],
+      };
+      const parsed = parseConfigPath("items[5]");
+      if (!parsed.ok || !parsed.path) {
+        throw new Error("path parse failed");
+      }
+
+      expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
+    });
+
+    it("creates intermediate array when setting nested index", () => {
+      const root: Record<string, unknown> = {};
+      const parsed = parseConfigPath("agents.list[0]");
+      if (!parsed.ok || !parsed.path) {
+        throw new Error("path parse failed");
+      }
+
+      setConfigValueAtPath(root, parsed.path, { id: "new-agent" });
+      expect(root.agents?.list).toEqual([{ id: "new-agent" }]);
+    });
+  });
 });
 
 describe("config strict validation", () => {

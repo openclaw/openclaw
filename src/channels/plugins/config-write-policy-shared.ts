@@ -146,31 +146,42 @@ export function resolveExplicitConfigWriteTargetShared<TChannelId extends string
 }
 
 export function resolveConfigWriteTargetFromPathShared<TChannelId extends string>(params: {
-  path: string[];
+  path: (string | number)[];
   normalizeChannelId: (raw: string) => TChannelId | null | undefined;
 }): ConfigWriteTargetLike<TChannelId> {
-  if (params.path[0] !== "channels") {
+  const firstSegment = params.path[0];
+  if (typeof firstSegment !== "string" || firstSegment !== "channels") {
     return { kind: "global" };
   }
   if (params.path.length < 2) {
     return { kind: "ambiguous", scopes: [] };
   }
-  const channelId = params.normalizeChannelId(params.path[1] ?? "");
+  const secondSegment = params.path[1];
+  if (typeof secondSegment !== "string") {
+    return { kind: "ambiguous", scopes: [] };
+  }
+  const channelId = params.normalizeChannelId(secondSegment);
   if (!channelId) {
     return { kind: "ambiguous", scopes: [] };
   }
   if (params.path.length === 2) {
     return { kind: "ambiguous", scopes: [{ channelId }] };
   }
-  if (params.path[2] !== "accounts") {
+  const thirdSegment = params.path[2];
+  if (typeof thirdSegment !== "string" || thirdSegment !== "accounts") {
     return { kind: "channel", scope: { channelId } };
   }
   if (params.path.length < 4) {
     return { kind: "ambiguous", scopes: [{ channelId }] };
   }
+  const fourthSegment = params.path[3];
+  const accountId = typeof fourthSegment === "string" ? normalizeAccountId(fourthSegment) : null;
+  if (!accountId) {
+    return { kind: "ambiguous", scopes: [{ channelId }] };
+  }
   return resolveExplicitConfigWriteTargetShared({
     channelId,
-    accountId: normalizeAccountId(params.path[3]),
+    accountId,
   });
 }
 

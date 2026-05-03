@@ -1,5 +1,6 @@
 import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
+import type { PathSegment } from "../../config/config-paths.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -63,7 +64,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     };
   }
 
-  let parsedWritePath: string[] | undefined;
+  let parsedWritePath: PathSegment[] | undefined;
   if (configCommand.action === "set" || configCommand.action === "unset") {
     const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
       label: "/config write",
