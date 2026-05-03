@@ -1269,7 +1269,7 @@ function renderMemoryPalaceSection(props: DreamingProps) {
   `;
 }
 
-function renderDiaryDayChips(content: string) {
+function renderDiaryDayChips(content: string, props: DreamingProps) {
   if (typeof content !== "string") return nothing;
   const entries = parseDiaryEntries(content);
   if (entries.length === 0) return nothing;
@@ -1287,6 +1287,7 @@ function renderDiaryDayChips(content: string) {
               : ""}"
             @click=${() => {
               setDiaryPage(e.page);
+              props.onRequestUpdate?.();
             }}
           >
             ${formatDiaryChipLabel(e.date)}
@@ -1449,7 +1450,7 @@ function renderDiarySection(props: DreamingProps) {
           </button>
         </div>
         ${renderDiarySubtabExplainer()}
-        ${_diarySubTab === "dreams" ? renderDiaryDayChips(props.dreamDiaryContent) : nothing}
+        ${_diarySubTab === "dreams" ? renderDiaryDayChips(props.dreamDiaryContent, props) : nothing}
       </div>
 
       ${memoryWikiUnavailable
