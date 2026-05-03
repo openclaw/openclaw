@@ -108,6 +108,7 @@ export async function runPluginHostCleanup(params: {
   sessionKey?: string;
   runId?: string;
   preserveSchedulerJobIds?: ReadonlySet<string>;
+  preserveSchedulerOwnerRegistry?: PluginRegistry | null;
 }): Promise<PluginHostCleanupResult> {
   const persistentCleanupCount =
     params.reason === "restart"
@@ -174,6 +175,7 @@ export async function runPluginHostCleanup(params: {
     sessionKey: params.sessionKey,
     records: registry?.sessionSchedulerJobs,
     preserveJobIds: params.preserveSchedulerJobIds,
+    preserveOwnerRegistry: params.preserveSchedulerOwnerRegistry,
   });
   for (const failure of schedulerFailures) {
     failures.push(failure);
@@ -249,6 +251,7 @@ export async function cleanupReplacedPluginHostRegistry(params: {
       preserveSchedulerJobIds: restarted
         ? collectSchedulerJobIds(params.nextRegistry, pluginId)
         : undefined,
+      preserveSchedulerOwnerRegistry: restarted ? params.nextRegistry : undefined,
     });
     cleanupCount += result.cleanupCount;
     failures.push(...result.failures);

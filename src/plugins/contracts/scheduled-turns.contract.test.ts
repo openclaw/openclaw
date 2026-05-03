@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
+import { cleanupReplacedPluginHostRegistry } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
   cleanupPluginSessionSchedulerJobs,
@@ -595,6 +596,81 @@ describe("plugin scheduled turns", () => {
     ).resolves.toEqual([]);
     expect(removed).toEqual(["dynamic-cleanup-job"]);
     expect(listPluginSessionSchedulerJobs("workflow-plugin")).toEqual([]);
+  });
+
+  it("preserves replacement-generation runtime scheduled turns during restart cleanup", async () => {
+    const removed: string[] = [];
+    const scheduledIds = ["old-runtime-job", "new-runtime-job"];
+    workflowMocks.callGatewayTool.mockImplementation(
+      async (method: string, _opts: unknown, body: unknown) => {
+        if (method === "cron.add") {
+          const id = scheduledIds.shift() ?? "unexpected-job";
+          return { id };
+        }
+        if (method === "cron.remove") {
+          removed.push((body as { id?: string }).id ?? "");
+          return { ok: true, removed: true };
+        }
+        return { ok: true };
+      },
+    );
+
+    const previousFixture = createPluginRegistryFixture();
+    previousFixture.registry.registry.plugins.push(
+      createPluginRecord({
+        id: "workflow-plugin",
+        name: "Workflow Plugin",
+        origin: "bundled",
+      }),
+    );
+    await schedulePluginSessionTurn({
+      pluginId: "workflow-plugin",
+      pluginName: "Workflow Plugin",
+      origin: "bundled",
+      ownerRegistry: previousFixture.registry.registry,
+      schedule: {
+        sessionKey: "agent:main:main",
+        message: "old wake",
+        delayMs: 1_000,
+      },
+    });
+
+    const replacementFixture = createPluginRegistryFixture();
+    replacementFixture.registry.registry.plugins.push(
+      createPluginRecord({
+        id: "workflow-plugin",
+        name: "Workflow Plugin",
+        origin: "bundled",
+      }),
+    );
+    await schedulePluginSessionTurn({
+      pluginId: "workflow-plugin",
+      pluginName: "Workflow Plugin",
+      origin: "bundled",
+      ownerRegistry: replacementFixture.registry.registry,
+      schedule: {
+        sessionKey: "agent:main:main",
+        message: "new wake",
+        delayMs: 1_000,
+      },
+    });
+
+    await expect(
+      cleanupReplacedPluginHostRegistry({
+        cfg: previousFixture.config,
+        previousRegistry: previousFixture.registry.registry,
+        nextRegistry: replacementFixture.registry.registry,
+      }),
+    ).resolves.toMatchObject({ failures: [] });
+    expect(removed).toEqual(["old-runtime-job"]);
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toEqual([
+      {
+        id: "new-runtime-job",
+        pluginId: "workflow-plugin",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+      },
+    ]);
   });
 
   it("treats already-missing cron jobs as successful scheduled-turn cleanup", async () => {

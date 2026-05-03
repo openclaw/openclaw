@@ -1987,6 +1987,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const handle = registerPluginSessionSchedulerJob({
       pluginId: record.id,
       pluginName: record.name,
+      ownerRegistry: registry,
       job: { ...job, id: jobId, sessionKey, kind },
     });
     if (!handle) {
@@ -2410,6 +2411,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   origin: record.origin,
                   schedule,
                   shouldCommit,
+                  ownerRegistry: registry,
                 });
               },
               unscheduleSessionTurnsByTag: (request) => {
