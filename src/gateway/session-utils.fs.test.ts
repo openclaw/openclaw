@@ -1704,6 +1704,38 @@ describe("oversized transcript line guards", () => {
     expect(serialized).toContain("after oversized");
   });
 
+  test("readRecentSessionMessagesAsync keeps oversized active-tree leaves", async () => {
+    const sessionId = "test-oversized-tree-tail";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "z".repeat(300 * 1024);
+    const lines = [
+      JSON.stringify({ type: "session", version: 3, id: sessionId }),
+      JSON.stringify({
+        type: "message",
+        id: "root",
+        parentId: null,
+        message: { role: "user", content: "root" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "oversized-leaf",
+        parentId: "root",
+        message: { role: "assistant", content: oversizedContent },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    const serialized = JSON.stringify(out);
+    expect(serialized).toContain("root");
+    expect(serialized).toContain("oversized-leaf");
+    expect(serialized).not.toContain(oversizedContent);
+    expect(serialized).toContain("[chat.history omitted: message too large]");
+  });
+
   test("readRecentSessionUsageFromTranscriptAsync skips oversized lines", async () => {
     const sessionId = "test-oversized-usage";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);

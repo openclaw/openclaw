@@ -267,21 +267,56 @@ async function readRecentTranscriptTailLinesAsync(
 }
 
 const MAX_TRANSCRIPT_PARSE_LINE_BYTES = 256 * 1024;
+const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
 
 function isOversizedTranscriptLine(line: string): boolean {
   return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
 }
 
-function buildOversizedTranscriptRecord(): TailTranscriptRecord {
-  return {
-    record: {
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
-        __openclaw: { truncated: true, reason: "oversized" },
-      },
+function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
+  const match = new RegExp(`"${field}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  try {
+    const decoded = JSON.parse(`"${match[1]}"`) as unknown;
+    return normalizeTailEntryString(decoded);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractJsonNullableStringFieldPrefix(
+  prefix: string,
+  field: string,
+): string | null | undefined {
+  if (new RegExp(`"${field}"\\s*:\\s*null`).test(prefix)) {
+    return null;
+  }
+  return extractJsonStringFieldPrefix(prefix, field);
+}
+
+function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
+  const prefix = line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
+  const id = extractJsonStringFieldPrefix(prefix, "id");
+  const parentId = extractJsonNullableStringFieldPrefix(prefix, "parentId");
+  const type = extractJsonStringFieldPrefix(prefix, "type");
+  const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
+  const record: Record<string, unknown> = {
+    ...(type ? { type } : {}),
+    ...(id ? { id } : {}),
+    ...(parentId !== undefined ? { parentId } : {}),
+    message: {
+      role,
+      content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
+      __openclaw: { truncated: true, reason: "oversized" },
     },
+  };
+  return {
+    ...(id ? { id } : {}),
+    ...(parentId !== undefined ? { parentId } : {}),
+    record,
   };
 }
 
@@ -291,7 +326,7 @@ function normalizeTailEntryString(value: unknown): string | undefined {
 
 function parseTailTranscriptRecord(line: string): TailTranscriptRecord | null {
   if (isOversizedTranscriptLine(line)) {
-    return buildOversizedTranscriptRecord();
+    return buildOversizedTranscriptRecord(line);
   }
   try {
     const parsed = JSON.parse(line) as unknown;
