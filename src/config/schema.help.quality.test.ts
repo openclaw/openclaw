@@ -104,6 +104,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.store.vector.enabled",
   "agents.defaults.memorySearch.store.vector.extensionPath",
   "agents.defaults.memorySearch.query.hybrid.enabled",
+  "agents.defaults.memorySearch.query.hybrid.fusion",
   "agents.defaults.memorySearch.query.hybrid.vectorWeight",
   "agents.defaults.memorySearch.query.hybrid.textWeight",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier",

@@ -467,6 +467,8 @@ export type MemorySearchConfig = {
     hybrid?: {
       /** Enable hybrid BM25 + vector search (default: true). */
       enabled?: boolean;
+      /** Score fusion mode for hybrid ranking (default: weighted). */
+      fusion?: "weighted" | "rrf";
       /** Weight for vector similarity when merging results (0-1). */
       vectorWeight?: number;
       /** Weight for BM25 text relevance when merging results (0-1). */

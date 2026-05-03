@@ -101,4 +101,91 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.vectorScore).toBeCloseTo(0.2);
     expect(merged[0]?.textScore).toBeCloseTo(1.0);
   });
+
+  it("mergeHybridResults supports rrf fusion ordering", async () => {
+    const merged = await mergeHybridResults({
+      fusion: "rrf",
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      vector: [
+        {
+          id: "a",
+          path: "memory/a.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "vec-a",
+          vectorScore: 0.2,
+        },
+        {
+          id: "b",
+          path: "memory/b.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "vec-b",
+          vectorScore: 0.9,
+        },
+      ],
+      keyword: [
+        {
+          id: "a",
+          path: "memory/a.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "kw-a",
+          textScore: 0.1,
+        },
+      ],
+    });
+
+    expect(merged).toHaveLength(2);
+    // "a" appears in both ranked lists, so it wins in RRF.
+    expect(merged[0]?.path).toBe("memory/a.md");
+    expect(merged[1]?.path).toBe("memory/b.md");
+    const k = 60;
+    const vw = 0.7;
+    const tw = 0.3;
+    expect(merged[0]?.score).toBeCloseTo(1, 6);
+    expect(merged[0]?.score).toBeLessThanOrEqual(1);
+    expect(merged[1]?.score).toBeCloseTo((vw / (k + 2)) * ((k + 1) / (vw + tw)), 6);
+  });
+
+  it("mergeHybridResults uses deterministic tie-breaking", async () => {
+    const merged = await mergeHybridResults({
+      fusion: "rrf",
+      vectorWeight: 0.5,
+      textWeight: 0.5,
+      vector: [
+        {
+          id: "a",
+          path: "memory/z.md",
+          startLine: 10,
+          endLine: 20,
+          source: "memory",
+          snippet: "z",
+          vectorScore: 1,
+        },
+      ],
+      keyword: [
+        {
+          id: "b",
+          path: "memory/a.md",
+          startLine: 10,
+          endLine: 20,
+          source: "memory",
+          snippet: "a",
+          textScore: 1,
+        },
+      ],
+      temporalDecay: { enabled: false },
+      mmr: { enabled: false },
+    });
+
+    expect(merged).toHaveLength(2);
+    // Equal score; path lexical tie-break applies.
+    expect(merged[0]?.path).toBe("memory/a.md");
+    expect(merged[1]?.path).toBe("memory/z.md");
+  });
 });

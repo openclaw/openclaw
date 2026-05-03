@@ -1084,6 +1084,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Minimum relevance score threshold for including memory results in final recall output. Increase to reduce weak/noisy matches, or lower when you need more permissive retrieval.",
   "agents.defaults.memorySearch.query.hybrid.enabled":
     "Combines BM25 keyword matching with vector similarity for better recall on mixed exact + semantic queries. Keep enabled unless you are isolating ranking behavior for troubleshooting.",
+  "agents.defaults.memorySearch.query.hybrid.fusion":
+    "Chooses how hybrid candidates are merged: `weighted` uses score-weighted blending, while `rrf` uses Reciprocal Rank Fusion for stronger rank-based robustness across sparse lexical/semantic overlaps.",
   "agents.defaults.memorySearch.query.hybrid.vectorWeight":
     "Controls how strongly semantic similarity influences hybrid ranking (0-1). Increase when paraphrase matching matters more than exact terms; decrease for stricter keyword emphasis.",
   "agents.defaults.memorySearch.query.hybrid.textWeight":

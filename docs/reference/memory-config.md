@@ -314,12 +314,13 @@ Unset uses the provider default: 600 seconds for local/self-hosted providers suc
 
 All under `memorySearch.query.hybrid`:
 
-| Key                   | Type      | Default | Description                        |
-| --------------------- | --------- | ------- | ---------------------------------- |
-| `enabled`             | `boolean` | `true`  | Enable hybrid BM25 + vector search |
-| `vectorWeight`        | `number`  | `0.7`   | Weight for vector scores (0-1)     |
-| `textWeight`          | `number`  | `0.3`   | Weight for BM25 scores (0-1)       |
-| `candidateMultiplier` | `number`  | `4`     | Candidate pool size multiplier     |
+| Key                   | Type                  | Default      | Description                                                                                                                                                                                                                                                         |
+| --------------------- | --------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`             | `boolean`             | `true`       | Enable hybrid BM25 + vector search                                                                                                                                                                                                                                  |
+| `fusion`              | `"weighted" \| "rrf"` | `"weighted"` | How to combine rankings: linear blend of retrieval scores (`weighted`) or weighted reciprocal-rank fusion (`rrf`). RRF fused scores are normalized to `[0, 1]` with maximum `1.0` when a chunk is rank 1 in both lists—see `docs/reference/memory-rrf-contract.md`. |
+| `vectorWeight`        | `number`              | `0.7`        | Weight for vector scores (0-1)                                                                                                                                                                                                                                      |
+| `textWeight`          | `number`              | `0.3`        | Weight for BM25 scores (0-1)                                                                                                                                                                                                                                        |
+| `candidateMultiplier` | `number`              | `4`          | Candidate pool size multiplier                                                                                                                                                                                                                                      |
 
 <Tabs>
   <Tab title="MMR (diversity)">
@@ -348,6 +349,7 @@ All under `memorySearch.query.hybrid`:
       memorySearch: {
         query: {
           hybrid: {
+            fusion: "rrf",
             vectorWeight: 0.7,
             textWeight: 0.3,
             mmr: { enabled: true, lambda: 0.7 },

@@ -238,7 +238,12 @@ describe("memory index", () => {
     cacheEnabled?: boolean;
     minScore?: number;
     onSearch?: boolean;
-    hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
+    hybrid?: {
+      enabled: boolean;
+      vectorWeight?: number;
+      textWeight?: number;
+      fusion?: "weighted" | "rrf";
+    };
   }): TestCfg {
     return {
       agents: {
@@ -543,6 +548,60 @@ describe("memory index", () => {
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
+  });
+
+  it("hybrid RRF yields scores above minScore when vector and keyword both hit", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-hybrid-rrf-minscore.sqlite"),
+      vectorEnabled: true,
+      minScore: 0.35,
+      hybrid: {
+        enabled: true,
+        fusion: "rrf",
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+      },
+    });
+    const manager = await getPersistentManager(cfg);
+    try {
+      expect(manager.status().fts?.available).toBe(true);
+      await manager.sync({ reason: "test" });
+      const results = await manager.search("Alpha");
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.score).toBeGreaterThanOrEqual(0.35);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("hybrid weighted fusion keeps linear blended scores", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-hybrid-weighted-blend.sqlite"),
+      vectorEnabled: true,
+      minScore: 0,
+      hybrid: {
+        enabled: true,
+        fusion: "weighted",
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+      },
+    });
+    const manager = await getPersistentManager(cfg);
+    try {
+      expect(manager.status().fts?.available).toBe(true);
+      await manager.sync({ reason: "test" });
+      const results = await manager.search("Alpha");
+      expect(results.length).toBeGreaterThan(0);
+      const top = results[0];
+      expect(top?.vectorScore).toBeDefined();
+      expect(top?.textScore).toBeDefined();
+      expect(top?.score).toBeCloseTo(
+        0.7 * (top?.vectorScore ?? 0) + 0.3 * (top?.textScore ?? 0),
+        5,
+      );
+    } finally {
+      await manager.close?.();
+    }
   });
 
   it("prefers exact session transcript hits in FTS-only mode", async () => {
