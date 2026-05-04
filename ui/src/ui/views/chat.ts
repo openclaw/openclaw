@@ -77,6 +77,7 @@ export type ChatProps = {
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
+  realtimeTalkProviderAvailable?: boolean | null;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -1305,9 +1306,17 @@ export function renderChat(props: ChatProps) {
                       ? "agent-chat__input-btn--talk"
                       : ""}"
                     @click=${props.onToggleRealtimeTalk}
-                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
-                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
-                    ?disabled=${!props.connected}
+                    title=${props.realtimeTalkProviderAvailable === false
+                      ? "No voice provider configured"
+                      : props.realtimeTalkActive
+                        ? "Stop Talk"
+                        : "Start Talk"}
+                    aria-label=${props.realtimeTalkProviderAvailable === false
+                      ? "No voice provider configured"
+                      : props.realtimeTalkActive
+                        ? "Stop Talk"
+                        : "Start Talk"}
+                    ?disabled=${!props.connected || props.realtimeTalkProviderAvailable === false}
                   >
                     ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
                   </button>

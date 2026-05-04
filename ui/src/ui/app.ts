@@ -224,6 +224,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
   @state() realtimeTalkDetail: string | null = null;
   @state() realtimeTalkTranscript: string | null = null;
+  @state() realtimeTalkProviderAvailable: boolean | null = null;
   private realtimeTalkSession: RealtimeTalkSession | null = null;
   @state() chatManualRefreshInFlight = false;
   @state() chatMobileControlsOpen = false;
@@ -924,6 +925,7 @@ export class OpenClawApp extends LitElement {
     this.realtimeTalkStatus = "connecting";
     this.realtimeTalkDetail = null;
     this.realtimeTalkTranscript = null;
+    this.realtimeTalkProviderAvailable = null;
     const session = new RealtimeTalkSession(this.client, this.sessionKey, {
       onStatus: (status, detail) => {
         this.realtimeTalkStatus = status;
@@ -948,6 +950,9 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkStatus = "error";
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       this.lastError = this.realtimeTalkDetail;
+      if (this.realtimeTalkDetail.toLowerCase().includes("no realtime voice provider")) {
+        this.realtimeTalkProviderAvailable = false;
+      }
     }
   }
 

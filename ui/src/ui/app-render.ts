@@ -1575,7 +1575,7 @@ export function renderApp(state: AppViewState) {
                     `
                   : nothing}
                 ${state.lastError
-                  ? html`<div class="pill danger">${state.lastError}</div>`
+                  ? html`<div class="pill danger"><span>${state.lastError}</span><button class="pill__dismiss" @click=${() => dismissChatError(state)} aria-label="Dismiss error">${icons.x}</button></div>`
                   : nothing}
                 ${isChat ? renderChatControls(state) : nothing}
               </div>
@@ -2371,6 +2371,7 @@ export function renderApp(state: AppViewState) {
               realtimeTalkStatus: state.realtimeTalkStatus,
               realtimeTalkDetail: state.realtimeTalkDetail,
               realtimeTalkTranscript: state.realtimeTalkTranscript,
+              realtimeTalkProviderAvailable: state.realtimeTalkProviderAvailable,
               connected: state.connected,
               canSend: state.connected,
               disabledReason: chatDisabledReason,

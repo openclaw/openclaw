@@ -357,6 +357,7 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       realtimeTalkStatus: "idle",
       realtimeTalkDetail: null,
       realtimeTalkTranscript: null,
+      realtimeTalkProviderAvailable: null,
       connected: true,
       canSend: true,
       disabledReason: null,
@@ -502,6 +503,7 @@ describe("chat voice controls", () => {
       error: 'Realtime voice provider "openai" is not configured',
       realtimeTalkStatus: "error",
       realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
+      realtimeTalkProviderAvailable: null,
       onDismissError,
     });
 

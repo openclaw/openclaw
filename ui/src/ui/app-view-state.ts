@@ -119,6 +119,7 @@ export type AppViewState = {
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
   realtimeTalkTranscript: string | null;
+  realtimeTalkProviderAvailable: boolean | null;
   chatManualRefreshInFlight: boolean;
   chatMobileControlsOpen: boolean;
   nodesLoading: boolean;
