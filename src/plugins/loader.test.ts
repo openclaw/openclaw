@@ -2526,6 +2526,44 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listMemoryEmbeddingProviders()).toEqual([]);
   });
 
+  it("preserves corpus supplements registered from service.start() during activating re-loads (#77039)", () => {
+    useNoBundledPlugins();
+    const supplement = { search: async () => [], get: async () => null };
+    // Simulate a supplement that a plugin's service.start() already registered
+    // before the lazy tool-load re-register triggers a full activating reload.
+    registerMemoryCorpusSupplement("service-start-plugin", supplement);
+    expect(listMemoryCorpusSupplements()).toHaveLength(1);
+
+    const plugin = writePlugin({
+      id: "lazy-tool-trigger",
+      filename: "lazy-tool-trigger.cjs",
+      body: `module.exports = {
+        id: "lazy-tool-trigger",
+        register(api) {
+          // register() does NOT call registerMemoryCorpusSupplement — only service.start() does
+        },
+      };`,
+    });
+
+    // Activating load (shouldActivate=true) — simulates the lazy tool-load re-register path
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["lazy-tool-trigger"],
+        },
+      },
+    });
+
+    // The supplement from service.start() must survive the activating re-load
+    const supplements = listMemoryCorpusSupplements();
+    expect(supplements).toHaveLength(1);
+    expect(supplements[0]?.pluginId).toBe("service-start-plugin");
+    expect(supplements[0]?.supplement).toBe(supplement);
+  });
+
   it("does not replace the active detached task runtime during non-activating loads", () => {
     useNoBundledPlugins();
     const activeRuntime = createDetachedTaskRuntimeStub("active");

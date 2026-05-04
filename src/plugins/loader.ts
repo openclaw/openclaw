@@ -96,6 +96,7 @@ import {
   getMemoryCapabilityRegistration,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  registerMemoryCorpusSupplement,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
@@ -1530,6 +1531,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   try {
     // Clear previously registered plugin state before reloading.
     // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
+    // Capture corpus supplements first: service.start() callbacks register supplements after
+    // register() returns, so they survive the current load but won't be re-called during a
+    // lazy re-register (registerService is idempotent). Restore any supplement whose plugin
+    // did not re-register one during this load pass. (#77039)
+    const preLoadCorpusSupplements = shouldActivate ? listMemoryCorpusSupplements() : [];
     if (shouldActivate) {
       clearActivatedPluginRuntimeState();
     }
@@ -2414,6 +2420,15 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             failedPlugins,
           )}). Run 'openclaw plugins list' for details.`,
         );
+      }
+    }
+
+    if (shouldActivate && preLoadCorpusSupplements.length > 0) {
+      const reRegisteredPluginIds = new Set(listMemoryCorpusSupplements().map((r) => r.pluginId));
+      for (const prev of preLoadCorpusSupplements) {
+        if (!reRegisteredPluginIds.has(prev.pluginId)) {
+          registerMemoryCorpusSupplement(prev.pluginId, prev.supplement);
+        }
       }
     }
 

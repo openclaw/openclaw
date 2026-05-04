@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/memory: preserve corpus supplements registered from plugin `service.start()` callbacks across activating re-loads (e.g. lazy tool-load re-register); supplements that a plugin's `service.start()` registered were silently dropped when a subsequent `loadOpenClawPlugins` call cleared runtime state and skipped re-calling service start for already-started services. Fixes #77039. (#77060) Thanks @hclsys.
 - Models/auth: add `openclaw models auth list [--provider <id>] [--json]` so users can inspect saved per-agent auth profiles without dumping secrets or hitting the old “too many arguments” path. Thanks @vincentkoc.
 - Control UI/header: show the active agent name in dashboard breadcrumbs without adding the current session key, keeping non-chat views oriented without crowding the topbar.
 - Control UI/cron: make the New Job sidebar collapsible so the jobs list can reclaim space while keeping the form one click away. Thanks @BunsDev.
