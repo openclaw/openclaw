@@ -21020,6 +21020,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.",
       },
+      sessionTitle: {
+        type: "object",
+        properties: {
+          enabled: {
+            type: "boolean",
+          },
+          turnsBeforeTitle: {
+            type: "integer",
+            minimum: 1,
+            maximum: 20,
+          },
+          maxChars: {
+            type: "integer",
+            minimum: 10,
+            maximum: 120,
+          },
+        },
+        additionalProperties: false,
+      },
       cron: {
         type: "object",
         properties: {

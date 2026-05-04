@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import { generateConversationLabel } from "./conversation-label-generator.js";
-import { resolveSessionTranscriptCandidates } from "../../gateway/session-transcript-files.fs.js";
 import { updateSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
-import { logVerbose } from "../../globals.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveSessionTranscriptCandidates } from "../../gateway/session-transcript-files.fs.js";
+import { logVerbose } from "../../globals.js";
+import { generateConversationLabel } from "./conversation-label-generator.js";
 
 function buildTitlePrompt(maxChars: number): string {
   return (
@@ -126,13 +126,15 @@ function findTranscriptPath(
   sessionFile?: string,
 ): string | null {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
-  return candidates.find((p) => {
-    try {
-      return fs.existsSync(p);
-    } catch {
-      return false;
-    }
-  }) ?? null;
+  return (
+    candidates.find((p) => {
+      try {
+        return fs.existsSync(p);
+      } catch {
+        return false;
+      }
+    }) ?? null
+  );
 }
 
 /**
@@ -156,11 +158,15 @@ async function readUserMessagesFromTranscriptHead(
     const lines = chunk.split(/\r?\n/);
 
     for (const line of lines) {
-      if (!line.trim()) continue;
+      if (!line.trim()) {
+        continue;
+      }
       try {
         const parsed = JSON.parse(line);
         const msg = parsed?.message;
-        if (!msg || msg.role !== "user") continue;
+        if (!msg || msg.role !== "user") {
+          continue;
+        }
         count++;
         if (messages.length < maxMessages) {
           const text = extractTextFromContent(msg.content);
@@ -187,10 +193,14 @@ function extractTextFromContent(content: unknown): string | null {
     return null;
   }
   for (const part of content) {
-    if (!part || typeof part.text !== "string") continue;
+    if (!part || typeof part.text !== "string") {
+      continue;
+    }
     if (part.type === "text" || part.type === "output_text" || part.type === "input_text") {
       const text = part.text.trim();
-      if (text) return text;
+      if (text) {
+        return text;
+      }
     }
   }
   return null;
