@@ -768,6 +768,7 @@ export async function runMantisSlackDesktopSmoke(
     return {
       outputDir,
       reportPath,
+      screenshotPath,
       status: "fail",
       summaryPath,
     };

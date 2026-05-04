@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - QA/Mantis: add a `pnpm openclaw qa mantis discord-smoke` runner and manual GitHub workflow that verify the Mantis Discord bot can see the configured guild/channel, post a smoke message, add a reaction, and upload artifacts.
 - QA/Mantis: add `pnpm openclaw qa mantis slack-desktop-smoke` to run Slack live QA inside a Crabbox VNC desktop, open Slack Web, and capture desktop screenshots beside the Slack QA artifacts.
 - QA/Mantis: pass the runtime env through desktop-browser Crabbox and artifact-copy child commands, so embedded Mantis callers can provide Crabbox credentials without mutating the parent process. Thanks @vincentkoc.
+- QA/Mantis: return the copied Slack desktop screenshot path even when remote Slack QA fails, so the CLI still prints the failure screenshot artifact. Thanks @vincentkoc.
 - QA/Slack: add a Slack live transport QA runner with canary and mention-gating coverage for the private bot-to-bot harness. Thanks @vincentkoc.
 - Gateway/performance: lazy-load the heavy cron runtime after the rest of Gateway startup, defer restart-sentinel refresh after readiness, and let the Gateway startup benchmark write per-run V8 CPU profiles with `--cpu-prof-dir`.
 - Gateway/performance: keep raw channel-config schema parsing from discovering bundled plugin runtime metadata, and add `pnpm gateway:watch --benchmark-no-force` for profiling startup without the default port cleanup.

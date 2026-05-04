@@ -162,6 +162,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
+    expect(result.screenshotPath).toBe(path.join(result.outputDir, "slack-desktop-smoke.png"));
     await expect(
       fs.readFile(path.join(result.outputDir, "slack-desktop-smoke.png"), "utf8"),
     ).resolves.toBe("png");
