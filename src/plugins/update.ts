@@ -4,7 +4,11 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
-import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  compareOpenClawReleaseVersions,
+  isPrereleaseResolutionAllowed,
+  parseRegistryNpmSpec,
+} from "../infra/npm-registry-spec.js";
 import {
   expectedIntegrityForUpdate,
   readInstalledPackageVersion,
@@ -198,6 +202,10 @@ function shouldBypassTrustedOfficialUnchangedNpmCheck(params: {
 }
 
 function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
+  const releaseCmp = compareOpenClawReleaseVersions(bundledVersion, installedVersion);
+  if (releaseCmp !== null) {
+    return releaseCmp > 0;
+  }
   const bundled = parseComparableSemver(bundledVersion);
   const installed = parseComparableSemver(installedVersion);
   const cmp = compareComparableSemver(bundled, installed);
