@@ -385,7 +385,7 @@ describe("codex command", () => {
         rateLimits: {
           limitId: "codex",
           limitName: "Codex",
-          primary: { usedPercent: 42 },
+          primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: null },
           secondary: null,
           credits: null,
           planType: null,
@@ -395,7 +395,7 @@ describe("codex command", () => {
           codex: {
             limitId: "codex",
             limitName: "Codex",
-            primary: { usedPercent: 42 },
+            primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: null },
             secondary: null,
             credits: null,
             planType: null,
