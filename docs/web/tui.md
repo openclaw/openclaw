@@ -113,7 +113,7 @@ Session controls:
 - `/fast <status|on|off>`
 - `/verbose <on|full|off>`
 - `/trace <on|off>`
-- `/reasoning <on|off|stream>`
+- `/reasoning <on|off|stream|verbose>`
 - `/usage <off|tokens|full>`
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`

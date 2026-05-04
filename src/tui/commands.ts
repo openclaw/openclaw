@@ -172,7 +172,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/fast <status|on|off>",
     "/verbose <on|off>",
     "/trace <on|off>",
-    "/reasoning <on|off>",
+    "/reasoning <on|off|stream|verbose>",
     "/usage <off|tokens|full>",
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",

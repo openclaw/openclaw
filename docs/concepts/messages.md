@@ -164,7 +164,7 @@ Details: [Streaming + chunking](/concepts/streaming).
 
 OpenClaw can expose or hide model reasoning:
 
-- `/reasoning on|off|stream` controls visibility.
+- `/reasoning on|off|stream|verbose` controls visibility.
 - Reasoning content still counts toward token usage when produced by the model.
 - Telegram supports reasoning stream into a transient draft bubble that is deleted after final delivery; use `/reasoning on` for persistent reasoning output.
 

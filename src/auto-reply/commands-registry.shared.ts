@@ -814,9 +814,9 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "mode",
-          description: "on, off, or stream",
+          description: "on, off, stream, or verbose",
           type: "string",
-          choices: ["on", "off", "stream"],
+          choices: ["on", "off", "stream", "verbose"],
         },
       ],
       argsMenu: "auto",

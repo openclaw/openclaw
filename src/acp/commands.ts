@@ -28,7 +28,7 @@ const BASE_AVAILABLE_COMMANDS: AvailableCommand[] = [
   },
   { name: "verbose", description: "Set verbose mode (on|full|off)." },
   { name: "trace", description: "Set plugin trace mode (on|off)." },
-  { name: "reasoning", description: "Toggle reasoning output (on|off|stream)." },
+  { name: "reasoning", description: "Toggle reasoning output (on|off|stream|verbose)." },
   { name: "elevated", description: "Toggle elevated mode (on|off)." },
   { name: "model", description: "Select a model (list|status|<name>)." },
   { name: "queue", description: "Adjust queue mode and options." },

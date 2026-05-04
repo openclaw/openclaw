@@ -478,7 +478,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "reasoning":
         if (!args) {
-          chatLog.addSystem("usage: /reasoning <on|off>");
+          chatLog.addSystem("usage: /reasoning <on|off|stream|verbose>");
           break;
         }
         try {

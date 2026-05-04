@@ -139,7 +139,7 @@ Current source-of-truth:
     - `/verbose on|off|full` toggles verbose output. Alias: `/v`.
     - `/trace on|off` toggles plugin trace output for the current session.
     - `/fast [status|on|off]` shows or sets fast mode.
-    - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.
+    - `/reasoning [on|off|stream|verbose]` toggles reasoning visibility. Alias: `/reason`.
     - `/elevated [on|off|ask|full]` toggles elevated mode. Alias: `/elev`.
     - `/exec host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` shows or sets exec defaults.
     - `/model [name|#|status]` shows or sets the model.

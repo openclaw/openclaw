@@ -307,7 +307,7 @@ export async function applySessionsPatchToStore(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeReasoningLevel(raw);
       if (!normalized) {
-        return invalid('invalid reasoningLevel (use "on"|"off"|"stream")');
+        return invalid('invalid reasoningLevel (use "on"|"off"|"stream"|"verbose")');
       }
       // Persist "off" explicitly so that resolveDefaultReasoningLevel()
       // does not re-enable reasoning for capable models (#24406).

@@ -211,11 +211,11 @@ export async function handleDirectiveOnly(
     if (!directives.rawReasoningLevel) {
       const level = currentReasoningLevel ?? "off";
       return {
-        text: withOptions(`Current reasoning level: ${level}.`, "on, off, stream"),
+        text: withOptions(`Current reasoning level: ${level}.`, "on, off, stream, verbose"),
       };
     }
     return {
-      text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`,
+      text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream, verbose.`,
     };
   }
   if (directives.hasElevatedDirective && !directives.elevatedLevel) {
@@ -544,8 +544,10 @@ export async function handleDirectiveOnly(
       directives.reasoningLevel === "off"
         ? formatDirectiveAck("Reasoning visibility disabled.")
         : directives.reasoningLevel === "stream"
-          ? formatDirectiveAck("Reasoning stream enabled (Telegram only).")
-          : formatDirectiveAck("Reasoning visibility enabled."),
+          ? formatDirectiveAck("Reasoning stream enabled.")
+          : directives.reasoningLevel === "verbose"
+            ? formatDirectiveAck("Verbose reasoning stream enabled (includes tool actions).")
+            : formatDirectiveAck("Reasoning visibility enabled."),
     );
   }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {

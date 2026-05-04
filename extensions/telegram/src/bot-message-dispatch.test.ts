@@ -1154,6 +1154,121 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Visible answer");
   });
 
+  it("uses config reasoningDefault as fallback when session store has no level", async () => {
+    // Session store has an entry but without a reasoningLevel set.
+    loadSessionStore.mockReturnValue({
+      s1: {},
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Reasoning:\n_step_" }, { kind: "block" });
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          list: [{ id: "default", reasoningDefault: "on" }],
+        },
+      },
+    });
+
+    // With reasoningDefault "on", block streaming should stay enabled (same as
+    // explicit session level "on").
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          disableBlockStreaming: false,
+        }),
+      }),
+    );
+  });
+
+  it("matches agent ID case-insensitively for reasoningDefault config lookup", async () => {
+    loadSessionStore.mockReturnValue({ s1: {} });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          // Agent configured as "Default" but routed as "default" (lowercase).
+          list: [{ id: "Default", reasoningDefault: "on" }],
+        },
+      },
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({ disableBlockStreaming: false }),
+      }),
+    );
+  });
+
+  it("uses global agents.defaults.reasoningDefault when no per-agent entry matches", async () => {
+    loadSessionStore.mockReturnValue({ s1: {} });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          defaults: { reasoningDefault: "on" },
+          list: [{ id: "default" }],
+        },
+      },
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({ disableBlockStreaming: false }),
+      }),
+    );
+  });
+
+  it("falls back to off when config reasoningDefault is absent and session has no level", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: {},
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {},
+    });
+
+    // No config default, no session level => "off", block streaming disabled.
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          disableBlockStreaming: true,
+        }),
+      }),
+    );
+  });
+
   it("does not overwrite finalized preview when additional final payloads are sent", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);

@@ -20,7 +20,7 @@ export type TraceLevel = "off" | "on" | "raw";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
-export type ReasoningLevel = "off" | "on" | "stream";
+export type ReasoningLevel = "off" | "on" | "stream" | "verbose";
 export type UsageDisplayLevel = "off" | "tokens" | "full";
 export type ThinkingCatalogEntry = {
   provider: string;
@@ -212,6 +212,9 @@ export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | u
   }
   if (["stream", "streaming", "draft", "live"].includes(key)) {
     return "stream";
+  }
+  if (["verbose"].includes(key)) {
+    return "verbose";
   }
   return undefined;
 }
