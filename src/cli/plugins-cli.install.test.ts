@@ -1009,6 +1009,8 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", "@wecom/wecom-openclaw-plugin@latest"]);
 
+    // Alternate selectors stay trusted by catalog package name, but must not
+    // inherit catalog integrity unless the install spec matches exactly.
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         spec: "@wecom/wecom-openclaw-plugin@latest",

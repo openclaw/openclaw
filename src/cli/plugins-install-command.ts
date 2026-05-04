@@ -71,6 +71,9 @@ function findTrustedCatalogPackageInstall(packageName: string):
       expectedIntegrity?: string;
     }
   | undefined {
+  // The catalog is the trust list. Raw npm selectors such as
+  // @scope/pkg@latest inherit install-scan trust when their package name is
+  // cataloged; integrity remains tied to exact catalog specs in the planner.
   const entry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
   if (!entry) {
     return undefined;
