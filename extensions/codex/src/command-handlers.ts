@@ -1579,6 +1579,7 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     overrides: {},
     hasOverrides: false,
   };
+  let sawAction = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--help" || arg === "-h") {
@@ -1586,6 +1587,11 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       continue;
     }
     if (arg === "status" || arg === "install") {
+      if (sawAction) {
+        parsed.help = true;
+        continue;
+      }
+      sawAction = true;
       parsed.action = arg;
       continue;
     }

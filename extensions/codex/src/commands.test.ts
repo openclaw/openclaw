@@ -414,6 +414,21 @@ describe("codex command", () => {
     expect(installCodexComputerUse).not.toHaveBeenCalled();
   });
 
+  it("rejects ambiguous Computer Use actions before setup checks", async () => {
+    const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+
+    await expect(
+      handleCodexCommand(createContext("computer-use status install"), {
+        deps: createDeps({ readCodexComputerUseStatus, installCodexComputerUse }),
+      }),
+    ).resolves.toEqual({
+      text: expect.stringContaining("Usage: /codex computer-use"),
+    });
+    expect(readCodexComputerUseStatus).not.toHaveBeenCalled();
+    expect(installCodexComputerUse).not.toHaveBeenCalled();
+  });
+
   it("explains compaction when no Codex thread is attached", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
 
