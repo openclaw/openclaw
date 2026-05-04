@@ -2526,42 +2526,88 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listMemoryEmbeddingProviders()).toEqual([]);
   });
 
-  it("preserves corpus supplements registered from service.start() during activating re-loads (#77039)", () => {
+  it("preserves corpus supplements registered via register(api) across activating re-loads (#77039)", () => {
     useNoBundledPlugins();
-    const supplement = { search: async () => [], get: async () => null };
-    // Simulate a supplement that a plugin's service.start() already registered
-    // before the lazy tool-load re-register triggers a full activating reload.
-    registerMemoryCorpusSupplement("service-start-plugin", supplement);
+    // Plugin registers its supplement through register(api). A second activating load calls
+    // clearActivatedPluginRuntimeState() before re-running register(api), temporarily wiping
+    // the supplement. The restore loop must put it back for still-active plugins.
+    const plugin = writePlugin({
+      id: "corpus-supplement-plugin",
+      filename: "corpus-supplement-plugin.cjs",
+      body: `module.exports = {
+        id: "corpus-supplement-plugin",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCorpusSupplement({
+            search: async () => [],
+            get: async () => null,
+          });
+        },
+      };`,
+    });
+    const pluginConfig = {
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["corpus-supplement-plugin"],
+          slots: { memory: "corpus-supplement-plugin" },
+        },
+      },
+    };
+
+    // First load: supplement registered via register(api).
+    loadOpenClawPlugins(pluginConfig);
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
 
+    // Second activating load: restore loop must preserve the supplement for still-active plugin.
+    loadOpenClawPlugins(pluginConfig);
+    const supplements = listMemoryCorpusSupplements();
+    expect(supplements).toHaveLength(1);
+    expect(supplements[0]?.pluginId).toBe("corpus-supplement-plugin");
+  });
+
+  it("does not restore corpus supplements for omitted plugins during activating re-loads (#77039)", () => {
+    useNoBundledPlugins();
+    // A plugin that had a supplement in a prior load must NOT have it restored
+    // when it is absent from the new activating load.
     const plugin = writePlugin({
-      id: "lazy-tool-trigger",
-      filename: "lazy-tool-trigger.cjs",
+      id: "corpus-supplement-plugin",
+      filename: "corpus-supplement-plugin.cjs",
       body: `module.exports = {
-        id: "lazy-tool-trigger",
+        id: "corpus-supplement-plugin",
+        kind: "memory",
         register(api) {
-          // register() does NOT call registerMemoryCorpusSupplement — only service.start() does
+          api.registerMemoryCorpusSupplement({
+            search: async () => [],
+            get: async () => null,
+          });
         },
       };`,
     });
 
-    // Activating load (shouldActivate=true) — simulates the lazy tool-load re-register path
+    // First load: supplement is live.
     loadOpenClawPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
         plugins: {
           load: { paths: [plugin.file] },
-          allow: ["lazy-tool-trigger"],
+          allow: ["corpus-supplement-plugin"],
+          slots: { memory: "corpus-supplement-plugin" },
         },
       },
     });
+    expect(listMemoryCorpusSupplements()).toHaveLength(1);
 
-    // The supplement from service.start() must survive the activating re-load
-    const supplements = listMemoryCorpusSupplements();
-    expect(supplements).toHaveLength(1);
-    expect(supplements[0]?.pluginId).toBe("service-start-plugin");
-    expect(supplements[0]?.supplement).toBe(supplement);
+    // Second load: plugin omitted — supplement must NOT be restored.
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: { plugins: { load: { paths: [] }, allow: [] } },
+    });
+    expect(listMemoryCorpusSupplements()).toHaveLength(0);
   });
 
   it("does not replace the active detached task runtime during non-activating loads", () => {

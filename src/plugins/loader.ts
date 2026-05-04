@@ -2424,9 +2424,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     if (shouldActivate && preLoadCorpusSupplements.length > 0) {
+      // Only restore supplements for plugins that are still active in the new registry.
+      // Disabled, failed, or omitted plugins must not keep their supplements alive.
+      const activePluginIdSet = new Set(
+        registry.plugins.filter((p) => p.status === "loaded").map((p) => p.id),
+      );
       const reRegisteredPluginIds = new Set(listMemoryCorpusSupplements().map((r) => r.pluginId));
       for (const prev of preLoadCorpusSupplements) {
-        if (!reRegisteredPluginIds.has(prev.pluginId)) {
+        if (activePluginIdSet.has(prev.pluginId) && !reRegisteredPluginIds.has(prev.pluginId)) {
           registerMemoryCorpusSupplement(prev.pluginId, prev.supplement);
         }
       }
