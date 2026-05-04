@@ -515,6 +515,38 @@ describe("discordPlugin outbound", () => {
     );
   });
 
+  it("clears stale Discord probe metadata when the async startup probe throws", async () => {
+    probeDiscordMock.mockRejectedValue(new Error("probe timed out"));
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const cfg = createCfg();
+    const statusPatches: Array<Record<string, unknown>> = [];
+    const ctx = createStartAccountContext({
+      account: resolveAccount(cfg),
+      cfg,
+      statusPatchSink: (next) => statusPatches.push({ ...next }),
+    });
+    ctx.setStatus({
+      accountId: "default",
+      bot: { username: "OldBot" },
+      application: { intents: { messageContent: "enabled" } },
+    });
+
+    await discordPlugin.gateway!.startAccount!(ctx);
+
+    await vi.waitFor(() =>
+      expect(
+        statusPatches.some(
+          (patch) =>
+            "bot" in patch &&
+            "application" in patch &&
+            patch.bot === undefined &&
+            patch.application === undefined,
+        ),
+      ).toBe(true),
+    );
+  });
+
   it("stagger starts later accounts in multi-bot setups", async () => {
     probeDiscordMock.mockResolvedValue({
       ok: true,

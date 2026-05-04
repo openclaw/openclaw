@@ -56,6 +56,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord: clear stale startup probe bot/application status when the async bot probe throws, not just when it returns a degraded probe result. Thanks @vincentkoc.
 - Web search: scope explicit bundled `web_search` provider runtime loading through manifest ownership, so selecting DuckDuckGo/Gemini/etc. does not import unrelated bundled providers or log their optional dependency failures. Thanks @vincentkoc.
 - Release/beta smoke: resolve the dispatched Telegram beta E2E run from `gh run list` when `gh workflow run` returns no run URL, so the maintainer helper does not fail immediately after dispatch. Thanks @vincentkoc.
 - Media/images: keep HEIC/HEIF attachments fail-closed when optional Sharp conversion is unavailable instead of sending originals that still need conversion. Thanks @vincentkoc.
