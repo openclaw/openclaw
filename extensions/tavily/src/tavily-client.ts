@@ -46,7 +46,10 @@ export type TavilyExtractParams = {
   extractDepth?: string;
   chunksPerSource?: number;
   includeImages?: boolean;
+  format?: string;
   timeoutSeconds?: number;
+  apiKey?: string;
+  baseUrl?: string;
 };
 
 function resolveEndpoint(baseUrl: string, pathname: string): string {
@@ -196,13 +199,13 @@ export async function runTavilySearch(
 export async function runTavilyExtract(
   params: TavilyExtractParams,
 ): Promise<Record<string, unknown>> {
-  const apiKey = resolveTavilyApiKey(params.cfg);
+  const apiKey = params.apiKey || resolveTavilyApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
       "tavily_extract needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure plugins.entries.tavily.config.webSearch.apiKey.",
     );
   }
-  const baseUrl = resolveTavilyBaseUrl(params.cfg);
+  const baseUrl = params.baseUrl || resolveTavilyBaseUrl(params.cfg);
   const timeoutSeconds = resolveTavilyExtractTimeoutSeconds(params.timeoutSeconds);
 
   const cacheKey = normalizeCacheKey(
@@ -214,6 +217,7 @@ export async function runTavilyExtract(
       extractDepth: params.extractDepth,
       chunksPerSource: params.chunksPerSource,
       includeImages: params.includeImages,
+      format: params.format,
     }),
   );
   const cached = readCache(EXTRACT_CACHE, cacheKey);
@@ -233,6 +237,9 @@ export async function runTavilyExtract(
   }
   if (params.includeImages) {
     body.include_images = true;
+  }
+  if (params.format) {
+    body.format = params.format;
   }
 
   const start = Date.now();

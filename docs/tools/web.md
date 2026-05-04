@@ -245,8 +245,12 @@ plugin or run `openclaw doctor --fix` to clean up the stale config.
   provider from available credentials
 - non-sandboxed `web_fetch` can use installed plugin providers that declare
   `contracts.webFetchProviders`; sandboxed fetches stay bundled-only
-- today the bundled web-fetch provider is Firecrawl, configured under
-  `plugins.entries.firecrawl.config.webFetch.*`
+- bundled web-fetch providers:
+
+  | Provider                      | Auto-detect order | API key                                                                                                         |
+  | ----------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------- |
+  | [Firecrawl](/tools/firecrawl) | 50                | `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webFetch.apiKey`                                       |
+  | [Tavily](/tools/tavily)       | 70                | `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (with optional `webFetch.apiKey` override) |
 
 When you choose **Kimi** during `openclaw onboard` or
 `openclaw configure --section web`, OpenClaw can also ask for:

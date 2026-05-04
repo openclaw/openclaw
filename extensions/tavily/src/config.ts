@@ -16,8 +16,19 @@ type TavilySearchConfig =
     }
   | undefined;
 
+type TavilyFetchConfig =
+  | {
+      apiKey?: unknown;
+      baseUrl?: string;
+    }
+  | undefined;
+
 type PluginEntryConfig = {
   webSearch?: {
+    apiKey?: unknown;
+    baseUrl?: string;
+  };
+  webFetch?: {
     apiKey?: unknown;
     baseUrl?: string;
   };
@@ -28,6 +39,15 @@ export function resolveTavilySearchConfig(cfg?: OpenClawConfig): TavilySearchCon
   const pluginWebSearch = pluginConfig?.webSearch;
   if (pluginWebSearch && typeof pluginWebSearch === "object" && !Array.isArray(pluginWebSearch)) {
     return pluginWebSearch;
+  }
+  return undefined;
+}
+
+export function resolveTavilyFetchConfig(cfg?: OpenClawConfig): TavilyFetchConfig {
+  const pluginConfig = cfg?.plugins?.entries?.tavily?.config as PluginEntryConfig;
+  const pluginWebFetch = pluginConfig?.webFetch;
+  if (pluginWebFetch && typeof pluginWebFetch === "object" && !Array.isArray(pluginWebFetch)) {
+    return pluginWebFetch;
   }
   return undefined;
 }
@@ -57,6 +77,24 @@ export function resolveTavilyBaseUrl(cfg?: OpenClawConfig): string {
     normalizeSecretInput(process.env.TAVILY_BASE_URL) ||
     "";
   return configured || DEFAULT_TAVILY_BASE_URL;
+}
+
+export function resolveTavilyFetchApiKey(
+  cfg?: OpenClawConfig,
+  fetchApiKey?: unknown,
+): string | undefined {
+  const fetch = resolveTavilyFetchConfig(cfg);
+  return (
+    normalizeConfiguredSecret(fetch?.apiKey, "plugins.entries.tavily.config.webFetch.apiKey") ||
+    normalizeConfiguredSecret(fetchApiKey, "tools.web.fetch.tavily.apiKey") ||
+    resolveTavilyApiKey(cfg)
+  );
+}
+
+export function resolveTavilyFetchBaseUrl(cfg?: OpenClawConfig): string {
+  const fetch = resolveTavilyFetchConfig(cfg);
+  const override = normalizeOptionalString(fetch?.baseUrl) ?? "";
+  return override || resolveTavilyBaseUrl(cfg);
 }
 
 export function resolveTavilySearchTimeoutSeconds(override?: number): number {
