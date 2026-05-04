@@ -370,6 +370,37 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
+  it("kills the Windows process tree when the overall timeout elapses", async () => {
+    vi.useFakeTimers();
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({ autoClose: false });
+    const taskkillChild = createMockChild();
+
+    spawnMock.mockImplementationOnce(() => child).mockImplementationOnce(() => taskkillChild);
+
+    try {
+      const resultPromise = runCommandWithTimeout(["node", "idle.js"], { timeoutMs: 80 });
+
+      await vi.advanceTimersByTimeAsync(81);
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(spawnMock.mock.calls[1]?.[0]).toBe("taskkill");
+      expect(spawnMock.mock.calls[1]?.[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      expect(spawnMock.mock.calls[1]?.[2]).toMatchObject({
+        stdio: "ignore",
+        windowsHide: true,
+      });
+
+      child.emit("close", null, "SIGKILL");
+      const result = await resultPromise;
+      expect(result.termination).toBe("timeout");
+      expect(result.code).not.toBe(0);
+    } finally {
+      platformSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("decodes GBK stdout and stderr from runExec on Windows", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const stdout = Buffer.from([0xb2, 0xe2, 0xca, 0xd4]);

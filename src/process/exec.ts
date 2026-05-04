@@ -333,6 +333,17 @@ export async function runCommandWithTimeout(
         return;
       }
       killIssuedByTimeout = true;
+      if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
+        try {
+          spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+          return;
+        } catch {
+          // Fall through to Node's direct child kill as a last resort.
+        }
+      }
       child.kill("SIGKILL");
     };
 
