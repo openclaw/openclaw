@@ -2437,6 +2437,15 @@ async function runRecallSubagent(params: {
       const searchDebug = partialReply ? await readActiveMemorySearchDebug(sessionFile) : undefined;
       attachPartialTimeoutData(error, partialReply, searchDebug);
     }
+    if (
+      error instanceof Error &&
+      error.message.startsWith("No callable tools remain after resolving explicit tool allowlist")
+    ) {
+      params.api.logger.debug?.(
+        `active-memory: no memory tools registered (memory-core or memory-lancedb required); skipping sub-agent`,
+      );
+      return { rawReply: "NONE" };
+    }
     throw error;
   } finally {
     if (tempDir) {
