@@ -3793,7 +3793,7 @@ describe("google-meet plugin", () => {
         }),
       );
     });
-    const consultArgs = runtime.agent.runEmbeddedPiAgent.mock.calls[0]?.[0] as unknown;
+    const consultArgs = (runtime.agent.runEmbeddedPiAgent.mock.calls as unknown[][])[0]?.[0];
     expect(JSON.stringify(consultArgs)).toContain(
       "Are we still on track?\\nPlease include launch blockers.",
     );
