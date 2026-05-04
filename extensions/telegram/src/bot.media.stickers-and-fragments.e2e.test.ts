@@ -32,7 +32,6 @@ describe("telegram stickers", () => {
     describeStickerImageSpy.mockReturnValue(undefined);
   });
 
-  // Skipped pending #50185: deterministic static sticker fetch injection.
   it(
     "downloads static sticker (WEBP) and includes sticker metadata",
     async () => {
@@ -75,7 +74,6 @@ describe("telegram stickers", () => {
     STICKER_TEST_TIMEOUT_MS,
   );
 
-  // Skipped pending #50185: deterministic cache-refresh assertions in CI.
   it(
     "refreshes cached sticker metadata on cache hit",
     async () => {

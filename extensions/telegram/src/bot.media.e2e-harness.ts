@@ -239,12 +239,18 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  findModelInCatalog: vi.fn(() => undefined),
-  loadModelCatalog: vi.fn(async () => []),
-  modelSupportsVision: vi.fn(() => false),
-  resolveDefaultModelForAgent: vi.fn(() => ({
-    provider: "openai",
-    model: "gpt-test",
-  })),
-}));
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
+  return {
+    ...actual,
+    findModelInCatalog: vi.fn(() => undefined),
+    loadModelCatalog: vi.fn(async () => []),
+    modelSupportsVision: vi.fn(() => false),
+    resolveDefaultModelForAgent: vi.fn(() => ({
+      provider: "openai",
+      model: "gpt-test",
+    })),
+  };
+});
