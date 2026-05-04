@@ -1007,6 +1007,66 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({ changes: [], warnings: [] });
   });
 
+  it("installs missing runtime plugins during the package update doctor pass", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "codex",
+      targetDir: "/tmp/openclaw-plugins/codex",
+      version: "2026.5.3",
+      npmResolution: {
+        name: "@openclaw/codex",
+        version: "2026.5.3",
+        resolvedSpec: "@openclaw/codex@2026.5.3",
+        integrity: "sha512-codex",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      },
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/codex",
+        expectedPluginId: "codex",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codex: expect.objectContaining({
+          source: "npm",
+          spec: "@openclaw/codex",
+          installPath: "/tmp/openclaw-plugins/codex",
+          version: "2026.5.3",
+        }),
+      }),
+      {
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        },
+      },
+    );
+    expect(result).toEqual({
+      changes: ['Installed missing configured plugin "codex" from @openclaw/codex.'],
+      warnings: [],
+    });
+  });
+
   it("does not install configured plugins when plugins are globally disabled", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {

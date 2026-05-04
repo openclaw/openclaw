@@ -67,6 +67,9 @@ const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[]
 
 const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs metadata";
 const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
+const UPDATE_DOCTOR_IMMEDIATE_PLUGIN_IDS = new Set(
+  RUNTIME_PLUGIN_INSTALL_CANDIDATES.map((candidate) => candidate.pluginId),
+);
 
 function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
   return (
@@ -366,7 +369,12 @@ function collectUpdateDeferredPluginIds(params: {
   configuredChannelOwnerPluginIds?: ReadonlyMap<string, ReadonlySet<string>>;
   blockedPluginIds?: ReadonlySet<string>;
 }): Set<string> {
-  const pluginIds = new Set(params.configuredPluginIds);
+  // Runtime harness plugins must exist before the restarted Gateway can process turns.
+  const pluginIds = new Set(
+    [...params.configuredPluginIds].filter(
+      (pluginId) => !UPDATE_DOCTOR_IMMEDIATE_PLUGIN_IDS.has(pluginId),
+    ),
+  );
   for (const candidate of collectDownloadableInstallCandidates({
     cfg: params.cfg,
     env: params.env,
@@ -376,6 +384,9 @@ function collectUpdateDeferredPluginIds(params: {
     configuredChannelOwnerPluginIds: params.configuredChannelOwnerPluginIds,
     blockedPluginIds: params.blockedPluginIds,
   })) {
+    if (UPDATE_DOCTOR_IMMEDIATE_PLUGIN_IDS.has(candidate.pluginId)) {
+      continue;
+    }
     pluginIds.add(candidate.pluginId);
   }
   return pluginIds;
