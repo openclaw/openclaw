@@ -27,8 +27,6 @@ export const supportedBundledFacadeSdkEntrypoints = [
 export const publicPluginOwnedSdkEntrypoints = [
   "browser-config",
   "image-generation-core",
-  "matrix",
-  "mattermost",
   "memory-core-host-engine-embeddings",
   "memory-core-host-engine-foundation",
   "memory-core-host-engine-qmd",
