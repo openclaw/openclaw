@@ -577,12 +577,25 @@ function isBridgeAlreadyInstalledFromPreferredSource(params: {
   record: PluginInstallRecord;
 }): boolean {
   const npmSpec = getExternalizedBundledPluginNpmSpec(params.bridge);
-  if (npmSpec && params.record.source === "npm" && params.record.spec === npmSpec) {
-    return true;
+  if (npmSpec && params.record.source === "npm") {
+    const bridgePackageName = resolveNpmSpecPackageName(npmSpec);
+    const recordPackageName =
+      resolveNpmSpecPackageName(params.record.spec) ??
+      resolveNpmSpecPackageName(params.record.resolvedSpec);
+    if (bridgePackageName && recordPackageName === bridgePackageName) {
+      return true;
+    }
   }
   const clawhubSpec = getExternalizedBundledPluginClawHubSpec(params.bridge);
+  const bridgeClawHubPackage = clawhubSpec ? parseClawHubPluginSpec(clawhubSpec)?.name : undefined;
+  const recordClawHubPackage =
+    params.record.source === "clawhub"
+      ? (params.record.clawhubPackage ?? parseClawHubPluginSpec(params.record.spec ?? "")?.name)
+      : undefined;
   return Boolean(
-    clawhubSpec && params.record.source === "clawhub" && params.record.spec === clawhubSpec,
+    bridgeClawHubPackage &&
+    params.record.source === "clawhub" &&
+    recordClawHubPackage === bridgeClawHubPackage,
   );
 }
 

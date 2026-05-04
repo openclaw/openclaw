@@ -2619,4 +2619,93 @@ describe("syncPluginsForUpdateChannel", () => {
       spec: "@openclaw/legacy-chat",
     });
   });
+
+  it("removes stale bundled load paths for already-externalized pinned npm installs", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: {
+            paths: [appBundledPluginRoot("legacy-chat"), "/workspace/plugins/other"],
+          },
+          installs: {
+            "legacy-chat": {
+              source: "npm",
+              spec: "@openclaw/legacy-chat@1.2.3",
+              resolvedSpec: "@openclaw/legacy-chat@1.2.3",
+              installPath: "/tmp/openclaw-plugins/legacy-chat",
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.load?.paths).toEqual(["/workspace/plugins/other"]);
+    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/legacy-chat@1.2.3",
+    });
+  });
+
+  it("removes stale bundled load paths for already-externalized pinned ClawHub installs", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          preferredSource: "clawhub",
+          clawhubSpec: "clawhub:legacy-chat",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: {
+            paths: [appBundledPluginRoot("legacy-chat"), "/workspace/plugins/other"],
+          },
+          installs: {
+            "legacy-chat": {
+              source: "clawhub",
+              spec: "clawhub:legacy-chat@2026.5.1",
+              clawhubPackage: "legacy-chat",
+              installPath: "/tmp/openclaw-plugins/legacy-chat",
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.load?.paths).toEqual(["/workspace/plugins/other"]);
+    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+      source: "clawhub",
+      spec: "clawhub:legacy-chat@2026.5.1",
+    });
+  });
 });
