@@ -94,6 +94,11 @@ function isToolAllowedByFactoryPolicy(params: {
   });
 }
 
+function mergeFactoryPolicyList(...lists: Array<string[] | undefined>): string[] | undefined {
+  const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
+  return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+}
+
 function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -165,25 +170,27 @@ function resolveOptionalMediaToolFactoryPlan(params: {
   toolDenylist?: string[];
 }): OptionalMediaToolFactoryPlan {
   const defaults = params.config?.agents?.defaults;
+  const toolAllowlist = mergeFactoryPolicyList(params.config?.tools?.allow, params.toolAllowlist);
+  const toolDenylist = mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist);
   const allowImageGenerate = isToolAllowedByFactoryPolicy({
     toolName: "image_generate",
-    allowlist: params.toolAllowlist,
-    denylist: params.toolDenylist,
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
   });
   const allowVideoGenerate = isToolAllowedByFactoryPolicy({
     toolName: "video_generate",
-    allowlist: params.toolAllowlist,
-    denylist: params.toolDenylist,
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
   });
   const allowMusicGenerate = isToolAllowedByFactoryPolicy({
     toolName: "music_generate",
-    allowlist: params.toolAllowlist,
-    denylist: params.toolDenylist,
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
   });
   const allowPdf = isToolAllowedByFactoryPolicy({
     toolName: "pdf",
-    allowlist: params.toolAllowlist,
-    denylist: params.toolDenylist,
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
   });
   const explicitImageGeneration = hasExplicitToolModelConfig(defaults?.imageGenerationModel);
   const explicitVideoGeneration = hasExplicitToolModelConfig(defaults?.videoGenerationModel);
@@ -253,6 +260,12 @@ export function createOpenClawTools(
     sandboxBrowserBridgeUrl?: string;
     allowHostBrowserControl?: boolean;
     agentSessionKey?: string;
+    /**
+     * The actual live run session key. When the tool is constructed with a sandbox/policy
+     * session key, this allows `session_status({sessionKey:"current"})` to resolve to
+     * the live run session instead of the stale sandbox key.
+     */
+    runSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     /** Delivery target for topic/thread routing. */
@@ -442,6 +455,7 @@ export function createOpenClawTools(
     config: options?.config,
     sandboxed: options?.sandboxed,
     runtimeWebFetch: runtimeWebTools?.fetch,
+    lateBindRuntimeConfig: true,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool
@@ -581,6 +595,7 @@ export function createOpenClawTools(
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
     }),

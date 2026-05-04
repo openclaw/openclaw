@@ -52,6 +52,13 @@ const DISCORD_DTS_INPUTS = [
 ];
 const DISCORD_DTS_STAMP = "dist/plugin-sdk/extensions/discord/.boundary-dts.stamp";
 const DISCORD_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/discord/api.d.ts"];
+const SLACK_DTS_INPUTS = [
+  "extensions/slack/api.ts",
+  "extensions/slack/src/client.ts",
+  "extensions/slack/tsconfig.json",
+];
+const SLACK_DTS_STAMP = "dist/plugin-sdk/extensions/slack/.boundary-dts.stamp";
+const SLACK_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/slack/api.d.ts"];
 const ENTRY_SHIMS_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entrypoints.json",
@@ -303,6 +310,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [DISCORD_DTS_STAMP, ...DISCORD_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(DISCORD_DTS_REQUIRED_OUTPUTS);
+    const slackDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: SLACK_DTS_INPUTS,
+        outputPaths: [SLACK_DTS_STAMP, ...SLACK_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(SLACK_DTS_REQUIRED_OUTPUTS);
 
     const prerequisiteSteps = [];
     const dependentSteps = [];
@@ -400,6 +413,37 @@ async function main(argv = process.argv.slice(2)) {
         });
       } else {
         process.stdout.write("[discord boundary dts] fresh; skipping\n");
+      }
+      if (!slackDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: SLACK_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "slack boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/slack/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/slack",
+            "--rootDir",
+            "extensions/slack",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: SLACK_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[slack boundary dts] fresh; skipping\n");
       }
     }
 

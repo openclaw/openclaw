@@ -274,6 +274,12 @@ export function createOpenClawCodingTools(options?: {
   messageThreadId?: string | number;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
+  /**
+   * The actual live run session key. When the tool set is constructed with a
+   * sandbox/policy session key, this allows `session_status({sessionKey:"current"})`
+   * to resolve to the live run session instead of the stale sandbox key.
+   */
+  runSessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
@@ -649,6 +655,7 @@ export function createOpenClawCodingTools(options?: {
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
           sandboxed: !!sandbox,
           pluginToolAllowlist,
+          pluginToolDenylist,
           currentChannelId: options?.currentChannelId,
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,
@@ -697,6 +704,7 @@ export function createOpenClawCodingTools(options?: {
           sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
           agentSessionKey: options?.sessionKey,
+          runSessionKey: options?.runSessionKey,
           agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
           agentAccountId: options?.agentAccountId,
           agentTo: options?.messageTo,

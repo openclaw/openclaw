@@ -332,6 +332,7 @@ describe("stuck session diagnostics threshold", () => {
   it("reports active sessions as stalled instead of stuck when active work stops progressing", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -360,6 +361,10 @@ describe("stuck session diagnostics threshold", () => {
       reason: "active_work_without_progress",
       activeWorkKind: "embedded_run",
     });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("lastProgress=embedded_run:started"),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("lastProgressAge=60s"));
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 

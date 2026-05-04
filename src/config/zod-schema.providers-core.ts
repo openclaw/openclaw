@@ -84,6 +84,17 @@ const ChannelStreamingPreviewSchema = z
   .object({
     chunk: BlockStreamingChunkSchema.optional(),
     toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
+  })
+  .strict();
+const ChannelStreamingProgressSchema = z
+  .object({
+    label: z.union([z.string(), z.literal(false)]).optional(),
+    labels: z.array(z.string()).optional(),
+    maxLines: z.number().int().positive().optional(),
+    render: z.enum(["text", "rich"]).optional(),
+    toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const ChannelPreviewStreamingConfigSchema = z
@@ -91,6 +102,7 @@ const ChannelPreviewStreamingConfigSchema = z
     mode: UnifiedStreamingModeSchema.optional(),
     chunkMode: TextChunkModeSchema.optional(),
     preview: ChannelStreamingPreviewSchema.optional(),
+    progress: ChannelStreamingProgressSchema.optional(),
     block: ChannelStreamingBlockSchema.optional(),
   })
   .strict();
@@ -1618,6 +1630,7 @@ export const MSTeamsConfigSchema = z
     contextVisibility: ContextVisibilityModeSchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    streaming: ChannelPreviewStreamingConfigSchema.optional(),
     typingIndicator: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),

@@ -211,6 +211,7 @@ Validation` or from the `main`/release workflow ref so workflow logic and
   against the published npm package using the shared leased Telegram credential
   pool. Local maintainer one-offs may omit the Convex vars and pass the three
   `OPENCLAW_QA_TELEGRAM_*` env credentials directly.
+- To run the full post-publish beta smoke from a maintainer machine, use `pnpm release:beta-smoke -- --beta betaN`. The helper runs Parallels npm update/fresh-target validation, dispatches `NPM Telegram Beta E2E`, polls the exact workflow run, downloads the artifact, and prints the Telegram report.
 - Maintainers can run the same post-publish check from GitHub Actions via the
   manual `NPM Telegram Beta E2E` workflow. It is intentionally manual-only and
   does not run on every merge.

@@ -371,6 +371,13 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const canUseManagedProxy =
         mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive() && hasProxyEnvConfigured();
       const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+
+      // Trusted env-proxy and pinDns=false can skip local DNS pinning, so keep
+      // the pre-DNS hostname/IP policy checks from the pinned path.
+      if (canUseTrustedEnvProxy || params.pinDns === false) {
+        assertHostnameAllowedWithPolicy(parsedUrl.hostname, params.policy);
+      }
+
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (canUseManagedProxy) {
