@@ -7,6 +7,7 @@ import type {
 import { describe, expect, it } from "vitest";
 import type { CommandsPort } from "../../engine/adapter/commands.port.js";
 import { initCommands } from "../../engine/commands/slash-commands-impl.js";
+import { ensurePlatformAdapter } from "../bootstrap.js";
 import { registerQQBotFrameworkCommands } from "./framework-registration.js";
 
 type RuntimeConfigApi = ReturnType<NonNullable<CommandsPort["approveRuntimeGetter"]>>["config"];
@@ -50,6 +51,7 @@ function installCommandRuntime(currentConfig: OpenClawConfig, writes: OpenClawCo
 }
 
 function registerCommands(): OpenClawPluginCommandDefinition[] {
+  ensurePlatformAdapter();
   const commands: OpenClawPluginCommandDefinition[] = [];
   const api = {
     logger: {},
