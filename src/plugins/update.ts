@@ -477,6 +477,21 @@ function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   return recordedPackageNames.includes(officialPackageName);
 }
 
+function isTrustedSourceLinkedOfficialBridgeNpmInstall(params: {
+  targetPluginId: string;
+  npmSpec: string | undefined;
+}): boolean {
+  const entry = getOfficialExternalPluginCatalogEntry(params.targetPluginId);
+  if (!entry) {
+    return false;
+  }
+  const officialPackageName = resolveNpmSpecPackageName(
+    resolveOfficialExternalPluginInstall(entry)?.npmSpec,
+  );
+  const requestedPackageName = resolveNpmSpecPackageName(params.npmSpec);
+  return Boolean(officialPackageName && requestedPackageName === officialPackageName);
+}
+
 function resolveNpmUpdateSpecs(params: {
   record: PluginInstallRecord;
   specOverride?: string;
@@ -1427,6 +1442,10 @@ export async function syncPluginsForUpdateChannel(params: {
       const preferredSource = getExternalizedBundledPluginPreferredSource(bridge);
       const npmSpec = getExternalizedBundledPluginNpmSpec(bridge);
       const clawhubSpec = getExternalizedBundledPluginClawHubSpec(bridge);
+      const trustedSourceLinkedOfficialInstall = isTrustedSourceLinkedOfficialBridgeNpmInstall({
+        targetPluginId,
+        npmSpec,
+      });
       let installSource = preferredSource;
       let installSpec = preferredSource === "clawhub" ? clawhubSpec : npmSpec;
       let result:
@@ -1458,6 +1477,7 @@ export async function syncPluginsForUpdateChannel(params: {
             spec: npmSpec,
             mode: "update",
             expectedPluginId: targetPluginId,
+            trustedSourceLinkedOfficialInstall,
             logger,
           });
         }
@@ -1466,6 +1486,7 @@ export async function syncPluginsForUpdateChannel(params: {
           spec: npmSpec,
           mode: "update",
           expectedPluginId: targetPluginId,
+          trustedSourceLinkedOfficialInstall,
           logger,
         });
       }
