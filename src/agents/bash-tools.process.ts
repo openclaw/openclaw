@@ -62,7 +62,7 @@ function resolveTerminalProcessStatus(session: ProcessSession): Exclude<ProcessS
   if (exitCode === 0 && exitSignal == null) {
     return "completed";
   }
-  if (isKillSignal(exitSignal)) {
+  if (session.exitReason === "manual-cancel" && isKillSignal(exitSignal)) {
     return "killed";
   }
   return "failed";
@@ -380,6 +380,7 @@ export function createProcessTool(
               scopedSession.exitCode ?? null,
               scopedSession.exitSignal ?? null,
               terminalStatus ?? "completed",
+              scopedSession.exitReason,
             );
           }
           const status = exited

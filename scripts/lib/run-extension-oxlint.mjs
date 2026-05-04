@@ -121,7 +121,11 @@ function isTopLevelExtensionsIgnorePattern(pattern) {
   );
 }
 
-export function collectTrackedTypeScriptFiles(repoRoot, roots, { spawn = spawnSync } = {}) {
+export function collectTrackedTypeScriptFiles(
+  repoRoot,
+  roots,
+  { spawn = spawnSync, exists = (filePath) => fs.existsSync(path.join(repoRoot, filePath)) } = {},
+) {
   if (roots.length === 0) {
     return [];
   }
@@ -146,6 +150,7 @@ export function collectTrackedTypeScriptFiles(repoRoot, roots, { spawn = spawnSy
   return result.stdout
     .split("\0")
     .filter((filePath) => filePath.length > 0)
+    .filter((filePath) => exists(filePath))
     .filter((filePath) => filePath.endsWith(".ts") || filePath.endsWith(".tsx"))
     .filter((filePath) => !hasPathSegment(filePath, "node_modules"))
     .toSorted((a, b) => a.localeCompare(b));

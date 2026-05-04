@@ -163,6 +163,28 @@ describe("process tool supervisor cancellation", () => {
     });
   });
 
+  it("poll keeps supervisor timeout signal exits on the failed path", async () => {
+    supervisorMock.getRecord.mockReturnValue(undefined);
+    const session = createBackgroundSession("sess-timeout", 4242);
+    session.exited = true;
+    session.exitCode = null;
+    session.exitSignal = "SIGKILL";
+    session.exitReason = "overall-timeout";
+    addSession(session);
+    const processTool = createProcessTool();
+
+    const result = await processTool.execute("toolcall", {
+      action: "poll",
+      sessionId: "sess-timeout",
+    });
+
+    expect(getFinishedSession("sess-timeout")).toMatchObject({
+      status: "failed",
+      exitReason: "overall-timeout",
+    });
+    expect(result.details).toMatchObject({ status: "failed" });
+  });
+
   it("log reports killed finished sessions without failed tool status", async () => {
     supervisorMock.getRecord.mockReturnValue(undefined);
     const session = createBackgroundSession("sess-killed", 4242);
