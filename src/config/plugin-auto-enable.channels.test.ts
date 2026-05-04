@@ -291,7 +291,12 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(true);
     });
 
-    it("falls back to channel key as plugin id when no installed manifest declares the channel", () => {
+    it("does not add unknown channel to plugins.entries when no plugin claims it", () => {
+      // Previously, collectPluginIdsForConfiguredChannel fell back to returning the
+      // channel id as a plugin id when no plugin claimed the channel. This caused
+      // unknown channels to be incorrectly added to plugins.entries and plugins.allow.
+      // The correct behavior is to return [] when no plugin claims the channel, since
+      // a channel id is not a plugin id.
       const result = applyPluginAutoEnable({
         config: {
           channels: { "unknown-chan": { someKey: "value" } },
@@ -300,7 +305,10 @@ describe("applyPluginAutoEnable channels", () => {
         manifestRegistry: makeRegistry([]),
       });
 
-      expect(result.config.plugins?.entries?.["unknown-chan"]?.enabled).toBe(true);
+      // The channel id should NOT be added to plugins.entries as a plugin
+      expect(result.config.plugins?.entries?.["unknown-chan"]).toBeUndefined();
+      // And it should NOT be added to plugins.allow either
+      expect(result.config.plugins?.allow ?? []).not.toContain("unknown-chan");
     });
   });
 
@@ -386,6 +394,25 @@ describe("applyPluginAutoEnable channels", () => {
 
       expect(result.config.channels?.imessage?.enabled).toBe(true);
       expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
+    });
+
+    it("does not add feishu channel id to plugins.allow when no plugin claims it", () => {
+      // Regression test: when a channel is configured but no plugin in the registry
+      // claims that channel, the channel id should NOT be added to plugins.allow.
+      // Previously, collectPluginIdsForConfiguredChannel fell back to returning the
+      // channel id as a plugin id, causing "feishu" to be incorrectly added to
+      // plugins.allow and triggering a "plugin not found" warning.
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { feishu: { enabled: true, defaultAccount: "main" } },
+        },
+        env: makeIsolatedEnv(),
+        // Empty registry: no plugin claims "feishu"
+        manifestRegistry: makeRegistry([]),
+      });
+
+      // plugins.allow should NOT contain "feishu"
+      expect(result.config.plugins?.allow ?? []).not.toContain("feishu");
     });
   });
 });
