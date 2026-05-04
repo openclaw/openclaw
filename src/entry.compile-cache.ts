@@ -1,8 +1,11 @@
-import { spawnSync } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+
+const COMPILE_CACHE_RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 
 export function resolveEntryInstallRoot(entryFile: string): string {
   const entryDir = path.dirname(entryFile);
@@ -84,10 +87,17 @@ export function resolveOpenClawCompileCacheDirectory(params: {
   );
 }
 
-type OpenClawCompileCacheRespawnPlan = {
+export type OpenClawCompileCacheRespawnPlan = {
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
+};
+
+type OpenClawCompileCacheRespawnRuntime = {
+  spawn: typeof spawn;
+  attachChildProcessBridge: typeof attachChildProcessBridge;
+  exit: (code?: number) => never;
+  writeError: (message: string) => void;
 };
 
 export function buildOpenClawCompileCacheRespawnPlan(params: {
@@ -138,15 +148,72 @@ export function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   if (!plan) {
     return false;
   }
-  const result = spawnSync(plan.command, plan.args, {
+  runOpenClawCompileCacheRespawnPlan(plan);
+  return true;
+}
+
+export function runOpenClawCompileCacheRespawnPlan(
+  plan: OpenClawCompileCacheRespawnPlan,
+  runtime: OpenClawCompileCacheRespawnRuntime = {
+    spawn,
+    attachChildProcessBridge,
+    exit: process.exit.bind(process) as (code?: number) => never,
+    writeError: (message: string) => process.stderr.write(message),
+  },
+): ChildProcess {
+  const child = runtime.spawn(plan.command, plan.args, {
     stdio: "inherit",
     env: plan.env,
   });
-  if (result.error) {
-    throw result.error;
-  }
-  process.exit(result.status ?? 1);
-  return true;
+  let signalExitTimer: NodeJS.Timeout | undefined;
+  const clearSignalExitTimer = (): void => {
+    if (!signalExitTimer) {
+      return;
+    }
+    clearTimeout(signalExitTimer);
+    signalExitTimer = undefined;
+  };
+  const forceKillChild = (): void => {
+    try {
+      child.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+    } catch {
+      // Best-effort shutdown fallback.
+    }
+  };
+  const scheduleParentExit = (): void => {
+    if (signalExitTimer) {
+      return;
+    }
+    signalExitTimer = setTimeout(() => {
+      forceKillChild();
+      runtime.exit(1);
+    }, COMPILE_CACHE_RESPAWN_SIGNAL_EXIT_GRACE_MS);
+    signalExitTimer.unref?.();
+  };
+
+  runtime.attachChildProcessBridge(child, {
+    onSignal: scheduleParentExit,
+  });
+
+  child.once("exit", (code, signal) => {
+    clearSignalExitTimer();
+    if (signal) {
+      runtime.exit(1);
+    }
+    runtime.exit(code ?? 1);
+  });
+
+  child.once("error", (error) => {
+    clearSignalExitTimer();
+    runtime.writeError(
+      `[openclaw] Failed to respawn CLI without compile cache: ${
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      }\n`,
+    );
+    runtime.exit(1);
+  });
+
+  return child;
 }
 
 export function enableOpenClawCompileCache(params: {
