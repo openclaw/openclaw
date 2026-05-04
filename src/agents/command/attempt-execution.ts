@@ -515,10 +515,11 @@ export function runAgentAttempt(params: {
           params.sessionStore &&
           params.storePath
         ) {
-          // Clear stale binding for any FailoverError so the next turn cannot
-          // resume a dead CLI session (#77089). Retry fresh only for recoverable
-          // reasons; for non-recoverable reasons (auth, billing, rate_limit) clear
-          // and rethrow so the caller can surface the real error.
+          // Clear stale binding for any FailoverError (#77089) so the next turn
+          // cannot resume a dead CLI session. For recoverable reasons
+          // (session_expired, timeout, unknown) retry once with a fresh session;
+          // for non-recoverable reasons (auth, billing, rate_limit) clear and
+          // rethrow so the caller can surface the real error without retrying.
           log.warn(
             `CLI session failed (reason=${err.reason}), clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
           );
