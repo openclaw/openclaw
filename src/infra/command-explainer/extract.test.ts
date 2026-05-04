@@ -593,9 +593,41 @@ describe("command explainer tree-sitter runtime", () => {
       expect.objectContaining({ kind: "command-carrier", command: "find", flag: "-exec" }),
     );
 
+    const findInline = await explainShellCommand("find . -exec python -c 'print(1)' {} \\;");
+    expect(findInline.risks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "command-carrier", command: "find", flag: "-exec" }),
+        expect.objectContaining({ kind: "inline-eval", command: "find", flag: "-exec" }),
+      ]),
+    );
+
+    const xargsWithValueOption = await explainShellCommand(
+      'printf "%s\\n" a b | xargs -n 1 sh -c "echo {}"',
+    );
+    expect(xargsWithValueOption.nestedCommands.map((command) => command.executable)).toContain(
+      "echo",
+    );
+
     const xargs = await explainShellCommand('printf "%s\\n" a b | xargs -I{} sh -c "echo {}"');
     expect(xargs.risks).toContainEqual(
       expect.objectContaining({ kind: "command-carrier", command: "xargs" }),
+    );
+    expect(xargs.nestedCommands).toContainEqual(
+      expect.objectContaining({ context: "wrapper-payload", executable: "echo" }),
+    );
+
+    const findShell = await explainShellCommand(
+      'find . -maxdepth 2 -name "*.ts" -exec sh -c \'echo checking "$1"; node -e "console.log(process.argv[1])" "$1"\' sh {} \\;',
+    );
+    expect(findShell.topLevelCommands.map((step) => step.executable)).toEqual(["find"]);
+    expect(findShell.nestedCommands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ context: "wrapper-payload", executable: "echo" }),
+        expect.objectContaining({ context: "wrapper-payload", executable: "node" }),
+      ]),
+    );
+    expect(findShell.risks).toContainEqual(
+      expect.objectContaining({ kind: "inline-eval", command: "node", flag: "-e" }),
     );
 
     const envSplitString = await explainShellCommand("env -S 'sh -c \"id\"'");

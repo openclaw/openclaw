@@ -141,6 +141,33 @@ describe("approval and confirmation modals", () => {
     );
   });
 
+  it("renders command explanation highlights in exec approvals", async () => {
+    const request = createExecRequest();
+    request.request.command = 'ls | grep "stuff" | python -c \'print("hi")\'';
+    request.request.commandExplanationLines = [
+      "Risks:",
+      "• python -c can run arbitrary code on your computer.",
+    ];
+    request.request.commandExplanationHighlights = [
+      { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
+      { startIndex: 20, endIndex: 29, kind: "risk", severity: "danger" },
+    ];
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(container.querySelector(".exec-approval-explanation")?.textContent).toContain(
+      "python -c can run arbitrary code on your computer.",
+    );
+    expect(
+      container.querySelector(".exec-approval-command-highlight.command.info")?.textContent,
+    ).toBe("ls");
+    expect(
+      container.querySelector(".exec-approval-command-highlight.risk.danger")?.textContent,
+    ).toBe("python -c");
+  });
+
   it("maps Escape to exec denial when approval is idle", async () => {
     const handleExecApprovalDecision = vi.fn(async () => undefined);
     render(renderExecApprovalPrompt(createExecState({ handleExecApprovalDecision })), container);

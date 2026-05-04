@@ -134,6 +134,13 @@ export function createExecApprovalHandlers(
         security?: string;
         ask?: string;
         warningText?: string | null;
+        commandExplanationLines?: string[];
+        commandExplanationHighlights?: {
+          startIndex: number;
+          endIndex: number;
+          kind: "command" | "risk";
+          severity?: "info" | "warning" | "danger";
+        }[];
         agentId?: string;
         resolvedPath?: string;
         sessionKey?: string;
@@ -215,6 +222,15 @@ export function createExecApprovalHandlers(
         cwd: effectiveCwd,
         sanitizeText: sanitizeExecApprovalWarningText,
       });
+      const commandExplanationLines = Array.isArray(p.commandExplanationLines)
+        ? p.commandExplanationLines
+            .map((line) => sanitizeExecApprovalWarningText(line))
+            .map((line) => normalizeOptionalString(line))
+            .filter((line): line is string => Boolean(line))
+        : undefined;
+      const sanitizedCommandText = sanitizeExecApprovalDisplayText(effectiveCommandText);
+      const commandExplanationHighlights =
+        sanitizedCommandText === effectiveCommandText ? p.commandExplanationHighlights : undefined;
       const systemRunBinding =
         host === "node"
           ? buildSystemRunApprovalBinding({
@@ -234,7 +250,7 @@ export function createExecApprovalHandlers(
         return;
       }
       const request = {
-        command: sanitizeExecApprovalDisplayText(effectiveCommandText),
+        command: sanitizedCommandText,
         commandPreview:
           host === "node" || !approvalContext.commandPreview
             ? undefined
@@ -250,6 +266,8 @@ export function createExecApprovalHandlers(
         ask: p.ask ?? null,
         warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
         commandAnalysis,
+        commandExplanationLines,
+        commandExplanationHighlights,
         allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: p.ask ?? null }),
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,

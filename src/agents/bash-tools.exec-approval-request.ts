@@ -1,3 +1,8 @@
+import {
+  explainShellCommand,
+  formatCommandExplanationHighlights,
+  formatCommandExplanationLines,
+} from "../infra/command-explainer/index.js";
 import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -18,6 +23,8 @@ export type RequestExecApprovalDecisionParams = {
   security: ExecSecurity;
   ask: ExecAsk;
   warningText?: string;
+  commandExplanationLines?: string[];
+  commandExplanationHighlights?: import("../infra/exec-approvals.js").ExecApprovalCommandHighlight[];
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -47,6 +54,8 @@ function buildExecApprovalRequestToolParams(
     security: params.security,
     ask: params.ask,
     warningText: params.warningText,
+    commandExplanationLines: params.commandExplanationLines,
+    commandExplanationHighlights: params.commandExplanationHighlights,
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,
@@ -159,6 +168,8 @@ type HostExecApprovalParams = {
   security: ExecSecurity;
   ask: ExecAsk;
   warningText?: string;
+  commandExplanationLines?: string[];
+  commandExplanationHighlights?: import("../infra/exec-approvals.js").ExecApprovalCommandHighlight[];
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -201,6 +212,32 @@ export function buildExecApprovalTurnSourceContext(
   };
 }
 
+function resolveExplanationCommand(
+  params: Pick<HostExecApprovalParams, "command" | "systemRunPlan">,
+): string | undefined {
+  return params.command ?? params.systemRunPlan?.commandText;
+}
+
+async function resolveCommandExplanation(command: string | undefined): Promise<{
+  lines?: string[];
+  highlights?: import("../infra/exec-approvals.js").ExecApprovalCommandHighlight[];
+}> {
+  if (!command) {
+    return {};
+  }
+  try {
+    const explanation = await explainShellCommand(command);
+    const lines = formatCommandExplanationLines(explanation);
+    const highlights = formatCommandExplanationHighlights(explanation);
+    return {
+      lines: lines.length > 0 ? lines : undefined,
+      highlights: highlights.length > 0 ? highlights : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 function buildHostApprovalDecisionParams(
   params: HostExecApprovalParams,
 ): RequestExecApprovalDecisionParams {
@@ -216,6 +253,8 @@ function buildHostApprovalDecisionParams(
     security: params.security,
     ask: params.ask,
     warningText: params.warningText,
+    commandExplanationLines: params.commandExplanationLines,
+    commandExplanationHighlights: params.commandExplanationHighlights,
     ...buildExecApprovalRequesterContext({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -225,16 +264,34 @@ function buildHostApprovalDecisionParams(
   };
 }
 
+async function buildHostApprovalDecisionParamsWithExplanation(
+  params: HostExecApprovalParams,
+): Promise<RequestExecApprovalDecisionParams> {
+  const explanation =
+    params.commandExplanationLines && params.commandExplanationHighlights
+      ? {}
+      : await resolveCommandExplanation(resolveExplanationCommand(params));
+  return buildHostApprovalDecisionParams({
+    ...params,
+    commandExplanationLines: params.commandExplanationLines ?? explanation.lines,
+    commandExplanationHighlights: params.commandExplanationHighlights ?? explanation.highlights,
+  });
+}
+
 export async function requestExecApprovalDecisionForHost(
   params: HostExecApprovalParams,
 ): Promise<string | null> {
-  return await requestExecApprovalDecision(buildHostApprovalDecisionParams(params));
+  return await requestExecApprovalDecision(
+    await buildHostApprovalDecisionParamsWithExplanation(params),
+  );
 }
 
 export async function registerExecApprovalRequestForHost(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
-  return await registerExecApprovalRequest(buildHostApprovalDecisionParams(params));
+  return await registerExecApprovalRequest(
+    await buildHostApprovalDecisionParamsWithExplanation(params),
+  );
 }
 
 export async function registerExecApprovalRequestForHostOrThrow(

@@ -10,11 +10,13 @@ vi.mock("./tools/gateway.js", () => ({
 
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").requestExecApprovalDecision;
+let registerExecApprovalRequestForHost: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequestForHost;
 
 describe("requestExecApprovalDecision", () => {
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ requestExecApprovalDecision } = await import("./bash-tools.exec-approval-request.js"));
+    ({ requestExecApprovalDecision, registerExecApprovalRequestForHost } =
+      await import("./bash-tools.exec-approval-request.js"));
   });
 
   beforeEach(() => {
@@ -173,5 +175,82 @@ describe("requestExecApprovalDecision", () => {
 
     expect(result).toBe("deny");
     expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
+  });
+
+  it("adds command explanation highlights to host approval registration payloads", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id",
+      command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "exec.approval.request",
+      expect.anything(),
+      expect.objectContaining({
+        commandExplanationHighlights: expect.arrayContaining([
+          expect.objectContaining({ kind: "command", severity: "info" }),
+          expect.objectContaining({ kind: "risk", severity: "danger" }),
+        ]),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("uses system run plan command text for host approval explanations", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id",
+      systemRunPlan: {
+        argv: ["node", "-e", "console.log(1)"],
+        cwd: "/tmp/project",
+        commandText: 'node -e "console.log(1)"',
+        agentId: null,
+        sessionKey: null,
+      },
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "exec.approval.request",
+      expect.anything(),
+      expect.objectContaining({
+        commandExplanationHighlights: expect.arrayContaining([
+          expect.objectContaining({ kind: "command", severity: "info" }),
+          expect.objectContaining({ kind: "risk", severity: "danger" }),
+        ]),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("keeps explicit command explanation lines", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id",
+      command: "echo hi",
+      commandExplanationLines: ["custom line"],
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "exec.approval.request",
+      expect.anything(),
+      expect.objectContaining({ commandExplanationLines: ["custom line"] }),
+      expect.anything(),
+    );
   });
 });
