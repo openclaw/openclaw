@@ -16,10 +16,17 @@ type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
   auth: GatewayClientAuth;
 }>;
 
+type GatewayClientShape = {
+  clientName?: string;
+  mode?: string;
+  scopes?: string[];
+  deviceIdentity?: null | undefined;
+};
+
 const mockState = vi.hoisted(() => ({
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
-  gatewayDeviceIdentity: [] as Array<null | undefined>,
+  gatewayShape: [] as GatewayClientShape[],
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
   routeLogsToStderr: vi.fn(),
@@ -38,12 +45,15 @@ const mockState = vi.hoisted(() => ({
 class MockGatewayClient {
   private callbacks: GatewayClientCallbacks;
 
-  constructor(
-    opts: GatewayClientCallbacks & GatewayClientAuth & { deviceIdentity?: null | undefined },
-  ) {
+  constructor(opts: GatewayClientCallbacks & GatewayClientAuth & GatewayClientShape) {
     this.callbacks = opts;
     mockState.gatewayAuth.push({ token: opts.token, password: opts.password });
-    mockState.gatewayDeviceIdentity.push(opts.deviceIdentity);
+    mockState.gatewayShape.push({
+      clientName: opts.clientName,
+      mode: opts.mode,
+      scopes: opts.scopes,
+      deviceIdentity: opts.deviceIdentity,
+    });
     mockState.gateways.push(this);
   }
 
@@ -200,7 +210,7 @@ describe("serveAcpGateway startup", () => {
   beforeEach(async () => {
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
-    mockState.gatewayDeviceIdentity.length = 0;
+    mockState.gatewayShape.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentStart.mockReset();
     mockState.routeLogsToStderr.mockReset();
@@ -347,7 +357,7 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
-  it("omits device identity for loopback shared-auth ACP launches (#74650)", async () => {
+  it("uses backend gateway-client shape with operator scopes for loopback shared-auth ACP launches (#74650)", async () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
@@ -363,7 +373,12 @@ describe("serveAcpGateway startup", () => {
       await vi.waitFor(() => {
         expect(mockState.gateways).toHaveLength(1);
       });
-      expect(mockState.gatewayDeviceIdentity[0]).toBeNull();
+      expect(mockState.gatewayShape[0]).toEqual({
+        clientName: "gateway-client",
+        mode: "backend",
+        scopes: ["operator.read", "operator.write", "operator.admin"],
+        deviceIdentity: null,
+      });
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
@@ -372,7 +387,7 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
-  it("keeps device identity for remote shared-auth ACP launches", async () => {
+  it("keeps cli/cli shape and device identity for remote shared-auth ACP launches", async () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "wss://gateway.example/ws",
       urlSource: "cli --url",
@@ -390,7 +405,10 @@ describe("serveAcpGateway startup", () => {
       await vi.waitFor(() => {
         expect(mockState.gateways).toHaveLength(1);
       });
-      expect(mockState.gatewayDeviceIdentity[0]).toBeUndefined();
+      expect(mockState.gatewayShape[0].clientName).toBe("cli");
+      expect(mockState.gatewayShape[0].mode).toBe("cli");
+      expect(mockState.gatewayShape[0].scopes).toBeUndefined();
+      expect(mockState.gatewayShape[0].deviceIdentity).toBeUndefined();
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
@@ -399,7 +417,7 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
-  it("keeps device identity for loopback ACP launches without shared auth", async () => {
+  it("keeps cli/cli shape and device identity for loopback ACP launches without shared auth", async () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
@@ -415,7 +433,10 @@ describe("serveAcpGateway startup", () => {
       await vi.waitFor(() => {
         expect(mockState.gateways).toHaveLength(1);
       });
-      expect(mockState.gatewayDeviceIdentity[0]).toBeUndefined();
+      expect(mockState.gatewayShape[0].clientName).toBe("cli");
+      expect(mockState.gatewayShape[0].mode).toBe("cli");
+      expect(mockState.gatewayShape[0].scopes).toBeUndefined();
+      expect(mockState.gatewayShape[0].deviceIdentity).toBeUndefined();
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
