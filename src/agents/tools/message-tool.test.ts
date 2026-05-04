@@ -1135,6 +1135,57 @@ describe("message tool reasoning tag sanitization", () => {
       expect(call?.params?.[field]).toBe(expected);
     },
   );
+
+  it("sanitizes visible presentation text before sending", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          title: "<think>internal title</think>Deploy ready",
+          blocks: [
+            { type: "text", text: "<think>internal note</think>Ship it" },
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "<think>button rationale</think>Approve",
+                  value: "approve",
+                },
+              ],
+            },
+            {
+              type: "select",
+              placeholder: "<think>selection rationale</think>Pick a lane",
+              options: [
+                {
+                  label: "<think>option rationale</think>Main",
+                  value: "main",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      title: "Deploy ready",
+      blocks: [
+        { type: "text", text: "Ship it" },
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve" }],
+        },
+        {
+          type: "select",
+          placeholder: "Pick a lane",
+          options: [{ label: "Main", value: "main" }],
+        },
+      ],
+    });
+  });
 });
 
 describe("message tool sandbox passthrough", () => {
