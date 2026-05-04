@@ -165,6 +165,8 @@ export function runOpenClawCompileCacheRespawnPlan(
     stdio: "inherit",
     env: plan.env,
   });
+  // Give the child a moment to honor forwarded signals, then exit the parent so
+  // a child that ignores SIGTERM cannot keep the compile-cache wrapper alive indefinitely.
   let signalExitTimer: NodeJS.Timeout | undefined;
   const clearSignalExitTimer = (): void => {
     if (!signalExitTimer) {

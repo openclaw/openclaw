@@ -96,6 +96,8 @@ const runRespawnedChild = (command, args, env) => {
     env,
   });
   const listeners = new Map();
+  // Give the child a moment to honor forwarded signals, then exit the wrapper so
+  // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
   let signalExitTimer = null;
   const detach = () => {
     for (const [signal, listener] of listeners) {
