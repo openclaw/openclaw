@@ -261,6 +261,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       console.log(`Completion installed. Restart your shell or run: source ${profilePath}`);
     }
   } catch (err) {
-    console.error(`Failed to install completion: ${err as string}`);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Failed to install completion: ${message}`);
   }
 }
