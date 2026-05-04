@@ -3,6 +3,7 @@ import type { AgentEventSinkConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { fetchWithSsrFGuard } from "../plugin-sdk/ssrf-runtime.js";
+import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { redactSensitiveUrl } from "../shared/net/redact-sensitive-url.js";
 import type { AgentEventPayload } from "./agent-events.js";
 import { onAgentEvent } from "./agent-events.js";
@@ -134,6 +135,9 @@ export function startAgentEventSink(params: {
   }
 
   function handleAssistant(evt: AgentEventPayload): void {
+    if (resolveAssistantEventPhase(evt.data) === "commentary") {
+      return;
+    }
     const state = getRunState(evt.runId);
     if (state.thinkingStarted) {
       state.thinkingStarted = false;
