@@ -86,31 +86,28 @@ describe("GatewayClient", () => {
     expect(last?.opts).toEqual(expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }));
   });
 
-  test("uses an explicit direct agent for control-plane WebSocket connections", () => {
+  test("does not pass an explicit direct agent for loopback control-plane WebSocket connections", () => {
     const client = new GatewayClient({ url: "ws://127.0.0.1:1" });
     client.start();
     const last = wsMockState.last as { opts: { agent?: unknown } } | null;
 
-    expect(last?.opts.agent).toBeDefined();
-    expect(last?.opts.agent).not.toBe(
-      (global as unknown as { GLOBAL_AGENT?: { HTTP_PROXY?: unknown } }).GLOBAL_AGENT,
-    );
+    expect(last?.opts.agent).toBeUndefined();
   });
 
-  test("uses an explicit direct agent for IPv6 loopback control-plane WebSocket connections", () => {
+  test("does not pass an explicit direct agent for IPv6 loopback control-plane WebSocket connections", () => {
     const client = new GatewayClient({ url: "ws://[::1]:1" });
     client.start();
     const last = wsMockState.last as { opts: { agent?: unknown } } | null;
 
-    expect(last?.opts.agent).toBeDefined();
+    expect(last?.opts.agent).toBeUndefined();
   });
 
-  test("uses the direct control-plane bypass for localhost hostnames", () => {
+  test("does not pass an explicit direct agent for localhost hostnames", () => {
     const client = new GatewayClient({ url: "ws://localhost:1" });
     client.start();
     const last = wsMockState.last as { opts: { agent?: unknown } } | null;
 
-    expect(last?.opts.agent).toBeDefined();
+    expect(last?.opts.agent).toBeUndefined();
   });
 
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {

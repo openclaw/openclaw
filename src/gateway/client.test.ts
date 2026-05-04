@@ -33,8 +33,10 @@ class MockWebSocket {
   terminateCalls = 0;
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
+  readonly options: unknown;
 
-  constructor(_url: string, _options?: unknown) {
+  constructor(_url: string, options?: unknown) {
+    this.options = options;
     wsInstances.push(this);
   }
 
@@ -232,7 +234,55 @@ describe("GatewayClient security checks", () => {
 
     expect(onConnectError).not.toHaveBeenCalled();
     expect(wsInstances.length).toBe(1); // WebSocket created
+    expect(getLatestWs().options).toMatchObject({ agent: expect.any(Object) });
     client.stop();
+  });
+
+  it("proxies ws:// loopback addresses when active proxy loopbackMode is proxy", async () => {
+    const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+      loopbackMode: "proxy",
+    });
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    try {
+      client.start();
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(wsInstances.length).toBe(1);
+      expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
+    } finally {
+      client.stop();
+      await stopProxy(handle);
+    }
+  });
+
+  it("blocks ws:// loopback addresses when active proxy loopbackMode is block", async () => {
+    const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+      loopbackMode: "block",
+    });
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    try {
+      expect(() => client.start()).toThrow("blocked by proxy.loopbackMode");
+      expect(wsInstances.length).toBe(0);
+    } finally {
+      client.stop();
+      await stopProxy(handle);
+    }
   });
 
   it("allows wss:// to any address", () => {

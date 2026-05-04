@@ -396,7 +396,7 @@ describe("SSRF external proxy routing", () => {
 
         async function gatewayLoopbackBypassProbe(url) {
           return new Promise((resolve, reject) => {
-            const ws = dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(url, () =>
+            const ws = dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane({ actualUrl: url, expectedGatewayUrl: url }, () =>
               new WebSocket(url, { handshakeTimeout: ${PROBE_TIMEOUT_MS} }),
             );
             ws.once("open", () => {
