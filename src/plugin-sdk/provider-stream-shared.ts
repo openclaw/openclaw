@@ -250,8 +250,8 @@ function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLeve
   return normalized === "off" || normalized === "none";
 }
 
-function resolveDeepSeekV4ReasoningEffort(thinkingLevel: DeepSeekV4ThinkingLevel): "high" | "xhigh" {
-  return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "xhigh" : "high";
+function resolveDeepSeekV4ReasoningEffort(thinkingLevel: DeepSeekV4ThinkingLevel): "high" | "max" {
+  return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
 }
 
 function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
@@ -288,6 +288,9 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   baseStreamFn: StreamFn | undefined;
   thinkingLevel: DeepSeekV4ThinkingLevel;
   shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
+  resolveReasoningEffort?: (
+    thinkingLevel: DeepSeekV4ThinkingLevel,
+  ) => "high" | "max" | "xhigh";
 }): StreamFn | undefined {
   if (!params.baseStreamFn) {
     return undefined;
@@ -308,7 +311,9 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
       }
 
       payload.thinking = { type: "enabled" };
-      payload.reasoning_effort = resolveDeepSeekV4ReasoningEffort(params.thinkingLevel);
+      payload.reasoning_effort = params.resolveReasoningEffort
+        ? params.resolveReasoningEffort(params.thinkingLevel)
+        : resolveDeepSeekV4ReasoningEffort(params.thinkingLevel);
       ensureDeepSeekV4AssistantReasoningContent(payload);
     });
   };

@@ -8,6 +8,7 @@ const OPENROUTER_DEEPSEEK_V4_THINKING_LEVEL_IDS = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ] as const;
 
 function buildOpenRouterDeepSeekV4ThinkingLevel(

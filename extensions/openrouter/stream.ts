@@ -125,6 +125,8 @@ function createOpenRouterDeepSeekV4ThinkingWrapper(
     baseStreamFn,
     thinkingLevel,
     shouldPatchModel: shouldPatchDeepSeekV4OpenRouterPayload,
+    resolveReasoningEffort: (level) =>
+      level === "xhigh" || level === "max" ? "xhigh" : "high",
   });
 }
 
