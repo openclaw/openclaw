@@ -495,7 +495,7 @@ function resolvePackageRuntimeEntrySource(params: {
       isTypeScriptPackageEntry(safeEntry.relativePath)
     ) {
       params.diagnostics.push({
-        level: "error",
+        level: "warn",
         message: missingCompiledRuntimeEntryMessage({
           label: "installed plugin package",
           entry: safeEntry.relativePath,
@@ -503,7 +503,6 @@ function resolvePackageRuntimeEntrySource(params: {
         }),
         source: params.sourceLabel,
       });
-      return null;
     }
   }
 
