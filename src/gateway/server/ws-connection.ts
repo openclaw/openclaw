@@ -349,6 +349,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       normalizeLowercaseStringOrEmpty(userAgent).includes("swiftpm-testing-helper") &&
       isLoopbackAddress(remote);
 
+    // RFC 6455 close code 1013 ("Try Again Later") is exactly what the
+    // gateway sends to clients that connect during the startup-sidecars-pending
+    // window. The reconnect attempt is expected and healthy — surface it at
+    // debug rather than warn so legitimate WARN inflation stays meaningful.
+    // Tie the downgrade to the server-owned `startup-sidecars-pending` close
+    // cause so a peer that picks code 1013 + reason "gateway starting" on a
+    // non-startup close cannot suppress an otherwise actionable WARN. See #76361.
+    const isExpectedStartupClose = (code: number | undefined, reason: string | undefined) =>
+      closeCause === "startup-sidecars-pending" &&
+      code === 1013 &&
+      normalizeLowercaseStringOrEmpty(reason).includes("gateway starting");
+
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
       const logForwardedFor = sanitizeLogValue(forwardedFor);
@@ -375,9 +387,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const logFn = isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr)
-          ? logWsControl.debug
-          : logWsControl.warn;
+        const downgradeToDebug =
+          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
+          isExpectedStartupClose(code, reason?.toString());
+        const logFn = downgradeToDebug ? logWsControl.debug : logWsControl.warn;
         logFn(
           `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
           closeContext,
