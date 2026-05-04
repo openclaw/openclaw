@@ -106,7 +106,7 @@ export function readLastAssistantFromSessionFile(filePath: string | undefined): 
     return undefined;
   }
   const tail = readTailText(filePath);
-  if (!tail.text) {
+  if (!tail?.text) {
     return undefined;
   }
   const lines = tail.text.split(/\r?\n/).filter(Boolean);
