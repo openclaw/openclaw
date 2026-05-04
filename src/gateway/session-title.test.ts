@@ -1,0 +1,124 @@
+import { describe, expect, test } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
+import { deriveSessionTitle } from "./session-title.js";
+
+describe("deriveSessionTitle", () => {
+  test("returns undefined for undefined entry", () => {
+    expect(deriveSessionTitle(undefined)).toBeUndefined();
+  });
+
+  test("prefers displayName when set", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      displayName: "My Custom Session",
+      subject: "Group Chat",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("My Custom Session");
+  });
+
+  test("falls back to subject when displayName is missing", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      subject: "Dev Team Chat",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Dev Team Chat");
+  });
+
+  test("prefers session label over first user message when present", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      label: "My App - Dashboard",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry, "heartbeat")).toBe("My App - Dashboard");
+  });
+
+  test("keeps displayName ahead of label", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      displayName: "Override",
+      label: "Should Not Appear",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Override");
+  });
+
+  test("keeps subject ahead of label", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      subject: "Room Title",
+      label: "Should Not Appear",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Room Title");
+  });
+
+  test("falls back to origin label only when no transcript or explicit label exists", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      origin: { label: "Discord: Engineering" },
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry, "heartbeat")).toBe("heartbeat");
+  });
+
+  test("uses origin label when no first user message and no explicit label", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      origin: { label: "Discord: Engineering" },
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry, null)).toBe("Discord: Engineering");
+  });
+
+  test("uses first user message when displayName, subject, and labels are missing", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry, "Hello, how are you?")).toBe("Hello, how are you?");
+  });
+
+  test("truncates long first user message to 60 chars with ellipsis", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const longMsg =
+      "This is a very long message that exceeds sixty characters and should be truncated appropriately";
+    const result = deriveSessionTitle(entry, longMsg);
+    expect(result).toBeDefined();
+    expect(result!.length).toBeLessThanOrEqual(60);
+    expect(result!.endsWith("…")).toBe(true);
+  });
+
+  test("falls back to sessionId prefix with date", () => {
+    const entry = {
+      sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
+      updatedAt: new Date("2024-03-15T10:30:00Z").getTime(),
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("abcd1234 (2024-03-15)");
+  });
+
+  test("truncates at word boundary when possible", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const longMsg = "This message has many words and should be truncated at a word boundary nicely";
+    const result = deriveSessionTitle(entry, longMsg);
+    expect(result).toBeDefined();
+    expect(result!.endsWith("…")).toBe(true);
+    expect(result!.includes("  ")).toBe(false);
+  });
+
+  test("falls back to sessionId prefix without date when updatedAt missing", () => {
+    const entry = {
+      sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
+      updatedAt: 0,
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("abcd1234");
+  });
+});
