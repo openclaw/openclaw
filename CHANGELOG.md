@@ -11,7 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Gateway/startup: keep model-catalog test helpers and run-session lookup code out of the hot `server.impl` import graph, reducing default gateway benchmark readiness latency.
+- Gateway/startup: keep model-catalog test helpers, run-session lookup code, QR pairing helpers, and TypeBox memory-tool schema construction out of hot startup import paths, reducing default gateway benchmark plugin-load and memory pressure.
 - Channels/streaming: add unified `streaming.mode: "progress"` drafts with auto single-word status labels and shared progress configuration across Discord, Telegram, Matrix, Slack, and Microsoft Teams.
 - Slack/streaming: add `streaming.progress.render: "rich"` for Block Kit progress drafts backed by structured progress line data.
 - Slack/streaming: keep the newest rich progress lines when Block Kit limits trim long progress drafts. Thanks @vincentkoc.
@@ -56,10 +56,15 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Release/beta smoke: resolve the dispatched Telegram beta E2E run from `gh run list` when `gh workflow run` returns no run URL, so the maintainer helper does not fail immediately after dispatch. Thanks @vincentkoc.
+- Media/images: keep HEIC/HEIF attachments fail-closed when optional Sharp conversion is unavailable instead of sending originals that still need conversion. Thanks @vincentkoc.
+- Google Meet: fork the caller's current agent transcript into agent-mode meeting consultant sessions, so Meet replies inherit the context from the tool call that joined the meeting.
 - Telegram/streaming: sanitize tool-progress draft preview backticks before shared compaction, so long backtick-heavy progress text still renders inside the safe code-formatted preview instead of collapsing to an ellipsis.
+- UI/chat: remove the unsupported `line-clamp` declaration from the chat queue text rule to eliminate Firefox console noise without changing visible truncation behavior. Thanks @ZanderH-code.
 - Agents/Pi: suppress persistence for synthetic mid-turn overflow continuation prompts, so transcript-retry recovery does not write the "continue from transcript" prompt as a new user turn. Thanks @vincentkoc.
 - Agents/tools: strip reasoning text from visible rich presentation titles, blocks, buttons, and select labels before message-tool sends, so structured channel payloads cannot leak hidden planning. Thanks @vincentkoc.
 - Telegram: keep reply-dispatch lazy provider runtime chunks behind stable dist names and delete `/reasoning stream` previews after final delivery so package updates and live reasoning drafts do not leave Telegram turns broken or noisy. Thanks @BunsDev.
+- Discord: start the gateway monitor without waiting for the startup bot/application probe, so WSL2 hosts with a slow `/users/@me` REST path still bring the channel online while status enrichment finishes asynchronously. Fixes #77103. Thanks @Suited78.
 - Exec approvals: detect `env -S` split-string command-carrier risks when `-S`/`-s` is combined with other env short options, so approval explanations do not miss split payloads hidden behind `env -iS...`. Thanks @vincentkoc.
 - Google Meet: log the concrete agent-mode TTS provider, model, voice, output format, and sample rate after speech synthesis, so Meet logs show which voice backend spoke each reply.
 - Voice Call: mark realtime calls completed when the realtime provider closes normally, so Twilio/OpenAI/Google realtime stop events do not leave active call records behind. Thanks @vincentkoc.
@@ -88,6 +93,9 @@ Docs: https://docs.openclaw.ai
 - Media: treat `EPERM` from the post-write media fsync step as best-effort, allowing WebChat and channel uploads to finish on Windows filesystems that reject `fsync` after a successful write. Fixes #76844.
 - Media/Telegram: send in-limit original images when optional image optimization is unavailable, so Telegram MEDIA replies and message-tool image sends do not fail just because `sharp` is missing. Fixes #77081. (#77117) Thanks @pfrederiksen.
 - Diagnostics: include last progress, cron job/run ids, stopped cron job name, and the last assistant transcript snippet in stalled-session and stuck-session recovery logs so cron stalls show what was stopped.
+- Streaming channels: add `streaming.preview.commandText: "status"` / `streaming.progress.commandText: "status"` to hide command/exec text in preview progress lines while keeping the released raw command text default. Fixes #77072.
+- Agents/cron: let explicit cron `timeoutSeconds` drive both CLI no-output and embedded LLM idle watchdogs instead of being capped by resume defaults. Fixes #76289.
+- Plugins/catalog: suppress missing `channelConfigs` compatibility diagnostics for external channel plugins that are disabled, denied, or outside a restrictive allowlist. Fixes #76095.
 - Diagnostics: keep webhook/message OTEL attributes and Prometheus delivery labels low-cardinality and omit raw chat/message IDs from spans, so progress-draft and message-tool modes do not leak high-cardinality messaging identifiers.
 - Google Meet: stop advertising legacy `mode: "realtime"` to agents and config UIs, while keeping it as a hidden compatibility alias for `mode: "agent"`, so new joins use the STT -> OpenClaw agent -> TTS path instead of selecting the direct realtime voice fallback.
 - Google Meet: add `chrome.audioBufferBytes` for generated command-pair SoX audio commands and lower the default buffer from SoX's 8192 bytes to 4096 bytes to reduce Chrome talk-back latency.

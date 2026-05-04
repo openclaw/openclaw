@@ -1,40 +1,41 @@
 import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import {
-  clearDeviceBootstrapTokens,
-  definePluginEntry,
-  issueDeviceBootstrapToken,
-  listDevicePairing,
-  PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  renderQrPngDataUrl,
-  writeQrPngTempFile,
-  revokeDeviceBootstrapToken,
-  resolveGatewayBindUrl,
-  resolveGatewayPort,
-  resolvePreferredOpenClawTmpDir,
-  runPluginCommandWithTimeout,
-  resolveTailnetHostWithRunner,
-  type OpenClawPluginApi,
-} from "./api.js";
-import {
-  armPairNotifyOnce,
-  formatPendingRequests,
-  handleNotifyCommand,
-  registerPairingNotifierService,
-} from "./notify.js";
-import {
-  approvePendingPairingRequest,
-  selectPendingApprovalRequest,
-} from "./pair-command-approve.js";
-import {
-  buildMissingPairingScopeReply,
-  resolvePairingCommandAuthState,
-} from "./pair-command-auth.js";
+
+type DevicePairApiModule = typeof import("./api.js");
+type NotifyModule = typeof import("./notify.js");
+type PairCommandApproveModule = typeof import("./pair-command-approve.js");
+type PairCommandAuthModule = typeof import("./pair-command-auth.js");
+
+let devicePairApiModulePromise: Promise<DevicePairApiModule> | undefined;
+let notifyModulePromise: Promise<NotifyModule> | undefined;
+let pairCommandApproveModulePromise: Promise<PairCommandApproveModule> | undefined;
+let pairCommandAuthModulePromise: Promise<PairCommandAuthModule> | undefined;
+
+function loadDevicePairApiModule(): Promise<DevicePairApiModule> {
+  devicePairApiModulePromise ??= import("./api.js");
+  return devicePairApiModulePromise;
+}
+
+function loadNotifyModule(): Promise<NotifyModule> {
+  notifyModulePromise ??= import("./notify.js");
+  return notifyModulePromise;
+}
+
+function loadPairCommandApproveModule(): Promise<PairCommandApproveModule> {
+  pairCommandApproveModulePromise ??= import("./pair-command-approve.js");
+  return pairCommandApproveModulePromise;
+}
+
+function loadPairCommandAuthModule(): Promise<PairCommandAuthModule> {
+  pairCommandAuthModulePromise ??= import("./pair-command-auth.js");
+  return pairCommandAuthModulePromise;
+}
 
 function formatDurationMinutes(expiresAtMs: number): string {
   const msRemaining = Math.max(0, expiresAtMs - Date.now());
@@ -254,6 +255,8 @@ function pickTailnetIPv4(): string | null {
 }
 
 async function resolveTailnetHost(): Promise<string | null> {
+  const { resolveTailnetHostWithRunner, runPluginCommandWithTimeout } =
+    await loadDevicePairApiModule();
   return await resolveTailnetHostWithRunner((argv, opts) =>
     runPluginCommandWithTimeout({
       argv,
@@ -307,6 +310,7 @@ function resolveRequiredAuthLabel(
 }
 
 async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResult> {
+  const { resolveGatewayBindUrl, resolveGatewayPort } = await loadDevicePairApiModule();
   const cfg = api.config;
   const pluginCfg = (api.pluginConfig ?? {}) as DevicePairPluginConfig;
   const scheme = resolveScheme(cfg);
@@ -511,6 +515,8 @@ function issuesPairSetupCode(action: string): boolean {
 }
 
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
+  const { issueDeviceBootstrapToken, PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+    await loadDevicePairApiModule();
   const issuedBootstrap = await issueDeviceBootstrapToken({
     profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
   });
@@ -558,7 +564,19 @@ export default definePluginEntry({
   name: "Device Pair",
   description: "QR/bootstrap pairing helpers for OpenClaw devices",
   register(api: OpenClawPluginApi) {
-    registerPairingNotifierService(api);
+    let notifierService: ReturnType<NotifyModule["createPairingNotifierService"]> | undefined;
+    api.registerService({
+      id: "device-pair-notifier",
+      start: async (ctx) => {
+        const { createPairingNotifierService } = await loadNotifyModule();
+        notifierService = createPairingNotifierService(api);
+        await notifierService.start(ctx);
+      },
+      stop: async (ctx) => {
+        await notifierService?.stop?.(ctx);
+        notifierService = undefined;
+      },
+    });
 
     api.registerCommand({
       name: "pair",
@@ -571,6 +589,8 @@ export default definePluginEntry({
         const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
           ? ctx.gatewayClientScopes
           : undefined;
+        const { buildMissingPairingScopeReply, resolvePairingCommandAuthState } =
+          await loadPairCommandAuthModule();
         const authState = resolvePairingCommandAuthState({
           channel: ctx.channel,
           gatewayClientScopes,
@@ -582,12 +602,17 @@ export default definePluginEntry({
         );
 
         if (action === "status" || action === "pending") {
+          const [{ listDevicePairing }, { formatPendingRequests }] = await Promise.all([
+            loadDevicePairApiModule(),
+            loadNotifyModule(),
+          ]);
           const list = await listDevicePairing();
           return { text: formatPendingRequests(list.pending) };
         }
 
         if (action === "notify") {
           const notifyAction = normalizeLowercaseStringOrEmpty(tokens[1]) || "status";
+          const { handleNotifyCommand } = await loadNotifyModule();
           return await handleNotifyCommand({
             api,
             ctx,
@@ -599,6 +624,10 @@ export default definePluginEntry({
           if (authState.isMissingInternalPairingPrivilege) {
             return buildMissingPairingScopeReply();
           }
+          const [
+            { listDevicePairing },
+            { approvePendingPairingRequest, selectPendingApprovalRequest },
+          ] = await Promise.all([loadDevicePairApiModule(), loadPairCommandApproveModule()]);
           const list = await listDevicePairing();
           const selected = selectPendingApprovalRequest({
             pending: list.pending,
@@ -621,6 +650,7 @@ export default definePluginEntry({
           if (authState.isMissingInternalPairingPrivilege) {
             return buildMissingPairingScopeReply();
           }
+          const { clearDeviceBootstrapTokens } = await loadDevicePairApiModule();
           const cleared = await clearDeviceBootstrapTokens();
           return {
             text:
@@ -651,6 +681,7 @@ export default definePluginEntry({
 
           if (channel === "telegram" && target) {
             try {
+              const { armPairNotifyOnce } = await loadNotifyModule();
               autoNotifyArmed = await armPairNotifyOnce({ api, ctx });
             } catch (err) {
               api.logger.warn?.(
@@ -672,6 +703,8 @@ export default definePluginEntry({
           if (target && canSendQrPngToChannel(channel)) {
             let qrFilePath: string | undefined;
             try {
+              const { resolvePreferredOpenClawTmpDir, writeQrPngTempFile } =
+                await loadDevicePairApiModule();
               qrFilePath = (
                 await writeQrPngTempFile(setupCode, {
                   tmpRoot: resolvePreferredOpenClawTmpDir(),
@@ -697,6 +730,7 @@ export default definePluginEntry({
                 };
               }
             } catch (err) {
+              const { revokeDeviceBootstrapToken } = await loadDevicePairApiModule();
               api.logger.warn?.(
                 `device-pair: QR image send failed channel=${channel}, falling back (${(err as Error)?.message ?? err})`,
               );
@@ -716,8 +750,10 @@ export default definePluginEntry({
           if (channel === "webchat") {
             let qrDataUrl: string;
             try {
+              const { renderQrPngDataUrl } = await loadDevicePairApiModule();
               qrDataUrl = await renderQrPngDataUrl(setupCode);
             } catch (err) {
+              const { revokeDeviceBootstrapToken } = await loadDevicePairApiModule();
               api.logger.warn?.(
                 `device-pair: webchat QR render failed, falling back (${(err as Error)?.message ?? err})`,
               );

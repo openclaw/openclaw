@@ -1567,6 +1567,37 @@ describe("processDiscordMessage draft streaming", () => {
     );
   });
 
+  it("can hide raw command progress text in Discord progress drafts by config", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+            commandText: "status",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
+  });
+
   it("keeps Discord progress lines across assistant boundaries", async () => {
     const draftStream = createMockDraftStreamForTest();
 

@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
@@ -1108,7 +1109,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                     await statusReactions.setTool(payload.name);
                   }
                   await pushPreviewToolProgress(
-                    buildChannelProgressDraftLine(
+                    buildChannelProgressDraftLineForEntry(
+                      account.config,
                       {
                         event: "tool",
                         name: payload.name,
@@ -1122,7 +1124,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                 },
                 onItemEvent: async (payload) => {
                   await pushPreviewToolProgress(
-                    buildChannelProgressDraftLine({
+                    buildChannelProgressDraftLineForEntry(account.config, {
                       event: "item",
                       itemKind: payload.kind,
                       title: payload.title,

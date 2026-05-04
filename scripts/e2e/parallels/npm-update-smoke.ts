@@ -65,10 +65,19 @@ interface NpmUpdateSummary {
   packageSpec: string;
   updateTarget: string;
   updateExpected: string;
+  updateTargetBuildCommit: string;
+  updateTargetPackageVersion: string;
+  updateTargetTarball: string;
   provider: Provider;
   latestVersion: string;
   currentHead: string;
   runDir: string;
+  slowestTiming?: {
+    durationMs: number;
+    label: string;
+    phase: "fresh" | "fresh-target" | "update";
+  };
+  totalDurationMs: number;
   fresh: Record<Platform, string>;
   freshTarget: Record<Platform, string>;
   freshTargetSpec: string;
@@ -184,6 +193,13 @@ function platformRecord<T>(value: T): Record<Platform, T> {
   return { linux: value, macos: value, windows: value };
 }
 
+function formatDuration(durationMs: number): string {
+  const seconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
 class NpmUpdateSmoke {
   private auth: ProviderAuth;
   private windowsAuth: ProviderAuth;
@@ -197,8 +213,12 @@ class NpmUpdateSmoke {
   private server: HostServer | null = null;
   private artifact: PackageArtifact | null = null;
   private freshTargetSpec = "";
+  private startedAt = Date.now();
+  private updateTargetBuildCommit = "";
   private updateTargetEffective = "";
   private updateExpectedNeedle = "";
+  private updateTargetPackageVersion = "";
+  private updateTargetTarball = "";
   private linuxVm = linuxVmDefault;
 
   private freshStatus = platformRecord("skip");
@@ -221,6 +241,7 @@ class NpmUpdateSmoke {
   }
 
   async run(): Promise<void> {
+    this.startedAt = Date.now();
     this.runDir = await makeTempDir("openclaw-parallels-npm-update.");
     this.tgzDir = await makeTempDir("openclaw-parallels-npm-update-tgz.");
     try {
@@ -394,12 +415,76 @@ class NpmUpdateSmoke {
       });
       this.updateTargetEffective = this.server.urlFor(this.artifact.path);
       this.updateExpectedNeedle = this.currentHeadShort;
+      this.updateTargetPackageVersion = this.artifact.version ?? "";
+      this.updateTargetBuildCommit =
+        this.artifact.buildCommitShort ?? this.artifact.buildCommit ?? "";
+      this.updateTargetTarball = this.updateTargetEffective;
       return;
     }
     this.updateTargetEffective = this.options.updateTarget;
     this.updateExpectedNeedle = this.isExplicitPackageTarget(this.updateTargetEffective)
       ? ""
       : resolveOpenClawRegistryVersion(this.updateTargetEffective) || this.updateTargetEffective;
+    const metadata = this.resolveRegistryPackageMetadata(this.updateTargetEffective);
+    this.updateTargetPackageVersion = metadata.version;
+    this.updateTargetBuildCommit =
+      metadata.gitHead || this.resolvePackageBuildCommit(metadata.tarball);
+    this.updateTargetTarball = metadata.tarball;
+  }
+
+  private resolvePackageBuildCommit(tarball: string): string {
+    if (!tarball) {
+      return "";
+    }
+    const output = run(
+      "bash",
+      ["-lc", `curl -fsSL ${shellQuote(tarball)} | tar -xzOf - package/dist/build-info.json`],
+      {
+        check: false,
+        quiet: true,
+      },
+    ).stdout.trim();
+    if (!output) {
+      return "";
+    }
+    try {
+      const parsed = JSON.parse(output) as { commit?: string };
+      return parsed.commit ? parsed.commit.slice(0, 7) : "";
+    } catch {
+      return "";
+    }
+  }
+
+  private resolveRegistryPackageMetadata(target: string): {
+    gitHead: string;
+    tarball: string;
+    version: string;
+  } {
+    if (this.isExplicitPackageTarget(target)) {
+      return { gitHead: "", tarball: "", version: "" };
+    }
+    const spec = target.startsWith("openclaw@") ? target : `openclaw@${target}`;
+    const output = run("npm", ["view", spec, "version", "dist.tarball", "gitHead", "--json"], {
+      check: false,
+      quiet: true,
+    }).stdout.trim();
+    if (!output) {
+      return { gitHead: "", tarball: "", version: "" };
+    }
+    try {
+      const parsed = JSON.parse(output) as {
+        dist?: { tarball?: string };
+        gitHead?: string;
+        version?: string;
+      };
+      return {
+        gitHead: parsed.gitHead ?? "",
+        tarball: parsed.dist?.tarball ?? "",
+        version: parsed.version ?? "",
+      };
+    } catch {
+      return { gitHead: "", tarball: "", version: "" };
+    }
   }
 
   private async runSameGuestUpdates(): Promise<void> {
@@ -900,6 +985,7 @@ class NpmUpdateSmoke {
   }
 
   private async writeSummary(): Promise<string> {
+    const slowestTiming = this.timings.toSorted((a, b) => b.durationMs - a.durationMs)[0];
     const summary: NpmUpdateSummary = {
       currentHead: this.currentHeadShort,
       fresh: this.freshStatus,
@@ -915,7 +1001,18 @@ class NpmUpdateSmoke {
         windows: { status: this.updateStatus.windows, version: this.updateVersion.windows },
       },
       timings: this.timings,
+      slowestTiming: slowestTiming
+        ? {
+            durationMs: slowestTiming.durationMs,
+            label: slowestTiming.label,
+            phase: slowestTiming.phase,
+          }
+        : undefined,
+      totalDurationMs: Date.now() - this.startedAt,
       updateExpected: this.updateExpectedNeedle,
+      updateTargetBuildCommit: this.updateTargetBuildCommit,
+      updateTargetPackageVersion: this.updateTargetPackageVersion,
+      updateTargetTarball: this.updateTargetTarball,
       updateTarget: this.updateTargetEffective,
     };
     const summaryPath = path.join(this.runDir, "summary.json");
@@ -924,10 +1021,14 @@ class NpmUpdateSmoke {
       lines: [
         `- package spec: ${summary.packageSpec}`,
         `- update target: ${summary.updateTarget}`,
+        `- update target package: ${summary.updateTargetPackageVersion || "unknown"}${summary.updateTargetBuildCommit ? ` (${summary.updateTargetBuildCommit})` : ""}`,
+        `- update target tarball: ${summary.updateTargetTarball || "n/a"}`,
         `- update expected: ${summary.updateExpected}`,
         `- fresh: macOS=${summary.fresh.macos}, Windows=${summary.fresh.windows}, Linux=${summary.fresh.linux}`,
         `- update: macOS=${summary.update.macos.status} (${summary.update.macos.version}), Windows=${summary.update.windows.status} (${summary.update.windows.version}), Linux=${summary.update.linux.status} (${summary.update.linux.version})`,
         `- fresh target: ${summary.freshTargetSpec || "skip"} macOS=${summary.freshTarget.macos}, Windows=${summary.freshTarget.windows}, Linux=${summary.freshTarget.linux}`,
+        `- wall clock: ${formatDuration(summary.totalDurationMs)}`,
+        `- slowest phase: ${summary.slowestTiming ? `${summary.slowestTiming.phase}/${summary.slowestTiming.label} ${formatDuration(summary.slowestTiming.durationMs)}` : "n/a"}`,
         `- logs: ${summary.runDir}`,
       ],
       summaryPath,

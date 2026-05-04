@@ -1477,6 +1477,7 @@
     "qa:lab:watch": "vite build --watch --config extensions/qa-lab/web/vite.config.ts",
     "qa:otel:smoke": "node --import tsx scripts/qa-otel-smoke.ts",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
+    "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
     "release:check": "pnpm deps:root-ownership:check && pnpm plugins:inventory:check && pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",

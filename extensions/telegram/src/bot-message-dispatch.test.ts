@@ -780,14 +780,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps the Telegram progress draft across post-tool assistant boundaries", async () => {
+  it("keeps non-command Telegram progress draft lines across post-tool assistant boundaries", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onReplyStart?.();
         await replyOptions?.onAssistantMessageStart?.();
-        await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
+        await replyOptions?.onItemEvent?.({ kind: "search", progressText: "docs lookup" });
         await replyOptions?.onItemEvent?.({ progressText: "tests passed" });
         await replyOptions?.onAssistantMessageStart?.();
         await dispatcherOptions.deliver({ text: "Final after tool" }, { kind: "final" });
@@ -802,7 +802,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      expect.stringMatching(/^Shelling\n• `exec ls ~\/Desktop`\n• `tests passed`$/),
+      expect.stringMatching(/^Shelling\n`🔎 Web Search: docs lookup`\n• `tests passed`$/),
     );
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(draftStream.materialize).not.toHaveBeenCalled();
@@ -815,20 +815,54 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
-  it("streams Telegram tool progress by default when preview streaming is active", async () => {
+  it("streams Telegram command progress text by default when preview streaming is active", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        name: "exec",
+        progressText: "exec ls ~/Desktop",
+      });
       return { queuedFinal: false };
     });
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      expect.stringMatching(/\n`🛠️ Exec`\n• `exec ls ~\/Desktop`$/),
+      expect.stringMatching(/\n`🛠️ Exec`\n`🛠️ Exec: exec ls ~\/Desktop`$/),
     );
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          suppressDefaultToolProgressMessages: true,
+        }),
+      }),
+    );
+  });
+
+  it("can hide Telegram command progress text by config", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        name: "exec",
+        progressText: "exec ls ~/Desktop",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial", preview: { commandText: "status" } } },
+    });
+
+    expect(draftStream.update).toHaveBeenCalledWith(expect.stringMatching(/\n`🛠️ Exec`$/));
+    expect(draftStream.update.mock.calls.at(-1)?.[0]).not.toContain("exec ls");
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({
@@ -882,12 +916,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps Telegram tool progress links inside code formatting", async () => {
+  it("keeps non-command Telegram tool progress links inside code formatting", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      await replyOptions?.onItemEvent?.({ progressText: "read [label](tg://user?id=123)" });
+      await replyOptions?.onItemEvent?.({
+        kind: "search",
+        progressText: "read [label](tg://user?id=123)",
+      });
       return { queuedFinal: false };
     });
 
@@ -897,7 +934,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     const lastPreviewText = draftStream.update.mock.calls.at(-1)?.[0];
-    expect(lastPreviewText).toMatch(/\n`🛠️ Exec`\n• `read \[label\]\(tg:\/\/user\?id=123\)`$/);
+    expect(lastPreviewText).toMatch(
+      /\n`🛠️ Exec`\n`🔎 Web Search: read \[label\]\(tg:\/\/user\?id=123\)`$/,
+    );
     expect(renderTelegramHtmlText(lastPreviewText ?? "")).not.toContain("<a ");
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -927,7 +966,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const progressLine = lastPreviewText.split("\n").at(1) ?? "";
 
     expect(lastPreviewText.length).toBeLessThan(340);
-    expect(progressLine).toMatch(/^• `'{10}/);
+    expect(progressLine).toMatch(/^• `.*…`$/);
     expect(progressLine).toContain("…");
     expect(renderTelegramHtmlText(lastPreviewText)).not.toContain("<a ");
   });
