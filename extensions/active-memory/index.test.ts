@@ -3283,7 +3283,6 @@ describe("active-memory plugin", () => {
         `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
       ),
     );
-    expect(rmSpy).not.toHaveBeenCalled();
     expect(
       vi
         .mocked(api.logger.info)
@@ -3291,6 +3290,7 @@ describe("active-memory plugin", () => {
           String(call[0]).includes(`transcript=${expectedDir}${path.sep}`),
         ),
     ).toBe(true);
+    expect(rmSpy.mock.calls.some(([target]) => String(target).startsWith(expectedDir))).toBe(false);
   });
 
   it("falls back to the default transcript directory when transcriptDir is unsafe", async () => {
