@@ -197,6 +197,36 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it("rewrites gateway shutdown imports to stable runtime aliases", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "server-close.runtime-AbCd1234.js"),
+      "export const close = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "server.impl-OldHash.js"),
+      [
+        'const closeModule = () => import("./server-close.runtime-AbCd1234.js");',
+        'const ordinaryChunk = () => import("./server-close-OldHash.js");',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "server.impl-OldHash.js"), "utf8")).toBe(
+      [
+        'const closeModule = () => import("./server-close.runtime.js");',
+        'const ordinaryChunk = () => import("./server-close-OldHash.js");',
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("keeps hashed imports when a stable runtime alias would collide", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
@@ -272,6 +302,26 @@ describe("runtime postbuild static assets", () => {
     expect(
       await fs.readFile(path.join(distDir, "runtime-plugins.runtime-CNAfmQRG.js"), "utf8"),
     ).toBe('export * from "./runtime-plugins.runtime.js";\n');
+  });
+
+  it("writes compatibility aliases for previous gateway shutdown chunk names", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "server-close.runtime.js"),
+      'export * from "./server-close.runtime-NewHash.js";\n',
+      "utf8",
+    );
+
+    writeLegacyRootRuntimeCompatAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "server-close-DsVPJDIx.js"), "utf8")).toBe(
+      'export * from "./server-close.runtime.js";\n',
+    );
+    expect(await fs.readFile(path.join(distDir, "server-close-DvAvfgr8.js"), "utf8")).toBe(
+      'export * from "./server-close.runtime.js";\n',
+    );
   });
 
   it("writes legacy CLI exit compatibility chunks", async () => {

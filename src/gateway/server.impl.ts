@@ -169,10 +169,10 @@ async function closeMcpLoopbackServerOnDemand(): Promise<void> {
   await closeMcpLoopbackServer();
 }
 
-let gatewayCloseModulePromise: Promise<typeof import("./server-close.js")> | null = null;
+let gatewayCloseModulePromise: Promise<typeof import("./server-close.runtime.js")> | null = null;
 
-function loadGatewayCloseModule(): Promise<typeof import("./server-close.js")> {
-  gatewayCloseModulePromise ??= import("./server-close.js");
+function loadGatewayCloseModule(): Promise<typeof import("./server-close.runtime.js")> {
+  gatewayCloseModulePromise ??= import("./server-close.runtime.js");
   return gatewayCloseModulePromise;
 }
 
@@ -925,6 +925,7 @@ export async function startGatewayServer(
     });
   const createCloseHandler =
     () => async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
+      const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
       const { createGatewayCloseHandler } = await loadGatewayCloseModule();
       await createGatewayCloseHandler({
         bonjourStop: runtimeState.bonjourStop,
@@ -932,6 +933,7 @@ export async function startGatewayServer(
         canvasHost,
         canvasHostServer,
         releasePluginRouteRegistry,
+        channelIds,
         stopChannel,
         pluginServices: runtimeState.pluginServices,
         cron: runtimeState.cronState.cron,
