@@ -158,6 +158,7 @@ function readTarEntry(entryPath) {
 }
 
 function collectRootPackageExcludedExtensionDirs(packageJson) {
+  /** @type {Set<string>} */
   const excluded = new Set();
   for (const entry of packageJson.files ?? []) {
     if (typeof entry !== "string") {
@@ -176,6 +177,7 @@ function collectExternalizedPluginRootChunkErrors(packageJson) {
   if (excludedExtensionDirs.size === 0) {
     return [];
   }
+  /** @type {Map<string, string[]>} */
   const leaked = new Map();
   for (const entry of normalized) {
     if (
