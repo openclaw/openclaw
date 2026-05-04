@@ -645,6 +645,29 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("🧠 Model:");
   });
 
+  it("resolves sandboxed sessionKey=current to the requester when no run session override exists", async () => {
+    resetSessionStore({});
+
+    const tool = getSessionStatusTool("agent:main:telegram:group:-5096326138", {
+      sandboxed: true,
+    });
+
+    const result = await tool.execute("call-current-sandboxed-channel", {
+      sessionKey: "current",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:telegram:group:-5096326138");
+    expect(details.statusText).toContain("OpenClaw");
+    expect(details.statusText).toContain("🧠 Model:");
+    expect(callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: expect.objectContaining({ key: "current" }),
+      }),
+    );
+  });
+
   it("resolves the default session_status lookup for a channel-plugin requester via implicit fallback", async () => {
     resetSessionStore({});
 

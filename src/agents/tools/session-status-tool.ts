@@ -364,9 +364,11 @@ export function createSessionStatusTool(opts?: {
           }),
         );
 
-      // Resolve "current" to the live run session key for lookup purposes (#76708).
-      if (requestedKeyRaw === "current" && opts?.runSessionKey) {
-        requestedKeyRaw = opts.runSessionKey;
+      // Resolve semantic "current" to the live run session key for lookup purposes (#76708).
+      // In sandboxed channel runs there may be no separate runSessionKey because the sandbox
+      // key already is the live requester; avoid probing literal "current" through the gateway.
+      if (requestedKeyRaw === "current" && (opts?.runSessionKey || opts?.sandboxed === true)) {
+        requestedKeyRaw = opts.runSessionKey ?? effectiveRequesterKey;
       }
 
       const currentSessionAlias = resolveCurrentSessionClientAlias({
@@ -508,7 +510,7 @@ export function createSessionStatusTool(opts?: {
 
       if (!resolved) {
         const fallback = resolveImplicitCurrentSessionFallback({
-          allowFallback: requestedKeyRaw === "current" || requestedKeyParam === undefined,
+          allowFallback: isSemanticCurrentRequest || requestedKeyParam === undefined,
           storeScopedRequesterKey,
         });
         if (fallback) {
