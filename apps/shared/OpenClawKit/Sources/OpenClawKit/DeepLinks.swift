@@ -64,7 +64,20 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             password: nil)
     }
 
-    /// Parse a device-pair setup code (base64url-encoded JSON: `{url, bootstrapToken?, token?, password?}`).
+    /// Parse a gateway setup payload from a device-pair setup code or copied setup text.
+    ///
+    /// Accepted inputs are:
+    /// - base64url-encoded setup JSON
+    /// - raw setup JSON
+    /// - copied text/message content containing one or more extractable setup-code candidates
+    ///
+    /// Accepted payload shapes are:
+    /// - `{url, bootstrapToken?, token?, password?}`
+    /// - `{host, port?, tls?, bootstrapToken?, token?, password?}`
+    ///
+    /// URL-based payloads provide the gateway WebSocket URL via `url`. Host-based payloads
+    /// provide `host` plus optional `port` and `tls`. In both cases, the optional
+    /// `bootstrapToken`, `token`, and `password` fields are also supported.
     public static func fromSetupCode(_ code: String) -> GatewayConnectDeepLink? {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
