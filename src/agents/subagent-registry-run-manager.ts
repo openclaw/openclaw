@@ -170,7 +170,7 @@ export function createSubagentRunManager(params: {
             endedAt: wait.endedAt,
           })
         ) {
-          params.persist();
+          params.persist({ bumpGeneration: true });
         }
         return;
       }

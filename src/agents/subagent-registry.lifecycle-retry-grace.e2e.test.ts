@@ -13,6 +13,7 @@ type LifecycleData = {
   startedAt?: number;
   endedAt?: number;
   aborted?: boolean;
+  yielded?: boolean;
   error?: string;
 };
 type LifecycleEvent = {
@@ -469,6 +470,92 @@ describe("subagent registry lifecycle error grace", () => {
     expect(killed).toBe(1);
     const afterGen = mod.getSubagentRegistryGeneration();
     expect(afterGen).toBeGreaterThan(beforeGen);
+  });
+
+  it("bumps registry generation when agent.wait pauses a run after sessions_yield", async () => {
+    type YieldedWaitResult = {
+      status: "ok";
+      startedAt: number;
+      endedAt: number;
+      livenessState: "paused";
+      yielded: true;
+    };
+    let resolveWait: ((value: YieldedWaitResult) => void) | undefined;
+    const defaultCallGatewayImplementation = callGatewayMock.getMockImplementation();
+    callGatewayMock.mockImplementation(async (request: GatewayRequest) => {
+      if (request.method === "agent.wait") {
+        return await new Promise<YieldedWaitResult>((resolve) => {
+          resolveWait = resolve;
+        });
+      }
+      if (request.method === "chat.history") {
+        const sessionKey =
+          typeof request.params?.sessionKey === "string" ? request.params.sessionKey : "";
+        return {
+          messages: chatHistoryBySessionKey.get(sessionKey) ?? [],
+        };
+      }
+      return {};
+    });
+    try {
+      registerCompletionRun(
+        "run-generation-yield-wait",
+        "generation-yield-wait",
+        "generation yield wait",
+      );
+      await flushAsync();
+      expect(resolveWait).toBeDefined();
+      const beforeGen = mod.getSubagentRegistryGeneration();
+
+      resolveWait?.({
+        status: "ok",
+        startedAt: 4_000,
+        endedAt: 4_500,
+        livenessState: "paused",
+        yielded: true,
+      });
+      await flushAsync();
+
+      const afterGen = mod.getSubagentRegistryGeneration();
+      expect(afterGen).toBeGreaterThan(beforeGen);
+      expect(
+        mod
+          .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+          .find((candidate) => candidate.runId === "run-generation-yield-wait")?.pauseReason,
+      ).toBe("sessions_yield");
+      expect(getAgentCalls()).toHaveLength(0);
+    } finally {
+      if (defaultCallGatewayImplementation) {
+        callGatewayMock.mockImplementation(defaultCallGatewayImplementation);
+      }
+    }
+  });
+
+  it("bumps registry generation when lifecycle yield pauses a run", async () => {
+    registerCompletionRun(
+      "run-generation-yield-lifecycle",
+      "generation-yield-lifecycle",
+      "generation yield lifecycle",
+    );
+    await flushAsync();
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    emitLifecycleEvent("run-generation-yield-lifecycle", {
+      phase: "end",
+      startedAt: 5_000,
+      endedAt: 5_500,
+      yielded: true,
+    });
+    await flushAsync();
+
+    const afterGen = mod.getSubagentRegistryGeneration();
+    expect(afterGen).toBeGreaterThan(beforeGen);
+    expect(
+      mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((candidate) => candidate.runId === "run-generation-yield-lifecycle")?.pauseReason,
+    ).toBe("sessions_yield");
+    expect(getAgentCalls()).toHaveLength(0);
   });
 
   it("does not bump registry generation for steer-restart bookkeeping toggles", () => {

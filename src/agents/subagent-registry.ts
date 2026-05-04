@@ -986,7 +986,7 @@ function ensureListener() {
               typeof evt.data?.startedAt === "number" ? evt.data.startedAt : entry.startedAt,
           })
         ) {
-          persistSubagentRuns();
+          persistSubagentRuns({ bumpGeneration: true });
         }
         return;
       }
