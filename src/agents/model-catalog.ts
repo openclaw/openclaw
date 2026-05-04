@@ -512,6 +512,7 @@ export async function loadModelCatalog(params?: {
               id: normalizeConfiguredProviderCatalogModelId(entry.provider, entry.id, {
                 manifestPlugins: getManifestPlugins(),
               }),
+              catalogSource: "provider-supplemental",
             });
           }
           appendCatalogEntriesIfAbsent(models, normalizedSupplemental);

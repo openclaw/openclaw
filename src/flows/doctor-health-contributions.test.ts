@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveDoctorHealthContributions,
   shouldSkipLegacyUpdateDoctorConfigWrite,
 } from "./doctor-health-contributions.js";
 
 const mocks = vi.hoisted(() => ({
+  getModelRefStatus: vi.fn(),
+  loadModelCatalog: vi.fn(),
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   note: vi.fn(),
   replaceConfigFile: vi.fn().mockResolvedValue(undefined),
@@ -20,6 +23,21 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
+  resolveConfiguredModelRef: vi.fn(),
+}));
+
+vi.mock("../agents/defaults.js", () => ({
+  DEFAULT_MODEL: "gpt-5.5",
+  DEFAULT_PROVIDER: "openai",
+}));
+
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: mocks.loadModelCatalog,
+}));
+
+vi.mock("../agents/model-selection.js", () => ({
+  getModelRefStatus: mocks.getModelRefStatus,
+  resolveConfiguredModelRef: mocks.resolveConfiguredModelRef,
 }));
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
@@ -85,8 +103,12 @@ function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
 
 describe("doctor health contributions", () => {
   beforeEach(() => {
+    mocks.getModelRefStatus.mockReset();
+    mocks.loadModelCatalog.mockReset();
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.note.mockReset();
+    mocks.resolveConfiguredModelRef.mockReset();
+    mocks.resolveConfiguredModelRef.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
     mocks.readConfigFileSnapshot.mockReset();
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -207,6 +229,71 @@ describe("doctor health contributions", () => {
     );
     expect(ids.indexOf("doctor:structured-health-repairs")).toBeLessThan(
       ids.indexOf("doctor:write-config"),
+    );
+  });
+
+  it("skips model allowlist catalog checks when no allowlist is configured", async () => {
+    const contribution = resolveDoctorHealthContributions().find(
+      (entry) => entry.id === "doctor:model-allowlist-catalog",
+    );
+    expect(contribution).toBeDefined();
+
+    await contribution?.run(makeHealthContext({}));
+
+    expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
+  it("warns when provider-supplied catalog rows are hidden by the model allowlist", async () => {
+    const contribution = resolveDoctorHealthContributions().find(
+      (entry) => entry.id === "doctor:model-allowlist-catalog",
+    );
+    expect(contribution).toBeDefined();
+    mocks.loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        catalogSource: "provider-supplemental",
+      },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.5",
+        name: "GPT-5.5 Codex",
+        catalogSource: "provider-supplemental",
+      },
+    ]);
+    mocks.getModelRefStatus.mockImplementation(({ ref }) => ({
+      key: `${ref.provider}/${ref.model}`,
+      inCatalog: true,
+      allowAny: false,
+      allowed: ref.provider === "openai" && ref.model === "gpt-5.4",
+    }));
+
+    await contribution?.run(
+      makeHealthContext({
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+      } as OpenClawConfig),
+    );
+
+    expect(mocks.note).toHaveBeenCalledTimes(1);
+    const message = String(mocks.note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("2 provider-supplied catalog models are available");
+    expect(message).toContain("openai/gpt-5.5");
+    expect(message).toContain("openai-codex/gpt-5.5");
+    expect(message).toContain(
+      `openclaw config set agents.defaults.models '{"openai/gpt-5.5":{}}' --strict-json --merge`,
     );
   });
 
@@ -426,3 +513,17 @@ describe("doctor health contributions", () => {
     });
   });
 });
+
+function makeHealthContext(cfg: OpenClawConfig) {
+  return {
+    cfg,
+    cfgForPersistence: cfg,
+    configPath: "/tmp/openclaw.json",
+    configResult: { cfg },
+    env: {},
+    options: {},
+    prompter: { shouldRepair: false },
+    runtime: {},
+    sourceConfigValid: true,
+  } as Parameters<ReturnType<typeof resolveDoctorHealthContributions>[number]["run"]>[0];
+}
