@@ -61,6 +61,7 @@ Docs: https://docs.openclaw.ai
 - Control UI: render tool results whose output arrives as text-block arrays and give expanded tool output a scrollable block, so read/exec output remains visible in WebChat. Fixes #77054.
 - MCP: include serialized conversation/message payloads in the primary text content for `conversations_list` and `messages_read`, while preserving `structuredContent` for capable clients. Fixes #77024.
 - Media: treat `EPERM` from the post-write media fsync step as best-effort, allowing WebChat and channel uploads to finish on Windows filesystems that reject `fsync` after a successful write. Fixes #76844.
+- Diagnostics: include last progress, cron job/run ids, stopped cron job name, and the last assistant transcript snippet in stalled-session and stuck-session recovery logs so cron stalls show what was stopped.
 - Diagnostics: keep webhook/message OTEL attributes and Prometheus delivery labels low-cardinality and omit raw chat/message IDs from spans, so progress-draft and message-tool modes do not leak high-cardinality messaging identifiers.
 - Google Meet: stop advertising legacy `mode: "realtime"` to agents and config UIs, while keeping it as a hidden compatibility alias for `mode: "agent"`, so new joins use the STT -> OpenClaw agent -> TTS path instead of selecting the direct realtime voice fallback.
 - Google Meet: add `chrome.audioBufferBytes` for generated command-pair SoX audio commands and lower the default buffer from SoX's 8192 bytes to 4096 bytes to reduce Chrome talk-back latency.
