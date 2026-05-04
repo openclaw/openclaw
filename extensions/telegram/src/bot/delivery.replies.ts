@@ -36,6 +36,7 @@ import {
   renderTelegramHtmlText,
   wrapFileReferencesInHtml,
 } from "../format.js";
+import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -751,7 +752,17 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
-    if (!reply?.text && !hasMedia) {
+    const resolvedReplyText =
+      resolveTelegramInteractiveTextFallback({
+        text: reply?.text,
+        interactive: reply?.interactive,
+      }) ??
+      reply?.text ??
+      "";
+    if (reply && resolvedReplyText !== (reply.text ?? "")) {
+      reply = { ...reply, text: resolvedReplyText };
+    }
+    if (!resolvedReplyText && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
@@ -760,7 +771,7 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    const rawContent = reply.text || "";
+    const rawContent = resolvedReplyText;
     const replyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     const replyQuote = resolveReplyQuoteForSend({
