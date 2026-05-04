@@ -165,6 +165,14 @@ const config = {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
     },
+    "examples/*": {
+      entry: ["index.{js,ts}!", "server.{js,ts}!", "src/index.{js,ts}!"],
+      project: ["*.{js,ts}!", "src/**/*.{js,ts}!"],
+    },
+    "examples/plugins/*": {
+      entry: ["index.js!", "src/index.ts!"],
+      project: ["index.js!", "src/**/*.ts!"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in
       // `index.ts` contracts, so Knip needs these convention-based entry files.

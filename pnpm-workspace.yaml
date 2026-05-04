@@ -3,6 +3,8 @@ packages:
   - ui
   - packages/*
   - extensions/*
+  - examples/*
+  - examples/plugins/*
 
 minimumReleaseAge: 2880
 
