@@ -83,6 +83,64 @@ describe("gateway session utils", () => {
     expect(res.items).toEqual(["b", "c"]);
   });
 
+  test("session lists apply a bounded default and expose truncation metadata", async () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 105 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = await listSessionsFromStoreAsync({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+
+    expect(listed.sessions).toHaveLength(100);
+    expect(listed.count).toBe(100);
+    expect(listed.totalCount).toBe(105);
+    expect(listed.limitApplied).toBe(100);
+    expect(listed.hasMore).toBe(true);
+    expect(listed.sessions[0]?.key).toBe("session-0");
+    expect(listed.sessions.at(-1)?.key).toBe("session-99");
+  });
+
+  test("session lists honor explicit caller limits", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 5 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { limit: 3 },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual([
+      "session-0",
+      "session-1",
+      "session-2",
+    ]);
+    expect(listed.count).toBe(3);
+    expect(listed.totalCount).toBe(5);
+    expect(listed.limitApplied).toBe(3);
+    expect(listed.hasMore).toBe(true);
+  });
+
   test("parseGroupKey handles group keys", () => {
     expect(parseGroupKey("discord:group:dev")).toEqual({
       channel: "discord",
