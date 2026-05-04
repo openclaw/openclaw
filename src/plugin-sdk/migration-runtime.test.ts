@@ -40,6 +40,7 @@ describe("withCachedMigrationConfigRuntime", () => {
           previousHash: null,
           snapshot: {} as never,
           nextConfig: runtimeConfig,
+          persistedConfig: runtimeConfig,
           afterWrite: { mode: "auto" },
           followUp: { mode: "auto", requiresRestart: false },
           result,
@@ -54,6 +55,7 @@ describe("withCachedMigrationConfigRuntime", () => {
           previousHash: null,
           snapshot: {} as never,
           nextConfig: runtimeConfig,
+          persistedConfig: runtimeConfig,
           afterWrite: { mode: "auto" },
           followUp: { mode: "auto", requiresRestart: false },
         };
