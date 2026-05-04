@@ -304,7 +304,7 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });
-        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
+        {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           finalPayloads.unshift({
             text: `🧹 Auto-compaction complete${suffix}.`,

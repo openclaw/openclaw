@@ -461,8 +461,9 @@ export function buildStatusMessage(args: StatusArgs): string {
   let cacheWrite = entry?.cacheWrite;
   let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
 
-  // Prefer prompt-size tokens from the session transcript when it looks larger
-  // (cached prompt tokens are often missing from agent meta/store).
+  // Fill in token data from session transcript when session store has none.
+  // Never let transcript data override valid session data (promptTokens from
+  // transcript can be a per-turn cumulative value that exceeds context window).
   if (args.includeTranscriptUsage) {
     const logUsage = readUsageFromSessionLog(
       entry?.sessionId,
@@ -473,8 +474,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
-      if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
-        totalTokens = candidate;
+      if (!totalTokens || totalTokens === 0) {
+        // Cap at context window to prevent >100% display from cumulative values
+        totalTokens = contextTokens && candidate > contextTokens ? contextTokens : candidate;
       }
       if (!entry?.model && logUsage.model) {
         const slashIndex = logUsage.model.indexOf("/");
@@ -536,9 +538,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
-  const freshMarker = entry?.totalTokensFresh === false ? " (est.)" : "";
+  const isFresh = entry?.totalTokensFresh !== false;
+  const displayTokens = isFresh ? totalTokens : null;
+  const freshMarker = isFresh ? "" : " ⚠️ (last call returned no token data)";
   const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}${freshMarker}`,
+    `Context: ${formatTokens(displayTokens, contextTokens ?? null)}${freshMarker}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)

@@ -29,6 +29,7 @@ import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
+import { catchUpMissedMessages } from "./catch-up.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
@@ -467,11 +468,35 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   try {
     if (slackMode === "socket") {
       let reconnectAttempts = 0;
+      let disconnectedAt: number | undefined;
       while (!opts.abortSignal?.aborted) {
         try {
           await app.start();
           reconnectAttempts = 0;
           runtime.log?.("slack socket mode connected");
+
+          // Catch up on messages missed during disconnect window
+          if (disconnectedAt && botUserId && handleSlackMessage) {
+            const gapMs = Date.now() - disconnectedAt;
+            runtime.log?.(
+              `slack catch-up: checking for missed messages (gap: ${Math.round(gapMs / 1000)}s)`,
+            );
+            try {
+              const found = await catchUpMissedMessages({
+                client: app.client,
+                botUserId,
+                disconnectedAt,
+                handleMessage: handleSlackMessage,
+                log: runtime.log,
+              });
+              if (found > 0) {
+                runtime.log?.(`slack catch-up: replayed ${found} missed message(s)`);
+              }
+            } catch (err) {
+              runtime.error?.(`slack catch-up failed: ${formatUnknownError(err)}`);
+            }
+            disconnectedAt = undefined;
+          }
         } catch (err) {
           reconnectAttempts += 1;
           if (
@@ -497,6 +522,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
 
         const disconnect = await waitForSlackSocketDisconnect(app, opts.abortSignal);
+        disconnectedAt = Date.now();
         if (opts.abortSignal?.aborted) {
           break;
         }

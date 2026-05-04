@@ -20,13 +20,46 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
-const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+const _RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
-function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
+function extractRetryAfterSeconds(raw: string): number | undefined {
+  // Match "retry-after: 30", "retry_after: 45", "Retry-After: 60", "retry after 30 seconds"
+  const match =
+    raw.match(/retry[_-]?after[\s:"]*(\d+)/i) ??
+    raw.match(/try again in (\d+)\s*(?:second|sec)/i) ??
+    raw.match(/wait (\d+)\s*(?:second|sec)/i) ??
+    raw.match(/please retry after (\d+)/i);
+  if (match?.[1]) {
+    const val = parseInt(match[1], 10);
+    // Sanity: only return if it looks like seconds (≤ 3600)
+    return val > 0 && val <= 3600 ? val : undefined;
+  }
+  return undefined;
+}
+
+function formatRateLimitOrOverloadedErrorCopy(
+  raw: string,
+  opts?: { provider?: string; model?: string },
+): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
-    return RATE_LIMIT_ERROR_USER_MESSAGE;
+    const parts: string[] = ["⚠️ API rate limit reached"];
+    const provider = opts?.provider?.trim();
+    const model = opts?.model?.trim();
+    if (provider && model) {
+      parts[0] = `⚠️ ${provider} (${model}) rate limit reached`;
+    } else if (provider) {
+      parts[0] = `⚠️ ${provider} rate limit reached`;
+    }
+    const retryAfter = extractRetryAfterSeconds(raw);
+    if (retryAfter) {
+      const display = retryAfter >= 60 ? `${Math.ceil(retryAfter / 60)} min` : `${retryAfter}s`;
+      parts.push(`Please wait ~${display} before retrying.`);
+    } else {
+      parts.push("Please try again later.");
+    }
+    return parts.join(". ");
   }
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
@@ -529,7 +562,10 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
-  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
+  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw, {
+    provider: opts?.provider,
+    model: opts?.model ?? msg.model,
+  });
   if (transientCopy) {
     return transientCopy;
   }

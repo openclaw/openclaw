@@ -1,3 +1,4 @@
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
@@ -131,9 +132,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
   const totalTokens = tokensAfterCompaction ?? resolveFreshSessionTotalTokens(params.sessionEntry);
+  const resolvedContextTokens = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.sessionEntry.providerOverride ?? params.provider,
+    model: params.sessionEntry.modelOverride ?? params.model,
+    contextTokensOverride: params.contextTokens,
+    fallbackContextTokens: params.sessionEntry.contextTokens,
+  });
   const contextSummary = formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
-    params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
+    resolvedContextTokens ?? null,
   );
   const reason = result.reason?.trim();
   const line = reason
