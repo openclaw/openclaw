@@ -1631,6 +1631,61 @@ describe("runCodexAppServerAttempt", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
+  it("keeps the native hook relay default floor for short Codex turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const relayFloorMs = 30 * 60_000;
+
+    const startedAtMs = Date.now();
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    expect(registration).toBeDefined();
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(relayFloorMs);
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeLessThan(relayFloorMs + 10_000);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("preserves an explicit native hook relay ttl", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const explicitTtlMs = 123_456;
+
+    const startedAtMs = Date.now();
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+        ttlMs: explicitTtlMs,
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    expect(registration).toBeDefined();
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(explicitTtlMs);
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeLessThan(explicitTtlMs + 10_000);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
   it("lets Codex app-server approval modes own native permission requests by default", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1708,6 +1763,56 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("keeps native hook relays alive across startup and long Codex turn timeouts", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const abortController = new AbortController();
+    const attemptTimeoutMs = 45 * 60_000;
+    const startupTimeoutMs = attemptTimeoutMs;
+    const turnStartTimeoutMs = attemptTimeoutMs;
+    const cleanupGraceMs = 5 * 60_000;
+    const expectedRelayTtlMs =
+      attemptTimeoutMs + startupTimeoutMs + turnStartTimeoutMs + cleanupGraceMs;
+    params.timeoutMs = attemptTimeoutMs;
+    params.abortSignal = abortController.signal;
+
+    const startedAtMs = Date.now();
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    let completed = false;
+    let relayId: string | undefined;
+    try {
+      await harness.waitForMethod("turn/start");
+
+      const startRequest = harness.requests.find((request) => request.method === "thread/start");
+      relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+      const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+      expect(registration).toBeDefined();
+      expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(
+        expectedRelayTtlMs,
+      );
+
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      completed = true;
+      await run;
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
+      ).toBeUndefined();
+    } finally {
+      if (!completed) {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" }).catch(() => {});
+        abortController.abort(new Error("test cleanup"));
+        await run.catch(() => {});
+      }
+    }
   });
 
   it("reuses the Codex native hook relay id across runs for the same session", async () => {

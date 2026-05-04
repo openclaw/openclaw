@@ -134,8 +134,11 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
+const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
+const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
+const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
@@ -649,6 +652,10 @@ export async function runCodexAppServerAttempt(
   let trajectoryEndRecorded = false;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
   let startupClientForCleanup: CodexAppServerClient | undefined;
+  const startupTimeoutMs = resolveCodexStartupTimeoutMs({
+    timeoutMs: params.timeoutMs,
+    timeoutFloorMs: options.startupTimeoutFloorMs,
+  });
   try {
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -662,6 +669,9 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       config: params.config,
       runId: params.runId,
+      attemptTimeoutMs: params.timeoutMs,
+      startupTimeoutMs,
+      turnStartTimeoutMs: params.timeoutMs,
       signal: runAbortController.signal,
     });
     const nativeHookRelayConfig = nativeHookRelay
@@ -705,8 +715,7 @@ export async function runCodexAppServerAttempt(
           }
         : appServer;
     ({ client, thread } = await withCodexStartupTimeout({
-      timeoutMs: params.timeoutMs,
-      timeoutFloorMs: options.startupTimeoutFloorMs,
+      timeoutMs: startupTimeoutMs,
       signal: runAbortController.signal,
       operation: async () => {
         let attemptedClient: CodexAppServerClient | undefined;
@@ -1630,6 +1639,9 @@ function createCodexNativeHookRelay(params: {
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
   runId: string;
+  attemptTimeoutMs: number;
+  startupTimeoutMs: number;
+  turnStartTimeoutMs: number;
   signal: AbortSignal;
 }): NativeHookRelayRegistrationHandle | undefined {
   if (params.options?.enabled === false) {
@@ -1648,7 +1660,12 @@ function createCodexNativeHookRelay(params: {
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     allowedEvents: params.events,
-    ttlMs: params.options?.ttlMs,
+    ttlMs: resolveCodexNativeHookRelayTtlMs({
+      explicitTtlMs: params.options?.ttlMs,
+      attemptTimeoutMs: params.attemptTimeoutMs,
+      startupTimeoutMs: params.startupTimeoutMs,
+      turnStartTimeoutMs: params.turnStartTimeoutMs,
+    }),
     signal: params.signal,
     command: {
       timeoutMs: params.options?.gatewayTimeoutMs,
@@ -1670,6 +1687,23 @@ function resolveCodexNativeHookRelayEvents(params: {
   return params.appServer.approvalPolicy === "never"
     ? CODEX_NATIVE_HOOK_RELAY_EVENTS
     : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
+}
+
+function resolveCodexNativeHookRelayTtlMs(params: {
+  explicitTtlMs: number | undefined;
+  attemptTimeoutMs: number;
+  startupTimeoutMs: number;
+  turnStartTimeoutMs: number;
+}): number {
+  if (params.explicitTtlMs !== undefined) {
+    return params.explicitTtlMs;
+  }
+  const relayBudgetMs =
+    params.attemptTimeoutMs +
+    params.startupTimeoutMs +
+    params.turnStartTimeoutMs +
+    CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS;
+  return Math.max(CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS, Math.floor(relayBudgetMs));
 }
 
 function buildCodexNativeHookRelayId(params: {
@@ -1855,7 +1889,6 @@ function shouldProjectMirroredHistoryForCodexStart(params: {
 
 async function withCodexStartupTimeout<T>(params: {
   timeoutMs: number;
-  timeoutFloorMs?: number;
   signal: AbortSignal;
   operation: () => Promise<T>;
 }): Promise<T> {
@@ -1875,10 +1908,9 @@ async function withCodexStartupTimeout<T>(params: {
           }
           reject(error);
         };
-        const timeoutMs = Math.max(params.timeoutFloorMs ?? 100, params.timeoutMs);
         timeout = setTimeout(() => {
           rejectOnce(new Error("codex app-server startup timed out"));
-        }, timeoutMs);
+        }, params.timeoutMs);
         const abortListener = () => rejectOnce(new Error("codex app-server startup aborted"));
         params.signal.addEventListener("abort", abortListener, { once: true });
         abortCleanup = () => params.signal.removeEventListener("abort", abortListener);
@@ -1890,6 +1922,16 @@ async function withCodexStartupTimeout<T>(params: {
     }
     abortCleanup?.();
   }
+}
+
+function resolveCodexStartupTimeoutMs(params: {
+  timeoutMs: number;
+  timeoutFloorMs?: number;
+}): number {
+  return Math.max(
+    params.timeoutFloorMs ?? CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
+    params.timeoutMs,
+  );
 }
 
 function resolveCodexTurnCompletionIdleTimeoutMs(value: number | undefined): number {
