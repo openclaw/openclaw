@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import type { createJiti } from "jiti";
 import { toSafeImportPath } from "../shared/import-specifier.js";
@@ -47,6 +48,8 @@ export type PluginModuleLoaderStatsSnapshot = {
 const DEFAULT_PLUGIN_MODULE_LOADER_CACHE_ENTRIES = 128;
 const MAX_TRACKED_SOURCE_TRANSFORM_TARGETS = 24;
 const JITI_FACTORY_OVERRIDE_KEY = Symbol.for("openclaw.pluginModuleLoaderJitiFactoryOverride");
+const PLUGIN_SDK_IMPORT_SPECIFIER_PATTERN =
+  /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(?:openclaw|@openclaw)\/plugin-sdk(?:\/[^"']*)?["']/u;
 const requireForJiti = createRequire(import.meta.url);
 let createJitiLoaderFactory: PluginModuleLoaderFactory | undefined;
 const pluginModuleLoaderStats = {
@@ -213,6 +216,29 @@ function createLazySourceTransformLoader(params: {
   };
 }
 
+function shouldForceSourceTransformForPluginSdkAlias(params: {
+  target: string;
+  aliasMap: Record<string, string>;
+}): boolean {
+  if (
+    !params.aliasMap["openclaw/plugin-sdk"] &&
+    !params.aliasMap["@openclaw/plugin-sdk"] &&
+    !Object.keys(params.aliasMap).some(
+      (key) => key.startsWith("openclaw/plugin-sdk/") || key.startsWith("@openclaw/plugin-sdk/"),
+    )
+  ) {
+    return false;
+  }
+  if (!/\.[cm]?js$/iu.test(params.target)) {
+    return false;
+  }
+  try {
+    return PLUGIN_SDK_IMPORT_SPECIFIER_PATTERN.test(fs.readFileSync(params.target, "utf-8"));
+  } catch {
+    return false;
+  }
+}
+
 function createPluginModuleLoader(params: {
   loaderFilename: string;
   aliasMap: Record<string, string>;
@@ -242,8 +268,20 @@ function createPluginModuleLoader(params: {
   // for TS / TSX sources and for the small set of require(esm) /
   // async-module fallbacks `tryNativeRequireJavaScriptModule` declines to
   // handle.
+  const getLoadWithAliasTransform = createLazySourceTransformLoader({
+    ...params,
+    tryNative: false,
+  });
   return ((target: string, ...rest: unknown[]) => {
     pluginModuleLoaderStats.calls += 1;
+    if (shouldForceSourceTransformForPluginSdkAlias({ target, aliasMap: params.aliasMap })) {
+      pluginModuleLoaderStats.sourceTransformForced += 1;
+      recordSourceTransformTarget(target);
+      return (getLoadWithAliasTransform() as (t: string, ...a: unknown[]) => unknown)(
+        target,
+        ...rest,
+      );
+    }
     const native = tryNativeRequireJavaScriptModule(target, { allowWindows: true });
     if (native.ok) {
       pluginModuleLoaderStats.nativeHits += 1;

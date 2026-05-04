@@ -10,7 +10,8 @@ function writeRuntimeModuleWrapper(sourcePath: string, targetPath: string): void
   const relative = `./${path.relative(path.dirname(targetPath), sourcePath).split(path.sep).join("/")}`;
   const content = [
     `export * from ${JSON.stringify(relative)};`,
-    `export { default } from ${JSON.stringify(relative)};`,
+    `import * as moduleExports from ${JSON.stringify(relative)};`,
+    `export default moduleExports.default ?? moduleExports;`,
     "",
   ].join("\n");
   try {

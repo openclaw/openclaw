@@ -18,7 +18,7 @@ type GatewayRuntimeServiceLogger = {
 type GatewayPostReadyLogger = {
   warn: (message: string) => void;
 };
-type GatewayMaintenanceHandles = NonNullable<
+export type GatewayMaintenanceHandles = NonNullable<
   Awaited<ReturnType<typeof startGatewayMaintenanceTimers>>
 >;
 
@@ -60,6 +60,18 @@ export function startGatewayCronWithLogging(params: {
   void params.cron.start().catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
 }
 
+function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles | null): void {
+  if (!maintenance) {
+    return;
+  }
+  clearInterval(maintenance.tickInterval);
+  clearInterval(maintenance.healthInterval);
+  clearInterval(maintenance.dedupeCleanup);
+  if (maintenance.mediaCleanup) {
+    clearInterval(maintenance.mediaCleanup);
+  }
+}
+
 export async function runGatewayPostReadyMaintenance(params: {
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => void;
@@ -86,6 +98,59 @@ export async function runGatewayPostReadyMaintenance(params: {
     });
   }
   params.recordPostReadyMemory();
+}
+
+export function scheduleGatewayPostReadyMaintenance(params: {
+  delayMs: number;
+  isClosing: () => boolean;
+  onStarted?: () => void;
+  startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
+  applyMaintenance: (maintenance: GatewayMaintenanceHandles) => void;
+  shouldStartCron: () => boolean;
+  markCronStartHandled: () => void;
+  cron: { start: () => Promise<void> };
+  logCron: { error: (message: string) => void };
+  log: GatewayPostReadyLogger;
+  recordPostReadyMemory: () => void;
+}): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(() => {
+    params.onStarted?.();
+    if (params.isClosing()) {
+      return;
+    }
+    void runGatewayPostReadyMaintenance({
+      startMaintenance: async () => {
+        if (params.isClosing()) {
+          return null;
+        }
+        const maintenance = await params.startMaintenance();
+        if (params.isClosing()) {
+          clearGatewayMaintenanceHandles(maintenance);
+          return null;
+        }
+        return maintenance;
+      },
+      applyMaintenance: (maintenance) => {
+        if (params.isClosing()) {
+          clearGatewayMaintenanceHandles(maintenance);
+          return;
+        }
+        params.applyMaintenance(maintenance);
+      },
+      shouldStartCron: () => !params.isClosing() && params.shouldStartCron(),
+      markCronStartHandled: params.markCronStartHandled,
+      cron: params.cron,
+      logCron: params.logCron,
+      log: params.log,
+      recordPostReadyMemory: () => {
+        if (!params.isClosing()) {
+          params.recordPostReadyMemory();
+        }
+      },
+    });
+  }, params.delayMs);
+  timer.unref?.();
+  return timer;
 }
 
 function recoverPendingOutboundDeliveries(params: {

@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 interface Options {
   beta: string;
@@ -101,6 +102,8 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+const TELEGRAM_BETA_WORKFLOW_FILE = "npm-telegram-beta-e2e.yml";
+
 function resolveBetaVersion(beta: string): string {
   const value = beta.trim().replace(/^openclaw@/, "");
   if (/^\d{4}\.\d+\.\d+-beta\.\d+$/u.test(value)) {
@@ -160,13 +163,92 @@ function ghJson(repo: string, pathSuffix: string): unknown {
   return JSON.parse(run("gh", ["api", `repos/${repo}/${pathSuffix}`], { capture: true }));
 }
 
-function dispatchTelegram(options: Options, packageSpec: string): string {
+export function parseWorkflowRunIdFromOutput(output: string): string | undefined {
+  return /\/actions\/runs\/(\d+)/u.exec(output)?.[1];
+}
+
+type WorkflowRunListEntry = {
+  createdAt?: string;
+  databaseId?: number | string;
+};
+
+function normalizeRunId(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  return undefined;
+}
+
+export function selectNewestDispatchedRunId(params: {
+  beforeIds: ReadonlySet<string>;
+  runs: readonly WorkflowRunListEntry[];
+}): string | undefined {
+  return params.runs
+    .filter((entry) => {
+      const id = normalizeRunId(entry.databaseId);
+      return id !== undefined && !params.beforeIds.has(id);
+    })
+    .toSorted((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))
+    .map((entry) => normalizeRunId(entry.databaseId))
+    .find((id): id is string => id !== undefined);
+}
+
+function listWorkflowDispatchRuns(repo: string, workflow: string): WorkflowRunListEntry[] {
+  return JSON.parse(
+    run(
+      "gh",
+      [
+        "run",
+        "list",
+        "--repo",
+        repo,
+        "--workflow",
+        workflow,
+        "--event",
+        "workflow_dispatch",
+        "--limit",
+        "50",
+        "--json",
+        "databaseId,createdAt",
+      ],
+      { capture: true },
+    ),
+  ) as WorkflowRunListEntry[];
+}
+
+async function findDispatchedWorkflowRunId(params: {
+  beforeIds: ReadonlySet<string>;
+  repo: string;
+  workflow: string;
+}): Promise<string> {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const runId = selectNewestDispatchedRunId({
+      beforeIds: params.beforeIds,
+      runs: listWorkflowDispatchRuns(params.repo, params.workflow),
+    });
+    if (runId) {
+      return runId;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+  throw new Error(`could not find dispatched run for ${params.workflow}`);
+}
+
+async function dispatchTelegram(options: Options, packageSpec: string): Promise<string> {
+  const beforeIds = new Set(
+    listWorkflowDispatchRuns(options.repo, TELEGRAM_BETA_WORKFLOW_FILE)
+      .map((entry) => normalizeRunId(entry.databaseId))
+      .filter((id): id is string => id !== undefined),
+  );
   const output = run(
     "gh",
     [
       "workflow",
       "run",
-      "NPM Telegram Beta E2E",
+      TELEGRAM_BETA_WORKFLOW_FILE,
       "--repo",
       options.repo,
       "--ref",
@@ -180,11 +262,15 @@ function dispatchTelegram(options: Options, packageSpec: string): string {
     ],
     { capture: true },
   );
-  const runId = /\/actions\/runs\/(\d+)/u.exec(output)?.[1];
-  if (!runId) {
-    throw new Error(`could not parse workflow run id from gh output:\n${output}`);
+  const runId = parseWorkflowRunIdFromOutput(output);
+  if (runId) {
+    return runId;
   }
-  return runId;
+  return await findDispatchedWorkflowRunId({
+    beforeIds,
+    repo: options.repo,
+    workflow: TELEGRAM_BETA_WORKFLOW_FILE,
+  });
 }
 
 async function pollRun(repo: string, runId: string): Promise<void> {
@@ -266,7 +352,7 @@ async function main(): Promise<void> {
   }
 
   if (!options.skipTelegram) {
-    const runId = dispatchTelegram(options, packageSpec);
+    const runId = await dispatchTelegram(options, packageSpec);
     await pollRun(options.repo, runId);
     const artifactDir = downloadTelegramArtifact(options.repo, runId);
     const report = findFile(artifactDir, "telegram-qa-report.md");
@@ -277,7 +363,9 @@ async function main(): Promise<void> {
   }
 }
 
-await main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

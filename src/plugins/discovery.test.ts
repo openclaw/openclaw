@@ -333,7 +333,7 @@ async function expectRejectedPackageExtensionEntry(params: {
   if (params.expectedDiagnostic === "runtime") {
     expect(
       result.diagnostics.some(
-        (entry) => entry.level === "error" && entry.message.includes("compiled runtime output"),
+        (entry) => entry.level === "warn" && entry.message.includes("compiled runtime output"),
       ),
     ).toBe(true);
     return;
@@ -748,7 +748,7 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
   });
 
-  it("rejects source-only TypeScript entries for installed package plugins", async () => {
+  it("warns but still loads source-only TypeScript entries for installed package plugins", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "source-only-pack");
     mkdirSafe(path.join(pluginDir, "src"));
@@ -762,11 +762,11 @@ describe("discoverOpenClawPlugins", () => {
 
     const result = await discoverWithStateDir(stateDir, {});
 
-    expectCandidatePresence(result, { absent: ["source-only-pack"] });
+    expectCandidateIds(result.candidates, { includes: ["source-only-pack"] });
     expect(
       result.diagnostics.some(
         (entry) =>
-          entry.level === "error" &&
+          entry.level === "warn" &&
           entry.message.includes("requires compiled runtime output") &&
           entry.message.includes("./dist/index.js"),
       ),

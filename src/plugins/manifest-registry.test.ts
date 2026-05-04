@@ -432,6 +432,40 @@ describe("loadPluginManifestRegistry", () => {
     expect(channelConfigWarnings).toHaveLength(1);
   });
 
+  it("suppresses missing channel config diagnostics for inactive external channel plugins", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    });
+    const candidate = createPluginCandidate({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    const disabledRegistry = loadPluginManifestRegistry({
+      config: { plugins: { entries: { "external-chat": { enabled: false } } } },
+      candidates: [candidate],
+    });
+    expect(
+      disabledRegistry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+
+    const allowlistRegistry = loadPluginManifestRegistry({
+      config: { plugins: { allow: ["other-plugin"] } },
+      candidates: [candidate],
+    });
+    expect(
+      allowlistRegistry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+  });
+
   it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();

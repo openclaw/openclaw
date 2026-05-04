@@ -5,6 +5,7 @@ import type {
   BlockStreamingCoalesceConfig,
   ChannelDeliveryStreamingConfig,
   ChannelPreviewStreamingConfig,
+  ChannelStreamingCommandTextMode,
   ChannelStreamingProgressConfig,
   ChannelStreamingConfig,
   SlackChannelStreamingConfig,
@@ -17,6 +18,7 @@ export type {
   ChannelDeliveryStreamingConfig,
   ChannelPreviewStreamingConfig,
   ChannelStreamingBlockConfig,
+  ChannelStreamingCommandTextMode,
   ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
   ChannelStreamingPreviewConfig,
@@ -86,6 +88,10 @@ function asProgressConfig(value: unknown): ChannelStreamingProgressConfig | unde
   return asObjectRecord(value) as ChannelStreamingProgressConfig | undefined;
 }
 
+function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | undefined {
+  return value === "raw" || value === "status" ? value : undefined;
+}
+
 export const DEFAULT_PROGRESS_DRAFT_LABELS = [
   "Thinking...",
   "Shelling...",
@@ -127,9 +133,10 @@ export function isChannelProgressDraftWorkToolName(name: string | null | undefin
   return Boolean(normalized && !NON_WORK_PROGRESS_TOOL_NAMES.has(normalized));
 }
 
-type ChannelProgressLineOptions = {
+export type ChannelProgressLineOptions = {
   markdown?: boolean;
   detailMode?: "explain" | "raw";
+  commandText?: ChannelStreamingCommandTextMode;
 };
 
 export type ChannelProgressDraftRenderMode = "text" | "rich";
@@ -258,6 +265,16 @@ function itemKindToToolName(kind: string | undefined): string | undefined {
   }
 }
 
+function isCommandToolName(name: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(name);
+  return normalized === "exec" || normalized === "shell" || normalized === "bash";
+}
+
+function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { event: "item" }>) {
+  const itemKind = normalizeOptionalLowercaseString(input.itemKind);
+  return itemKind === "command" || isCommandToolName(input.name);
+}
+
 function patchMetas(input: Extract<ChannelProgressDraftLineInput, { event: "patch" }>): string[] {
   const fileMetas = [...(input.added ?? []), ...(input.modified ?? []), ...(input.deleted ?? [])];
   return compactStrings([input.summary, ...fileMetas, input.title]);
@@ -265,6 +282,42 @@ function patchMetas(input: Extract<ChannelProgressDraftLineInput, { event: "patc
 
 function shouldPrefixProgressLine(line: string): boolean {
   return !EMOJI_PREFIX_RE.test(line);
+}
+
+export function formatChannelProgressDraftLine(
+  input: ChannelProgressDraftLineInput,
+  options?: ChannelProgressLineOptions,
+): string | undefined {
+  return buildChannelProgressDraftLine(input, options)?.text;
+}
+
+export function resolveChannelProgressDraftLineOptions(
+  entry: StreamingCompatEntry | null | undefined,
+  options?: ChannelProgressLineOptions,
+): ChannelProgressLineOptions {
+  return {
+    ...options,
+    commandText: options?.commandText ?? resolveChannelStreamingPreviewCommandText(entry),
+  };
+}
+
+export function buildChannelProgressDraftLineForEntry(
+  entry: StreamingCompatEntry | null | undefined,
+  input: ChannelProgressDraftLineInput,
+  options?: ChannelProgressLineOptions,
+): ChannelProgressDraftLine | undefined {
+  return buildChannelProgressDraftLine(
+    input,
+    resolveChannelProgressDraftLineOptions(entry, options),
+  );
+}
+
+export function formatChannelProgressDraftLineForEntry(
+  entry: StreamingCompatEntry | null | undefined,
+  input: ChannelProgressDraftLineInput,
+  options?: ChannelProgressLineOptions,
+): string | undefined {
+  return buildChannelProgressDraftLineForEntry(entry, input, options)?.text;
 }
 
 export function buildChannelProgressDraftLine(
@@ -277,7 +330,9 @@ export function buildChannelProgressDraftLine(
         input.event,
         input.name,
         [
-          inferToolMeta(input.name, input.args, options?.detailMode),
+          options?.commandText === "status" && isCommandToolName(input.name)
+            ? undefined
+            : inferToolMeta(input.name, input.args, options?.detailMode),
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,
@@ -285,7 +340,12 @@ export function buildChannelProgressDraftLine(
     }
     case "item": {
       const name = input.name ?? itemKindToToolName(input.itemKind);
-      const meta = input.meta ?? input.progressText ?? input.summary;
+      const meta =
+        input.meta ??
+        input.summary ??
+        (options?.commandText === "status" && isCommandProgressItem(input)
+          ? undefined
+          : input.progressText);
       if (name) {
         return buildNamedProgressLine(input.event, name, [meta], options, {
           status: input.status,
@@ -339,9 +399,7 @@ export function buildChannelProgressDraftLine(
         input.name ?? "exec",
         [status, input.title],
         options,
-        {
-          status,
-        },
+        { status },
       );
     }
     case "patch": {
@@ -357,13 +415,6 @@ export function buildChannelProgressDraftLine(
     }
   }
   return undefined;
-}
-
-export function formatChannelProgressDraftLine(
-  input: ChannelProgressDraftLineInput,
-  options?: ChannelProgressLineOptions,
-): string | undefined {
-  return buildChannelProgressDraftLine(input, options)?.text;
 }
 
 export function createChannelProgressDraftGate(params: {
@@ -496,6 +547,18 @@ export function resolveChannelStreamingPreviewToolProgress(
     );
   }
   return asBoolean(config?.preview?.toolProgress) ?? defaultValue;
+}
+
+export function resolveChannelStreamingPreviewCommandText(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue: ChannelStreamingCommandTextMode = "raw",
+): ChannelStreamingCommandTextMode {
+  const config = getChannelStreamingConfigObject(entry);
+  return (
+    asCommandTextMode(config?.progress?.commandText) ??
+    asCommandTextMode(config?.preview?.commandText) ??
+    defaultValue
+  );
 }
 
 export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
