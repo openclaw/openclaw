@@ -385,7 +385,33 @@ export async function loadModelCatalog(params?: {
           },
         });
         if (supplemental.length > 0) {
-          appendCatalogEntriesIfAbsent(models, supplemental);
+          appendCatalogEntriesIfAbsent(
+            models,
+            supplemental.map((entry) => {
+              const catalogEntry: ModelCatalogEntry = {
+                id: entry.id,
+                name: entry.name,
+                provider: entry.provider,
+                catalogSource: "provider-supplemental",
+              };
+              if (entry.alias !== undefined) {
+                catalogEntry.alias = entry.alias;
+              }
+              if (entry.contextWindow !== undefined) {
+                catalogEntry.contextWindow = entry.contextWindow;
+              }
+              if (entry.reasoning !== undefined) {
+                catalogEntry.reasoning = entry.reasoning;
+              }
+              if (entry.input !== undefined) {
+                catalogEntry.input = entry.input;
+              }
+              if (entry.compat !== undefined) {
+                catalogEntry.compat = entry.compat;
+              }
+              return catalogEntry;
+            }),
+          );
         }
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
