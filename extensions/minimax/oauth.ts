@@ -247,7 +247,7 @@ export async function refreshMiniMaxPortalOAuthToken(params: {
       notification_message: payload.notification_message,
     };
   } finally {
-    release();
+    await release();
   }
 }
 
