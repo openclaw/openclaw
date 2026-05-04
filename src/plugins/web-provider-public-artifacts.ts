@@ -54,17 +54,17 @@ function resolveBundledCandidatePluginIds(params: {
   bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
 }): BundledCandidateResolution {
-  const resolvedConfig =
-    params.contract === "webSearchProviders"
-      ? resolveBundledWebSearchResolutionConfig(params).config
-      : resolveBundledWebFetchResolutionConfig(params).config;
-  if (params.onlyPluginIds && params.onlyPluginIds.length > 0) {
+  if (params.onlyPluginIds !== undefined) {
     return {
-      pluginIds: filterAllowlistedBundledPluginIds(resolvedConfig, [
+      pluginIds: filterAllowlistedBundledPluginIds(params.config, [
         ...new Set(params.onlyPluginIds),
       ]).toSorted((left, right) => left.localeCompare(right)),
     };
   }
+  const resolvedConfig =
+    params.contract === "webSearchProviders"
+      ? resolveBundledWebSearchResolutionConfig(params).config
+      : resolveBundledWebFetchResolutionConfig(params).config;
   const candidates = resolveManifestDeclaredWebProviderCandidates({
     contract: params.contract,
     configKey: params.configKey,

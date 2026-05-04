@@ -781,8 +781,8 @@ describe("openai transport stream", () => {
     expect(output.stopReason).toBe("stop");
   });
 
-  it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", async () => {
-    const streamFn = buildTransportAwareSimpleStreamFn(
+  it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
+    const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
         {
           id: "anthropic/claude-sonnet-4",
@@ -803,28 +803,6 @@ describe("openai transport stream", () => {
           },
         },
       ),
-    );
-
-    expect(streamFn).toBeTypeOf("function");
-    let capturedPayload: Record<string, unknown> | undefined;
-    let resolveCaptured!: () => void;
-    const captured = new Promise<void>((resolve) => {
-      resolveCaptured = resolve;
-    });
-
-    void streamFn!(
-      {
-        id: "anthropic/claude-sonnet-4",
-        name: "Claude Sonnet 4",
-        api: "openclaw-openai-completions-transport",
-        provider: "openrouter",
-        baseUrl: "https://proxy.example.com/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as Model<"openclaw-openai-completions-transport">,
       {
         systemPrompt: "system",
         messages: [],
@@ -832,25 +810,18 @@ describe("openai transport stream", () => {
       } as never,
       {
         reasoningEffort: "high",
-        onPayload: async (payload: unknown) => {
-          capturedPayload = payload as Record<string, unknown>;
-          resolveCaptured();
-          return payload;
-        },
       } as never,
-    );
+    ) as Record<string, unknown>;
 
-    await captured;
-
-    expect(capturedPayload).toMatchObject({
+    expect(params).toMatchObject({
       reasoning: {
         effort: "high",
       },
     });
   });
 
-  it("keeps OpenRouter thinking format for native OpenRouter hosts behind custom provider ids", async () => {
-    const streamFn = buildTransportAwareSimpleStreamFn(
+  it("keeps OpenRouter thinking format for native OpenRouter hosts behind custom provider ids", () => {
+    const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
         {
           id: "anthropic/claude-sonnet-4",
@@ -871,28 +842,6 @@ describe("openai transport stream", () => {
           },
         },
       ),
-    );
-
-    expect(streamFn).toBeTypeOf("function");
-    let capturedPayload: Record<string, unknown> | undefined;
-    let resolveCaptured!: () => void;
-    const captured = new Promise<void>((resolve) => {
-      resolveCaptured = resolve;
-    });
-
-    void streamFn!(
-      {
-        id: "anthropic/claude-sonnet-4",
-        name: "Claude Sonnet 4",
-        api: "openclaw-openai-completions-transport",
-        provider: "custom-openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as Model<"openclaw-openai-completions-transport">,
       {
         systemPrompt: "system",
         messages: [],
@@ -900,17 +849,10 @@ describe("openai transport stream", () => {
       } as never,
       {
         reasoningEffort: "high",
-        onPayload: async (payload: unknown) => {
-          capturedPayload = payload as Record<string, unknown>;
-          resolveCaptured();
-          return payload;
-        },
       } as never,
-    );
+    ) as Record<string, unknown>;
 
-    await captured;
-
-    expect(capturedPayload).toMatchObject({
+    expect(params).toMatchObject({
       reasoning: {
         effort: "high",
       },
