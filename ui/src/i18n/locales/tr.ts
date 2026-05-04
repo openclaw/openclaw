@@ -169,7 +169,7 @@ export const tr: TranslationMap = {
     global: "Genel",
     unknown: "Bilinmiyor",
     showArchived: "Arşivlenmişleri göster",
-    activeTooltip: "Son N dakika içinde güncellendi.",
+    activeTooltip: "Son {count} dakika içinde güncellendi.",
     limitTooltip: "Yüklenecek maksimum oturum sayısı.",
     globalTooltip: "Genel oturumları dahil et.",
     unknownTooltip: "Bilinmeyen oturumları dahil et.",

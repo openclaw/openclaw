@@ -666,7 +666,7 @@ export async function createChatSession(state: AppViewState) {
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
-      showArchived: state.sessionsShowArchived ?? false,
+      showArchived: state.sessionsShowArchived,
     },
   );
   if (
@@ -697,7 +697,7 @@ async function refreshSessionOptions(state: AppViewState) {
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,
-    showArchived: state.sessionsShowArchived ?? false,
+    showArchived: state.sessionsShowArchived,
   });
 }
 

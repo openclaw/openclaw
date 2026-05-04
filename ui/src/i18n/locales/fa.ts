@@ -168,7 +168,7 @@ export const fa: TranslationMap = {
     global: "سراسری",
     unknown: "نامشخص",
     showArchived: "نمایش بایگانی‌شده‌ها",
-    activeTooltip: "در N دقیقهٔ گذشته به‌روزرسانی شده است.",
+    activeTooltip: "در {count} دقیقهٔ گذشته به‌روزرسانی شده است.",
     limitTooltip: "حداکثر جلسه‌هایی که بارگیری می‌شوند.",
     globalTooltip: "شامل جلسه‌های سراسری شود.",
     unknownTooltip: "شامل جلسه‌های ناشناخته شود.",

@@ -100,7 +100,13 @@ describe("sessions view", () => {
 
   it("uses one short styled tooltip per session filter", async () => {
     const container = document.createElement("div");
-    render(renderSessions(buildProps(buildMultiResult([]))), container);
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        activeMinutes: "120",
+      }),
+      container,
+    );
     await Promise.resolve();
 
     const filters = container.querySelector(".sessions-filter-bar");
@@ -120,7 +126,7 @@ describe("sessions view", () => {
       ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
       ?.closest("label");
 
-    expect(activeField?.getAttribute("data-tooltip")).toBe("Updated in the last N minutes.");
+    expect(activeField?.getAttribute("data-tooltip")).toBe("Updated in the last 120 minutes.");
     expect(limitField?.getAttribute("data-tooltip")).toBe("Max sessions to load.");
     expect(globalToggle?.getAttribute("data-tooltip")).toBe("Include global sessions.");
     expect(unknownToggle?.getAttribute("data-tooltip")).toBe("Include unknown sessions.");

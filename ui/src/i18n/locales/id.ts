@@ -167,7 +167,7 @@ export const id: TranslationMap = {
     global: "Global",
     unknown: "Tidak diketahui",
     showArchived: "Tampilkan yang diarsipkan",
-    activeTooltip: "Diperbarui dalam N menit terakhir.",
+    activeTooltip: "Diperbarui dalam {count} menit terakhir.",
     limitTooltip: "Jumlah sesi maksimum untuk dimuat.",
     globalTooltip: "Sertakan sesi global.",
     unknownTooltip: "Sertakan sesi tidak dikenal.",

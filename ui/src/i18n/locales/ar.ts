@@ -166,7 +166,7 @@ export const ar: TranslationMap = {
     global: "عام",
     unknown: "غير معروف",
     showArchived: "إظهار المؤرشفة",
-    activeTooltip: "تم التحديث خلال آخر N دقيقة.",
+    activeTooltip: "تم التحديث خلال آخر {count} دقيقة.",
     limitTooltip: "الحد الأقصى للجلسات المراد تحميلها.",
     globalTooltip: "تضمين الجلسات العامة.",
     unknownTooltip: "تضمين الجلسات غير المعروفة.",
