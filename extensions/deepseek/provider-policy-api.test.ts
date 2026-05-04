@@ -1,6 +1,6 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
-import { normalizeConfig } from "./provider-policy-api.js";
+import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("deepseek provider-policy-api", () => {
   it("hydrates contextWindow and cost from catalog for known models", () => {
@@ -231,5 +231,33 @@ describe("deepseek provider-policy-api", () => {
       cacheRead: 0.145,
       cacheWrite: 0,
     });
+  });
+});
+
+describe("resolveThinkingProfile", () => {
+  it("returns V4 profile with xhigh and max for deepseek-v4-pro", () => {
+    const profile = resolveThinkingProfile({ provider: "deepseek", modelId: "deepseek-v4-pro" });
+    expect(profile).not.toBeNull();
+    const ids = profile!.levels.map((l) => l.id);
+    expect(ids).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    expect(profile!.defaultLevel).toBe("high");
+  });
+
+  it("returns V4 profile with xhigh and max for deepseek-v4-flash", () => {
+    const profile = resolveThinkingProfile({ provider: "deepseek", modelId: "deepseek-v4-flash" });
+    expect(profile).not.toBeNull();
+    const ids = profile!.levels.map((l) => l.id);
+    expect(ids).toContain("xhigh");
+    expect(ids).toContain("max");
+  });
+
+  it("returns null for non-V4 DeepSeek models", () => {
+    expect(resolveThinkingProfile({ provider: "deepseek", modelId: "deepseek-chat" })).toBeNull();
+  });
+
+  it("returns null for non-DeepSeek providers even with a V4 model id", () => {
+    expect(
+      resolveThinkingProfile({ provider: "openrouter", modelId: "deepseek-v4-pro" }),
+    ).toBeNull();
   });
 });

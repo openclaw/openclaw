@@ -1,6 +1,30 @@
+import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { DEEPSEEK_MODEL_CATALOG } from "./models.js";
+import { DEEPSEEK_MODEL_CATALOG, isDeepSeekV4ModelId } from "./models.js";
+
+const DEEPSEEK_V4_LEVEL_IDS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+export const DEEPSEEK_V4_THINKING_PROFILE = {
+  levels: DEEPSEEK_V4_LEVEL_IDS.map((id) => ({ id })),
+  defaultLevel: "high",
+} satisfies ProviderThinkingProfile;
+
+/**
+ * Resolve the thinking profile for DeepSeek V4 models from the lightweight
+ * provider-policy surface. Mirrors the runtime hook in index.ts so that
+ * fallback callers (e.g. the Control UI picker via resolveBundledProviderPolicySurface)
+ * expose the same xhigh|max levels as the active runtime registry.
+ */
+export function resolveThinkingProfile(params: {
+  provider: string;
+  modelId: string;
+}): ProviderThinkingProfile | null {
+  if (params.provider === "deepseek" && isDeepSeekV4ModelId(params.modelId)) {
+    return DEEPSEEK_V4_THINKING_PROFILE;
+  }
+  return null;
+}
 
 type ModelDefinitionDraft = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
