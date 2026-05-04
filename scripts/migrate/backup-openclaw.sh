@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# shellcheck source=scripts/migrate/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/migrate/backup-openclaw.sh [options]
+
+Options:
+  --repo-root <path>       OpenClaw repo root (default: current repo)
+  --env-file <path>        Env file to include (default: <repo-root>/.env)
+  --config-dir <path>      OpenClaw config dir (default: env or ~/.openclaw)
+  --workspace-dir <path>   OpenClaw workspace dir (default: env or ~/.openclaw/workspace)
+  --output-dir <path>      Output directory for backup archive (default: <repo-root>/backups)
+  --name <name>            Backup name prefix (default: openclaw-backup-<timestamp>)
+  -h, --help               Show this help
+EOF
+}
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$ROOT_DIR"
+ENV_FILE=""
+CONFIG_DIR=""
+WORKSPACE_DIR=""
+OUTPUT_DIR=""
+BACKUP_NAME=""
+ENV_FILE_EXPLICIT=0
+OUTPUT_DIR_EXPLICIT=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo-root)
+      REPO_ROOT="$2"
+      shift 2
+      ;;
+    --env-file)
+      ENV_FILE="$2"
+      ENV_FILE_EXPLICIT=1
+      shift 2
+      ;;
+    --config-dir)
+      CONFIG_DIR="$2"
+      shift 2
+      ;;
+    --workspace-dir)
+      WORKSPACE_DIR="$2"
+      shift 2
+      ;;
+    --output-dir)
+      OUTPUT_DIR="$2"
+      OUTPUT_DIR_EXPLICIT=1
+      shift 2
+      ;;
+    --name)
+      BACKUP_NAME="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "Unknown argument: $1"
+      ;;
+  esac
+done
+
+require_cmd tar
+require_cmd rsync
+require_cmd shasum
+require_cmd python3
+require_cmd date
+require_cmd uname
+
+REPO_ROOT="$(resolve_abs_path "$REPO_ROOT")"
+if [[ $ENV_FILE_EXPLICIT -eq 0 ]]; then
+  ENV_FILE="$REPO_ROOT/.env"
+fi
+if [[ $OUTPUT_DIR_EXPLICIT -eq 0 ]]; then
+  OUTPUT_DIR="$REPO_ROOT/backups"
+fi
+ENV_FILE="$(resolve_abs_path "$ENV_FILE")"
+OUTPUT_DIR="$(resolve_abs_path "$OUTPUT_DIR")"
+
+if [[ -z "$CONFIG_DIR" ]]; then
+  CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$(env_value_from_file "$ENV_FILE" OPENCLAW_CONFIG_DIR)}"
+fi
+if [[ -z "$WORKSPACE_DIR" ]]; then
+  WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$(env_value_from_file "$ENV_FILE" OPENCLAW_WORKSPACE_DIR)}"
+fi
+
+CONFIG_DIR="${CONFIG_DIR:-$HOME/.openclaw}"
+WORKSPACE_DIR="${WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+CONFIG_DIR="$(resolve_abs_path "$CONFIG_DIR")"
+WORKSPACE_DIR="$(resolve_abs_path "$WORKSPACE_DIR")"
+
+[[ -d "$CONFIG_DIR" ]] || fail "Config directory does not exist: $CONFIG_DIR"
+[[ -d "$WORKSPACE_DIR" ]] || fail "Workspace directory does not exist: $WORKSPACE_DIR"
+[[ -d "$REPO_ROOT" ]] || fail "Repo root does not exist: $REPO_ROOT"
+
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP_NAME="${BACKUP_NAME:-openclaw-backup-${timestamp}}"
+mkdir -p "$OUTPUT_DIR"
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+
+stage="$tmpdir/stage"
+mkdir -p "$stage/payload/config" "$stage/payload/workspace" "$stage/payload/repo" "$stage/meta"
+
+echo "==> Copying config directory"
+config_rsync_args=(-a)
+if [[ "$WORKSPACE_DIR" == "$CONFIG_DIR"/* ]]; then
+  nested_workspace_rel="${WORKSPACE_DIR#$CONFIG_DIR/}"
+  if [[ -n "$nested_workspace_rel" ]]; then
+    config_rsync_args+=(--exclude="/${nested_workspace_rel}/")
+  fi
+fi
+rsync "${config_rsync_args[@]}" "$CONFIG_DIR/" "$stage/payload/config/"
+
+echo "==> Copying workspace directory"
+rsync -a "$WORKSPACE_DIR/" "$stage/payload/workspace/"
+
+if [[ -f "$ENV_FILE" ]]; then
+  echo "==> Including env file: $ENV_FILE"
+  cp "$ENV_FILE" "$stage/payload/repo/.env"
+fi
+
+for file in docker-compose.yml docker-compose.extra.yml Dockerfile docker-setup.sh; do
+  if [[ -f "$REPO_ROOT/$file" ]]; then
+    cp "$REPO_ROOT/$file" "$stage/payload/repo/$file"
+  fi
+done
+
+{
+  echo "timestamp_utc=$timestamp"
+  echo "source_host=$(hostname -s || hostname)"
+  echo "source_arch=$(uname -m)"
+  echo "source_os=$(uname -s)"
+  echo "repo_root=$REPO_ROOT"
+  echo "config_dir=$CONFIG_DIR"
+  echo "workspace_dir=$WORKSPACE_DIR"
+} >"$stage/meta/backup.env"
+
+if command -v docker >/dev/null 2>&1; then
+  {
+    echo "# docker version"
+    docker version --format '{{.Server.Version}}' 2>/dev/null || true
+    echo
+    echo "# docker compose ps"
+    docker compose -f "$REPO_ROOT/docker-compose.yml" ps 2>/dev/null || true
+  } >"$stage/meta/docker.txt"
+fi
+
+if command -v git >/dev/null 2>&1 && [[ -d "$REPO_ROOT/.git" ]]; then
+  {
+    echo "branch=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"
+    echo "commit=$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    echo
+    echo "# status"
+    git -C "$REPO_ROOT" status --short
+  } >"$stage/meta/git.txt"
+fi
+
+(
+  python3 - "$stage" <<'PY'
+import hashlib
+import os
+import sys
+
+stage = sys.argv[1]
+entries = []
+for root, dirs, files in os.walk(stage):
+    dirs.sort()
+    files.sort()
+    for name in files:
+        rel = os.path.relpath(os.path.join(root, name), stage)
+        if rel == "SHA256SUMS":
+            continue
+        entries.append(rel)
+
+with open(os.path.join(stage, "SHA256SUMS"), "w", encoding="utf-8") as out:
+    for rel in sorted(entries):
+        digest = hashlib.sha256()
+        with open(os.path.join(stage, rel), "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+        out.write(f"{digest.hexdigest()}  ./{rel}\n")
+PY
+)
+
+archive_path="$OUTPUT_DIR/${BACKUP_NAME}.tar.gz"
+(
+  cd "$stage"
+  tar -czf "$archive_path" .
+)
+(
+  cd "$OUTPUT_DIR"
+  shasum -a 256 "$(basename "$archive_path")" > "$(basename "$archive_path").sha256"
+)
+
+echo
+echo "Backup created:"
+echo "  $archive_path"
+echo "  ${archive_path}.sha256"
+echo
+echo "Next step on target host:"
+echo "  scripts/migrate/restore-openclaw.sh --archive \"$archive_path\""
