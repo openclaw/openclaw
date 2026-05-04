@@ -16,6 +16,7 @@ import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-m
 import {
   agentOutputHasExpectedOkMarker,
   buildCrossOsReleaseSmokePluginAllowlist,
+  buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
@@ -230,6 +231,19 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "--ignore-scripts",
       "--loglevel=notice",
     ]);
+  });
+
+  it("keeps packaged-upgrade release updates out of service restart flow", () => {
+    const args = buildPackagedUpgradeUpdateArgs("http://127.0.0.1:49152/openclaw-current.tgz");
+    expect(args.slice(0, 6)).toEqual([
+      "update",
+      "--tag",
+      "http://127.0.0.1:49152/openclaw-current.tgz",
+      "--yes",
+      "--json",
+      "--no-restart",
+    ]);
+    expect(args.at(-2)).toBe("--timeout");
   });
 
   it("keeps cross-OS live smoke agent turns on GPT-5-safe timeouts and minimal context", () => {
