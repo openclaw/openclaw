@@ -143,7 +143,6 @@ Provider and channel execution paths must use the active runtime config snapshot
     const result = await api.runtime.llm.complete({
       messages: [{ role: "user", content: "Summarize this transcript." }],
       purpose: "my-plugin.summary",
-      caller: { kind: "plugin", id: "my-plugin" },
       maxTokens: 512,
       temperature: 0.2,
     });
@@ -155,6 +154,10 @@ Provider and channel execution paths must use the active runtime config snapshot
     active session's agent and do not silently fall back to the default agent. The
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
+
+    <Warning>
+    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
+    </Warning>
 
   </Accordion>
   <Accordion title="api.runtime.subagent">
