@@ -7,6 +7,20 @@
 
 ## Last Session
 
+- **Date**: 2026-05-04 (Jojo PM NVIDIA fallback hotfix)
+- **What changed**:
+  - **Jojo PM / projectmanager (2ndClaw)**: repaired existing config by adding the dashboard-supported NVIDIA model definitions, changing primary back to `nvidia/z-ai/glm-5.1`, and placing `venice/claude-opus-4-6` first in fallbacks
+  - **Dashboard PR #62** (`hotfix/nvidia-existing-agent-models`): backfills NVIDIA model definitions on existing-agent config saves, normalizes the old GLM runtime id, and retries public chat on Claude Opus 4.6 when a selected NVIDIA model fails
+  - **Dashboard PR #63** (`hotfix/public-chat-default-fallback`): extends the public-chat Claude fallback retry to stale/no-explicit-model clients when the gateway default NVIDIA model fails
+  - **Production deploys**: CI/CD deployed Cloud Run revisions `openclaw-dashboard-00238-4s6` and `openclaw-dashboard-00239-bl9`; latest tag `v2026.5.4.2`
+- **Validation**:
+  - Dashboard: `npx tsc --noEmit`, `npm run build`, GitHub Actions runs `25341349408` and `25344858302`
+  - Runtime: Jojo PM selected DeepSeek-R1 public chat returned `jojo-deepseek-fallback-live-ok` via fallback; Jojo PM no-explicit-model public chat returned `jojo-default-fallback-live-ok`
+
+---
+
+## Last Session (prev)
+
 - **Date**: 2026-05-03 (dashboard NVIDIA public-chat hotfix)
 - **What changed**:
   - **Dashboard PR #61** (`hotfix/nvidia-designer-chat`): fixed the agent config dropdown/landing-page model split, registered the requested NVIDIA models in generated `openclaw.json`, corrected NVIDIA GLM-5 runtime id to `nvidia/z-ai/glm-5.1` while displaying `GLM-5`, sent the selected landing-page model through public chat, limited public Venice choices to the requested set, and sanitized invalid `channels.defaults`/`accessMode`/`groupEnabled` fields before saving configs
@@ -19,7 +33,7 @@
 
 ---
 
-## Last Session (prev)
+## Last Session (prev 2)
 
 - **Date**: 2026-05-03 (dashboard NVIDIA model defaults)
 - **What changed**:
@@ -31,7 +45,7 @@
 
 ---
 
-## Last Session (prev 2)
+## Last Session (prev 3)
 
 - **Date**: 2026-04-30 (dashboard GitHub MCP hotfix)
 - **What changed**:
@@ -44,7 +58,7 @@
 
 ---
 
-## Last Session (prev 3)
+## Last Session (prev 4)
 
 - **Date**: 2026-04-20 (vcode1bot coding upgrade)
 - **What changed**:
@@ -91,20 +105,22 @@
 
 ## Active Branches / PRs
 
-| Repo               | Branch                          | PR  | Status          | Owner   | Files / Areas Touched                    | Validation         | Next Concrete Step                       | Notes                                                                                                                      |
-| ------------------ | ------------------------------- | --- | --------------- | ------- | ---------------------------------------- | ------------------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| openclaw-dashboard | codex/feat-widget-chat-v1       | #52 | merged+deployed | Codex   | Widget Chat V1 (widget tab, chat API/UI) | npm run build + CI | Monitor production behavior              | Merged to main; Cloud Run deploy run 24422489602 succeeded                                                                 |
-| openclaw-dashboard | codex/fix-port-allocation-drift | #55 | merged+deployed | Codex   | agent creation, port allocation          | npm run build + CI | Monitor new-agent deploy behavior        | skips ports already claimed in live server state before allocation                                                         |
-| openclaw-dashboard | codex/fix-deploy-port-repair    | #56 | merged+deployed | Codex   | deploy route, port reservation repair    | npm run build + CI | Monitor first-deploy conflict recovery   | auto-repairs stale reserved ports for never-deployed agents                                                                |
-| openclaw-dashboard | feat/ci-cd-pipeline             | #51 | merged          | Claude  | GitHub Actions, Cloud Run pipeline       | merged             | None                                     | CI/CD auto-deploy live                                                                                                     |
-| openclaw           | fix/deploy-and-control-infra    | #7  | merged          | Claude  | docker-compose.yml                       | n/a                | None                                     | Adds OPENCLAW_SKIP_BROWSER_CONTROL_SERVER env passthrough; merged Apr 15                                                   |
-| openclaw-dashboard | fix/control-deploy-infra        | #53 | merged          | Claude  | control, logs, deploy routes             | merged             | None                                     | Merged Apr 20                                                                                                              |
-| openclaw-dashboard | feat/coding-capability-template | #57 | merged+deployed | Claude  | lib/agent-config-template.ts             | npm run build + CI | None                                     | Merged Apr 20; coding=true previously used qwen3-coder + filesystem + brave-search MCPs                                    |
-| openclaw-dashboard | hotfix/github-mcp-dashboard     | #59 | merged+deployed | Codex   | Tools MCP UI, MCP API route              | tsc + npm build    | Rotate leaked GitHub PAT; monitor setup  | Prod revision `openclaw-dashboard-00234-xh7`; tag `v2026.4.30.hotfix-github-mcp.1`                                         |
-| openclaw-dashboard | feat/nvidia-model-management    | #60 | merged+deployed | Codex   | model config, secrets UI, deploy route   | tsc + npm build    | Superseded by #61 runtime-id hotfix      | Prod revision `openclaw-dashboard-00236-fxz`; tag `v2026.5.3.1`; initial default corrected to `nvidia/z-ai/glm-5.1` by #61 |
-| openclaw-dashboard | hotfix/nvidia-designer-chat     | #61 | merged+deployed | Codex   | public chat models, config template      | tsc + npm build    | Monitor designer/GLM-5 landing behavior  | Prod revision `openclaw-dashboard-00237-6tr`; tag `v2026.5.3.2`; default `nvidia/z-ai/glm-5.1`                             |
-| openclaw           | hotfix/nvidia-compose-env       | #10 | merged          | Codex   | docker-compose.yml, .env.example         | runtime smoke      | Include in next gateway image deploy     | Runtime compose file patched on EU/US so containers receive `NVIDIA_API_KEY`                                               |
-| unknown            | chore/staging-deploy-gcp        | #1  | open, stale     | unknown | GCP deploy workflow                      | unknown            | Verify ownership before reuse or cleanup | Treat as active until verified                                                                                             |
+| Repo               | Branch                              | PR  | Status          | Owner   | Files / Areas Touched                    | Validation         | Next Concrete Step                       | Notes                                                                                                                      |
+| ------------------ | ----------------------------------- | --- | --------------- | ------- | ---------------------------------------- | ------------------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| openclaw-dashboard | codex/feat-widget-chat-v1           | #52 | merged+deployed | Codex   | Widget Chat V1 (widget tab, chat API/UI) | npm run build + CI | Monitor production behavior              | Merged to main; Cloud Run deploy run 24422489602 succeeded                                                                 |
+| openclaw-dashboard | codex/fix-port-allocation-drift     | #55 | merged+deployed | Codex   | agent creation, port allocation          | npm run build + CI | Monitor new-agent deploy behavior        | skips ports already claimed in live server state before allocation                                                         |
+| openclaw-dashboard | codex/fix-deploy-port-repair        | #56 | merged+deployed | Codex   | deploy route, port reservation repair    | npm run build + CI | Monitor first-deploy conflict recovery   | auto-repairs stale reserved ports for never-deployed agents                                                                |
+| openclaw-dashboard | feat/ci-cd-pipeline                 | #51 | merged          | Claude  | GitHub Actions, Cloud Run pipeline       | merged             | None                                     | CI/CD auto-deploy live                                                                                                     |
+| openclaw           | fix/deploy-and-control-infra        | #7  | merged          | Claude  | docker-compose.yml                       | n/a                | None                                     | Adds OPENCLAW_SKIP_BROWSER_CONTROL_SERVER env passthrough; merged Apr 15                                                   |
+| openclaw-dashboard | fix/control-deploy-infra            | #53 | merged          | Claude  | control, logs, deploy routes             | merged             | None                                     | Merged Apr 20                                                                                                              |
+| openclaw-dashboard | feat/coding-capability-template     | #57 | merged+deployed | Claude  | lib/agent-config-template.ts             | npm run build + CI | None                                     | Merged Apr 20; coding=true previously used qwen3-coder + filesystem + brave-search MCPs                                    |
+| openclaw-dashboard | hotfix/github-mcp-dashboard         | #59 | merged+deployed | Codex   | Tools MCP UI, MCP API route              | tsc + npm build    | Rotate leaked GitHub PAT; monitor setup  | Prod revision `openclaw-dashboard-00234-xh7`; tag `v2026.4.30.hotfix-github-mcp.1`                                         |
+| openclaw-dashboard | feat/nvidia-model-management        | #60 | merged+deployed | Codex   | model config, secrets UI, deploy route   | tsc + npm build    | Superseded by #61 runtime-id hotfix      | Prod revision `openclaw-dashboard-00236-fxz`; tag `v2026.5.3.1`; initial default corrected to `nvidia/z-ai/glm-5.1` by #61 |
+| openclaw-dashboard | hotfix/nvidia-designer-chat         | #61 | merged+deployed | Codex   | public chat models, config template      | tsc + npm build    | Monitor designer/GLM-5 landing behavior  | Prod revision `openclaw-dashboard-00237-6tr`; tag `v2026.5.3.2`; default `nvidia/z-ai/glm-5.1`                             |
+| openclaw-dashboard | hotfix/nvidia-existing-agent-models | #62 | merged+deployed | Codex   | config save, public chat fallback        | tsc + npm build    | Monitor Jojo PM fallback behavior        | Prod revision `openclaw-dashboard-00238-4s6`; tag `v2026.5.4.1`; backfills existing configs                                |
+| openclaw-dashboard | hotfix/public-chat-default-fallback | #63 | merged+deployed | Codex   | public chat fallback                     | tsc                | Monitor stale/no-model clients           | Prod revision `openclaw-dashboard-00239-bl9`; tag `v2026.5.4.2`; default NVIDIA failures retry Claude                      |
+| openclaw           | hotfix/nvidia-compose-env           | #10 | merged          | Codex   | docker-compose.yml, .env.example         | runtime smoke      | Include in next gateway image deploy     | Runtime compose file patched on EU/US so containers receive `NVIDIA_API_KEY`                                               |
+| unknown            | chore/staging-deploy-gcp            | #1  | open, stale     | unknown | GCP deploy workflow                      | unknown            | Verify ownership before reuse or cleanup | Treat as active until verified                                                                                             |
 
 ---
 
