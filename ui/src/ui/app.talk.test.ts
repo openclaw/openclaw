@@ -2,33 +2,14 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { realtimeTalkCtor, startMock, stopMock } = vi.hoisted(() => ({
-  realtimeTalkCtor: vi.fn(),
-  startMock: vi.fn(),
-  stopMock: vi.fn(),
-}));
-
-vi.mock("./chat/realtime-talk.ts", () => ({
-  RealtimeTalkSession: realtimeTalkCtor,
-}));
-
 describe("OpenClawApp Talk controls", () => {
   beforeEach(() => {
-    realtimeTalkCtor.mockReset();
-    startMock.mockReset();
-    stopMock.mockReset();
-    realtimeTalkCtor.mockImplementation(
-      function MockRealtimeTalkSession(this: { start: typeof startMock; stop: typeof stopMock }) {
-        this.start = startMock;
-        this.stop = stopMock;
-      },
-    );
-    startMock.mockResolvedValue(undefined);
+    vi.restoreAllMocks();
   });
 
   it("retries Talk immediately when the previous session is already in error state", async () => {
-    const { OpenClawApp } = await import("./app.ts");
-    const app = new OpenClawApp() as unknown as {
+    await import("./app.ts");
+    const app = document.createElement("openclaw-app") as unknown as {
       client: unknown;
       connected: boolean;
       realtimeTalkActive: boolean;
@@ -38,7 +19,8 @@ describe("OpenClawApp Talk controls", () => {
       toggleRealtimeTalk(): Promise<void>;
     };
     const staleStop = vi.fn();
-    app.client = { request: vi.fn() } as never;
+    const request = vi.fn().mockRejectedValue(new Error("session unavailable"));
+    app.client = { request } as never;
     app.connected = true;
     app.sessionKey = "main";
     app.realtimeTalkActive = true;
@@ -48,10 +30,9 @@ describe("OpenClawApp Talk controls", () => {
     await app.toggleRealtimeTalk();
 
     expect(staleStop).toHaveBeenCalledOnce();
-    expect(realtimeTalkCtor).toHaveBeenCalledOnce();
-    expect(startMock).toHaveBeenCalledOnce();
-    expect(stopMock).not.toHaveBeenCalled();
-    expect(app.realtimeTalkStatus).toBe("connecting");
-    expect(app.realtimeTalkSession).not.toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("talk.realtime.session", { sessionKey: "main" });
+    expect(app.realtimeTalkStatus).toBe("error");
+    expect(app.realtimeTalkSession).toBeNull();
   });
 });

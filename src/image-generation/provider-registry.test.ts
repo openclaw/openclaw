@@ -1,15 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
-import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
+import type * as ProviderRegistry from "./provider-registry.js";
 
 const { resolvePluginCapabilityProvidersMock } = vi.hoisted(() => ({
   resolvePluginCapabilityProvidersMock: vi.fn<() => ImageGenerationProviderPlugin[]>(() => []),
 }));
 
-vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
-}));
+let getImageGenerationProvider: typeof ProviderRegistry.getImageGenerationProvider;
+let listImageGenerationProviders: typeof ProviderRegistry.listImageGenerationProviders;
 
 function createProvider(
   params: Pick<ImageGenerationProviderPlugin, "id"> & Partial<ImageGenerationProviderPlugin>,
@@ -27,10 +26,19 @@ function createProvider(
   };
 }
 
+async function loadProviderRegistry() {
+  vi.resetModules();
+  vi.doMock("../plugins/capability-provider-runtime.js", () => ({
+    resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
+  }));
+  return await import("./provider-registry.js");
+}
+
 describe("image-generation provider registry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);
+    ({ getImageGenerationProvider, listImageGenerationProviders } = await loadProviderRegistry());
   });
 
   it("delegates provider resolution to the capability provider boundary", () => {
