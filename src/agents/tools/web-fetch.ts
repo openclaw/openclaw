@@ -34,6 +34,7 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+import { resolveWebFetchToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
@@ -631,11 +632,17 @@ export function createWebFetchTool(options?: {
   const resolveProviderFallback = async () => {
     if (!providerFallbackResolved) {
       const { resolveWebFetchDefinition } = await loadWebFetchRuntime();
+      const { config, preferRuntimeProviders, runtimeWebFetch } = resolveWebFetchToolRuntimeContext(
+        {
+          config: options?.config,
+          runtimeWebFetch: options?.runtimeWebFetch,
+        },
+      );
       providerFallbackCache = resolveWebFetchDefinition({
-        config: options?.config,
+        config,
         sandboxed: options?.sandboxed,
-        runtimeWebFetch: options?.runtimeWebFetch,
-        preferRuntimeProviders: true,
+        runtimeWebFetch,
+        preferRuntimeProviders,
       });
       providerFallbackResolved = true;
     }

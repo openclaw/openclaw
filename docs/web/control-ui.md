@@ -384,6 +384,16 @@ When gateway auth is configured, the Control UI avatar endpoint requires the sam
 
 If you disable gateway auth (not recommended on shared hosts), the avatar route also becomes unauthenticated, in line with the rest of the gateway.
 
+## Assistant media route auth
+
+When gateway auth is configured, assistant local-media previews use a two-step route:
+
+- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth. The browser sends the gateway token as a bearer header when checking availability.
+- Successful metadata responses include a short-lived `mediaTicket` scoped to that exact source path.
+- Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
+
+This keeps normal media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
+
 ## Building the UI
 
 The Gateway serves static files from `dist/control-ui`. Build them with:

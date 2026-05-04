@@ -1,6 +1,7 @@
 import {
   createChannelProgressDraftGate,
   formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
@@ -1580,7 +1581,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLine(
+              formatChannelProgressDraftLineForEntry(
+                progressConfigEntry,
                 {
                   event: "tool",
                   name: toolName,
@@ -1594,7 +1596,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           },
           onItemEvent: async (payload) => {
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLine({
+              formatChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "item",
                 itemKind: payload.kind,
                 title: payload.title,

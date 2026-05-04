@@ -426,6 +426,7 @@ export class GoogleMeetRuntime {
                 config: this.params.config,
                 fullConfig: this.params.fullConfig,
                 meetingSessionId: session.id,
+                requesterSessionKey: request.requesterSessionKey,
                 mode,
                 url,
                 logger: this.params.logger,
@@ -435,6 +436,7 @@ export class GoogleMeetRuntime {
                 config: this.params.config,
                 fullConfig: this.params.fullConfig,
                 meetingSessionId: session.id,
+                requesterSessionKey: request.requesterSessionKey,
                 mode,
                 url,
                 logger: this.params.logger,
@@ -604,7 +606,12 @@ export class GoogleMeetRuntime {
         return false;
       }
       const blocked = health?.speechBlockedReason;
-      if (blocked && blocked !== "not-in-call" && blocked !== "browser-unverified") {
+      if (
+        blocked &&
+        blocked !== "not-in-call" &&
+        blocked !== "browser-unverified" &&
+        blocked !== "meet-microphone-muted"
+      ) {
         return false;
       }
     }

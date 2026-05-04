@@ -52,8 +52,11 @@ vi.mock("./model-pricing-cache.js", () => ({
   startGatewayModelPricingRefresh: hoisted.startGatewayModelPricingRefresh,
 }));
 
-const { activateGatewayScheduledServices, startGatewayRuntimeServices } =
-  await import("./server-runtime-services.js");
+const {
+  activateGatewayScheduledServices,
+  runGatewayPostReadyMaintenance,
+  startGatewayRuntimeServices,
+} = await import("./server-runtime-services.js");
 
 describe("server-runtime-services", () => {
   beforeEach(() => {
@@ -217,6 +220,31 @@ describe("server-runtime-services", () => {
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(1);
   });
 
+  it("starts cron and records memory when post-ready maintenance fails", async () => {
+    const cron = { start: vi.fn(async () => undefined) };
+    const log = createLog();
+    const recordPostReadyMemory = vi.fn();
+
+    await runGatewayPostReadyMaintenance({
+      startMaintenance: vi.fn(async () => {
+        throw new Error("timers unavailable");
+      }),
+      applyMaintenance: vi.fn(),
+      shouldStartCron: () => true,
+      markCronStartHandled: vi.fn(),
+      cron,
+      logCron: { error: vi.fn() },
+      log,
+      recordPostReadyMemory,
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "gateway post-ready maintenance startup failed: Error: timers unavailable",
+    );
+    expect(cron.start).toHaveBeenCalledTimes(1);
+    expect(recordPostReadyMemory).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps scheduled services disabled for minimal test gateways", () => {
     const cron = { start: vi.fn(async () => undefined) };
 
@@ -247,6 +275,7 @@ function createLog() {
       warn: vi.fn(),
       error: vi.fn(),
     })),
+    warn: vi.fn(),
     error: vi.fn(),
   };
 }

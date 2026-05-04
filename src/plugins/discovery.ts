@@ -435,6 +435,26 @@ function readPackageManifest(
   }
 }
 
+function readTrustedPackageManifest(dir: string): PackageManifest | null {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as PackageManifest;
+  } catch {
+    return null;
+  }
+}
+
+function readCandidatePackageManifest(params: {
+  dir: string;
+  origin: PluginOrigin;
+  rejectHardlinks: boolean;
+  rootRealPath?: string;
+}): PackageManifest | null {
+  if (params.origin === "bundled") {
+    return readTrustedPackageManifest(params.dir);
+  }
+  return readPackageManifest(params.dir, params.rejectHardlinks, params.rootRealPath);
+}
+
 function deriveIdHint(params: {
   filePath: string;
   manifestId?: string;
@@ -660,7 +680,12 @@ function discoverInDirectory(params: {
 
     const rejectHardlinks = params.origin !== "bundled";
     const fullPathRealPath = safeRealpathSync(fullPath, params.realpathCache) ?? undefined;
-    const manifest = readPackageManifest(fullPath, rejectHardlinks, fullPathRealPath);
+    const manifest = readCandidatePackageManifest({
+      dir: fullPath,
+      origin: params.origin,
+      rejectHardlinks,
+      ...(fullPathRealPath !== undefined ? { rootRealPath: fullPathRealPath } : {}),
+    });
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
     const manifestId = resolveIdHintManifestId(fullPath, rejectHardlinks, fullPathRealPath);
@@ -860,7 +885,12 @@ function discoverFromPath(params: {
   if (stat.isDirectory()) {
     const rejectHardlinks = params.origin !== "bundled";
     const resolvedRealPath = safeRealpathSync(resolved, params.realpathCache) ?? undefined;
-    const manifest = readPackageManifest(resolved, rejectHardlinks, resolvedRealPath);
+    const manifest = readCandidatePackageManifest({
+      dir: resolved,
+      origin: params.origin,
+      rejectHardlinks,
+      ...(resolvedRealPath !== undefined ? { rootRealPath: resolvedRealPath } : {}),
+    });
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
     const manifestId = resolveIdHintManifestId(resolved, rejectHardlinks, resolvedRealPath);

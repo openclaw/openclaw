@@ -445,7 +445,7 @@ Enable the Voice Call plugin on the Gateway host, not on the Chrome node:
 ```json5
 {
   plugins: {
-    allow: ["google-meet", "voice-call"],
+    allow: ["google-meet", "voice-call", "google"],
     entries: {
       "google-meet": {
         enabled: true,
@@ -458,7 +458,23 @@ Enable the Voice Call plugin on the Gateway host, not on the Chrome node:
         enabled: true,
         config: {
           provider: "twilio",
+          inboundPolicy: "allowlist",
+          realtime: {
+            enabled: true,
+            provider: "google",
+            instructions: "Join this Google Meet as an OpenClaw agent. Be brief.",
+            toolPolicy: "safe-read-only",
+            providers: {
+              google: {
+                silenceDurationMs: 500,
+                startSensitivity: "high",
+              },
+            },
+          },
         },
+      },
+      google: {
+        enabled: true,
       },
     },
   },
@@ -472,7 +488,11 @@ secrets out of `openclaw.json`:
 export TWILIO_ACCOUNT_SID=AC...
 export TWILIO_AUTH_TOKEN=...
 export TWILIO_FROM_NUMBER=+15550001234
+export GEMINI_API_KEY=...
 ```
+
+Use `realtime.provider: "openai"` with the OpenAI provider plugin and
+`OPENAI_API_KEY` instead if that is your realtime voice provider.
 
 Restart or reload the Gateway after enabling `voice-call`; plugin config changes
 do not appear in an already running Gateway process until it reloads.
@@ -1111,6 +1131,50 @@ Optional overrides:
 }
 ```
 
+ElevenLabs for both agent-mode listening and speaking:
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          modelId: "eleven_v3",
+          voiceId: "pMsXgVXv3BLzUgSXRplE",
+        },
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      "google-meet": {
+        config: {
+          realtime: {
+            transcriptionProvider: "elevenlabs",
+            providers: {
+              elevenlabs: {
+                modelId: "scribe_v2_realtime",
+                audioFormat: "ulaw_8000",
+                sampleRate: 8000,
+                commitStrategy: "vad",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The persistent Meet voice comes from
+`messages.tts.providers.elevenlabs.voiceId`. Agent replies can also use
+per-reply `[[tts:voiceId=... model=eleven_v3]]` directives when TTS model
+overrides are enabled, but config is the deterministic default for meetings.
+On join, the logs should show `transcriptionProvider=elevenlabs` and each
+spoken reply should log `provider=elevenlabs model=eleven_v3 voice=<voiceId>`.
+
 Twilio-only config:
 
 ```json5
@@ -1155,6 +1219,9 @@ agent produces the answer, and regular OpenClaw TTS speaks it into Meet. Use
 `mode: "bidi"` when you want the realtime voice model to answer directly.
 Raw `mode: "realtime"` remains accepted as a legacy compatibility alias for
 `mode: "agent"`, but it is no longer advertised in the agent tool schema.
+Agent-mode logs include the resolved transcription provider/model at bridge
+startup and the TTS provider, model, voice, output format, and sample rate after
+each synthesized reply.
 
 Use `action: "status"` to list active sessions or inspect a session ID. Use
 `action: "speak"` with `sessionId` and `message` to make the realtime agent
@@ -1639,6 +1706,11 @@ Chrome talk-back modes need `BlackHole 2ch` plus either:
 - `chrome.audioBridgeCommand`: an external bridge command owns the whole local
   audio path and must exit after starting or validating its daemon. This is only
   valid for `bidi` because `agent` mode needs direct command-pair access for TTS.
+
+When an agent calls the `google_meet` tool in agent mode, the meeting consultant
+session forks the caller's current transcript before answering participant
+speech. The Meet session still stays separate (`agent:<agentId>:subagent:google-meet:<sessionId>`)
+so meeting follow-ups do not mutate the caller transcript directly.
 
 For clean duplex audio, route Meet output and Meet microphone through separate
 virtual devices or a Loopback-style virtual device graph. A single shared

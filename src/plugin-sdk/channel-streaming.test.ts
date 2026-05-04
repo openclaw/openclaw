@@ -1,18 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildChannelProgressDraftLine,
   createChannelProgressDraftGate,
   DEFAULT_PROGRESS_DRAFT_LABELS,
   formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
+  resolveChannelProgressDraftRender,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
   resolveChannelStreamingNativeTransport,
+  resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   resolveChannelStreamingPreviewToolProgress,
@@ -35,6 +39,7 @@ describe("channel-streaming", () => {
         preview: {
           chunk: { minChars: 10, maxChars: 20, breakPreference: "sentence" },
           toolProgress: false,
+          commandText: "status",
         },
       },
       chunkMode: "length",
@@ -59,6 +64,7 @@ describe("channel-streaming", () => {
       breakPreference: "sentence",
     });
     expect(resolveChannelStreamingPreviewToolProgress(entry)).toBe(false);
+    expect(resolveChannelStreamingPreviewCommandText(entry)).toBe("status");
   });
 
   it("keeps progress-only tool progress config out of normal preview modes", () => {
@@ -195,8 +201,9 @@ describe("channel-streaming", () => {
   });
 
   it("formats bounded progress draft text", () => {
-    const entry = { streaming: { progress: { label: "Shelling", maxLines: 2 } } };
+    const entry = { streaming: { progress: { label: "Shelling", maxLines: 2, render: "rich" } } };
     expect(resolveChannelProgressDraftMaxLines(entry)).toBe(2);
+    expect(resolveChannelProgressDraftRender(entry)).toBe("rich");
     expect(
       formatChannelProgressDraftText({
         entry,
@@ -246,6 +253,20 @@ describe("channel-streaming", () => {
 
   it("formats progress draft lines with shared tool display labels", () => {
     expect(
+      buildChannelProgressDraftLine({
+        event: "tool",
+        name: "write",
+        args: { path: "/tmp/demo/index.html" },
+      }),
+    ).toMatchObject({
+      kind: "tool",
+      icon: "✍️",
+      label: "Write",
+      detail: "to /tmp/demo/index.html",
+      text: "✍️ Write: to /tmp/demo/index.html",
+      toolName: "write",
+    });
+    expect(
       formatChannelProgressDraftLine({
         event: "tool",
         name: "write",
@@ -276,6 +297,46 @@ describe("channel-streaming", () => {
         { detailMode: "raw" },
       ),
     ).toBe("🛠️ Exec: run tests, `pnpm test -- --watch=false`");
+    expect(
+      formatChannelProgressDraftLine({
+        event: "item",
+        itemKind: "command",
+        name: "exec",
+        progressText: "raw command output",
+      }),
+    ).toBe("🛠️ Exec: raw command output");
+    expect(
+      formatChannelProgressDraftLine(
+        {
+          event: "item",
+          itemKind: "command",
+          name: "exec",
+          progressText: "raw command output",
+        },
+        { commandText: "status" },
+      ),
+    ).toBe("🛠️ Exec");
+    expect(
+      formatChannelProgressDraftLine(
+        {
+          event: "tool",
+          name: "exec",
+          args: { command: "pnpm test" },
+        },
+        { detailMode: "raw", commandText: "status" },
+      ),
+    ).toBe("🛠️ Exec");
+    expect(
+      formatChannelProgressDraftLineForEntry(
+        { streaming: { preview: { commandText: "status" } } },
+        {
+          event: "item",
+          itemKind: "command",
+          name: "exec",
+          progressText: "raw command output",
+        },
+      ),
+    ).toBe("🛠️ Exec");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

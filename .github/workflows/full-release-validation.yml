@@ -54,7 +54,7 @@ on:
           - qa-live
           - npm-telegram
       live_suite_filter:
-        description: Optional exact live suite id for focused live/E2E reruns; blank runs all selected live suites
+        description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram; blank runs all selected live suites
         required: false
         default: ""
         type: string

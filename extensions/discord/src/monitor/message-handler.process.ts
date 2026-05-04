@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
@@ -669,7 +670,8 @@ export async function processDiscordMessage(
                   await maybeBindStatusReactionsToToolReaction(payload);
                   await statusReactions.setTool(payload.name);
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLine(
+                    formatChannelProgressDraftLineForEntry(
+                      discordConfig,
                       {
                         event: "tool",
                         name: payload.name,
@@ -683,7 +685,7 @@ export async function processDiscordMessage(
                 },
                 onItemEvent: async (payload) => {
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLine({
+                    formatChannelProgressDraftLineForEntry(discordConfig, {
                       event: "item",
                       itemKind: payload.kind,
                       title: payload.title,

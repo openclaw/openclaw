@@ -885,6 +885,13 @@ export async function runEmbeddedAttempt(
               ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
               allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
               sessionKey: sandboxSessionKey,
+              // When sandboxSessionKey differs from the real run session key (e.g. Telegram
+              // direct peer key vs agent:main:main), pass the live key so session_status
+              // "current" resolves to the active run session, not the stale sandbox key.
+              runSessionKey:
+                params.sessionKey && params.sessionKey !== sandboxSessionKey
+                  ? params.sessionKey
+                  : undefined,
               sessionId: params.sessionId,
               runId: params.runId,
               agentDir,

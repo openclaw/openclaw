@@ -17,6 +17,15 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).toContain('from "./server-cron-lazy.js"');
     expect(serverImpl).not.toContain('from "./server-methods.js"');
     expect(serverImpl).not.toContain('from "./config-reload.js"');
+    expect(serverImpl).not.toMatch(
+      /import\s+\{[^}]*resolveSessionKeyForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
+    );
+    expect(serverImpl).not.toMatch(
+      /export\s+\{[^}]*__resetModelCatalogCacheForTest[^}]*\}\s+from "\.\/server-model-catalog\.js"/s,
+    );
+    expect(readSource("src/gateway/server-runtime-subscriptions.ts")).toContain(
+      'import("./server-session-key.js")',
+    );
     expect(readSource("src/gateway/server-shared-auth-generation.ts")).not.toContain(
       'from "./config-reload.js"',
     );

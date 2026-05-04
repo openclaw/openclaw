@@ -223,6 +223,27 @@ OpenClaw truncates long progress lines by default so repeated draft edits do not
 wrap differently on every update. The prefix stays readable, and long details
 such as paths or raw commands are shortened with an ellipsis.
 
+Slack can render progress lines as structured Block Kit fields instead of a
+single text body:
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          render: "rich",
+        },
+      },
+    },
+  },
+}
+```
+
+Rich rendering keeps the same plain-text fallback so channels and clients that
+do not support the richer shape can still show the compact progress text.
+
 Keep the single progress draft but hide tool and task lines:
 
 ```json5
