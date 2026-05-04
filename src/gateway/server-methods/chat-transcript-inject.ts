@@ -53,6 +53,14 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
   config?: SessionWriteLockAcquireTimeoutConfig;
+  /**
+   * When true, the JSONL transcript is updated but no `session.message`
+   * transcript-events listener is notified. Callers that already have the
+   * message visible on screen (e.g. WebChat streaming) can avoid triggering
+   * a downstream `chat.history` reload that would replace the rendered
+   * messages with the persisted snapshot. (#76804)
+   */
+  silent?: boolean;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const usage = {
@@ -110,11 +118,13 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       useRawWhenLinear: true,
       config: params.config,
     });
-    emitSessionTranscriptUpdate({
-      sessionFile: params.transcriptPath,
-      message: messageBody,
-      messageId,
-    });
+    if (!params.silent) {
+      emitSessionTranscriptUpdate({
+        sessionFile: params.transcriptPath,
+        message: messageBody,
+        messageId,
+      });
+    }
     return { ok: true, messageId, message: messageBody };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };

@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as transcriptEvents from "../../sessions/transcript-events.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { createTranscriptFixtureSync } from "./chat.test-helpers.js";
 
@@ -31,6 +32,54 @@ describe("gateway chat.inject transcript writes", () => {
       expect(last).toHaveProperty("id");
       expect(last).toHaveProperty("message");
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a session transcript update by default (#76804)", async () => {
+    const { dir, transcriptPath } = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-emit-",
+      sessionId: "sess-emit",
+    });
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    try {
+      const appended = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath,
+        message: "hello",
+      });
+      expect(appended.ok).toBe(true);
+      expect(emitSpy).toHaveBeenCalledTimes(1);
+      expect(emitSpy.mock.calls[0]?.[0]).toMatchObject({
+        sessionFile: transcriptPath,
+        messageId: appended.messageId,
+      });
+    } finally {
+      emitSpy.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the session transcript update emit when silent is set (#76804)", async () => {
+    const { dir, transcriptPath } = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-silent-",
+      sessionId: "sess-silent",
+    });
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    try {
+      const appended = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath,
+        message: "hello",
+        silent: true,
+      });
+      expect(appended.ok).toBe(true);
+      expect(appended.messageId).toBeTruthy();
+      expect(emitSpy).not.toHaveBeenCalled();
+      const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/).filter(Boolean);
+      const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+      expect(last).toHaveProperty("id", appended.messageId);
+      expect(last).toHaveProperty("message");
+    } finally {
+      emitSpy.mockRestore();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
