@@ -22,6 +22,9 @@ import {
 import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
 
+const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
+const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
+
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
     const normalized = normalizeVoiceCallLegacyConfigInput(value);
@@ -42,6 +45,11 @@ const voiceCallConfigSchema = {
     inboundPolicy: { label: "Inbound Policy" },
     allowFrom: { label: "Inbound Allowlist" },
     inboundGreeting: { label: "Inbound Greeting", advanced: true },
+    numbers: {
+      label: "Per-number Routing",
+      help: "Inbound overrides keyed by dialed E.164 number.",
+      advanced: true,
+    },
     "telnyx.apiKey": { label: "Telnyx API Key", sensitive: true },
     "telnyx.connectionId": { label: "Telnyx Connection ID" },
     "telnyx.publicKey": { label: "Telnyx Public Key", sensitive: true },
@@ -297,6 +305,22 @@ export default definePluginEntry({
       respondError(respond, formatErrorMessage(err));
     };
 
+    const describeHistoricalCall = async (rt: VoiceCallRuntime, callId: string) => {
+      const history = await rt.manager.getCallHistory(100);
+      const call = history
+        .toReversed()
+        .find((candidate) => candidate.callId === callId || candidate.providerCallId === callId);
+      if (!call) {
+        return undefined;
+      }
+      const details = [
+        `last state=${call.state}`,
+        call.endReason ? `endReason=${call.endReason}` : undefined,
+        call.endedAt ? `endedAt=${new Date(call.endedAt).toISOString()}` : undefined,
+      ].filter(Boolean);
+      return `call is not active (${details.join(", ")})`;
+    };
+
     const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
       const callId = normalizeOptionalString(params?.callId) ?? "";
       const message = normalizeOptionalString(params?.message) ?? "";
@@ -304,7 +328,11 @@ export default definePluginEntry({
         return { error: "callId and message required" } as const;
       }
       const rt = await ensureRuntime();
-      return { rt, callId, message } as const;
+      const activeCall = rt.manager.getCall(callId) ?? rt.manager.getCallByProviderCallId(callId);
+      if (activeCall) {
+        return { rt, callId: activeCall.callId, message } as const;
+      }
+      return { error: (await describeHistoricalCall(rt, callId)) ?? "Call not found" } as const;
     };
 
     const initiateCallAndRespond = async (params: {
@@ -390,6 +418,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -407,6 +436,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -427,6 +457,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -448,6 +479,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_READ_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -472,6 +504,13 @@ export default definePluginEntry({
               respond(true, { success: true });
               return;
             }
+            if (params?.allowTwimlFallback === false) {
+              respond(true, {
+                success: false,
+                error: realtimeResult.error ?? "Realtime bridge is not active",
+              });
+              return;
+            }
           }
           const result = await request.rt.manager.speak(request.callId, request.message);
           if (!result.success) {
@@ -483,6 +522,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -506,6 +546,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -528,6 +569,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -551,6 +593,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_READ_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -564,9 +607,9 @@ export default definePluginEntry({
             respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
           }
-          const rt = await ensureRuntime();
           const mode =
             params?.mode === "notify" || params?.mode === "conversation" ? params.mode : undefined;
+          const rt = await ensureRuntime();
           await initiateCallAndRespond({
             rt,
             respond,
@@ -579,6 +622,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerTool({

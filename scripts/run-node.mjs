@@ -15,14 +15,23 @@ import {
   writeBuildStamp as writeDistBuildStamp,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mjs";
+import { listStaticExtensionAssetSources } from "./lib/static-extension-assets.mjs";
+import {
+  extensionRestartMetadataFiles,
+  isBuildRelevantRunNodePath,
+  isRestartRelevantRunNodePath,
+  normalizeRunNodePath as normalizePath,
+  runNodeConfigFiles,
+  runNodeSourceRoots,
+  runNodeWatchedPaths,
+} from "./run-node-watch-paths.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
+
+export { isBuildRelevantRunNodePath, isRestartRelevantRunNodePath, runNodeWatchedPaths };
 
 const buildScript = "scripts/tsdown-build.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
 
-const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
-const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
-export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
 const runtimePostBuildWatchedPaths = [
   "scripts/copy-bundled-plugin-metadata.mjs",
   "scripts/copy-plugin-sdk-root-alias.mjs",
@@ -33,73 +42,16 @@ const runtimePostBuildWatchedPaths = [
   "scripts/runtime-postbuild-stamp.mjs",
   "scripts/runtime-postbuild-shared.mjs",
   "scripts/runtime-postbuild.mjs",
-  "scripts/stage-bundled-plugin-runtime-deps.mjs",
   "scripts/stage-bundled-plugin-runtime.mjs",
   "scripts/windows-cmd-helpers.mjs",
   "scripts/write-official-channel-catalog.mjs",
   "src/plugin-sdk/root-alias.cjs",
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
-const ignoredRunNodeRepoPaths = new Set([
-  "src/canvas-host/a2ui/.bundle.hash",
-  "src/canvas-host/a2ui/a2ui.bundle.js",
-]);
 const runtimePostBuildScriptPaths = new Set(
   runtimePostBuildWatchedPaths.filter((entry) => entry.startsWith("scripts/")),
 );
-const runtimePostBuildStaticAssetPaths = new Set([
-  "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
-  "extensions/diffs/assets/viewer-runtime.js",
-]);
-const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
-const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
-
-const normalizePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
-
-const isIgnoredSourcePath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  return (
-    normalizedPath.endsWith(".test.ts") ||
-    normalizedPath.endsWith(".test.tsx") ||
-    normalizedPath.endsWith("test-helpers.ts")
-  );
-};
-
-const isBuildRelevantSourcePath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
-};
-
-const isRestartRelevantExtensionPath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
-    return true;
-  }
-  return isBuildRelevantSourcePath(normalizedPath);
-};
-
-const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
-    return false;
-  }
-  if (runNodeConfigFiles.includes(normalizedPath)) {
-    return true;
-  }
-  if (normalizedPath.startsWith("src/")) {
-    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
-  }
-  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isRelevantBundledPluginPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
-  }
-  return false;
-};
-
-export const isBuildRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
-
-export const isRestartRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);
+const runtimePostBuildStaticAssetPaths = new Set(listStaticExtensionAssetSources());
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {
@@ -433,6 +385,7 @@ const isSignalKey = (signal) => Object.hasOwn(SIGNAL_EXIT_CODES, signal);
 const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[signal] : 1);
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
+const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
 const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
 const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
 const RUN_NODE_BUILD_LOCK_STALE_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_STALE_MS";
@@ -505,6 +458,35 @@ const logRunner = (message, deps) => {
   deps.outputTee?.write(line);
 };
 
+const sanitizeCpuProfileNamePart = (value) => {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "command";
+};
+
+const resolveRunNodeCpuProfileArgs = (deps) => {
+  const profileDir = deps.env[RUN_NODE_CPU_PROF_DIR_ENV]?.trim();
+  if (!profileDir) {
+    return [];
+  }
+
+  const absoluteProfileDir = path.resolve(deps.cwd, profileDir);
+  deps.fs.mkdirSync(absoluteProfileDir, { recursive: true });
+  deps.env[RUN_NODE_CPU_PROF_DIR_ENV] = absoluteProfileDir;
+
+  const commandName = sanitizeCpuProfileNamePart(deps.args[0]);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const pid = Number.isInteger(deps.process.pid) && deps.process.pid > 0 ? deps.process.pid : "pid";
+  const profileName = `openclaw-${commandName}-${pid}-${timestamp}.cpuprofile`;
+  const profilePath = path.join(absoluteProfileDir, profileName);
+  const relativeProfilePath = path.relative(deps.cwd, profilePath) || profilePath;
+  logRunner(`Writing Node CPU profile to ${relativeProfilePath}.`, deps);
+  return ["--cpu-prof", `--cpu-prof-dir=${absoluteProfileDir}`, `--cpu-prof-name=${profileName}`];
+};
+
 const waitForSpawnedProcess = async (childProcess, deps) => {
   let forwardedSignal = null;
   let onSigInt;
@@ -575,7 +557,8 @@ const getInterruptedSpawnExitCode = (res) => {
 };
 
 const runOpenClaw = async (deps) => {
-  const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
+  const cpuProfileArgs = resolveRunNodeCpuProfileArgs(deps);
+  const nodeProcess = deps.spawn(deps.execPath, [...cpuProfileArgs, "openclaw.mjs", ...deps.args], {
     cwd: deps.cwd,
     env: deps.env,
     stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",

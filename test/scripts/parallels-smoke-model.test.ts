@@ -89,7 +89,6 @@ describe("Parallels smoke model selection", () => {
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL");
     expect(providerAuth).toContain("openai/gpt-5.5");
-    expect(providerAuth).toContain("openai/gpt-4.1-mini");
     expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
     expect(providerAuth).toContain('authChoice: "minimax-global-api"');
@@ -101,6 +100,19 @@ describe("Parallels smoke model selection", () => {
       expect(script, scriptPath).toContain("--model <provider/model>");
       expect(script, scriptPath).toContain("modelId");
     }
+  });
+
+  it("writes full model ids as config map keys in provider batches", () => {
+    const source = `
+import { modelProviderConfigBatchJson } from "./${TS_PATHS.common}";
+const result = modelProviderConfigBatchJson("openai/gpt-5.5", "windows");
+console.log(result);
+`;
+    const batch = JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" })) as Array<{
+      path: string;
+    }>;
+
+    expect(batch.map((entry) => entry.path)).toContain('agents.defaults.models["openai/gpt-5.5"]');
   });
 
   it("keeps snapshot, host, package, and quote helpers shared", () => {
@@ -245,7 +257,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     });
   });
 
-  it("uses the faster OpenAI model for Windows smoke unless overridden", () => {
+  it("uses the shared GPT-5 OpenAI model for Windows smoke unless overridden", () => {
     const source = `
 import { resolveWindowsProviderAuth } from "./${TS_PATHS.common}";
 const result = resolveWindowsProviderAuth({
@@ -255,7 +267,7 @@ console.log(JSON.stringify(result));
 `;
     expect(JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" }))).toMatchObject({
       apiKeyEnv: "OPENAI_API_KEY",
-      modelId: "openai/gpt-4.1-mini",
+      modelId: "openai/gpt-5.5",
     });
 
     expect(
@@ -315,15 +327,24 @@ console.log(JSON.stringify(result));
 
       expect(script, scriptPath).toContain("AgentWorkspaceScript");
       expect(script, scriptPath).toContain("parallels-");
-      expect(script, scriptPath).toContain("agents.defaults.skipBootstrap");
-      expect(script, scriptPath).toContain("tools.profile");
+      if (scriptPath !== TS_PATHS.windows) {
+        expect(script, scriptPath).toContain("agents.defaults.skipBootstrap");
+        expect(script, scriptPath).toContain("tools.profile");
+      }
       expect(script, scriptPath).toContain("--thinking");
       expect(script, scriptPath).toContain("minimal");
       expect(script, scriptPath).toContain("finalAssistant(Raw|Visible)Text");
     }
-    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("providerTimeoutConfigJson");
-    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("providerTimeoutConfigJson");
-    expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("windowsModelProviderTimeoutScript");
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("modelProviderConfigBatchJson");
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("config set --batch-file");
+    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("modelProviderConfigBatchJson");
+    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("config set --batch-file");
+    expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("windowsAgentTurnConfigPatchScript");
+    const powershell = readFileSync(TS_PATHS.powershell, "utf8");
+    expect(powershell).toContain("config set --batch-file");
+    expect(powershell).toContain("agents.defaults.skipBootstrap");
+    expect(powershell).toContain("tools.profile");
+    expect(powershell).toContain("replace(/^\\\\uFEFF/u");
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
@@ -332,7 +353,9 @@ console.log(JSON.stringify(result));
     expect(npmUpdateScripts).toContain("--thinking minimal");
     expect(npmUpdateScripts).toContain("finalAssistant(Raw|Visible)Text");
     expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
-    expect(npmUpdateScripts).toContain("windowsModelProviderTimeoutScript");
+    expect(npmUpdateScripts).toContain("windowsAgentTurnConfigPatchScript");
+    expect(npmUpdateScripts).toContain("modelProviderConfigBatchJson");
+    expect(npmUpdateScripts).toContain("config set --batch-file");
   });
 
   it("clears phase timers and applies phase deadlines to guest commands", () => {
@@ -350,6 +373,12 @@ console.log(JSON.stringify(result));
       expect(script, scriptPath).toContain("remainingPhaseTimeoutMs");
       expect(script, scriptPath).toContain("timeoutMs:");
     }
+  });
+
+  it("runs POSIX guest shell scripts with a normal install umask", () => {
+    const guestTransports = readFileSync(TS_PATHS.guestTransports, "utf8");
+
+    expect(guestTransports.match(/umask 022/g)).toHaveLength(2);
   });
 
   it("provisions portable Git before Windows dev update lanes", () => {
@@ -408,7 +437,7 @@ console.log(JSON.stringify(result));
     expect(macos).not.toContain("Authorization: Bot");
     expect(discord).toContain("Authorization: Bot");
     expect(discord).toContain('"--silent"');
-    expect(discord).toContain("plugins deps --repair");
+    expect(discord).toContain("doctor --fix --yes --non-interactive");
     expect(discord).toContain("channels status --probe --json");
     expect(discord).toContain("Stop ${this.input.vmName} after successful Discord smoke");
   });
@@ -424,16 +453,18 @@ console.log(JSON.stringify(result));
 
   it("runs Windows ref onboarding through a detached done-file runner", () => {
     const script = readFileSync(TS_PATHS.windows, "utf8");
+    const transports = readFileSync(TS_PATHS.guestTransports, "utf8");
 
     expect(script).toContain("guestPowerShellBackground");
-    expect(script).toContain("Join-Path $env:TEMP");
-    expect(script).toContain("__OPENCLAW_BACKGROUND_DONE__");
-    expect(script).toContain("__OPENCLAW_BACKGROUND_EXIT__");
-    expect(script).toContain("__OPENCLAW_LOG_OFFSET__");
-    expect(script).toContain("result.status !== 0 && result.status !== 124");
-    expect(script).toContain("Start-Process -FilePath powershell.exe");
-    expect(script).toContain('launchLog.includes("started")');
-    expect(script).toContain("waitForBackgroundMaterialized(pathsScript, 45_000)");
+    expect(script).toContain("runWindowsBackgroundPowerShell");
+    expect(transports).toContain("Join-Path $env:TEMP");
+    expect(transports).toContain("__OPENCLAW_BACKGROUND_DONE__");
+    expect(transports).toContain("__OPENCLAW_BACKGROUND_EXIT__");
+    expect(transports).toContain("__OPENCLAW_LOG_OFFSET__");
+    expect(transports).toContain("poll.status !== 0 && poll.status !== 124");
+    expect(transports).toContain("Start-Process -FilePath powershell.exe");
+    expect(transports).toContain('launch.stdout.includes("started")');
+    expect(transports).toContain("waitForWindowsBackgroundMaterialized");
   });
 
   it("returns timed-out host command status when check is disabled", () => {
@@ -458,20 +489,72 @@ console.log(JSON.stringify(result));
 
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
-    expect(script).toContain("windowsModelProviderTimeoutScript(this.auth.modelId)");
+    expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 2700");
+    expect(script).toContain("windowsAgentTurnConfigPatchScript(this.auth.modelId)");
+    expect(script).toContain("--model");
+    expect(script).toContain('resolveParallelsModelTimeoutSeconds("windows")');
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
     expect(script).toContain("parallels-windows-smoke-retry-$attempt");
+    expect(script).toContain("agent turn attempt $attempt failed or finished without OK response");
     expect(script).not.toContain("$config.models.providers");
     expect(script).not.toContain("timeoutSeconds = 300");
     expect(script).toContain('"$sessionId.jsonl"');
   });
 
+  it("gives GPT-5.5 enough Parallels model time on slower desktop guests", () => {
+    const source = `
+import { resolveParallelsModelTimeoutSeconds } from "./${TS_PATHS.common}";
+console.log(JSON.stringify({
+  macos: resolveParallelsModelTimeoutSeconds("macos"),
+  windows: resolveParallelsModelTimeoutSeconds("windows"),
+  linux: resolveParallelsModelTimeoutSeconds("linux"),
+}));
+`;
+    expect(JSON.parse(runTsEval(source))).toEqual({
+      linux: 900,
+      macos: 1800,
+      windows: 1800,
+    });
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
+      "OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 2700",
+    );
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
+      '--timeout ${resolveParallelsModelTimeoutSeconds("macos")}',
+    );
+    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain(
+      '--timeout ${resolveParallelsModelTimeoutSeconds("linux")}',
+    );
+  });
+
   it("waits through transient Windows restoring state before VM operations", () => {
     const script = readFileSync(TS_PATHS.windows, "utf8");
+    const transports = readFileSync(TS_PATHS.guestTransports, "utf8");
 
     expect(script).toContain("waitForVmNotRestoring");
     expect(script).toContain("snapshot-switch retry");
-    expect(script).toContain("launch retry");
+    expect(transports).toContain("launch retry");
+  });
+
+  it("keeps Windows update-only env flags scoped before verification", () => {
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+    const powershell = readFileSync(TS_PATHS.powershell, "utf8");
+
+    expect(powershell).toContain("windowsScopedEnvFunction");
+    expect(windows).toContain(
+      "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
+    );
+    expect(windows).toContain("$script:OpenClawUpdateExit = $LASTEXITCODE");
+    expect(windows).not.toContain("$env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'");
+  });
+
+  it("writes Parallels phase timing artifacts", () => {
+    const phaseRunner = readFileSync(TS_PATHS.phaseRunner, "utf8");
+    const npmUpdate = readFileSync(TS_PATHS.npmUpdate, "utf8");
+
+    expect(phaseRunner).toContain("phase-timings.json");
+    expect(phaseRunner).toContain("slowest");
+    expect(npmUpdate).toContain("timings: this.timings");
+    expect(npmUpdate).toContain("recordTiming");
   });
 
   it("resolves Windows OpenClaw commands without assuming the npm shim path", () => {
@@ -481,6 +564,9 @@ console.log(JSON.stringify(result));
     expect(powershell).toContain("windowsOpenClawResolver");
     expect(powershell).toContain("providerTimeoutConfigJson");
     expect(powershell).toContain("models.providers.${providerId}");
+    expect(powershell).toContain("agents.defaults.models${configPathMapKey(modelId)}");
+    expect(powershell).toContain("configPathMapKey");
+    expect(powershell).toContain('transport: "sse"');
     expect(powershell).toContain("Resolve-OpenClawCommand");
     expect(powershell).toContain("npm\\node_modules\\openclaw\\openclaw.mjs");
     expect(powershell).toContain("$ErrorActionPreference = 'Continue'");

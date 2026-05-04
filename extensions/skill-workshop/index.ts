@@ -142,5 +142,5 @@ export default definePluginEntry({
 export { createProposalFromMessages } from "./src/signals.js";
 export { SkillWorkshopStore } from "./src/store.js";
 export { applyProposalToWorkspace } from "./src/skills.js";
-export { countToolCalls, reviewTranscriptForProposal } from "./src/reviewer.js";
+export { reviewTranscriptForProposal } from "./src/reviewer.js";
 export { scanSkillContent } from "./src/scanner.js";

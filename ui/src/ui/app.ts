@@ -1,5 +1,5 @@
 import { LitElement } from "lit";
-import { customElement, state } from "lit/decorators.js";
+import { state } from "lit/decorators.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -25,7 +25,11 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
 } from "./app-chat.ts";
-import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
+import {
+  DEFAULT_CRON_FORM,
+  DEFAULT_LOG_LEVEL_FILTERS,
+  DEFAULT_SESSIONS_FILTERS,
+} from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
@@ -34,6 +38,7 @@ import {
   handleFirstUpdated,
   handleUpdated,
 } from "./app-lifecycle.ts";
+import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
@@ -139,7 +144,6 @@ function resolveOnboardingMode(): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-@customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
   private i18nController = new I18nController(this);
   clientInstanceId = generateUUID();
@@ -188,9 +192,11 @@ export class OpenClawApp extends LitElement {
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;
+  @state() chatMessageMaxWidth: string | null = null;
   @state() serverVersion: string | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
+  currentSessionId: string | null = null;
   @state() chatLoading = false;
   @state() chatSending = false;
   @state() chatMessage = "";
@@ -220,11 +226,12 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkTranscript: string | null = null;
   private realtimeTalkSession: RealtimeTalkSession | null = null;
   @state() chatManualRefreshInFlight = false;
+  @state() chatHeaderControlsHidden = false;
   @state() chatMobileControlsOpen = false;
   private chatMobileControlsTrigger: HTMLElement | null = null;
   @state() navDrawerOpen = false;
 
-  onSlashAction?: (action: string) => void;
+  onSlashAction?: (action: string) => void | Promise<void>;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>> = {};
   chatInputHistorySessionKey: string | null = null;
   chatInputHistoryItems: string[] | null = null;
@@ -368,10 +375,12 @@ export class OpenClawApp extends LitElement {
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;
-  @state() sessionsFilterActive = "";
-  @state() sessionsFilterLimit = "120";
+  @state() sessionsFilterActive = DEFAULT_SESSIONS_FILTERS.activeMinutes;
+  @state() sessionsFilterLimit = DEFAULT_SESSIONS_FILTERS.limit;
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
+  @state() sessionsShowArchived = false;
+  @state() sessionsFiltersCollapsed = false;
   @state() sessionsHideCron = true;
   @state() sessionsSearchQuery = "";
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
@@ -463,6 +472,7 @@ export class OpenClawApp extends LitElement {
   @state() cronStatus: CronStatus | null = null;
   @state() cronError: string | null = null;
   @state() cronForm: CronFormState = { ...DEFAULT_CRON_FORM };
+  @state() cronFormCollapsed = false;
   @state() cronFieldErrors: import("./controllers/cron.js").CronFieldErrors = {};
   @state() cronEditingJobId: string | null = null;
   @state() cronRunsJobId: string | null = null;
@@ -555,6 +565,7 @@ export class OpenClawApp extends LitElement {
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
   private chatScrollTimeout: number | null = null;
+  private chatLastScrollTop = 0;
   private chatHasAutoScrolled = false;
   private chatUserNearBottom = true;
   @state() chatNewMessagesBelow = false;
@@ -562,6 +573,7 @@ export class OpenClawApp extends LitElement {
   private logsPollInterval: number | null = null;
   private debugPollInterval: number | null = null;
   private logsScrollFrame: number | null = null;
+  private controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
   refreshSessionsAfterChat = new Set<string>();
@@ -604,8 +616,11 @@ export class OpenClawApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    this.onSlashAction = (action: string) => {
+    this.onSlashAction = async (action: string) => {
       switch (action) {
+        case "new-session":
+          await createChatSessionInternal(this as unknown as AppViewState);
+          break;
         case "toggle-focus":
           this.applySettings({
             ...this.settings,
@@ -616,7 +631,7 @@ export class OpenClawApp extends LitElement {
           exportChatMarkdown(this.chatMessages, this.assistantName);
           break;
         case "refresh-tools-effective": {
-          void refreshVisibleToolsEffectiveForCurrentSessionInternal(this);
+          await refreshVisibleToolsEffectiveForCurrentSessionInternal(this);
           break;
         }
       }
@@ -895,13 +910,18 @@ export class OpenClawApp extends LitElement {
 
   async toggleRealtimeTalk() {
     if (this.realtimeTalkSession) {
-      this.realtimeTalkSession.stop();
-      this.realtimeTalkSession = null;
-      this.realtimeTalkActive = false;
-      this.realtimeTalkStatus = "idle";
-      this.realtimeTalkDetail = null;
-      this.realtimeTalkTranscript = null;
-      return;
+      if (this.realtimeTalkStatus === "error") {
+        this.realtimeTalkSession.stop();
+        this.realtimeTalkSession = null;
+      } else {
+        this.realtimeTalkSession.stop();
+        this.realtimeTalkSession = null;
+        this.realtimeTalkActive = false;
+        this.realtimeTalkStatus = "idle";
+        this.realtimeTalkDetail = null;
+        this.realtimeTalkTranscript = null;
+        return;
+      }
     }
     if (!this.client || !this.connected) {
       this.lastError = "Gateway not connected";
@@ -1158,4 +1178,8 @@ export class OpenClawApp extends LitElement {
   render() {
     return renderApp(this as unknown as AppViewState);
   }
+}
+
+if (!customElements.get("openclaw-app")) {
+  customElements.define("openclaw-app", OpenClawApp);
 }

@@ -11,8 +11,8 @@ import {
   packOpenClaw,
   parseMode,
   parseProvider,
-  providerIdFromModelId,
-  providerTimeoutConfigJson,
+  modelProviderConfigBatchJson,
+  resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
@@ -24,6 +24,7 @@ import {
   startHostServer,
   warn,
   writeJson,
+  writeSummaryMarkdown,
   type HostServer,
   type Mode,
   type PackageArtifact,
@@ -325,7 +326,6 @@ class MacosSmoke {
           destination: this.tgzDir,
           packageSpec: this.options.targetPackageSpec,
           requireControlUi: true,
-          stageRuntimeDeps: !this.options.targetPackageSpec,
         });
         if (this.options.targetPackageSpec) {
           this.targetExpectVersion =
@@ -475,7 +475,7 @@ class MacosSmoke {
     this.status.freshDashboard = "pass";
     await this.phase(
       "fresh.first-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 2700),
       () => this.verifyTurn(),
     );
     this.status.freshAgent = "pass";
@@ -532,7 +532,7 @@ class MacosSmoke {
     this.status.upgradeDashboard = "pass";
     await this.phase(
       "upgrade.first-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 2700),
       () => this.verifyTurn(),
     );
     this.status.upgradeAgent = "pass";
@@ -729,6 +729,12 @@ class MacosSmoke {
     this.guestSh(String.raw`/usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
 /usr/bin/pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
 /usr/bin/pkill -f 'openclaw.mjs gateway' >/dev/null 2>&1 || true
+printf 'preflight.user=%s\n' "$(whoami)"
+printf 'preflight.home=%s\n' "$HOME"
+printf 'preflight.path=%s\n' "$PATH"
+printf 'preflight.umask=%s\n' "$(umask)"
+printf 'preflight.npmRoot=%s\n' "$(${guestNpm} root -g 2>/dev/null || true)"
+${guestNpm} uninstall -g openclaw >/dev/null 2>&1 || true
 rm -rf "$HOME/.openclaw"
 rm -f /tmp/openclaw-parallels-macos-gateway.log`);
   }
@@ -973,14 +979,16 @@ exit 1`);
 
   private verifyTurn(): void {
     this.guestExec([guestNode, guestOpenClawEntry, "models", "set", this.auth.modelId]);
-    const providerId = providerIdFromModelId(this.auth.modelId) || this.options.provider;
-    const providerTimeoutConfig = providerTimeoutConfigJson(this.auth.modelId, "macos");
-    if (providerTimeoutConfig) {
-      this.guestSh(
-        `${shellQuote(guestNode)} ${shellQuote(guestOpenClawEntry)} config set ${shellQuote(
-          `models.providers.${providerId}`,
-        )} ${shellQuote(providerTimeoutConfig)} --strict-json`,
-      );
+    const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "macos");
+    if (modelProviderConfigBatch) {
+      this.guestSh(`provider_config_batch="$(mktemp)"
+cat >"$provider_config_batch" <<'JSON'
+${modelProviderConfigBatch}
+JSON
+${shellQuote(guestNode)} ${shellQuote(
+        guestOpenClawEntry,
+      )} config set --batch-file "$provider_config_batch" --strict-json
+rm -f "$provider_config_batch"`);
     }
     this.guestExec([
       guestNode,
@@ -1003,7 +1011,7 @@ for attempt in 1 2; do
   set +e
   /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
-  )} --thinking minimal --json >"$output_file" 2>&1
+  )} --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("macos")} --json >"$output_file" 2>&1
   rc=$?
   set -e
   cat "$output_file"
@@ -1059,7 +1067,7 @@ fi`,
 
   private async extractLastVersion(phaseName: string): Promise<string> {
     const log = await readFile(path.join(this.runDir, `${phaseName}.log`), "utf8").catch(() => "");
-    const matches = [...log.matchAll(/openclaw\s+([0-9][^\s]*)/g)];
+    const matches = [...log.matchAll(/OpenClaw\s+([0-9][^\s]*)/gi)];
     return matches.at(-1)?.[1] ?? "";
   }
 
@@ -1103,6 +1111,18 @@ fi`,
     };
     const summaryPath = path.join(this.runDir, "summary.json");
     await writeJson(summaryPath, summary);
+    await writeSummaryMarkdown({
+      lines: [
+        `- vm: ${summary.vm}`,
+        `- target: ${summary.targetPackageSpec || "current main"}`,
+        `- fresh: ${summary.freshMain.status} ${summary.freshMain.version}`,
+        `- fresh gateway/dashboard/agent: ${summary.freshMain.gateway}/${summary.freshMain.dashboard}/${summary.freshMain.agent}`,
+        `- upgrade: ${summary.upgrade.status} ${summary.upgrade.mainVersion}`,
+        `- logs: ${summary.runDir}`,
+      ],
+      summaryPath,
+      title: "macOS Parallels Smoke",
+    });
     return summaryPath;
   }
 
