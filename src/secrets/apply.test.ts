@@ -110,7 +110,8 @@ async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
       "openai:default": {
         type: "api_key",
         provider: "openai",
-        key: "sk-openai-plaintext", // pragma: allowlist secret
+        key: "sk-ope...text", // pragma: allowlist secret
+        keyRef: OPENAI_API_KEY_ENV_REF,
       },
     },
   });
