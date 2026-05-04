@@ -1,3 +1,22 @@
+/**
+ * registry.ts — Plugin Registry (core)
+ *
+ * Central service locator and lifecycle manager for all plugins loaded by
+ * the OpenClaw gateway. This module:
+ *
+ * 1. Validates plugin manifests (tool contracts, provider declarations, etc.)
+ * 2. Registers plugin capabilities (tools, hooks, channels, providers, commands)
+ * 3. Manages plugin lifecycle (load, activate, deactivate, reload)
+ * 4. Provides per-plugin API instances via api-builder.ts
+ *
+ * The registry follows a "two-phase registration" pattern:
+ *   Phase 1 — manifest parsing (tool contracts, declared capabilities)
+ *   Phase 2 — handler wiring (actual function references)
+ *
+ * Most of the logic lives inside createPluginRegistry(), which returns all
+ * the registration handler functions wired to a shared mutable registry state.
+ */
+
 import path from "node:path";
 import {
   getRegisteredAgentHarness,
