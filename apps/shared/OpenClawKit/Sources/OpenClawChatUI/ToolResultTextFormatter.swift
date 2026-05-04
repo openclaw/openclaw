@@ -35,6 +35,7 @@ enum ToolResultTextFormatter {
     private static func renderDictionary(_ dict: [String: Any], toolName: String?) -> String {
         let status = (dict["status"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let errorText = self.firstString(in: dict, keys: ["error", "reason"])
+        let stdoutText = self.firstString(in: dict, keys: ["stdout"])
         let messageText = self.firstString(in: dict, keys: ["message", "result", "detail"])
 
         if status?.lowercased() == "error" || errorText != nil {
@@ -49,6 +50,10 @@ enum ToolResultTextFormatter {
 
         if toolName == "nodes", let summary = self.renderNodesSummary(dict) {
             return summary
+        }
+
+        if let stdoutText, !stdoutText.isEmpty {
+            return stdoutText
         }
 
         if let message = messageText {
