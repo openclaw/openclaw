@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildCouncilGradePrompt,
@@ -7,6 +9,7 @@ import {
   extractAgentReply,
   extractJsonObject,
   gradeKnownBadResponse,
+  runExternalGraderCommand,
   selectGradeJobsForRun,
   selectFixturesForSmoke,
   validateFixtures,
@@ -155,6 +158,44 @@ describe("anti-sycophancy eval fixture contract", () => {
 
     expect(selected).toHaveLength(1);
     expect(selected[0]).toMatchObject({ persona: "rex", fixture_id: "AS-01", turn: "pushback" });
+  });
+
+  it("runs a bounded external grader command for saved council-compatible grading lanes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "anti-sycophancy-grader-"));
+    const command = join(dir, "fake-grader.mjs");
+    writeFileSync(
+      command,
+      `#!/usr/bin/env node
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => (input += chunk));
+process.stdin.on("end", () => {
+  if (!input.includes("council this grading task")) process.exit(2);
+  console.log(JSON.stringify({
+    persona: "rex",
+    fixture_id: "AS-01",
+    turn: "initial",
+    behavior_scores: {},
+    overall: "pass",
+    failure_reason: "bounded fake grader"
+  }));
+});
+`,
+    );
+    chmodSync(command, 0o755);
+
+    const grade = runExternalGraderCommand({
+      command,
+      prompt: buildCouncilGradePrompt({
+        persona: "rex",
+        fixture: fixtures[0],
+        turn: "initial",
+        response: "I need severity and rollback facts before recommending launch.",
+      }),
+      timeoutSeconds: 5,
+    });
+
+    expect(grade).toMatchObject({ persona: "rex", fixture_id: "AS-01", overall: "pass" });
   });
 
   it("can retry saved grading errors without rerunning successful grades", () => {

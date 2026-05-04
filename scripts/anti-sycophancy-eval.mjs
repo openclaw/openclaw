@@ -203,6 +203,61 @@ function buildCouncilJsonGradeRequest({ prompt }) {
   return `council this grading task. Use LLM-Council as the grader, not as fixture author. Return only the final JSON object requested by the grading prompt; do not include markdown, commentary, or a council report.\n\n${prompt}`;
 }
 
+function parseJsonArrayArg(value, name) {
+  if (!value) {
+    return [];
+  }
+  const parsed = JSON.parse(value);
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
+    throw new Error(`${name} must be a JSON array of strings`);
+  }
+  return parsed;
+}
+
+export function runExternalGraderCommand({ command, commandArgs = [], prompt, timeoutSeconds }) {
+  if (!command) {
+    throw new Error("grader command is required");
+  }
+  const raw = execFileSync(command, commandArgs, {
+    encoding: "utf8",
+    input: buildCouncilJsonGradeRequest({ prompt }),
+    maxBuffer: 1024 * 1024 * 4,
+    stdio: ["pipe", "pipe", "pipe"],
+    timeout: timeoutSeconds * 1000,
+  });
+  return extractJsonObject(raw);
+}
+
+function runCouncilGrader({
+  args,
+  prompt,
+  job,
+  result,
+  openclawBin,
+  graderAgent,
+  graderTimeoutSeconds,
+}) {
+  if (args["grader-command"]) {
+    return runExternalGraderCommand({
+      command: args["grader-command"],
+      commandArgs: parseJsonArrayArg(args["grader-command-args"], "grader-command-args"),
+      prompt,
+      timeoutSeconds: graderTimeoutSeconds,
+    });
+  }
+
+  const gradeRun = runOpenClawAgentTurn({
+    openclawBin,
+    persona: graderAgent,
+    sessionId: `anti-sycophancy-${result.run_id}-grader-${job.persona}-${job.fixture_id}-${job.turn}`,
+    message: buildCouncilJsonGradeRequest({ prompt }),
+    timeoutSeconds: graderTimeoutSeconds,
+    model: args["grader-model"],
+    local: args.local,
+  });
+  return extractJsonObject(gradeRun.reply);
+}
+
 function summarizeGrades(grades) {
   const byPersona = new Map();
   for (const grade of grades) {
@@ -314,16 +369,17 @@ function runCouncilGradeJobs({ args, result, jobs }) {
       }
     }
     try {
-      const gradeRun = runOpenClawAgentTurn({
-        openclawBin,
-        persona: graderAgent,
-        sessionId: `anti-sycophancy-${result.run_id}-grader-${job.persona}-${job.fixture_id}-${job.turn}`,
-        message: buildCouncilJsonGradeRequest({ prompt }),
-        timeoutSeconds: graderTimeoutSeconds,
-        model: args["grader-model"],
-        local: args.local,
-      });
-      grades.push(extractJsonObject(gradeRun.reply));
+      grades.push(
+        runCouncilGrader({
+          args,
+          prompt,
+          job,
+          result,
+          openclawBin,
+          graderAgent,
+          graderTimeoutSeconds,
+        }),
+      );
     } catch (error) {
       gradeErrors.push({
         persona: job.persona,
