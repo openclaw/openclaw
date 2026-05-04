@@ -41,6 +41,7 @@ import {
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import {
   logMessageProcessed,
   logMessageQueued,
@@ -760,6 +761,21 @@ export async function dispatchReplyFromConfig(
     sourceReplyDeliveryMode === "message_tool_only"
       ? { ...result, sourceReplyDeliveryMode }
       : result;
+  let suppressedSourceReplyContent = false;
+  const markSuppressedSourceReplyContent = (payload: ReplyPayload) => {
+    if (!suppressDelivery || payload.isReasoning === true) {
+      return;
+    }
+    if (!hasReplyPayloadContent(payload, { extraContent: payload.audioAsVoice })) {
+      return;
+    }
+    if (!suppressedSourceReplyContent) {
+      logVerbose(
+        `automatic source reply content suppressed by ${deliverySuppressionReason || "delivery policy"}; visible output requires the message tool or automatic visible replies`,
+      );
+    }
+    suppressedSourceReplyContent = true;
+  };
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -1352,6 +1368,7 @@ export async function dispatchReplyFromConfig(
               markInboundDedupeReplayUnsafe();
             }
             if (suppressDelivery) {
+              markSuppressedSourceReplyContent(payload);
               return;
             }
             // Suppress reasoning payloads — channels using this generic dispatch
@@ -1540,6 +1557,10 @@ export async function dispatchReplyFromConfig(
           );
         }
       }
+    } else {
+      for (const reply of replies) {
+        markSuppressedSourceReplyContent(reply);
+      }
     }
 
     const counts = dispatcher.getQueuedCounts();
@@ -1547,7 +1568,11 @@ export async function dispatchReplyFromConfig(
     commitInboundDedupeIfClaimed();
     recordProcessed(
       "completed",
-      pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
+      pluginFallbackReason
+        ? { reason: pluginFallbackReason }
+        : suppressedSourceReplyContent
+          ? { reason: "source-reply-delivery-suppressed" }
+          : undefined,
     );
     markIdle("message_completed");
     return attachSourceReplyDeliveryMode({ queuedFinal, counts });

@@ -856,7 +856,7 @@ export function handleMessageEnd(
       // lastBlockReplyText is still null and message_end must deliver.
       if (ctx.state.blockReplyBreak === "text_end" && ctx.state.lastBlockReplyText != null) {
         ctx.log.debug(
-          `Skipping message_end safety send for text_end channel - content already delivered via text_end`,
+          `Skipping message_end safety send for text_end channel - content already emitted via text_end`,
         );
       } else {
         // Check for duplicates before emitting (same logic as emitBlockChunk).

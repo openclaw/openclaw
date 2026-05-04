@@ -82,6 +82,7 @@ function createMessageEndContext(
     finalizeAssistantTexts?: ReturnType<typeof vi.fn>;
     consumeReplyDirectives?: ReturnType<typeof vi.fn>;
     warn?: ReturnType<typeof vi.fn>;
+    debug?: ReturnType<typeof vi.fn>;
     builtinToolNames?: ReadonlySet<string>;
     state?: Record<string, unknown>;
   } = {},
@@ -125,7 +126,7 @@ function createMessageEndContext(
     noteLastAssistant: vi.fn(),
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
-    log: { debug: vi.fn(), warn: params.warn ?? vi.fn() },
+    log: { debug: params.debug ?? vi.fn(), warn: params.warn ?? vi.fn() },
     builtinToolNames: params.builtinToolNames,
     stripBlockTags: (text: string) => text,
     finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
@@ -756,11 +757,13 @@ describe("handleMessageEnd", () => {
   });
 
   it("does not duplicate block reply for text_end channels even when stripping differs", () => {
+    const debug = vi.fn();
     const onBlockReply = vi.fn();
     const emitBlockReply = vi.fn();
     // Same pattern: directive accumulator returns null for empty final flush
     const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
     const ctx = createMessageEndContext({
+      debug,
       onBlockReply,
       emitBlockReply,
       consumeReplyDirectives,
@@ -789,6 +792,9 @@ describe("handleMessageEnd", () => {
     // send should NOT fire for text_end channels. The only consumeReplyDirectives
     // call is the final empty flush which returns null.
     expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(debug).toHaveBeenCalledWith(
+      "Skipping message_end safety send for text_end channel - content already emitted via text_end",
+    );
   });
 
   it("emits a replacement final assistant event when final_answer appears only at message_end", () => {

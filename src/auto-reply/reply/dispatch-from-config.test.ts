@@ -4587,6 +4587,50 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("marks diagnostics when message-tool-only suppresses generated visible output", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const richPayload = {
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Open", url: "https://example.test/result" }],
+          },
+        ],
+      },
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.(richPayload);
+      return richPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "channel",
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "test:discord:channel:C1",
+      }),
+      cfg,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "completed",
+        reason: "source-reply-delivery-suppressed",
+        sessionKey: "test:discord:channel:C1",
+      }),
+    );
+  });
+
   it("does not auto-route same-provider group/channel final replies in message-tool-only mode", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
