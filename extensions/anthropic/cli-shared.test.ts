@@ -209,6 +209,8 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.args).toContain("user");
     expect(backend.config.resumeArgs).toContain("--setting-sources");
     expect(backend.config.resumeArgs).toContain("user");
+    expect(backend.config.resumeArgs).toContain("--fork-session");
+    expect(backend.config.args).not.toContain("--fork-session");
     expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
     expect(backend.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
@@ -224,5 +226,18 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("OTEL_METRICS_EXPORTER");
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
+  });
+
+  it("orders --fork-session after --resume {sessionId} in default resume args so each resume forks its own session id", () => {
+    const backend = buildAnthropicCliBackend();
+    const resumeArgs = backend.config.resumeArgs ?? [];
+
+    const resumeIndex = resumeArgs.indexOf("--resume");
+    const forkIndex = resumeArgs.indexOf("--fork-session");
+
+    expect(resumeIndex).toBeGreaterThanOrEqual(0);
+    expect(forkIndex).toBeGreaterThanOrEqual(0);
+    expect(resumeArgs[resumeIndex + 1]).toBe("{sessionId}");
+    expect(forkIndex).toBeGreaterThan(resumeIndex + 1);
   });
 });
