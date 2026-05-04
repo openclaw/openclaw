@@ -14,6 +14,14 @@ type BlueBubblesGroupConfig = {
   systemPrompt?: string;
 };
 
+type BlueBubblesDmConfig = {
+  /**
+   * Free-form directive appended to the system prompt on every turn that
+   * handles a DM from this sender. Use `"*"` as the key to apply to all DMs.
+   */
+  systemPrompt?: string;
+};
+
 type BlueBubblesActionConfig = {
   reactions?: boolean;
   edit?: boolean;
@@ -104,6 +112,8 @@ export type BlueBubblesAccountConfig = {
   network?: BlueBubblesNetworkConfig;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
+  /** Per-DM configuration keyed by sender handle or `"*"` wildcard. */
+  direct?: Record<string, BlueBubblesDmConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: BlueBubblesActionConfig;
   /** Channel health monitor overrides for this channel/account. */

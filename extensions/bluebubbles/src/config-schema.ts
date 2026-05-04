@@ -38,6 +38,16 @@ const bluebubblesGroupConfigSchema = z.object({
   systemPrompt: z.string().optional(),
 });
 
+const bluebubblesDmConfigSchema = z.object({
+  /**
+   * Free-form directive appended to the system prompt for every turn that
+   * handles a DM from this sender. Use `"*"` as the key to apply to all DMs.
+   * Use the sender's iMessage handle (e.g. `"+15551234567"`) to target a
+   * specific contact. Mirrors the `groups.<id>.systemPrompt` pattern for DMs.
+   */
+  systemPrompt: z.string().optional(),
+});
+
 const bluebubblesNetworkSchema = z
   .object({
     /** Dangerous opt-in for same-host or trusted private/internal BlueBubbles deployments. */
@@ -109,6 +119,7 @@ const bluebubblesAccountSchema = z
      */
     replyContextApiFallback: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
+    direct: z.object({}).catchall(bluebubblesDmConfigSchema).optional(),
     coalesceSameSenderDms: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
