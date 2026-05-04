@@ -1,6 +1,12 @@
 import chalk from "chalk";
+import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { resolveFastModeState } from "../agents/fast-mode.js";
+import {
+  resolveConfiguredModelRef,
+  resolveReasoningDefault,
+  resolveThinkingDefault,
+} from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
@@ -22,8 +28,13 @@ export function logGatewayStartup(params: {
     defaultModel: DEFAULT_MODEL,
   });
   const modelRef = `${agentProvider}/${agentModel}`;
-  params.log.info(`agent model: ${modelRef}`, {
-    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
+  const modelDetails = formatAgentModelStartupDetails({
+    cfg: params.cfg,
+    provider: agentProvider,
+    model: agentModel,
+  });
+  params.log.info(`agent model: ${modelRef} (${modelDetails})`, {
+    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)} (${modelDetails})`,
   });
   const startupDurationMs =
     typeof params.startupStartedAt === "number" ? Date.now() - params.startupStartedAt : null;
@@ -44,6 +55,37 @@ export function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+}
+
+export function formatAgentModelStartupDetails(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): string {
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const defaultAgentConfig = resolveAgentConfig(params.cfg, defaultAgentId);
+  const thinking =
+    defaultAgentConfig?.thinkingDefault ??
+    resolveThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+    });
+  const reasoning =
+    defaultAgentConfig?.reasoningDefault ??
+    params.cfg.agents?.defaults?.reasoningDefault ??
+    resolveReasoningDefault({
+      provider: params.provider,
+      model: params.model,
+    });
+  const fast = resolveFastModeState({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    agentId: defaultAgentId,
+  });
+
+  return `thinking=${thinking}, reasoning=${reasoning}, fast=${fast.enabled ? "on" : "off"}`;
 }
 
 function formatReadyDetails(

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { logGatewayStartup } from "./server-startup-log.js";
+import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
 
 describe("gateway startup log", () => {
   afterEach(() => {
@@ -47,6 +47,65 @@ describe("gateway startup log", () => {
     });
 
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("logs configured model mode defaults with the startup model", () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    logGatewayStartup({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+            models: {
+              "openai-codex/gpt-5.5": {
+                params: {
+                  fastMode: true,
+                  thinking: "medium",
+                },
+              },
+            },
+            reasoningDefault: "stream",
+          },
+        },
+      },
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    expect(info).toHaveBeenCalledWith(
+      "agent model: openai-codex/gpt-5.5 (thinking=medium, reasoning=stream, fast=on)",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "agent model: openai-codex/gpt-5.5 (thinking=medium, reasoning=stream, fast=on)",
+        ),
+      }),
+    );
+  });
+
+  it("uses default agent mode overrides in the startup model details", () => {
+    expect(
+      formatAgentModelStartupDetails({
+        cfg: {
+          agents: {
+            defaults: {
+              thinkingDefault: "low",
+              reasoningDefault: "off",
+              models: {
+                "openai/gpt-5.5": { params: { fastMode: false } },
+              },
+            },
+            list: [{ id: "alpha", default: true, thinkingDefault: "high", fastModeDefault: true }],
+          },
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+    ).toBe("thinking=high, reasoning=off, fast=on");
   });
 
   it("logs a compact listening line with loaded plugin ids and duration", () => {
