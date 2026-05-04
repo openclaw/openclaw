@@ -1615,6 +1615,7 @@
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
     "test:plugins:gateway-gauntlet": "node scripts/check-plugin-gateway-gauntlet.mjs",
     "test:plugins:kitchen-sink-live": "bash -lc 'if [ -x \"$HOME/.local/bin/openclaw-testbox-env\" ]; then exec \"$HOME/.local/bin/openclaw-testbox-env\" pnpm openclaw qa suite --provider-mode live-frontier --scenario kitchen-sink-live-openai; fi; exec pnpm openclaw qa suite --provider-mode live-frontier --scenario kitchen-sink-live-openai'",
+    "test:plugins:kitchen-sink-rpc": "node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mjs",
     "test:sectriage": "OPENCLAW_GATEWAY_PROJECT_SHARDS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:serial": "OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
     "test:stability:gateway": "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/gateway-stability.test.ts && OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.logging.config.ts src/logging/diagnostic-stability-bundle.test.ts && OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/fatal-error-hooks.test.ts",
