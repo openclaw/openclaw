@@ -12,6 +12,7 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   buildAcpClientStripKeys,
@@ -115,7 +116,11 @@ function printSessionUpdate(notification: SessionNotification): void {
 export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
-  const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
+  const log = createSubsystemLogger("acp/client");
+
+  if (!verbose) {
+    log.isEnabled = () => false;
+  }
 
   ensureOpenClawCliOnPath();
   const serverArgs = buildServerArgs(opts);
@@ -146,7 +151,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
     },
   );
 
-  log(`spawning: ${spawnInvocation.command} ${spawnInvocation.args.join(" ")}`);
+  log.info(`spawning: ${spawnInvocation.command} ${spawnInvocation.args.join(" ")}`);
 
   const agent = spawn(spawnInvocation.command, spawnInvocation.args, {
     stdio: ["pipe", "pipe", "inherit"],
@@ -176,7 +181,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
     stream,
   );
 
-  log("initializing");
+  log.info("initializing");
   await client.initialize({
     protocolVersion: PROTOCOL_VERSION,
     clientCapabilities: {
@@ -186,7 +191,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
     clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
   });
 
-  log("creating session");
+  log.info("creating session");
   const session = await client.newSession({
     cwd,
     mcpServers: [],

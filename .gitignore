@@ -195,3 +195,8 @@ extensions/**/.openclaw-runtime-deps-stamp.json
 
 # Output dir for scripts/run-opengrep.sh (local opengrep scans)
 /.opengrep-out/
+
+# Extension install and dependency lock artifacts
+extensions/**/.openclaw-install-stage/
+.openclaw-runtime-deps.lock/
+
