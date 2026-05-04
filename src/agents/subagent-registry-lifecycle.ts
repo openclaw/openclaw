@@ -822,7 +822,7 @@ export function createSubagentRegistryLifecycleController(params: {
       typeof priorErrorEndedAt === "number" &&
       typeof entry.startedAt === "number" &&
       entry.startedAt > priorErrorEndedAt;
-    const priorEndedReason = entry.endedReason as SubagentLifecycleEndedReason | undefined;
+    const priorEndedReason = entry.endedReason;
     const priorTerminalError =
       priorEndedReason === SUBAGENT_ENDED_REASON_ERROR || entry.outcome?.status === "error";
     const preserveTerminalError =
