@@ -21,6 +21,8 @@
   animation: dashboard-enter 0.3s var(--ease-out);
   transition: grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease);
   overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
 }
 
 @supports (height: 100dvh) {
@@ -1200,7 +1202,7 @@
   }
 
   .list-item {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
