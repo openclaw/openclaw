@@ -49,6 +49,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/ClawHub: annotate 429 errors from ClawHub with the reset window from `RateLimit-Reset`/`Retry-After` and append a `Sign in for higher rate limits.` hint when the request was unauthenticated, so users can see when downloads will recover and how to lift the cap. Thanks @romneyda.
 - Plugins/runtime state: add `registerIfAbsent` for atomic keyed-store dedupe claims that return whether a plugin successfully claimed a key without overwriting an existing live value. Thanks @amknight.
 - Plugin SDK: add plugin-owned `SessionEntry` slot projection and scoped trusted-policy session extension reads. (#75609; replaces part of #73384/#74483) Thanks @100yenadmin.
+- Tasks/maintenance: add `tasks.retentionMs` and `tasks.sweepIntervalMs` config keys (defaults 7 days and 60 seconds; the `openclaw.json` schema only accepts positive integers and rejects non-positive, non-integer, or non-finite values at config-load time so the defaults remain in effect), index-driven task registry sweeps that reuse a top-of-sweep snapshot and fast-skip non-due/non-ACP records, and `openclaw tasks maintenance` now honors the configured retention/interval through the same shared runtime-config seam as the gateway scheduler. (#77395)
 
 ### Fixes
 

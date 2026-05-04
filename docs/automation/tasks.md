@@ -312,7 +312,7 @@ autocheckpoint threshold plus periodic and shutdown `TRUNCATE` checkpoints.
 
 ### Automatic maintenance
 
-A sweeper runs every **60 seconds** and handles four things:
+A sweeper runs every **60 seconds by default** and handles four things:
 
 <Steps>
   <Step title="Reconciliation">
@@ -330,8 +330,26 @@ A sweeper runs every **60 seconds** and handles four things:
 </Steps>
 
 <Note>
-**Retention:** terminal task records are kept for **7 days**, then automatically pruned. No configuration needed.
+**Retention:** terminal task records are kept for **7 days by default**, then automatically pruned.
 </Note>
+
+#### Tuning the sweeper
+
+Both the sweep cadence and the terminal-record retention window are configurable via `openclaw.json`:
+
+```json
+{
+  "tasks": {
+    "retentionMs": 604800000,
+    "sweepIntervalMs": 60000
+  }
+}
+```
+
+- `tasks.retentionMs` — milliseconds a terminal task record is retained before it becomes eligible for pruning. Default `604800000` (7 days).
+- `tasks.sweepIntervalMs` — milliseconds between automatic sweeps. Default `60000` (60 seconds).
+
+Both keys must be positive integers in `openclaw.json`; the config schema rejects non-finite, zero, negative, or non-integer values at load time, leaving the defaults (`604800000` and `60000`) in effect. Both keys apply to the gateway's scheduled sweep **and** to the manual `openclaw tasks maintenance` CLI command, so out-of-band cleanup runs honor the same retention as the running gateway.
 
 ## How tasks relate to other systems
 
