@@ -77,14 +77,14 @@ async function createNoisyPngBuffer(width: number, height: number): Promise<Buff
 
 async function createFixture(
   stateDir: string,
-  options?: { sessionKey?: string; attachmentId?: string; filename?: string },
+  options?: { sessionKey?: string; attachmentId?: string; filename?: string; original?: Buffer },
 ) {
   const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
   const sessionKey = options?.sessionKey ?? "agent:main:main";
   const filename = options?.filename ?? `${attachmentId}-cat-full.png`;
   const originalPath = path.join(stateDir, "files", filename);
   await fs.mkdir(path.dirname(originalPath), { recursive: true });
-  await fs.writeFile(originalPath, Buffer.from("original-image"));
+  await fs.writeFile(originalPath, options?.original ?? Buffer.from("original-image"));
   const record: Record<string, unknown> = {
     attachmentId,
     sessionKey,
@@ -118,6 +118,7 @@ async function requestManagedImage(params: {
   denyAuth?: boolean;
   authResponse?: Record<string, unknown>;
   headers?: Record<string, string>;
+  thumbnailMaxSide?: number;
   transcriptMessages?: Record<string, unknown>[];
   subagentRun?: Record<string, unknown> | null;
   sessionEntry?: { sessionId: string; sessionFile?: string };
@@ -159,6 +160,7 @@ async function requestManagedImage(params: {
       trustedProxies: ["127.0.0.1/32"],
       allowRealIpFallback: false,
       stateDir: params.stateDir,
+      thumbnailMaxSide: params.thumbnailMaxSide,
     });
     if (!handled) {
       res.statusCode = 404;
@@ -251,6 +253,34 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers["content-type"]).toBe("image/png");
     expect(result.body.toString("utf-8")).toBe("original-image");
     expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("uses configured thumbnail sizing for managed outgoing previews", async () => {
+    const sharp = (await import("sharp")).default;
+    const original = await sharp({
+      create: {
+        width: 120,
+        height: 40,
+        channels: 4,
+        background: { r: 24, g: 64, b: 128, alpha: 1 },
+      },
+    })
+      .png()
+      .toBuffer();
+    const { attachmentId, sessionKey } = await createFixture(stateDir, { original });
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/thumbnail`,
+      headers: { "x-openclaw-requester-session-key": sessionKey },
+      thumbnailMaxSide: 60,
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("image/png");
+    const metadata = await sharp(result.body).metadata();
+    expect(metadata.width).toBe(60);
+    expect(metadata.height).toBe(20);
   });
 
   it("rejects unauthenticated requests before serving bytes", async () => {

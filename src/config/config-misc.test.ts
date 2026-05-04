@@ -341,6 +341,37 @@ describe("gateway.controlUi.chatMessageMaxWidth", () => {
   });
 });
 
+describe("gateway.controlUi.imageThumbnailMaxSide", () => {
+  it("accepts bounded positive pixel values", () => {
+    for (const value of [32, 300, 1024, 4096]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: {
+          controlUi: {
+            imageThumbnailMaxSide: value,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.gateway?.controlUi?.imageThumbnailMaxSide).toBe(value);
+      }
+    }
+  });
+
+  it("rejects unsafe or non-integer values", () => {
+    for (const value of [0, 31, 4097, 300.5, "300"]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: {
+          controlUi: {
+            imageThumbnailMaxSide: value,
+          },
+        },
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+});
+
 describe("plugins.entries.*.hooks", () => {
   it.each([true, false])("accepts allowConversationAccess=%s", (allowConversationAccess) => {
     const result = OpenClawSchema.safeParse({

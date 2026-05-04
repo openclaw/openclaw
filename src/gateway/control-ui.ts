@@ -14,6 +14,7 @@ import { openLocalFileSafely, FsSafeError, readSecureFile } from "../infra/fs-sa
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
+import { resizeToPng } from "../media/image-ops.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
@@ -62,6 +63,7 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
+const CONTROL_UI_DEFAULT_IMAGE_THUMBNAIL_MAX_SIDE = 300;
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
 
 export type ControlUiRequestOptions = {
@@ -177,6 +179,33 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(JSON.stringify(body));
+}
+
+function resolveControlUiImageThumbnailMaxSide(config?: OpenClawConfig): number {
+  return (
+    config?.gateway?.controlUi?.imageThumbnailMaxSide ?? CONTROL_UI_DEFAULT_IMAGE_THUMBNAIL_MAX_SIDE
+  );
+}
+
+async function tryBuildAssistantMediaThumbnail(
+  opened: Awaited<ReturnType<typeof openLocalFileSafely>>,
+  mime: string | null,
+  maxSide: number,
+): Promise<Buffer | null> {
+  if (!mime?.startsWith("image/")) {
+    return null;
+  }
+  try {
+    const buffer = await opened.handle.readFile();
+    return await resizeToPng({
+      buffer,
+      maxSide,
+      compressionLevel: 8,
+      withoutEnlargement: true,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function respondControlUiAssetsUnavailable(
@@ -586,6 +615,22 @@ export async function handleControlUiAssistantMediaRequest(
       res.setHeader("Content-Type", mime);
     } else {
       res.setHeader("Content-Type", "application/octet-stream");
+    }
+    if (req.method === "GET" && url.searchParams.get("thumbnail") === "1") {
+      const thumbnail = await tryBuildAssistantMediaThumbnail(
+        opened,
+        mime,
+        resolveControlUiImageThumbnailMaxSide(opts?.config),
+      );
+      if (thumbnail) {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+        res.setHeader("Content-Length", String(thumbnail.byteLength));
+        res.end(thumbnail);
+        await closeOpenedHandle();
+        return true;
+      }
     }
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));
