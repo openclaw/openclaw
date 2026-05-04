@@ -209,12 +209,18 @@ export async function handleCodexSubcommand(
     return await bindConversation(deps, ctx, options.pluginConfig, rest);
   }
   if (normalized === "detach" || normalized === "unbind") {
+    if (rest.length > 0) {
+      return { text: "Usage: /codex detach" };
+    }
     return { text: await detachConversation(deps, ctx) };
   }
   if (normalized === "binding") {
     return { text: await describeConversationBinding(deps, ctx) };
   }
   if (normalized === "stop") {
+    if (rest.length > 0) {
+      return { text: "Usage: /codex stop" };
+    }
     return { text: await stopConversationTurn(deps, ctx, options.pluginConfig) };
   }
   if (normalized === "steer") {

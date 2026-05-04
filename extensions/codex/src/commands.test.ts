@@ -1703,6 +1703,25 @@ describe("codex command", () => {
     expect(clearCodexAppServerBinding).toHaveBeenCalledWith(sessionFile);
   });
 
+  it("rejects malformed detach commands before clearing bindings", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const clearCodexAppServerBinding = vi.fn();
+    const detachConversationBinding = vi.fn();
+
+    await expect(
+      handleCodexCommand(
+        createContext("detach now", sessionFile, {
+          detachConversationBinding,
+        }),
+        { deps: createDeps({ clearCodexAppServerBinding }) },
+      ),
+    ).resolves.toEqual({
+      text: "Usage: /codex detach",
+    });
+    expect(detachConversationBinding).not.toHaveBeenCalled();
+    expect(clearCodexAppServerBinding).not.toHaveBeenCalled();
+  });
+
   it("stops the active bound Codex turn", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const stopCodexConversationTurn = vi.fn(async () => ({
@@ -1719,6 +1738,18 @@ describe("codex command", () => {
       sessionFile,
       pluginConfig: undefined,
     });
+  });
+
+  it("rejects malformed stop commands before interrupting Codex", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const stopCodexConversationTurn = vi.fn();
+
+    await expect(
+      handleCodexCommand(createContext("stop now", sessionFile), {
+        deps: createDeps({ stopCodexConversationTurn }),
+      }),
+    ).resolves.toEqual({ text: "Usage: /codex stop" });
+    expect(stopCodexConversationTurn).not.toHaveBeenCalled();
   });
 
   it("steers the active bound Codex turn", async () => {
