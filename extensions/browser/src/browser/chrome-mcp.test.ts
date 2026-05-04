@@ -1,15 +1,27 @@
+import fsp from "node:fs/promises";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clickChromeMcpElement,
   buildChromeMcpArgs,
+  clickChromeMcpElement,
+  decideStartGate,
   ensureChromeMcpAvailable,
   evaluateChromeMcpScript,
+  formatStartGateBlockedMessage,
   listChromeMcpTabs,
   navigateChromeMcpPage,
   openChromeMcpTab,
   probeChromeMcpHealth,
+  probeChromeRemoteDebuggingViaFiles,
   resetChromeMcpSessionsForTest,
+  setBrowserAuthSignalProbesForTest,
+  setBrowserAuthVisualVerifier,
   setChromeMcpSessionFactoryForTest,
+  setChromeRemoteDebuggingProberForTest,
+  type ChromeBrowserAuthHealth,
+  type ChromePortOwnerSignal,
 } from "./chrome-mcp.js";
 
 type ToolCall = {
@@ -683,7 +695,9 @@ describe("chrome MCP page parsing", () => {
 
     const result = await probeChromeMcpHealth("chrome-live");
 
-    expect(result).toEqual({ attached: false, mcpPid: null });
+    expect(result.attached).toBe(false);
+    expect(result.mcpPid).toBeNull();
+    expect(result.cacheAttached).toBe(false);
     expect(factory).not.toHaveBeenCalled();
   });
 
@@ -694,7 +708,10 @@ describe("chrome MCP page parsing", () => {
     await listChromeMcpTabs("chrome-live");
 
     const result = await probeChromeMcpHealth("chrome-live");
-    expect(result).toEqual({ attached: true, mcpPid: 123 });
+    expect(result.attached).toBe(true);
+    expect(result.mcpPid).toBe(123);
+    expect(result.cacheAttached).toBe(true);
+    expect(result.level).toBe("high");
   });
 
   it("honors timeoutMs for ephemeral availability probes", async () => {
@@ -725,5 +742,595 @@ describe("chrome MCP page parsing", () => {
 
     await expectation;
     expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+async function withListeningPort<T>(fn: (port: number) => Promise<T>): Promise<T> {
+  const server = net.createServer();
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("expected listening port");
+  }
+  try {
+    return await fn(address.port);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+async function pickFreeLoopbackPort(): Promise<number> {
+  const server = net.createServer();
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("expected listening port");
+  }
+  const port = address.port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+describe("probeChromeRemoteDebuggingViaFiles", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    await resetChromeMcpSessionsForTest();
+    setChromeRemoteDebuggingProberForTest(null);
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-userdata-"));
+  });
+
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("reports enabled when Local State toggle is true and DevToolsActivePort is bound", async () => {
+    await withListeningPort(async (port) => {
+      await fsp.writeFile(
+        path.join(dir, "Local State"),
+        JSON.stringify({ devtools: { remote_debugging: { "user-enabled": true } } }),
+      );
+      const uuid = "c2e9313d-e7ab-452e-962d-ad7465c4764f";
+      await fsp.writeFile(
+        path.join(dir, "DevToolsActivePort"),
+        `${port}\n/devtools/browser/${uuid}\n`,
+      );
+
+      const signal = await probeChromeRemoteDebuggingViaFiles({ userDataDir: dir });
+
+      expect(signal).toMatchObject({
+        enabled: true,
+        toggleEnabled: true,
+        port,
+        browserUuid: uuid,
+        portListening: true,
+        reason: "devtools-active-port-detected",
+      });
+      expect(typeof signal.portFileMtimeMs).toBe("number");
+    });
+  });
+
+  it("reports disabled when Local State is missing", async () => {
+    const signal = await probeChromeRemoteDebuggingViaFiles({ userDataDir: dir });
+    expect(signal.enabled).toBe(false);
+    expect(signal.toggleEnabled).toBe(false);
+    expect(signal.reason).toBe("local-state-unreadable");
+  });
+
+  it("reports toggle-off + port-file-present as a contradiction reason", async () => {
+    await fsp.writeFile(
+      path.join(dir, "Local State"),
+      JSON.stringify({ devtools: { remote_debugging: { "user-enabled": false } } }),
+    );
+    await fsp.writeFile(path.join(dir, "DevToolsActivePort"), `9999\n/devtools/browser/x\n`);
+
+    const signal = await probeChromeRemoteDebuggingViaFiles({ userDataDir: dir });
+    expect(signal.enabled).toBe(false);
+    expect(signal.toggleEnabled).toBe(false);
+    expect(signal.port).toBe(9999);
+    expect(signal.reason).toBe("toggle-off-port-file-present");
+  });
+
+  it("reports user-enabled-false when both toggle and port file are absent", async () => {
+    await fsp.writeFile(
+      path.join(dir, "Local State"),
+      JSON.stringify({ devtools: { remote_debugging: { "user-enabled": false } } }),
+    );
+
+    const signal = await probeChromeRemoteDebuggingViaFiles({ userDataDir: dir });
+    expect(signal.enabled).toBe(false);
+    expect(signal.toggleEnabled).toBe(false);
+    expect(signal.port).toBeNull();
+    expect(signal.reason).toBe("user-enabled-false");
+  });
+
+  it("reports devtools-active-port-unreadable when toggle is true but port file is missing", async () => {
+    await fsp.writeFile(
+      path.join(dir, "Local State"),
+      JSON.stringify({ devtools: { remote_debugging: { "user-enabled": true } } }),
+    );
+
+    const signal = await probeChromeRemoteDebuggingViaFiles({ userDataDir: dir });
+    expect(signal.enabled).toBe(false);
+    expect(signal.toggleEnabled).toBe(true);
+    expect(signal.reason).toBe("devtools-active-port-unreadable");
+  });
+
+  it("reports disabled when the DevToolsActivePort port is not listening", async () => {
+    const port = await pickFreeLoopbackPort();
+    await fsp.writeFile(
+      path.join(dir, "Local State"),
+      JSON.stringify({ devtools: { remote_debugging: { "user-enabled": true } } }),
+    );
+    await fsp.writeFile(path.join(dir, "DevToolsActivePort"), `${port}\n/devtools/browser/abc\n`);
+
+    const signal = await probeChromeRemoteDebuggingViaFiles({ userDataDir: dir });
+    expect(signal.enabled).toBe(false);
+    expect(signal.toggleEnabled).toBe(true);
+    expect(signal.portListening).toBe(false);
+    expect(signal.reason).toBe("devtools-active-port-not-listening");
+    expect(signal.port).toBe(port);
+  });
+
+  it("skips file checks when an explicit cdpUrl is configured", async () => {
+    await fsp.writeFile(
+      path.join(dir, "Local State"),
+      JSON.stringify({ devtools: { remote_debugging: { "user-enabled": true } } }),
+    );
+    await fsp.writeFile(path.join(dir, "DevToolsActivePort"), `9999\n/devtools/browser/x\n`);
+
+    const signal = await probeChromeRemoteDebuggingViaFiles({
+      userDataDir: dir,
+      cdpUrl: "http://192.0.2.10:9222",
+    });
+    expect(signal.enabled).toBe(false);
+    expect(signal.reason).toBe("cdp-url-configured");
+  });
+
+  it("ignores malformed JSON in Local State without throwing", async () => {
+    await fsp.writeFile(path.join(dir, "Local State"), "{not json");
+    const signal = await probeChromeRemoteDebuggingViaFiles({ userDataDir: dir });
+    expect(signal.enabled).toBe(false);
+    expect(signal.reason).toBe("local-state-unreadable");
+  });
+});
+
+describe("probeChromeMcpHealth confidence levels", () => {
+  beforeEach(async () => {
+    await resetChromeMcpSessionsForTest();
+  });
+
+  afterEach(() => {
+    setBrowserAuthSignalProbesForTest(null);
+  });
+
+  it("returns HIGH attached when toggle, port, owner, and HTTP all agree", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "c2e9313d-e7ab-452e-962d-ad7465c4764f",
+        portListening: true,
+        portFileMtimeMs: Date.now(),
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({
+        kind: "chrome",
+        process: "Google Chrome",
+        pid: 37121,
+        reason: "lsof-chrome-listener",
+      }),
+      jsonVersionProbe: async () => ({
+        ok: true,
+        reason: "chrome-json-version",
+        product: "Chrome/144.0.0.0",
+      }),
+    });
+
+    const result = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(result.level).toBe("high");
+    expect(result.attached).toBe(true);
+    expect(result.mcpPid).toBeNull();
+    expect(result.cacheAttached).toBe(false);
+    expect(result.port).toBe(50211);
+    expect(result.browserUuid).toBe("c2e9313d-e7ab-452e-962d-ad7465c4764f");
+    expect(result.emptyState).toBe(false);
+    expect(result.reasons[0]).toBe("file:devtools-active-port-detected");
+  });
+
+  it("returns MEDIUM when toggle+port listen but lsof can't identify the owner", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        portFileMtimeMs: Date.now(),
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({ kind: "unknown", reason: "lsof-timeout" }),
+    });
+
+    const result = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(result.level).toBe("medium");
+    expect(result.attached).toBe(false);
+    expect(result.emptyState).toBe(false);
+    expect(result.reasons).toContain("owner:lsof-timeout");
+  });
+
+  it("returns MEDIUM when toggle is on but port file is missing (Chrome restarting)", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: false,
+        toggleEnabled: true,
+        port: null,
+        browserUuid: null,
+        portListening: false,
+        portFileMtimeMs: null,
+        reason: "devtools-active-port-unreadable",
+      }),
+    });
+
+    const result = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(result.level).toBe("low");
+    expect(result.attached).toBe(false);
+    // toggle on + no port + no owner check possible → contradiction, hold
+    expect(result.emptyState).toBe(false);
+  });
+
+  it("returns MEDIUM when toggle+listener+chrome-owner agree but the HTTP endpoint is non-Chrome", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        portFileMtimeMs: Date.now(),
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({
+        kind: "chrome",
+        process: "Google Chrome",
+        pid: 37121,
+        reason: "lsof-chrome-listener",
+      }),
+      jsonVersionProbe: async () => ({ ok: false, reason: "non-chrome-product" }),
+    });
+
+    const result = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(result.level).toBe("medium");
+    expect(result.attached).toBe(false);
+    expect(result.reasons).toContain("http:non-chrome-product");
+  });
+
+  it("returns LOW (emptyState) when nothing is running", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: false,
+        toggleEnabled: false,
+        port: null,
+        browserUuid: null,
+        portListening: false,
+        portFileMtimeMs: null,
+        reason: "user-enabled-false",
+      }),
+    });
+
+    const result = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(result.level).toBe("low");
+    expect(result.attached).toBe(false);
+    expect(result.emptyState).toBe(true);
+  });
+
+  it("returns LOW (conflict) when port is listening but owned by a non-Chrome process", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        portFileMtimeMs: Date.now(),
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({
+        kind: "other",
+        process: "node",
+        pid: 999,
+        reason: "lsof-non-chrome-listener",
+      }),
+    });
+
+    const result = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(result.level).toBe("low");
+    expect(result.attached).toBe(false);
+    expect(result.emptyState).toBe(false);
+  });
+
+  it("returns LOW with mayStart=false when toggle is on but port file is stale (port not listening)", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: false,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: false,
+        portFileMtimeMs: Date.now() - 60_000,
+        reason: "devtools-active-port-not-listening",
+      }),
+      portOwnerProbe: async () => ({ kind: "none", reason: "lsof-no-listener" }),
+    });
+
+    const result = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(result.level).toBe("low");
+    expect(result.attached).toBe(false);
+    expect(result.emptyState).toBe(false);
+    expect(decideStartGate(result).mayStart).toBe(false);
+  });
+
+  it("prefers the live MCP cache (HIGH cacheAttached) over file probes", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        portFileMtimeMs: Date.now(),
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({
+        kind: "chrome",
+        process: "Google Chrome",
+        pid: 37121,
+        reason: "lsof-chrome-listener",
+      }),
+      jsonVersionProbe: async () => ({ ok: true, reason: "chrome-json-version" }),
+    });
+    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await listChromeMcpTabs("chrome-live");
+
+    const result = await probeChromeMcpHealth("chrome-live");
+    expect(result.level).toBe("high");
+    expect(result.attached).toBe(true);
+    expect(result.cacheAttached).toBe(true);
+    expect(result.mcpPid).toBe(123);
+  });
+});
+
+describe("decideStartGate", () => {
+  function makeHealth(overrides: Partial<ChromeBrowserAuthHealth>): ChromeBrowserAuthHealth {
+    return {
+      level: "low",
+      attached: false,
+      mcpPid: null,
+      port: null,
+      browserUuid: null,
+      reasons: [],
+      emptyState: false,
+      cacheAttached: false,
+      ...overrides,
+    };
+  }
+
+  it("HIGH: mayStart=false (already attached, do not respawn)", () => {
+    const gate = decideStartGate(
+      makeHealth({ level: "high", attached: true, cacheAttached: true }),
+    );
+    expect(gate).toEqual({
+      mayStart: false,
+      reason: "browser-already-attached",
+      level: "high",
+    });
+  });
+
+  it("MEDIUM: mayStart=false until visual verification", () => {
+    const gate = decideStartGate(makeHealth({ level: "medium" }));
+    expect(gate.mayStart).toBe(false);
+    if (!gate.mayStart) {
+      expect(gate.level).toBe("medium");
+      expect(gate.reason).toBe("browser-auth-visual-verification-required");
+    }
+  });
+
+  it("LOW with emptyState: mayStart=true", () => {
+    const gate = decideStartGate(makeHealth({ level: "low", emptyState: true }));
+    expect(gate).toEqual({ mayStart: true, reason: "browser-not-running" });
+  });
+
+  it("LOW without emptyState: mayStart=false (conflicting signals)", () => {
+    const gate = decideStartGate(makeHealth({ level: "low", emptyState: false }));
+    expect(gate.mayStart).toBe(false);
+    if (!gate.mayStart) {
+      expect(gate.level).toBe("low");
+      expect(gate.reason).toBe("browser-auth-conflict");
+    }
+  });
+});
+
+describe("ensureChromeMcpAvailable spawn gate", () => {
+  beforeEach(async () => {
+    await resetChromeMcpSessionsForTest();
+  });
+
+  afterEach(() => {
+    setBrowserAuthSignalProbesForTest(null);
+  });
+
+  it("refuses to spawn when confidence is HIGH (browser already attached)", async () => {
+    let spawned = false;
+    const factory: ChromeMcpSessionFactory = async () => {
+      spawned = true;
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        portFileMtimeMs: Date.now(),
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({
+        kind: "chrome",
+        process: "Google Chrome",
+        pid: 37121,
+        reason: "lsof-chrome-listener",
+      }),
+      jsonVersionProbe: async () => ({ ok: true, reason: "chrome-json-version" }),
+    });
+
+    await expect(
+      ensureChromeMcpAvailable("chrome-live", { userDataDir: "/tmp/chrome-fake" }),
+    ).rejects.toThrow(/already attached/);
+    expect(spawned).toBe(false);
+  });
+
+  it("refuses to spawn when confidence is MEDIUM (visual verifier required)", async () => {
+    let spawned = false;
+    const factory: ChromeMcpSessionFactory = async () => {
+      spawned = true;
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        portFileMtimeMs: Date.now(),
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({ kind: "unknown", reason: "lsof-timeout" }),
+    });
+
+    await expect(
+      ensureChromeMcpAvailable("chrome-live", { userDataDir: "/tmp/chrome-fake" }),
+    ).rejects.toThrow(/uncertain|visual confirmation/i);
+    expect(spawned).toBe(false);
+  });
+
+  it("refuses to spawn when LOW signals conflict (e.g. non-chrome process owns the port)", async () => {
+    let spawned = false;
+    const factory: ChromeMcpSessionFactory = async () => {
+      spawned = true;
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        portFileMtimeMs: Date.now(),
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async (): Promise<ChromePortOwnerSignal> => ({
+        kind: "other",
+        process: "node",
+        pid: 999,
+        reason: "lsof-non-chrome-listener",
+      }),
+    });
+
+    await expect(
+      ensureChromeMcpAvailable("chrome-live", { userDataDir: "/tmp/chrome-fake" }),
+    ).rejects.toThrow(/conflict|signals conflict/i);
+    expect(spawned).toBe(false);
+  });
+
+  it("permits spawn when LOW with emptyState (Chrome not running)", async () => {
+    let spawned = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      spawned += 1;
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: false,
+        toggleEnabled: false,
+        port: null,
+        browserUuid: null,
+        portListening: false,
+        portFileMtimeMs: null,
+        reason: "user-enabled-false",
+      }),
+      portOwnerProbe: async () => ({ kind: "none", reason: "lsof-no-listener" }),
+    });
+
+    await ensureChromeMcpAvailable("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(spawned).toBe(1);
+  });
+});
+
+describe("BrowserAuthVisualVerifier extension point", () => {
+  afterEach(() => {
+    setBrowserAuthVisualVerifier(null);
+  });
+
+  it("accepts a typed verifier registration without affecting decideStartGate", () => {
+    setBrowserAuthVisualVerifier({
+      checkConsentModal: async () => ({ present: false, reason: "stub" }),
+      checkAutomationBanner: async () => ({ present: false, reason: "stub" }),
+    });
+    // The verifier is a plumbing point; decideStartGate remains synchronous
+    // and conservative until the verifier is consulted by a future caller.
+    const gate = decideStartGate({
+      level: "medium",
+      attached: false,
+      mcpPid: null,
+      port: 50211,
+      browserUuid: null,
+      reasons: [],
+      emptyState: false,
+      cacheAttached: false,
+    });
+    expect(gate.mayStart).toBe(false);
+  });
+});
+
+describe("formatStartGateBlockedMessage", () => {
+  it("includes the per-signal reasons when present", () => {
+    const message = formatStartGateBlockedMessage(
+      "chrome-live",
+      {
+        level: "medium",
+        attached: false,
+        mcpPid: null,
+        port: 50211,
+        browserUuid: null,
+        reasons: ["file:devtools-active-port-detected", "owner:lsof-timeout"],
+        emptyState: false,
+        cacheAttached: false,
+      },
+      {
+        mayStart: false,
+        reason: "browser-auth-visual-verification-required",
+        level: "medium",
+      },
+    );
+    expect(message).toContain("chrome-live");
+    expect(message).toContain("Visual confirmation");
+    expect(message).toContain("file:devtools-active-port-detected");
+    expect(message).toContain("owner:lsof-timeout");
   });
 });

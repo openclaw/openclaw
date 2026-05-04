@@ -3,28 +3,108 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
 import type { BrowserServerState } from "./server-context.js";
 
-const chromeMcpMock = vi.hoisted(() => ({
-  closeChromeMcpSession: vi.fn(async () => true),
-  ensureChromeMcpAvailable: vi.fn(async () => {}),
-  focusChromeMcpTab: vi.fn(async () => {}),
-  listChromeMcpTabs: vi.fn(async () => [
-    { targetId: "7", title: "", url: "https://example.com", type: "page" },
-  ]),
-  openChromeMcpTab: vi.fn(async () => ({
-    targetId: "8",
-    title: "",
-    url: "about:blank",
-    type: "page",
-  })),
-  closeChromeMcpTab: vi.fn(async () => {}),
-  getChromeMcpPid: vi.fn(() => 4321),
-  probeChromeMcpHealth: vi.fn(
-    async (): Promise<{ attached: boolean; mcpPid: number | null }> => ({
-      attached: true,
-      mcpPid: 4321,
-    }),
-  ),
-}));
+type MockChromeBrowserAuthHealth = {
+  level: "high" | "medium" | "low";
+  attached: boolean;
+  mcpPid: number | null;
+  port: number | null;
+  browserUuid: string | null;
+  reasons: string[];
+  emptyState: boolean;
+  cacheAttached: boolean;
+};
+function makeAttached(mcpPid: number | null = 4321): MockChromeBrowserAuthHealth {
+  return {
+    level: "high",
+    attached: true,
+    mcpPid,
+    port: null,
+    browserUuid: null,
+    reasons: ["cache:mcp-session-ready"],
+    emptyState: false,
+    cacheAttached: true,
+  };
+}
+function makeUnattached(
+  level: "low" | "medium" = "low",
+  emptyState = true,
+): MockChromeBrowserAuthHealth {
+  return {
+    level,
+    attached: false,
+    mcpPid: null,
+    port: null,
+    browserUuid: null,
+    reasons: [`file:${level === "low" ? "user-enabled-false" : "lsof-timeout"}`],
+    emptyState,
+    cacheAttached: false,
+  };
+}
+type MockStartGateDecision =
+  | { mayStart: true; reason: string }
+  | { mayStart: false; reason: string; level: "high" | "medium" | "low" };
+
+const chromeMcpMock = vi.hoisted(() => {
+  return {
+    closeChromeMcpSession: vi.fn(async () => true),
+    ensureChromeMcpAvailable: vi.fn(async () => {}),
+    focusChromeMcpTab: vi.fn(async () => {}),
+    listChromeMcpTabs: vi.fn(async () => [
+      { targetId: "7", title: "", url: "https://example.com", type: "page" },
+    ]),
+    openChromeMcpTab: vi.fn(async () => ({
+      targetId: "8",
+      title: "",
+      url: "about:blank",
+      type: "page",
+    })),
+    closeChromeMcpTab: vi.fn(async () => {}),
+    getChromeMcpPid: vi.fn(() => 4321),
+    probeChromeMcpHealth: vi.fn(
+      async (): Promise<{
+        level: "high" | "medium" | "low";
+        attached: boolean;
+        mcpPid: number | null;
+        port: number | null;
+        browserUuid: string | null;
+        reasons: string[];
+        emptyState: boolean;
+        cacheAttached: boolean;
+      }> => ({
+        level: "high",
+        attached: true,
+        mcpPid: 4321,
+        port: null,
+        browserUuid: null,
+        reasons: ["cache:mcp-session-ready"],
+        emptyState: false,
+        cacheAttached: true,
+      }),
+    ),
+    decideStartGate: vi.fn(
+      (health: { level: string; emptyState: boolean }): MockStartGateDecision => {
+        if (health.level === "high") {
+          return { mayStart: false, reason: "browser-already-attached", level: "high" };
+        }
+        if (health.level === "medium") {
+          return {
+            mayStart: false,
+            reason: "browser-auth-visual-verification-required",
+            level: "medium",
+          };
+        }
+        if (health.emptyState) {
+          return { mayStart: true, reason: "browser-not-running" };
+        }
+        return { mayStart: false, reason: "browser-auth-conflict", level: "low" };
+      },
+    ),
+    formatStartGateBlockedMessage: vi.fn(
+      (name: string, _health: unknown, gate: { reason: string }) =>
+        `Chrome MCP for profile "${name}": ${gate.reason}`,
+    ),
+  };
+});
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMock);
 
@@ -113,10 +193,7 @@ describe("browser server-context existing-session profile", () => {
     const state = makeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
 
-    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce({
-      attached: true,
-      mcpPid: 4321,
-    });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce(makeAttached(4321));
     vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValueOnce(new Error("No page selected"));
 
     const profiles = await ctx.listProfiles();
@@ -148,10 +225,7 @@ describe("browser server-context existing-session profile", () => {
     const state = makeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
 
-    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce({
-      attached: false,
-      mcpPid: null,
-    });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce(makeUnattached("low", true));
 
     const profiles = await ctx.listProfiles();
     expect(profiles).toEqual([
@@ -174,10 +248,7 @@ describe("browser server-context existing-session profile", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const live = ctx.forProfile("chrome-live");
 
-    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue({
-      attached: true,
-      mcpPid: 4321,
-    });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue(makeAttached(4321));
 
     await live.ensureBrowserAvailable();
 
@@ -195,10 +266,7 @@ describe("browser server-context existing-session profile", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const live = ctx.forProfile("chrome-live");
 
-    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue({
-      attached: false,
-      mcpPid: null,
-    });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue(makeUnattached("low", true));
 
     await live.ensureBrowserAvailable();
 
@@ -219,10 +287,7 @@ describe("browser server-context existing-session profile", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const live = ctx.forProfile("chrome-live");
 
-    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue({
-      attached: false,
-      mcpPid: null,
-    });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue(makeUnattached("low", true));
 
     await Promise.all([live.ensureBrowserAvailable(), live.ensureBrowserAvailable()]);
 
@@ -235,10 +300,7 @@ describe("browser server-context existing-session profile", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const live = ctx.forProfile("chrome-live");
 
-    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce({
-      attached: false,
-      mcpPid: null,
-    });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce(makeUnattached("low", true));
     vi.mocked(chromeMcp.listChromeMcpTabs)
       .mockResolvedValueOnce([
         { targetId: "7", title: "", url: "https://example.com", type: "page" },
@@ -293,13 +355,38 @@ describe("browser server-context existing-session profile", () => {
     expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith("chrome-live");
   });
 
+  it("refuses to spawn chrome-mcp when the confidence probe reports MEDIUM", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce(
+      makeUnattached("medium", false),
+    );
+
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("chrome-live");
+
+    await expect(live.ensureBrowserAvailable()).rejects.toThrow(
+      /browser-auth-visual-verification-required/,
+    );
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
+  });
+
+  it("refuses to spawn chrome-mcp when LOW signals conflict (non-empty state)", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce(makeUnattached("low", false));
+
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("chrome-live");
+
+    await expect(live.ensureBrowserAvailable()).rejects.toThrow(/browser-auth-conflict/);
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
+  });
+
   it("surfaces DevToolsActivePort attach failures instead of a generic tab timeout", async () => {
     vi.useFakeTimers();
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
-    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue({
-      attached: false,
-      mcpPid: null,
-    });
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue(makeUnattached("low", true));
     vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValue(
       new Error(
         "Could not connect to Chrome. Check if Chrome is running. Cause: Could not find DevToolsActivePort for chrome at /tmp/brave-profile/DevToolsActivePort",

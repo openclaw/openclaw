@@ -355,7 +355,25 @@ const chromeMcpMocks = vi.hoisted(() => ({
     type: "page",
   })),
   pressChromeMcpKey: vi.fn(async () => {}),
-  probeChromeMcpHealth: vi.fn(async () => ({ attached: true, mcpPid: 4321 })),
+  probeChromeMcpHealth: vi.fn(async () => ({
+    level: "high" as const,
+    attached: true,
+    mcpPid: 4321,
+    port: null,
+    browserUuid: null,
+    reasons: ["cache:mcp-session-ready"],
+    emptyState: false,
+    cacheAttached: true,
+  })),
+  decideStartGate: vi.fn(() => ({
+    mayStart: false,
+    reason: "browser-already-attached",
+    level: "high" as const,
+  })),
+  formatStartGateBlockedMessage: vi.fn(
+    (name: string, _h: unknown, gate: { reason: string }) =>
+      `Chrome MCP for profile "${name}": ${gate.reason}`,
+  ),
   resizeChromeMcpPage: vi.fn(async () => {}),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({

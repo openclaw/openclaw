@@ -1,9 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
+const ATTACHED_HEALTH = {
+  level: "high" as const,
+  attached: true,
+  mcpPid: 4321,
+  port: null,
+  browserUuid: null,
+  reasons: ["cache:mcp-session-ready"],
+  emptyState: false,
+  cacheAttached: true,
+};
+const UNATTACHED_HEALTH = {
+  level: "low" as const,
+  attached: false,
+  mcpPid: null,
+  port: null,
+  browserUuid: null,
+  reasons: ["file:user-enabled-false"],
+  emptyState: true,
+  cacheAttached: false,
+};
+
 vi.mock("../chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
-  probeChromeMcpHealth: vi.fn(async () => ({ attached: true, mcpPid: 4321 })),
+  probeChromeMcpHealth: vi.fn(async () => ATTACHED_HEALTH),
 }));
 
 const { probeChromeMcpHealth: probeChromeMcpHealthMock } = await import("../chrome-mcp.js");
@@ -274,7 +295,7 @@ describe("basic browser routes", () => {
   });
 
   it("treats attach-only profiles as running when MCP cache is healthy even if page reachability is false", async () => {
-    vi.mocked(probeChromeMcpHealthMock).mockResolvedValueOnce({ attached: true, mcpPid: 4321 });
+    vi.mocked(probeChromeMcpHealthMock).mockResolvedValueOnce(ATTACHED_HEALTH);
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({
         isReachable: async () => false,
@@ -295,7 +316,7 @@ describe("basic browser routes", () => {
     const isHttpReachable = vi.fn(async () => true);
     const isTransportAvailable = vi.fn(async () => true);
     vi.mocked(probeChromeMcpHealthMock).mockClear();
-    vi.mocked(probeChromeMcpHealthMock).mockResolvedValueOnce({ attached: true, mcpPid: 4321 });
+    vi.mocked(probeChromeMcpHealthMock).mockResolvedValueOnce(ATTACHED_HEALTH);
 
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({
@@ -318,7 +339,7 @@ describe("basic browser routes", () => {
   it("reports not-running for chrome-mcp profile with empty session cache without spawning", async () => {
     const isHttpReachable = vi.fn(async () => true);
     const isTransportAvailable = vi.fn(async () => true);
-    vi.mocked(probeChromeMcpHealthMock).mockResolvedValueOnce({ attached: false, mcpPid: null });
+    vi.mocked(probeChromeMcpHealthMock).mockResolvedValueOnce(UNATTACHED_HEALTH);
 
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({
