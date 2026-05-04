@@ -43,6 +43,7 @@ describe("gateway-watch tmux wrapper", () => {
       env: {
         OPENCLAW_GATEWAY_PORT: "19001",
         OPENCLAW_PROFILE: "Dev Profile",
+        OPENCLAW_TRACE_SYNC_IO: "0",
         SHELL: "/bin/zsh",
       },
       nodePath: "/opt/node",
@@ -57,6 +58,7 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("'FORCE_COLOR=1'");
     expect(command).toContain("'OPENCLAW_GATEWAY_PORT=19001'");
     expect(command).toContain("'OPENCLAW_PROFILE=Dev Profile'");
+    expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=0'");
     expect(command).toContain("/opt/node");
     expect(command).toContain("scripts/watch-node.mjs");
     expect(command).toContain("gateway");

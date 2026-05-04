@@ -487,6 +487,15 @@ const resolveRunNodeCpuProfileArgs = (deps) => {
   return ["--cpu-prof", `--cpu-prof-dir=${absoluteProfileDir}`, `--cpu-prof-name=${profileName}`];
 };
 
+const resolveRunNodeDiagnosticArgs = (deps) => {
+  const args = [...resolveRunNodeCpuProfileArgs(deps)];
+  if (deps.env.OPENCLAW_TRACE_SYNC_IO === "1") {
+    logRunner("Enabling Node --trace-sync-io for startup I/O diagnostics.", deps);
+    args.push("--trace-sync-io");
+  }
+  return args;
+};
+
 const waitForSpawnedProcess = async (childProcess, deps) => {
   let forwardedSignal = null;
   let onSigInt;
@@ -557,8 +566,8 @@ const getInterruptedSpawnExitCode = (res) => {
 };
 
 const runOpenClaw = async (deps) => {
-  const cpuProfileArgs = resolveRunNodeCpuProfileArgs(deps);
-  const nodeProcess = deps.spawn(deps.execPath, [...cpuProfileArgs, "openclaw.mjs", ...deps.args], {
+  const diagnosticArgs = resolveRunNodeDiagnosticArgs(deps);
+  const nodeProcess = deps.spawn(deps.execPath, [...diagnosticArgs, "openclaw.mjs", ...deps.args], {
     cwd: deps.cwd,
     env: deps.env,
     stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
