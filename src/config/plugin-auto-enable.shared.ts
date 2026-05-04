@@ -280,11 +280,12 @@ function collectPluginIdsForConfiguredChannel(
   }
 
   if (claims.length === 0) {
-    // When no plugin claims this channel in the registry, don't fall back to
-    // returning the channel ID as a plugin ID — that causes channel IDs (e.g.
-    // "feishu") to be incorrectly added to plugins.allow. Built-in channels that
-    // don't require a plugin will have no claims and no fallback.
-    return [];
+    // Only return a built-in channel id as a plugin candidate when the channel is
+    // actually a known built-in. This prevents non-built-in channel ids (like
+    // "feishu") from being incorrectly added to plugins.allow as plugin ids.
+    // For non-built-in channels with no claims, return [] since a channel id
+    // is not a plugin id.
+    return builtInId ? [builtInId] : [];
   }
 
   const claimIds = new Set(claims.map((claim) => claim.plugin.id));
