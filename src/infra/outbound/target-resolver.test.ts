@@ -111,6 +111,70 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the matched directory entry kind for single matches", async () => {
+    const entry: ChannelDirectoryEntry = { kind: "user", id: "staff_bob", name: "Bob" };
+    mocks.listGroups.mockResolvedValue([entry]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "dingtalk",
+      input: "Bob",
+    });
+
+    expect(result.target).toEqual({
+      to: "staff_bob",
+      kind: "user",
+      display: "Bob",
+      source: "directory",
+    });
+  });
+
+  it('preserves "channel" directory entries as channel targets', async () => {
+    const entry: ChannelDirectoryEntry = {
+      kind: "channel",
+      id: "channel:support-room",
+      name: "Support Room",
+    };
+    mocks.listGroups.mockResolvedValue([entry]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "dingtalk",
+      input: "Support Room",
+    });
+
+    expect(result.target).toEqual({
+      to: "channel:support-room",
+      kind: "channel",
+      display: "Support Room",
+      source: "directory",
+    });
+  });
+
+  it("preserves the selected directory entry kind for non-error ambiguous matches", async () => {
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "group:support", name: "Support", rank: 1 },
+      { kind: "channel", id: "channel:support", name: "Support", rank: 5 },
+    ] satisfies ChannelDirectoryEntry[]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "dingtalk",
+      input: "Support",
+      resolveAmbiguous: "best",
+    });
+
+    expect(result.target).toEqual({
+      to: "channel:support",
+      kind: "channel",
+      display: "Support",
+      source: "directory",
+    });
+  });
+
   it("skips directory lookup for direct ids", async () => {
     const result = await expectOkResolution({
       cfg,
