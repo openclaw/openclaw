@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import {
+  TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
   resolveTrajectoryFilePath,
@@ -15,6 +16,7 @@ import {
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 
 export {
+  TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
   resolveTrajectoryFilePath,
@@ -244,7 +246,7 @@ export function createTrajectoryRuntimeRecorder(
   }
   const maxRuntimeFileBytes = Math.max(
     1,
-    Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_FILE_MAX_BYTES),
+    Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
   const writer =
     params.writer ??
