@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
-import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
+import {
+  CODEX_CONTROL_METHODS,
+  describeControlFailure,
+  type CodexControlMethod,
+} from "./app-server/capabilities.js";
 import {
   installCodexComputerUse,
   readCodexComputerUseStatus,
@@ -1538,22 +1542,34 @@ async function handleCodexGoal(
     return "No Codex thread is attached to this OpenClaw session yet. Use /codex bind first.";
   }
   if (parsed.action === "get") {
-    const response = await deps.codexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.goalGet, {
-      threadId: binding.threadId,
-    });
-    return formatCodexGoalResponse(
-      response,
-      `No Codex goal is set for thread ${binding.threadId}.`,
-    );
+    try {
+      const response = await deps.codexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.goalGet, {
+        threadId: binding.threadId,
+      });
+      return formatCodexGoalResponse(
+        response,
+        `No Codex goal is set for thread ${binding.threadId}.`,
+      );
+    } catch (error) {
+      return `Codex goal unavailable: ${describeControlFailure(error)}.`;
+    }
   }
   if (parsed.action === "clear") {
-    const response = await deps.codexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.goalClear, {
-      threadId: binding.threadId,
-    });
-    const cleared = isJsonObject(response) ? response.cleared === true : false;
-    return cleared
-      ? `Cleared Codex goal for thread ${binding.threadId}.`
-      : `No Codex goal was set for thread ${binding.threadId}.`;
+    try {
+      const response = await deps.codexControlRequest(
+        pluginConfig,
+        CODEX_CONTROL_METHODS.goalClear,
+        {
+          threadId: binding.threadId,
+        },
+      );
+      const cleared = isJsonObject(response) ? response.cleared === true : false;
+      return cleared
+        ? `Cleared Codex goal for thread ${binding.threadId}.`
+        : `No Codex goal was set for thread ${binding.threadId}.`;
+    } catch (error) {
+      return `Codex goal unavailable: ${describeControlFailure(error)}.`;
+    }
   }
 
   const params = {
@@ -1562,12 +1578,18 @@ async function handleCodexGoal(
     ...(parsed.status != null ? { status: parsed.status } : {}),
     ...("tokenBudget" in parsed ? { tokenBudget: parsed.tokenBudget } : {}),
   };
-  const response = await deps.codexControlRequest(
-    pluginConfig,
-    CODEX_CONTROL_METHODS.goalSet,
-    params,
-  );
-  return ["Codex goal updated.", formatCodexGoalResponse(response, "No goal returned.")].join("\n");
+  try {
+    const response = await deps.codexControlRequest(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.goalSet,
+      params,
+    );
+    return ["Codex goal updated.", formatCodexGoalResponse(response, "No goal returned.")].join(
+      "\n",
+    );
+  } catch (error) {
+    return `Codex goal unavailable: ${describeControlFailure(error)}.`;
+  }
 }
 
 function codexGoalUsage(): string {
