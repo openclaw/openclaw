@@ -159,6 +159,33 @@ describe("probeIMessage", () => {
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
 
+  it("marks Messages database permission denial as fatal", async () => {
+    vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "",
+      stderr: "rpc help",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+    vi.spyOn(clientModule, "createIMessageRpcClient").mockResolvedValue({
+      request: vi
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            'imsg rpc permission denied: permissionDenied(path: "/Users/me/Library/Messages/chat.db", underlying: authorization denied (code: 23))',
+          ),
+        ),
+      stop: vi.fn(),
+    } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "imsg-test-permission" });
+
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(true);
+    expect(result.error).toMatch(/permission denied/i);
+  });
+
   it("status probe uses account-scoped cliPath and dbPath", async () => {
     const probeSpy = vi.spyOn(channelRuntimeModule, "probeIMessageAccount").mockResolvedValue({
       ok: true,

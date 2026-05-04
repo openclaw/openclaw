@@ -4,7 +4,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { detectBinary } from "openclaw/plugin-sdk/setup";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { createIMessageRpcClient } from "./client.js";
+import { createIMessageRpcClient, isIMessageRpcPermissionDeniedText } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
 // Re-export for backwards compatibility
@@ -99,7 +99,8 @@ export async function probeIMessage(
     await client.request("chats.list", { limit: 1 }, { timeoutMs: effectiveTimeout });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: String(err) };
+    const error = String(err);
+    return { ok: false, error, fatal: isIMessageRpcPermissionDeniedText(error) };
   } finally {
     await client.stop();
   }
