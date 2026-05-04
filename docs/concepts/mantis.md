@@ -111,6 +111,51 @@ Useful desktop smoke flags:
 - `--keep-lease` or `OPENCLAW_MANTIS_KEEP_VM=1` keeps a newly created passing lease open for VNC inspection. Failed runs keep the lease by default when one was created so an operator can reconnect.
 - `--class`, `--idle-timeout`, and `--ttl` tune machine size and lease lifetime.
 
+The first full desktop transport primitive is the Slack desktop smoke:
+
+```bash
+pnpm openclaw qa mantis slack-desktop-smoke \
+  --output-dir .artifacts/qa-e2e/mantis/slack-desktop \
+  --gateway-setup \
+  --scenario slack-canary \
+  --keep-lease
+```
+
+It leases or reuses a Crabbox desktop machine, syncs the current checkout into
+the VM, runs `pnpm openclaw qa slack` inside that VM, opens Slack Web in the VNC
+browser, captures the visible desktop, and copies both the Slack QA artifacts and
+the VNC screenshot back to the local output directory. This is the first Mantis
+shape where the SUT OpenClaw gateway and the browser both live inside the same
+Linux desktop VM.
+
+With `--gateway-setup`, the command prepares a persistent disposable OpenClaw
+home at `$HOME/.openclaw-mantis/slack-openclaw`, patches Slack Socket Mode
+configuration for the selected channel, starts `openclaw gateway run` on port
+`38973`, and keeps Chrome running in the VNC session. This is the "leave me a
+Linux desktop with Slack and a claw running" mode; the bot-to-bot Slack QA lane
+remains the default when `--gateway-setup` is omitted.
+
+Required inputs for `--credential-source env`:
+
+- `OPENCLAW_QA_SLACK_CHANNEL_ID`
+- `OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN`
+- `OPENCLAW_QA_SLACK_SUT_BOT_TOKEN`
+- `OPENCLAW_QA_SLACK_SUT_APP_TOKEN`
+- `OPENCLAW_LIVE_OPENAI_KEY` for the remote model lane. If only
+  `OPENAI_API_KEY` is set locally, Mantis maps it to `OPENCLAW_LIVE_OPENAI_KEY`
+  before invoking Crabbox so Crabbox's `OPENCLAW_*` env forwarding can carry it
+  into the VM.
+
+Useful Slack desktop flags:
+
+- `--lease-id <cbx_...>` reruns against a machine where an operator already logged in to Slack Web through VNC.
+- `--gateway-setup` starts a persistent OpenClaw Slack gateway in the VM instead of only running the bot-to-bot QA lane.
+- `--slack-url <url>` opens a specific Slack Web URL. Without it, Mantis derives `https://app.slack.com/client/<team>/<channel>` from Slack `auth.test` when the SUT bot token is available.
+- `--slack-channel-id <id>` controls the Slack channel allowlist used by gateway setup.
+- `OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR` controls the persistent Chrome profile inside the VM. The default is `$HOME/.config/openclaw-mantis/slack-chrome-profile`, so a manual Slack Web login survives reruns on the same lease.
+- `--credential-source convex --credential-role ci` uses the shared credential pool instead of direct Slack env tokens.
+- `--provider-mode`, `--model`, `--alt-model`, and `--fast` pass through to the Slack live lane.
+
 The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
 workflow for the first real scenario is `Mantis Discord Status Reactions`. It
 accepts:

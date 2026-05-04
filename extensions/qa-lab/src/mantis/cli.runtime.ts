@@ -4,6 +4,10 @@ import {
 } from "./desktop-browser-smoke.runtime.js";
 import { runMantisDiscordSmoke, type MantisDiscordSmokeOptions } from "./discord-smoke.runtime.js";
 import { runMantisBeforeAfter, type MantisBeforeAfterOptions } from "./run.runtime.js";
+import {
+  runMantisSlackDesktopSmoke,
+  type MantisSlackDesktopSmokeOptions,
+} from "./slack-desktop-smoke.runtime.js";
 
 export async function runMantisDiscordSmokeCommand(opts: MantisDiscordSmokeOptions) {
   const result = await runMantisDiscordSmoke(opts);
@@ -29,6 +33,18 @@ export async function runMantisDesktopBrowserSmokeCommand(opts: MantisDesktopBro
   process.stdout.write(`Mantis desktop browser summary: ${result.summaryPath}\n`);
   if (result.screenshotPath) {
     process.stdout.write(`Mantis desktop browser screenshot: ${result.screenshotPath}\n`);
+  }
+  if (result.status === "fail") {
+    process.exitCode = 1;
+  }
+}
+
+export async function runMantisSlackDesktopSmokeCommand(opts: MantisSlackDesktopSmokeOptions) {
+  const result = await runMantisSlackDesktopSmoke(opts);
+  process.stdout.write(`Mantis Slack desktop report: ${result.reportPath}\n`);
+  process.stdout.write(`Mantis Slack desktop summary: ${result.summaryPath}\n`);
+  if (result.screenshotPath) {
+    process.stdout.write(`Mantis Slack desktop screenshot: ${result.screenshotPath}\n`);
   }
   if (result.status === "fail") {
     process.exitCode = 1;

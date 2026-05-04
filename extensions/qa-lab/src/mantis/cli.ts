@@ -3,6 +3,7 @@ import { createLazyCliRuntimeLoader } from "../live-transports/shared/live-trans
 import type { MantisDesktopBrowserSmokeOptions } from "./desktop-browser-smoke.runtime.js";
 import type { MantisDiscordSmokeOptions } from "./discord-smoke.runtime.js";
 import type { MantisBeforeAfterOptions } from "./run.runtime.js";
+import type { MantisSlackDesktopSmokeOptions } from "./slack-desktop-smoke.runtime.js";
 
 type MantisCliRuntime = typeof import("./cli.runtime.js");
 
@@ -23,6 +24,11 @@ async function runBeforeAfter(opts: MantisBeforeAfterOptions) {
 async function runDesktopBrowserSmoke(opts: MantisDesktopBrowserSmokeOptions) {
   const runtime = await loadMantisCliRuntime();
   await runtime.runMantisDesktopBrowserSmokeCommand(opts);
+}
+
+async function runSlackDesktopSmoke(opts: MantisSlackDesktopSmokeOptions) {
+  const runtime = await loadMantisCliRuntime();
+  await runtime.runMantisSlackDesktopSmokeCommand(opts);
 }
 
 type MantisDiscordSmokeCommanderOptions = {
@@ -66,6 +72,33 @@ type MantisDesktopBrowserSmokeCommanderOptions = {
   repoRoot?: string;
   ttl?: string;
 };
+
+type MantisSlackDesktopSmokeCommanderOptions = {
+  altModel?: string;
+  class?: string;
+  crabboxBin?: string;
+  credentialRole?: string;
+  credentialSource?: string;
+  fast?: boolean;
+  gatewaySetup?: boolean;
+  idleTimeout?: string;
+  keepLease?: boolean;
+  leaseId?: string;
+  machineClass?: string;
+  model?: string;
+  outputDir?: string;
+  provider?: string;
+  providerMode?: string;
+  repoRoot?: string;
+  scenario?: string[];
+  slackChannelId?: string;
+  slackUrl?: string;
+  ttl?: string;
+};
+
+function collectString(value: string, previous: string[] = []) {
+  return [...previous, value];
+}
 
 export function registerMantisCli(qa: Command) {
   const mantis = qa
@@ -159,6 +192,60 @@ export function registerMantisCli(qa: Command) {
         outputDir: opts.outputDir,
         provider: opts.provider,
         repoRoot: opts.repoRoot,
+        ttl: opts.ttl,
+      });
+    });
+
+  mantis
+    .command("slack-desktop-smoke")
+    .description(
+      "Lease or reuse a Crabbox VNC desktop, run Slack QA inside it, open Slack in the browser, and capture a screenshot",
+    )
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Mantis Slack desktop artifact directory")
+    .option("--crabbox-bin <path>", "Crabbox binary path")
+    .option("--provider <provider>", "Crabbox provider")
+    .option("--machine-class <class>", "Crabbox machine class")
+    .option("--class <class>", "Alias for --machine-class")
+    .option("--lease-id <id>", "Reuse an existing Crabbox lease")
+    .option("--idle-timeout <duration>", "Crabbox idle timeout")
+    .option("--ttl <duration>", "Crabbox maximum lease lifetime")
+    .option("--keep-lease", "Keep a lease created by this run after a passing smoke")
+    .option("--gateway-setup", "Start a persistent OpenClaw Slack gateway inside the VNC VM")
+    .option("--slack-url <url>", "Slack web URL to open in the visible browser")
+    .option("--slack-channel-id <id>", "Slack channel id for gateway setup allowlist")
+    .option("--provider-mode <mode>", "QA provider mode")
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option(
+      "--scenario <id>",
+      "Run only the named Slack QA scenario (repeatable)",
+      collectString,
+      [],
+    )
+    .option("--credential-source <source>", "Credential source for Slack QA: env or convex")
+    .option("--credential-role <role>", "Credential role for convex auth")
+    .option("--fast", "Enable provider fast mode where supported")
+    .action(async (opts: MantisSlackDesktopSmokeCommanderOptions) => {
+      await runSlackDesktopSmoke({
+        alternateModel: opts.altModel,
+        crabboxBin: opts.crabboxBin,
+        credentialRole: opts.credentialRole,
+        credentialSource: opts.credentialSource,
+        fastMode: opts.fast,
+        gatewaySetup: opts.gatewaySetup,
+        idleTimeout: opts.idleTimeout,
+        keepLease: opts.keepLease,
+        leaseId: opts.leaseId,
+        machineClass: opts.machineClass ?? opts.class,
+        outputDir: opts.outputDir,
+        primaryModel: opts.model,
+        provider: opts.provider,
+        providerMode: opts.providerMode,
+        repoRoot: opts.repoRoot,
+        scenarioIds: opts.scenario,
+        slackChannelId: opts.slackChannelId,
+        slackUrl: opts.slackUrl,
         ttl: opts.ttl,
       });
     });

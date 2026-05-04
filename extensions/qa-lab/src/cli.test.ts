@@ -51,6 +51,7 @@ const {
   runMantisBeforeAfterCommand,
   runMantisDesktopBrowserSmokeCommand,
   runMantisDiscordSmokeCommand,
+  runMantisSlackDesktopSmokeCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
   runQaCredentialsListCommand: vi.fn(),
@@ -62,6 +63,7 @@ const {
   runMantisBeforeAfterCommand: vi.fn(),
   runMantisDesktopBrowserSmokeCommand: vi.fn(),
   runMantisDiscordSmokeCommand: vi.fn(),
+  runMantisSlackDesktopSmokeCommand: vi.fn(),
 }));
 
 const { listQaRunnerCliContributions } = vi.hoisted(() => ({
@@ -82,6 +84,7 @@ vi.mock("./mantis/cli.runtime.js", () => ({
   runMantisBeforeAfterCommand,
   runMantisDesktopBrowserSmokeCommand,
   runMantisDiscordSmokeCommand,
+  runMantisSlackDesktopSmokeCommand,
 }));
 
 vi.mock("./cli.runtime.js", () => ({
@@ -110,6 +113,7 @@ describe("qa cli registration", () => {
     runMantisBeforeAfterCommand.mockReset();
     runMantisDesktopBrowserSmokeCommand.mockReset();
     runMantisDiscordSmokeCommand.mockReset();
+    runMantisSlackDesktopSmokeCommand.mockReset();
     listQaRunnerCliContributions
       .mockReset()
       .mockReturnValue([createAvailableQaRunnerContribution()]);
@@ -280,6 +284,70 @@ describe("qa cli registration", () => {
       provider: undefined,
       repoRoot: "/tmp/openclaw-repo",
       ttl: undefined,
+    });
+  });
+
+  it("routes mantis Slack desktop smoke flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "slack-desktop-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/slack-desktop",
+      "--crabbox-bin",
+      "/tmp/crabbox",
+      "--provider",
+      "hetzner",
+      "--machine-class",
+      "beast",
+      "--lease-id",
+      "cbx_123abc",
+      "--idle-timeout",
+      "45m",
+      "--ttl",
+      "120m",
+      "--slack-url",
+      "https://app.slack.com/client/T123/C123",
+      "--provider-mode",
+      "live-frontier",
+      "--model",
+      "openai/gpt-5.4",
+      "--alt-model",
+      "openai/gpt-5.4",
+      "--scenario",
+      "slack-canary",
+      "--credential-source",
+      "env",
+      "--credential-role",
+      "maintainer",
+      "--fast",
+      "--keep-lease",
+    ]);
+
+    expect(runMantisSlackDesktopSmokeCommand).toHaveBeenCalledWith({
+      alternateModel: "openai/gpt-5.4",
+      crabboxBin: "/tmp/crabbox",
+      credentialRole: "maintainer",
+      credentialSource: "env",
+      fastMode: true,
+      gatewaySetup: undefined,
+      idleTimeout: "45m",
+      keepLease: true,
+      leaseId: "cbx_123abc",
+      machineClass: "beast",
+      outputDir: ".artifacts/qa-e2e/mantis/slack-desktop",
+      primaryModel: "openai/gpt-5.4",
+      provider: "hetzner",
+      providerMode: "live-frontier",
+      repoRoot: "/tmp/openclaw-repo",
+      scenarioIds: ["slack-canary"],
+      slackChannelId: undefined,
+      slackUrl: "https://app.slack.com/client/T123/C123",
+      ttl: "120m",
     });
   });
 

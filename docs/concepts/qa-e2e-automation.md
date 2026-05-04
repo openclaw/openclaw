@@ -29,26 +29,26 @@ Current pieces:
 Every QA flow runs under `pnpm openclaw qa <subcommand>`. Many have `pnpm qa:*`
 script aliases; both forms are supported.
 
-| Command                                             | Purpose                                                                                                                                                                   |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                          |
-| `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                    |
-| `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                             |
-| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report.                                                                                            |
-| `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                              |
-| `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                            |
-| `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                      |
-| `qa docker-build-image`                             | Build the prebaked QA Docker image.                                                                                                                                       |
-| `qa docker-scaffold`                                | Write a docker-compose scaffold for the QA dashboard + gateway lane.                                                                                                      |
-| `qa up`                                             | Build the QA site, start the Docker-backed stack, print the URL (alias: `pnpm qa:lab:up`; `:fast` variant adds `--use-prebuilt-image --bind-ui-dist --skip-ui-build`).    |
-| `qa aimock`                                         | Start only the AIMock provider server.                                                                                                                                    |
-| `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                              |
-| `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                                 |
-| `qa matrix`                                         | Live transport lane against a disposable Tuwunel homeserver. See [Matrix QA](/concepts/qa-matrix).                                                                        |
-| `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                                |
-| `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                         |
-| `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                 |
-| `qa mantis`                                         | Before and after verification runner for live transport bugs, with Discord status-reactions evidence and a Crabbox desktop/browser smoke. See [Mantis](/concepts/mantis). |
+| Command                                             | Purpose                                                                                                                                                                                      |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                                             |
+| `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                       |
+| `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                                                |
+| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report.                                                                                                               |
+| `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                                                 |
+| `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                                               |
+| `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                                         |
+| `qa docker-build-image`                             | Build the prebaked QA Docker image.                                                                                                                                                          |
+| `qa docker-scaffold`                                | Write a docker-compose scaffold for the QA dashboard + gateway lane.                                                                                                                         |
+| `qa up`                                             | Build the QA site, start the Docker-backed stack, print the URL (alias: `pnpm qa:lab:up`; `:fast` variant adds `--use-prebuilt-image --bind-ui-dist --skip-ui-build`).                       |
+| `qa aimock`                                         | Start only the AIMock provider server.                                                                                                                                                       |
+| `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                                                 |
+| `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                                                    |
+| `qa matrix`                                         | Live transport lane against a disposable Tuwunel homeserver. See [Matrix QA](/concepts/qa-matrix).                                                                                           |
+| `qa telegram`                                       | Live transport lane against a real private Telegram group.                                                                                                                                   |
+| `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                            |
+| `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                    |
+| `qa mantis`                                         | Before and after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis). |
 
 ## Operator flow
 
@@ -120,6 +120,23 @@ pnpm openclaw qa slack
 ```
 
 They target a pre-existing real channel with two bots (driver + SUT). Required env vars, scenario lists, output artifacts, and the Convex credential pool are documented in [Telegram, Discord, and Slack QA reference](#telegram-discord-and-slack-qa-reference) below.
+
+For a full Slack desktop VM run with VNC rescue, run:
+
+```bash
+pnpm openclaw qa mantis slack-desktop-smoke \
+  --gateway-setup \
+  --scenario slack-canary \
+  --keep-lease
+```
+
+That command leases a Crabbox desktop/browser machine, runs the Slack live lane
+inside the VM, opens Slack Web in the VNC browser, captures the desktop, and
+copies `slack-qa/` plus `slack-desktop-smoke.png` back to the Mantis artifact
+directory. Reuse `--lease-id <cbx_...>` after logging in to Slack Web manually
+through VNC. With `--gateway-setup`, Mantis leaves a persistent OpenClaw Slack
+gateway running inside the VM on port `38973`; without it, the command runs the
+normal bot-to-bot Slack QA lane and exits after artifact capture.
 
 Before using pooled live credentials, run:
 
