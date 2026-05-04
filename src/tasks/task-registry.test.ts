@@ -802,6 +802,55 @@ describe("task-registry", () => {
     });
   });
 
+  it("routes group-channel ACP completion through the parent session", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "guildchat",
+        to: "guildchat:channel:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:guildchat:channel:123",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "guildchat",
+          to: "guildchat:channel:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-group-terminal",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-group-terminal",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-group-terminal")).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:guildchat:channel:123")).toEqual([
+        expect.stringContaining("Background task done: ACP background task"),
+      ]);
+      expect(hasPendingHeartbeatWake()).toBe(true);
+    });
+  });
+
   it("records delivery failure and queues a session fallback when direct delivery misses", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

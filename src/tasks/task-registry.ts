@@ -1055,10 +1055,19 @@ function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
 }
 
 function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
-  const origin = resolveTaskDeliveryOwner(task).requesterOrigin;
+  const owner = resolveTaskDeliveryOwner(task);
+  if (isGroupMessageOwnerSession(owner.sessionKey)) {
+    return false;
+  }
+  const origin = owner.requesterOrigin;
   const channel = origin?.channel?.trim();
   const to = origin?.to?.trim();
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
+}
+
+function isGroupMessageOwnerSession(sessionKey?: string): boolean {
+  const rest = parseAgentSessionKey(sessionKey)?.rest;
+  return rest?.split(":").includes("channel") === true;
 }
 
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
