@@ -1,4 +1,5 @@
 import * as dns from "node:dns";
+import type { LookupFunction } from "node:net";
 
 const DISCORD_DNS_HOSTS = ["discord.com", "discord.gg", "gateway.discord.gg"];
 
@@ -31,14 +32,10 @@ function reorderLookupAddresses(addresses: dns.LookupAddress[]): dns.LookupAddre
   return [...ipv4, ...ipv6];
 }
 
-export function createDiscordDnsLookup(): typeof dns.lookup {
+export function createDiscordDnsLookup(): LookupFunction {
   return (hostname, options, callback) => {
-    if (typeof callback !== "function") {
-      return;
-    }
-
     if (!isDiscordTransportHostname(hostname)) {
-      return dns.lookup(hostname, options as never, callback as never);
+      return dns.lookup(hostname, options, callback);
     }
 
     const lookupOptions: dns.LookupOptions =
@@ -57,22 +54,18 @@ export function createDiscordDnsLookup(): typeof dns.lookup {
       { ...lookupOptions, all: true },
       (err, addresses) => {
         if (err) {
-          callback(err);
+          callback(err, "", 4);
           return;
         }
         if (!Array.isArray(addresses)) {
-          callback(new Error("Expected all lookup addresses to be an array"));
+          callback(new Error("Expected all lookup addresses to be an array"), "", 4);
           return;
         }
 
         const reordered = reorderLookupAddresses(addresses);
-        if (lookupOptions.all) {
-          callback(null, reordered as never);
-          return;
-        }
         const first = reordered[0];
         if (!first) {
-          callback(null, "", 4);
+          callback(new Error("No Discord DNS addresses resolved"), "", 4);
           return;
         }
         callback(null, first.address, first.family);
