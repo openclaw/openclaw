@@ -51,6 +51,7 @@ import {
   resolveGlobalInstallSpec,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
@@ -184,15 +185,32 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 export async function collectMissingPluginInstallPayloads(params: {
   records: Record<string, PluginInstallRecord>;
+  config?: OpenClawConfig;
+  skipDisabledPlugins?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<MissingPluginInstallPayload[]> {
   const env = params.env ?? process.env;
+  const normalizedPluginConfig =
+    params.skipDisabledPlugins && params.config
+      ? normalizePluginsConfig(params.config.plugins)
+      : undefined;
   const missing: MissingPluginInstallPayload[] = [];
   for (const [pluginId, record] of Object.entries(params.records).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
     if (!isTrackedPackageInstallRecord(record)) {
       continue;
+    }
+    if (normalizedPluginConfig && params.config) {
+      const enableState = resolveEffectiveEnableState({
+        id: pluginId,
+        origin: "global",
+        config: normalizedPluginConfig,
+        rootConfig: params.config,
+      });
+      if (!enableState.enabled) {
+        continue;
+      }
     }
     const rawInstallPath = normalizeOptionalString(record.installPath);
     if (!rawInstallPath) {
@@ -1091,7 +1109,11 @@ async function updatePluginsAfterCoreUpdate(params: {
   const repairMissingPayloads = async (
     records: Record<string, PluginInstallRecord>,
   ): Promise<readonly string[]> => {
-    const missing = await collectMissingPluginInstallPayloads({ records });
+    const missing = await collectMissingPluginInstallPayloads({
+      records,
+      config: pluginConfig,
+      skipDisabledPlugins: true,
+    });
     if (missing.length === 0) {
       return [];
     }
@@ -1110,6 +1132,8 @@ async function updatePluginsAfterCoreUpdate(params: {
       pluginIds: missingIds,
       timeoutMs: params.timeoutMs,
       updateChannel: params.channel,
+      skipDisabledPlugins: true,
+      disableOnFailure: true,
       logger: pluginLogger,
       onIntegrityDrift: onPluginIntegrityDrift,
     });
@@ -1130,6 +1154,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     updateChannel: params.channel,
     skipIds: new Set([...syncResult.summary.switchedToNpm, ...repairedMissingPayloadIds]),
     skipDisabledPlugins: true,
+    disableOnFailure: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
   });
@@ -1140,6 +1165,8 @@ async function updatePluginsAfterCoreUpdate(params: {
 
   const remainingMissingPayloads = await collectMissingPluginInstallPayloads({
     records: pluginConfig.plugins?.installs ?? {},
+    config: pluginConfig,
+    skipDisabledPlugins: true,
   });
   pluginUpdateOutcomes.push(
     ...remainingMissingPayloads.map(
