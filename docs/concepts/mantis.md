@@ -370,9 +370,15 @@ Recommended secret names:
 - `OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for public GitHub artifact uploads
 - `OPENCLAW_QA_CONVEX_SITE_URL`
 - `OPENCLAW_QA_CONVEX_SECRET_CI`
+- `OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR`
+- `OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN`
 
 Long term, the Convex credential pool should remain the normal source for live
 transport credentials. GitHub secrets bootstrap the broker and fallback lanes.
+The Discord status-reactions workflow maps the Mantis Crabbox secrets back to
+the `CRABBOX_COORDINATOR` and `CRABBOX_COORDINATOR_TOKEN` environment variables
+that the Crabbox CLI expects. The plain `CRABBOX_*` GitHub secret names remain
+accepted as a compatibility fallback.
 
 The Mantis runner must never print:
 
