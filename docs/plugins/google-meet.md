@@ -31,13 +31,13 @@ Google Meet participant support for OpenClaw — the plugin is explicit by desig
 
 Install the local audio dependencies and configure a realtime transcription
 provider plus regular OpenClaw TTS. OpenAI is the default transcription
-provider; Google Gemini Live also works with `realtime.provider: "google"` for
-`bidi` mode:
+provider; Google Gemini Live also works as a separate `bidi` voice fallback with
+`realtime.voiceProvider: "google"`:
 
 ```bash
 brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
-# or
+# only needed when realtime.voiceProvider is "google" for bidi mode
 export GEMINI_API_KEY=...
 ```
 
@@ -973,8 +973,9 @@ Workspace Developer Preview Program for Meet media APIs.
 
 The common Chrome agent path only needs the plugin enabled, BlackHole, SoX, a
 realtime transcription provider key, and a configured OpenClaw TTS provider.
-OpenAI is the default transcription provider; set `realtime.provider: "google"`
-to use Google Gemini Live for `bidi` mode:
+OpenAI is the default transcription provider; set `realtime.voiceProvider` to
+`"google"` and `realtime.model` to use Google Gemini Live for `bidi` mode
+without changing the default agent-mode transcription provider:
 
 ```bash
 brew install blackhole-2ch sox
@@ -1042,8 +1043,13 @@ Defaults:
   realtime voice provider answers participant speech directly and may call
   `openclaw_agent_consult` for deeper/tool-backed answers.
 - `mode: "transcribe"`: observe-only mode without the talk-back bridge.
-- `realtime.provider: "openai"`: provider id used by `agent` mode for realtime
-  transcription and by `bidi` mode for realtime voice.
+- `realtime.provider: "openai"`: compatibility fallback used when the scoped
+  provider fields below are unset.
+- `realtime.transcriptionProvider: "openai"`: provider id used by `agent` mode
+  for realtime transcription.
+- `realtime.voiceProvider`: provider id used by `bidi` mode for direct realtime
+  voice. Set this to `"google"` to use Gemini Live while keeping agent-mode
+  transcription on OpenAI.
 - `realtime.toolPolicy: "safe-read-only"`
 - `realtime.instructions`: brief spoken replies, with
   `openclaw_agent_consult` for deeper answers
@@ -1089,13 +1095,15 @@ Optional overrides:
   },
   defaultMode: "agent",
   realtime: {
-    provider: "google",
+    provider: "openai",
+    transcriptionProvider: "openai",
+    voiceProvider: "google",
+    model: "gemini-2.5-flash-native-audio-preview-12-2025",
     agentId: "jay",
     toolPolicy: "owner",
     introMessage: "Say exactly: I'm here.",
     providers: {
       google: {
-        model: "gemini-2.5-flash-native-audio-preview-12-2025",
         voice: "Kore",
       },
     },

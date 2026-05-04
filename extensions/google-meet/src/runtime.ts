@@ -402,9 +402,16 @@ export class GoogleMeetRuntime {
       realtime: {
         enabled: isGoogleMeetTalkBackMode(mode),
         strategy: mode === "bidi" ? "bidi" : "agent",
-        provider: mode === "bidi" ? this.params.config.realtime.provider : undefined,
+        provider:
+          mode === "bidi"
+            ? (this.params.config.realtime.voiceProvider ?? this.params.config.realtime.provider)
+            : undefined,
         model: mode === "bidi" ? this.params.config.realtime.model : undefined,
-        transcriptionProvider: mode === "agent" ? this.params.config.realtime.provider : undefined,
+        transcriptionProvider:
+          mode === "agent"
+            ? (this.params.config.realtime.transcriptionProvider ??
+              this.params.config.realtime.provider)
+            : undefined,
         toolPolicy: this.params.config.realtime.toolPolicy,
       },
       notes: [],

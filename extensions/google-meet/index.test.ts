@@ -29,6 +29,8 @@ import {
   convertGoogleMeetTtsAudioForBridge,
   extendGoogleMeetOutputEchoSuppression,
   isGoogleMeetLikelyAssistantEchoTranscript,
+  resolveGoogleMeetRealtimeProvider,
+  resolveGoogleMeetRealtimeTranscriptionProvider,
   startCommandAgentAudioBridge,
   startCommandRealtimeAudioBridge,
 } from "./src/realtime.js";
@@ -385,6 +387,7 @@ describe("google-meet plugin", () => {
       realtime: {
         strategy: "agent",
         provider: "openai",
+        transcriptionProvider: "openai",
         introMessage: "Say exactly: I'm here and listening.",
         toolPolicy: "safe-read-only",
       },
@@ -393,6 +396,87 @@ describe("google-meet plugin", () => {
     });
     expect(resolveGoogleMeetConfig({ defaultMode: "realtime" }).defaultMode).toBe("agent");
     expect(resolveGoogleMeetConfig({}).realtime.instructions).toContain("openclaw_agent_consult");
+  });
+
+  it("resolves separate realtime providers for agent transcription and bidi voice", () => {
+    expect(
+      resolveGoogleMeetConfig({
+        realtime: {
+          provider: "openai",
+          transcriptionProvider: "openai",
+          voiceProvider: "google",
+          model: "gemini-2.5-flash-native-audio-preview-12-2025",
+        },
+      }).realtime,
+    ).toMatchObject({
+      provider: "openai",
+      transcriptionProvider: "openai",
+      voiceProvider: "google",
+      model: "gemini-2.5-flash-native-audio-preview-12-2025",
+    });
+  });
+
+  it("uses voiceProvider for bidi and transcriptionProvider for agent mode resolution", () => {
+    const voiceProviders: RealtimeVoiceProviderPlugin[] = [
+      {
+        id: "openai",
+        label: "OpenAI",
+        autoSelectOrder: 1,
+        isConfigured: () => true,
+        createBridge: () => {
+          throw new Error("unused");
+        },
+      },
+      {
+        id: "google",
+        label: "Google",
+        autoSelectOrder: 2,
+        resolveConfig: ({ rawConfig }) => rawConfig,
+        isConfigured: () => true,
+        createBridge: () => {
+          throw new Error("unused");
+        },
+      },
+    ];
+    const transcriptionProviders: RealtimeTranscriptionProviderPlugin[] = [
+      {
+        id: "openai",
+        label: "OpenAI",
+        autoSelectOrder: 1,
+        isConfigured: () => true,
+        createSession: () => {
+          throw new Error("unused");
+        },
+      },
+    ];
+    const config = resolveGoogleMeetConfig({
+      realtime: {
+        provider: "openai",
+        transcriptionProvider: "openai",
+        voiceProvider: "google",
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+      },
+    });
+
+    expect(
+      resolveGoogleMeetRealtimeProvider({
+        config,
+        fullConfig: {} as never,
+        providers: voiceProviders,
+      }),
+    ).toMatchObject({
+      provider: { id: "google" },
+      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
+    });
+    expect(
+      resolveGoogleMeetRealtimeTranscriptionProvider({
+        config,
+        fullConfig: {} as never,
+        providers: transcriptionProviders,
+      }),
+    ).toMatchObject({
+      provider: { id: "openai" },
+    });
   });
 
   it("declares barge-in config metadata in the plugin entry and manifest", () => {

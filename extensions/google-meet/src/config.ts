@@ -65,6 +65,8 @@ export type GoogleMeetConfig = {
   realtime: {
     strategy: GoogleMeetRealtimeStrategy;
     provider?: string;
+    transcriptionProvider?: string;
+    voiceProvider?: string;
     model?: string;
     instructions?: string;
     introMessage?: string;
@@ -220,6 +222,7 @@ const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
   realtime: {
     strategy: "agent",
     provider: "openai",
+    transcriptionProvider: "openai",
     instructions: DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS,
     introMessage: DEFAULT_GOOGLE_MEET_REALTIME_INTRO_MESSAGE,
     toolPolicy: "safe-read-only",
@@ -536,6 +539,10 @@ export function resolveGoogleMeetConfigWithEnv(
       ),
       provider:
         normalizeOptionalString(realtime.provider) ?? DEFAULT_GOOGLE_MEET_CONFIG.realtime.provider,
+      transcriptionProvider:
+        normalizeOptionalString(realtime.transcriptionProvider) ??
+        DEFAULT_GOOGLE_MEET_CONFIG.realtime.transcriptionProvider,
+      voiceProvider: normalizeOptionalString(realtime.voiceProvider),
       model: normalizeOptionalString(realtime.model) ?? DEFAULT_GOOGLE_MEET_CONFIG.realtime.model,
       instructions:
         normalizeOptionalString(realtime.instructions) ??
