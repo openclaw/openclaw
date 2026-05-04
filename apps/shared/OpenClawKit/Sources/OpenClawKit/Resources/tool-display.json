@@ -43,21 +43,30 @@
       "emoji": "📖",
       "title": "Read",
       "detailKeys": [
-        "path"
+        "path",
+        "file",
+        "filePath",
+        "file_path"
       ]
     },
     "write": {
       "emoji": "✍️",
       "title": "Write",
       "detailKeys": [
-        "path"
+        "path",
+        "file",
+        "filePath",
+        "file_path"
       ]
     },
     "edit": {
       "emoji": "📝",
       "title": "Edit",
       "detailKeys": [
-        "path"
+        "path",
+        "file",
+        "filePath",
+        "file_path"
       ]
     },
     "attach": {

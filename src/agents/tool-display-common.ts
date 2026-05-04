@@ -178,7 +178,7 @@ function resolvePathArg(args: unknown): string | undefined {
   if (!record) {
     return undefined;
   }
-  for (const candidate of [record.path, record.file_path, record.filePath]) {
+  for (const candidate of [record.path, record.file_path, record.filePath, record.file]) {
     if (typeof candidate !== "string") {
       continue;
     }
