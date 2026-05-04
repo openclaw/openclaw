@@ -4,7 +4,7 @@ const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
   ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
   getApiKeyForModelMock: vi.fn(async () => ({
-    apiKey: "oauth-test", // pragma: allowlist secret
+    apiKey: "oauth-test" as string | undefined, // pragma: allowlist secret
     source: "test",
     mode: "oauth",
   })),
@@ -199,6 +199,7 @@ describe("describeImageWithModel", () => {
           providers: {
             "amazon-bedrock": {
               auth: "aws-sdk",
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
               models: [],
             },
           },
@@ -225,10 +226,10 @@ describe("describeImageWithModel", () => {
         provider: "amazon-bedrock",
         id: "anthropic.claude-opus-4-7",
       }),
+      expect.any(Object),
       expect.objectContaining({
         apiKey: undefined,
       }),
-      expect.any(Object),
     );
   });
 
