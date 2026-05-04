@@ -5,6 +5,8 @@ import {
   type ActiveManagedProxyUrl,
 } from "./net/proxy/active-proxy-state.js";
 
+const APNS_DEFAULT_PORT = "443";
+
 const APNS_AUTHORITIES = new Set([
   "https://api.push.apple.com",
   "https://api.sandbox.push.apple.com",
@@ -37,7 +39,8 @@ function assertApnsAuthority(authority: string): ApnsAuthority {
   } catch {
     throw new Error(`Unsupported APNs authority: ${authority}`);
   }
-  const normalized = `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}`;
+  const port = parsed.port && parsed.port !== APNS_DEFAULT_PORT ? `:${parsed.port}` : "";
+  const normalized = `${parsed.protocol}//${parsed.hostname}${port}`;
   if (!APNS_AUTHORITIES.has(normalized)) {
     throw new Error(`Unsupported APNs authority: ${authority}`);
   }

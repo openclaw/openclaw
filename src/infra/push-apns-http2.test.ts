@@ -112,6 +112,17 @@ describe("connectApnsHttp2Session", () => {
     expect(connectSpy).toHaveBeenCalledWith("https://api.sandbox.push.apple.com");
   });
 
+  it("normalizes the default APNs HTTPS port", async () => {
+    const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
+
+    await connectApnsHttp2Session({
+      authority: "https://api.push.apple.com:443",
+      timeoutMs: 10_000,
+    });
+
+    expect(connectSpy).toHaveBeenCalledWith("https://api.push.apple.com");
+  });
+
   it("uses an HTTP CONNECT tunnel when managed proxy is active", async () => {
     const registration = registerActiveManagedProxyUrl(new URL("http://proxy.example:8080"));
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
