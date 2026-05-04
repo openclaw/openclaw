@@ -481,6 +481,53 @@ describe("codex command", () => {
     );
   });
 
+  it("rejects malformed diagnostics confirmation commands without consuming the token", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-confirm-args", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-confirm-args" },
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+
+    const request = await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
+    const token = readDiagnosticsConfirmationToken(request);
+
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${token} extra`, sessionFile), {
+        deps,
+      }),
+    ).resolves.toEqual({
+      text: [
+        "Usage: /codex diagnostics [note]",
+        "Usage: /codex diagnostics confirm <token>",
+        "Usage: /codex diagnostics cancel <token>",
+      ].join("\n"),
+    });
+    await expect(
+      handleCodexCommand(createContext(`diagnostics cancel ${token} extra`, sessionFile), {
+        deps,
+      }),
+    ).resolves.toEqual({
+      text: [
+        "Usage: /codex diagnostics [note]",
+        "Usage: /codex diagnostics confirm <token>",
+        "Usage: /codex diagnostics cancel <token>",
+      ].join("\n"),
+    });
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
+    });
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
+  });
+
   it("previews exec-approved diagnostics upload without exposing Codex ids", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(

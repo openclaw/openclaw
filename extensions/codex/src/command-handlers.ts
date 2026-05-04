@@ -120,7 +120,8 @@ type ParsedComputerUseArgs = {
 type ParsedDiagnosticsArgs =
   | { action: "request"; note: string }
   | { action: "confirm"; token: string }
-  | { action: "cancel"; token: string };
+  | { action: "cancel"; token: string }
+  | { action: "usage" };
 
 type CodexDiagnosticsTarget = {
   threadId: string;
@@ -581,6 +582,9 @@ async function handleCodexDiagnosticsFeedback(
     return { text: "Only an owner can send Codex diagnostics." };
   }
   const parsed = parseDiagnosticsArgs(args);
+  if (parsed.action === "usage") {
+    return { text: formatDiagnosticsUsage(commandPrefix) };
+  }
   if (parsed.action === "confirm") {
     return {
       text: await confirmCodexDiagnosticsFeedback(deps, ctx, pluginConfig, parsed.token),
@@ -1006,15 +1010,39 @@ function normalizeDiagnosticsReason(note: string): string | undefined {
 }
 
 function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
-  const [action, token] = splitArgs(args);
+  const [action, token, ...extra] = splitArgs(args);
   const normalizedAction = action?.toLowerCase();
-  if ((normalizedAction === "confirm" || normalizedAction === "--confirm") && token) {
+  if (
+    (normalizedAction === "confirm" || normalizedAction === "--confirm") &&
+    token &&
+    extra.length === 0
+  ) {
     return { action: "confirm", token };
   }
-  if ((normalizedAction === "cancel" || normalizedAction === "--cancel") && token) {
+  if (
+    (normalizedAction === "cancel" || normalizedAction === "--cancel") &&
+    token &&
+    extra.length === 0
+  ) {
     return { action: "cancel", token };
   }
+  if (
+    normalizedAction === "confirm" ||
+    normalizedAction === "--confirm" ||
+    normalizedAction === "cancel" ||
+    normalizedAction === "--cancel"
+  ) {
+    return { action: "usage" };
+  }
   return { action: "request", note: args };
+}
+
+function formatDiagnosticsUsage(commandPrefix: string): string {
+  return [
+    `Usage: ${commandPrefix} [note]`,
+    `Usage: ${commandPrefix} confirm <token>`,
+    `Usage: ${commandPrefix} cancel <token>`,
+  ].join("\n");
 }
 
 function createCodexDiagnosticsConfirmation(params: {
