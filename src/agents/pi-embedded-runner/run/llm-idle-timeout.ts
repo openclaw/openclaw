@@ -137,16 +137,16 @@ export function resolveLlmIdleTimeoutMs(params?: {
     return clampTimeoutMs(Math.min(modelRequestTimeoutMs, ...timeoutBounds));
   }
 
+  if (params?.trigger === "cron") {
+    return 0;
+  }
+
   if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
     return clampImplicitTimeoutMs(runTimeoutMs);
   }
 
   if (agentTimeoutMs !== undefined) {
     return clampImplicitTimeoutMs(agentTimeoutMs);
-  }
-
-  if (params?.trigger === "cron") {
-    return 0;
   }
 
   // The default watchdog is a network-silence-as-hang guard for cloud providers.

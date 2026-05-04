@@ -81,9 +81,13 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(0);
   });
 
-  it("caps agents.defaults.timeoutSeconds for cron before disabling the default idle timeout", () => {
+  it("does not convert cron run timeouts into model idle watchdogs", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(0);
+  });
+
+  it("does not convert agents.defaults.timeoutSeconds into a cron model idle watchdog", () => {
     const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(0);
   });
 
   it.each([
