@@ -288,6 +288,12 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       entry.frozenResultText = nextFrozen;
       entry.frozenResultCapturedAt = capturedAt;
+      if (entry.pendingFinalDeliveryPayload) {
+        entry.pendingFinalDeliveryPayload = {
+          ...entry.pendingFinalDeliveryPayload,
+          frozenResultText: nextFrozen,
+        };
+      }
       changed = true;
     }
     if (changed) {
