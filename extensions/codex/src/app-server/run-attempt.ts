@@ -1088,7 +1088,7 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     if (usageLimitError) {
       throw new Error(usageLimitError, {
-        cause: error instanceof Error ? error : undefined,
+        cause: error,
       });
     }
     throw error;

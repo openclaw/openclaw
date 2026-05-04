@@ -132,7 +132,7 @@ function collectRateLimitSnapshots(
 }
 
 function sortedRateLimitKeys(keys: string[]): string[] {
-  return keys.sort((left, right) => {
+  return keys.toSorted((left, right) => {
     if (left === CODEX_LIMIT_ID) {
       return -1;
     }
