@@ -3,6 +3,13 @@ export type ChatRunEntry = {
   clientRunId: string;
 };
 
+export type PendingChatUserMessage = {
+  sessionKey: string;
+  clientRunId: string;
+  message: Record<string, unknown>;
+  ts: number;
+};
+
 export type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunEntry) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
@@ -70,6 +77,7 @@ export type ChatRunState = {
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
+  pendingUserMessages: Map<string, PendingChatUserMessage>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
@@ -80,6 +88,7 @@ export function createChatRunState(): ChatRunState {
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
+  const pendingUserMessages = new Map<string, PendingChatUserMessage>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
@@ -88,6 +97,7 @@ export function createChatRunState(): ChatRunState {
     buffers.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
+    pendingUserMessages.clear();
     abortedRuns.clear();
   };
 
@@ -97,6 +107,7 @@ export function createChatRunState(): ChatRunState {
     buffers,
     deltaSentAt,
     deltaLastBroadcastLen,
+    pendingUserMessages,
     abortedRuns,
     clear,
   };

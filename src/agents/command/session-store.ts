@@ -170,6 +170,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
   }
   next.abortedLastRun = result.meta.aborted ?? false;
+  next.status = next.abortedLastRun ? "killed" : "done";
+  next.endedAt = now;
+  next.runtimeMs = Math.max(
+    0,
+    now -
+      (typeof next.startedAt === "number" && Number.isFinite(next.startedAt)
+        ? next.startedAt
+        : now),
+  );
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
   }

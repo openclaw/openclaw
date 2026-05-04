@@ -1176,6 +1176,48 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
     });
   });
+
+  it("marks completed runs as terminal when no lifecycle event arrives", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-terminal-fallback";
+      const sessionId = "test-terminal-fallback-session";
+      const startedAt = Date.now() - 5_000;
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: startedAt,
+          startedAt,
+          status: "running",
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.status).toBe("done");
+      expect(sessionStore[sessionKey]?.endedAt).toBeGreaterThanOrEqual(startedAt);
+      expect(sessionStore[sessionKey]?.runtimeMs).toBeGreaterThanOrEqual(0);
+    });
+  });
 });
 
 describe("clearCliSessionInStore", () => {

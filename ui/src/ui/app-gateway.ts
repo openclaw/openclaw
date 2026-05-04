@@ -471,6 +471,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.chatRunId = null;
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      (host as unknown as { chatStreamEphemeral: boolean }).chatStreamEphemeral = false;
       (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       if (shutdownHost.resumeChatQueueAfterReconnect) {

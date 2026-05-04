@@ -367,8 +367,9 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();
   const id = typeof m.id === "string" ? m.id : undefined;
-  const senderLabel =
+  const rawSenderLabel =
     typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
+  const senderLabel = rawSenderLabel === "openclaw-control-ui" ? null : rawSenderLabel;
 
   // Strip AI-injected metadata prefix blocks from user messages before display.
   if (role === "user" || role === "User") {
