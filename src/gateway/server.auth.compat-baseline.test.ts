@@ -314,7 +314,7 @@ describe("gateway auth compatibility baseline", () => {
       testState.gatewayAuth = { mode: "none" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
       port = await getFreePort();
-      server = await startGatewayServer(port);
+      server = await startGatewayServer(port, { controlUiEnabled: true });
     });
 
     afterAll(async () => {
@@ -332,13 +332,18 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
-    test("keeps auth-none control ui first-connect token absence unchanged", async () => {
-      const ws = await openWs(port);
+    test("keeps auth-none control ui first-connect token handoff unchanged", async () => {
+      const ws = await openWs(port, { origin: originForPort(port) });
       try {
+        const deviceIdentityPath = path.join(
+          os.tmpdir(),
+          `openclaw-auth-none-control-ui-first-${process.pid}-${port}.json`,
+        );
         const res = await connectReq(ws, {
           skipDefaultAuth: true,
           client: { ...CONTROL_UI_CLIENT },
           scopes: ["operator.read"],
+          deviceIdentityPath,
         });
         expect(res.ok).toBe(true);
         const helloOk = res.payload as
@@ -348,14 +353,14 @@ describe("gateway auth compatibility baseline", () => {
               };
             }
           | undefined;
-        expect(helloOk?.auth?.deviceToken).toBeUndefined();
+        expect(typeof helloOk?.auth?.deviceToken).toBe("string");
       } finally {
         ws.close();
       }
     });
 
     test("keeps auth-none control ui stale-key token handoff unchanged", async () => {
-      const ws = await openWs(port);
+      const ws = await openWs(port, { origin: originForPort(port) });
       try {
         const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
           await import("../infra/device-identity.js");
