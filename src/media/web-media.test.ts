@@ -176,7 +176,9 @@ describe("loadWebMedia", () => {
         throw new Error("should not optimize png");
       }),
       resizeToJpeg: vi.fn(async () => {
-        throw new Error("should not resize jpeg");
+        throw new Error(
+          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+        );
       }),
     }));
     try {
@@ -206,6 +208,17 @@ describe("loadWebMedia", () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
+      ).rejects.toThrow(/Optional dependency sharp is required/);
+    });
+  });
+
+  it("does not send original HEIC media when optional sharp conversion is unavailable", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const heicFile = path.join(fixtureRoot, "photo.heic");
+      await fs.writeFile(heicFile, Buffer.from("heic-source"));
+      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
+      await expect(
+        loadWebMediaWithMissingOptimizer(heicFile, createLocalWebMediaOptions()),
       ).rejects.toThrow(/Optional dependency sharp is required/);
     });
   });

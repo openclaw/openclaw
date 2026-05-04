@@ -72,6 +72,9 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - For full beta validation after a tag is published, prefer one command:
   - `timeout --foreground 150m pnpm test:parallels:npm-update -- --beta-validation beta3 --json`
     This resolves `beta3` to the latest `*-beta.3` version, runs latest->that-version same-guest update coverage, and then runs fresh install smoke for that exact published target on the same selected OS matrix. Use `--platform macos|windows|linux` to narrow reruns.
+- For beta 4 npm validation with agent turns, the known-good shape is:
+  - `gtimeout --foreground 150m pnpm test:parallels:npm-update -- --beta-validation beta4 --model openai/gpt-5.4 --json`
+    Prefer the explicit `beta4` alias over `openclaw@beta` when validating a specific prerelease number; npm tags can move.
 - If the wrapper fails a lane, read the auto-dumped tail first, then the full nested lane log under `.artifacts/parallels/openclaw-parallels-npm-update.*`.
 - Current known macOS update-lane transport signature when the fallback is missing or bypassed: `Unable to authenticate the user. Make sure that the specified credentials are correct and try again.` Treat that as Parallels current-user authentication before blaming npm or OpenClaw.
 - A macOS packaged fresh install with global package directories or bundled files mode `0777` usually means the harness used the root `prlctl exec` fallback under a permissive umask. The POSIX guest transports should prepend `umask 022`; verify the phase preflight line before blaming npm.

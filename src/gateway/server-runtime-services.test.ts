@@ -55,6 +55,7 @@ vi.mock("./model-pricing-cache.js", () => ({
 const {
   activateGatewayScheduledServices,
   runGatewayPostReadyMaintenance,
+  scheduleGatewayPostReadyMaintenance,
   startGatewayRuntimeServices,
 } = await import("./server-runtime-services.js");
 
@@ -245,6 +246,64 @@ describe("server-runtime-services", () => {
     expect(recordPostReadyMemory).toHaveBeenCalledTimes(1);
   });
 
+  it("returns a cancellable post-ready maintenance timer", async () => {
+    vi.useFakeTimers();
+    const startMaintenance = vi.fn(async () => null);
+    const onStarted = vi.fn();
+    const handle = scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        delayMs: 25,
+        onStarted,
+        startMaintenance,
+      }),
+    );
+
+    clearTimeout(handle);
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(onStarted).not.toHaveBeenCalled();
+    expect(startMaintenance).not.toHaveBeenCalled();
+  });
+
+  it("clears delayed maintenance handles when close starts during maintenance startup", async () => {
+    vi.useFakeTimers();
+    let closing = false;
+    let resolveMaintenance!: (maintenance: ReturnType<typeof createMaintenanceHandles>) => void;
+    const startMaintenance = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof createMaintenanceHandles>>((resolve) => {
+          resolveMaintenance = resolve;
+        }),
+    );
+    const applyMaintenance = vi.fn();
+    const cron = { start: vi.fn(async () => undefined) };
+    const recordPostReadyMemory = vi.fn();
+
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        delayMs: 25,
+        isClosing: () => closing,
+        startMaintenance,
+        applyMaintenance,
+        cron,
+        recordPostReadyMemory,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(startMaintenance).toHaveBeenCalledTimes(1);
+
+    closing = true;
+    resolveMaintenance(createMaintenanceHandles());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(applyMaintenance).not.toHaveBeenCalled();
+    expect(cron.start).not.toHaveBeenCalled();
+    expect(recordPostReadyMemory).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("keeps scheduled services disabled for minimal test gateways", () => {
     const cron = { start: vi.fn(async () => undefined) };
 
@@ -277,5 +336,32 @@ function createLog() {
     })),
     warn: vi.fn(),
     error: vi.fn(),
+  };
+}
+
+function createPostReadyMaintenanceScheduleParams(
+  overrides: Partial<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0]> = {},
+): Parameters<typeof scheduleGatewayPostReadyMaintenance>[0] {
+  return {
+    delayMs: 1,
+    isClosing: () => false,
+    startMaintenance: vi.fn(async () => null),
+    applyMaintenance: vi.fn(),
+    shouldStartCron: () => true,
+    markCronStartHandled: vi.fn(),
+    cron: { start: vi.fn(async () => undefined) },
+    logCron: { error: vi.fn() },
+    log: createLog(),
+    recordPostReadyMemory: vi.fn(),
+    ...overrides,
+  };
+}
+
+function createMaintenanceHandles() {
+  return {
+    tickInterval: setInterval(() => undefined, 60_000),
+    healthInterval: setInterval(() => undefined, 60_000),
+    dedupeCleanup: setInterval(() => undefined, 60_000),
+    mediaCleanup: setInterval(() => undefined, 60_000),
   };
 }

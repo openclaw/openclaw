@@ -63,6 +63,7 @@ function createPluginCandidate(params: {
   format?: "openclaw" | "bundle";
   bundleFormat?: "codex" | "claude" | "cursor";
   packageName?: string;
+  packageVersion?: string;
   packageManifest?: OpenClawPackageManifest;
   packageDir?: string;
   bundledManifest?: PluginCandidate["bundledManifest"];
@@ -76,6 +77,7 @@ function createPluginCandidate(params: {
     format: params.format,
     bundleFormat: params.bundleFormat,
     packageName: params.packageName,
+    packageVersion: params.packageVersion,
     packageManifest: params.packageManifest,
     packageDir: params.packageDir,
     bundledManifest: params.bundledManifest,
@@ -430,6 +432,40 @@ describe("loadPluginManifestRegistry", () => {
       diagnostic.message.includes("without channelConfigs metadata"),
     );
     expect(channelConfigWarnings).toHaveLength(1);
+  });
+
+  it("suppresses missing channel config diagnostics for inactive external channel plugins", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    });
+    const candidate = createPluginCandidate({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    const disabledRegistry = loadPluginManifestRegistry({
+      config: { plugins: { entries: { "external-chat": { enabled: false } } } },
+      candidates: [candidate],
+    });
+    expect(
+      disabledRegistry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+
+    const allowlistRegistry = loadPluginManifestRegistry({
+      config: { plugins: { allow: ["other-plugin"] } },
+      candidates: [candidate],
+    });
+    expect(
+      allowlistRegistry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
   });
 
   it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
@@ -1905,6 +1941,33 @@ describe("loadPluginManifestRegistry", () => {
         rootDir: dir,
         sourceName: "b.ts",
         origin: "global",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
+  it("suppresses duplicate warning when global candidates come from the same package artifact", () => {
+    const firstDir = makeTempDir();
+    const secondDir = makeTempDir();
+    const manifest = { id: "opik-openclaw", configSchema: { type: "object" } };
+    writeManifest(firstDir, manifest);
+    writeManifest(secondDir, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "opik-openclaw",
+        rootDir: firstDir,
+        origin: "global",
+        packageName: "@opik/opik-openclaw",
+        packageVersion: "0.2.14",
+      }),
+      createPluginCandidate({
+        idHint: "opik-openclaw",
+        rootDir: secondDir,
+        origin: "global",
+        packageName: "@opik/opik-openclaw",
+        packageVersion: "0.2.14",
       }),
     ];
 

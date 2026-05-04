@@ -124,6 +124,7 @@ export type GatewayWsSharedHandlerParams = {
   port: number;
   gatewayHost?: string;
   canvasHostEnabled: boolean;
+  canvasHostScheme?: "http" | "https";
   canvasHostServerPort?: number;
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
@@ -199,6 +200,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     port,
     gatewayHost,
     canvasHostEnabled,
+    canvasHostScheme,
     canvasHostServerPort,
     resolvedAuth,
     getResolvedAuth = () => resolvedAuth,
@@ -253,6 +255,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       requestHost: upgradeReq.headers.host,
       forwardedProto: upgradeReq.headers["x-forwarded-proto"],
       localAddress: upgradeReq.socket?.localAddress,
+      scheme: canvasHostScheme,
     });
 
     logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });

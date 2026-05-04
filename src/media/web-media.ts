@@ -413,7 +413,11 @@ async function loadWebMediaInternal(
     try {
       optimized = await optimizeImageWithFallback({ buffer, cap, meta });
     } catch (err) {
-      if (isOptionalImageOptimizerUnavailable(err) && buffer.length <= cap) {
+      if (
+        isOptionalImageOptimizerUnavailable(err) &&
+        !isHeicSource(meta ?? {}) &&
+        buffer.length <= cap
+      ) {
         if (shouldLogVerbose()) {
           logVerbose(
             `Image optimizer unavailable; sending original ${formatMb(buffer.length)}MB media without optimization`,

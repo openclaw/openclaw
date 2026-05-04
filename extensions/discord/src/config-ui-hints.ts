@@ -65,6 +65,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Draft Tool Progress",
     help: "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
   },
+  "streaming.preview.commandText": {
+    label: "Discord Draft Command Text",
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
   "streaming.progress.label": {
     label: "Discord Progress Label",
     help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
@@ -80,6 +84,10 @@ export const discordChannelConfigUiHints = {
   "streaming.progress.toolProgress": {
     label: "Discord Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+  },
+  "streaming.progress.commandText": {
+    label: "Discord Progress Command Text",
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
   "retry.attempts": {
     label: "Discord Retry Attempts",
