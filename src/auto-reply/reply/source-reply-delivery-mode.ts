@@ -1,12 +1,37 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
+import { isCommandMessage } from "../commands-registry.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
   CommandSource?: "text" | "native";
+  CommandBody?: string;
+  Body?: string;
 };
+
+/**
+ * True when the inbound turn is a command invocation whose canned reply
+ * should bypass `messages.visibleReplies = "message_tool"` suppression.
+ *
+ * Two cases:
+ * - `CommandSource === "native"` — slash-menu protocol invocation (Slack,
+ *   Mattermost). The protocol surface guarantees this is a command.
+ * - `CommandSource === "text"` AND the message body starts with `/` — Matrix
+ *   and Tlon set `CommandSource: "text"` for every inbound message, so this
+ *   prong additionally requires a slash-command body to avoid widening the
+ *   bypass to normal user messages on those channels.
+ */
+export function isCommandSourceTurn(ctx: SourceReplyDeliveryModeContext): boolean {
+  if (ctx.CommandSource === "native") {
+    return true;
+  }
+  if (ctx.CommandSource === "text") {
+    return isCommandMessage(ctx.CommandBody ?? ctx.Body ?? "");
+  }
+  return false;
+}
 
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
@@ -20,7 +45,7 @@ export function resolveSourceReplyDeliveryMode(params: {
       ? "automatic"
       : params.requested;
   }
-  if (params.ctx.CommandSource === "native") {
+  if (isCommandSourceTurn(params.ctx)) {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
