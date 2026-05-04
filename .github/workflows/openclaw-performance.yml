@@ -555,4 +555,14 @@ jobs:
             exit 0
           fi
           git -C "$reports_root" commit -m "perf: add OpenClaw ${LANE_ID} report ${TESTED_SHA::12}"
-          git -C "$reports_root" push origin HEAD:main
+          for attempt in 1 2 3 4 5; do
+            if git -C "$reports_root" push origin HEAD:main; then
+              exit 0
+            fi
+            if [[ "$attempt" == "5" ]]; then
+              exit 1
+            fi
+            sleep $((attempt * 2))
+            git -C "$reports_root" fetch --depth=1 origin main
+            git -C "$reports_root" rebase FETCH_HEAD
+          done

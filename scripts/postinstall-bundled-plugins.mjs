@@ -11,6 +11,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmdirSync,
@@ -366,13 +367,102 @@ export function collectLegacyPluginRuntimeDepsStateRoots(params = {}) {
   );
 }
 
+function isPathInsideRoot(candidate, root) {
+  const relativePath = relative(root, candidate);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function collectLegacyPluginRuntimeDepsSymlinkPaths(roots, params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const readDir = params.readdirSync ?? readdirSync;
+  const pathLstat = params.lstatSync ?? lstatSync;
+  const readLink = params.readlinkSync ?? readlinkSync;
+  const pathExists = params.existsSync ?? existsSync;
+  const containingNodeModules = dirname(packageRoot);
+  if (basename(containingNodeModules) !== "node_modules") {
+    return [];
+  }
+
+  const normalizedRoots = roots.map((root) => pathResolve(root));
+  const candidates = [];
+  function addCandidate(linkPath) {
+    let linkStat;
+    try {
+      linkStat = pathLstat(linkPath);
+    } catch {
+      return;
+    }
+    if (!linkStat.isSymbolicLink()) {
+      return;
+    }
+    let target;
+    try {
+      target = readLink(linkPath);
+    } catch {
+      return;
+    }
+    if (!target.includes(LEGACY_PLUGIN_RUNTIME_DEPS_DIR)) {
+      return;
+    }
+    const resolvedTarget = pathResolve(dirname(linkPath), target);
+    const pointsIntoPrunedRoot = normalizedRoots.some((root) =>
+      isPathInsideRoot(resolvedTarget, root),
+    );
+    if (pointsIntoPrunedRoot || !pathExists(resolvedTarget)) {
+      candidates.push(linkPath);
+    }
+  }
+
+  let entries;
+  try {
+    entries = readDir(containingNodeModules, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.startsWith("@")) {
+      const scopeDir = join(containingNodeModules, entry.name);
+      let scopeEntries;
+      try {
+        scopeEntries = readDir(scopeDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const scopeEntry of scopeEntries) {
+        addCandidate(join(scopeDir, scopeEntry.name));
+      }
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      addCandidate(join(containingNodeModules, entry.name));
+    }
+  }
+  return [...new Set(candidates.map((entry) => pathResolve(entry)))].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
 export function pruneLegacyPluginRuntimeDepsState(params = {}) {
   const pathExists = params.existsSync ?? existsSync;
   const removePath = params.rmSync ?? rmSync;
+  const unlinkPath = params.unlinkSync ?? unlinkSync;
   const log = params.log ?? console;
   const removed = [];
+  const removedSymlinks = [];
+  const roots = collectLegacyPluginRuntimeDepsStateRoots(params);
 
-  for (const root of collectLegacyPluginRuntimeDepsStateRoots(params)) {
+  for (const linkPath of collectLegacyPluginRuntimeDepsSymlinkPaths(roots, params)) {
+    try {
+      unlinkPath(linkPath);
+      removedSymlinks.push(linkPath);
+    } catch (error) {
+      log.warn?.(
+        `[postinstall] could not prune legacy plugin runtime deps symlink ${linkPath}: ${String(error)}`,
+      );
+    }
+  }
+
+  for (const root of roots) {
     if (!pathExists(root)) {
       continue;
     }
@@ -388,6 +478,11 @@ export function pruneLegacyPluginRuntimeDepsState(params = {}) {
 
   if (removed.length > 0) {
     log.log?.(`[postinstall] pruned legacy plugin runtime deps: ${removed.join(", ")}`);
+  }
+  if (removedSymlinks.length > 0) {
+    log.log?.(
+      `[postinstall] pruned legacy plugin runtime deps symlinks: ${removedSymlinks.join(", ")}`,
+    );
   }
 
   return removed;
@@ -793,8 +888,12 @@ export function runBundledPluginPostinstall(params = {}) {
   }
   pruneLegacyPluginRuntimeDepsState({
     env,
+    packageRoot,
     existsSync: pathExists,
+    lstatSync: params.lstatSync,
+    readlinkSync: params.readlinkSync,
     rmSync: params.rmSync,
+    unlinkSync: params.unlinkSync,
     log,
     homedir: params.homedir,
   });
