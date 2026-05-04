@@ -87,4 +87,62 @@ describe("web provider public artifact manifest fallback", () => {
       pluginId: "fallback-fetch",
     });
   });
+
+  it("keeps explicit bundled web-search public artifact candidates inside respect-allow", () => {
+    mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockImplementation(
+      (params: { onlyPluginIds: readonly string[] }) =>
+        params.onlyPluginIds.map((pluginId) => ({ id: pluginId, pluginId })),
+    );
+
+    const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
+      config: {
+        plugins: {
+          allow: ["fallback-search"],
+          bundledMode: "respect-allow",
+        },
+      },
+      onlyPluginIds: ["blocked-search", "fallback-search"],
+    });
+
+    expect(providers).toEqual([{ id: "fallback-search", pluginId: "fallback-search" }]);
+    expect(mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts).toHaveBeenCalledWith({
+      onlyPluginIds: ["fallback-search"],
+    });
+  });
+
+  it("keeps manifest bundled web-fetch public artifact candidates inside respect-allow", () => {
+    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "blocked-fetch",
+          origin: "bundled",
+          rootDir: "/tmp/blocked-fetch",
+          contracts: { webFetchProviders: ["blocked-fetch"] },
+        },
+        {
+          id: "fallback-fetch",
+          origin: "bundled",
+          rootDir: "/tmp/fallback-fetch",
+          contracts: { webFetchProviders: ["fallback-fetch"] },
+        },
+      ],
+    });
+
+    const providers = resolveBundledWebFetchProvidersFromPublicArtifacts({
+      config: {
+        plugins: {
+          allow: ["fallback-fetch"],
+          bundledMode: "respect-allow",
+        },
+      },
+    });
+
+    expect(providers).toEqual([{ id: "fallback-fetch", pluginId: "fallback-fetch" }]);
+    expect(mocks.loadBundledWebFetchProviderEntriesFromDir).toHaveBeenCalledOnce();
+    expect(mocks.loadBundledWebFetchProviderEntriesFromDir).toHaveBeenCalledWith({
+      dirName: "fallback-fetch",
+      pluginId: "fallback-fetch",
+    });
+  });
 });
