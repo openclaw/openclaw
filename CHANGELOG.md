@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/OpenAI: default direct OpenAI Responses models to the SSE transport instead of WebSocket auto-selection, preventing pi runtime chat turns from hanging on servers where the WebSocket path stalls while the OpenAI HTTP stream works. Thanks @vincentkoc.
+- Channels/plugins: key bundled package-state probes, env/config presence, and read-only command defaults by channel id instead of manifest plugin id, preserving setup and native-command detection for channel plugins whose package id differs from the channel alias. Thanks @vincentkoc.
 - Docker: prune package-excluded plugin dist directories from runtime images unless the build explicitly opts that plugin in, so official external plugins such as Feishu stay install-on-demand instead of shipping partial metadata without compiled runtime output. Fixes #77424. Thanks @vincentkoc.
 - Model switching: include the exact additive allowlist repair command when `/model ... --runtime ...` targets a blocked model, and make Telegram's model picker say that it changes only the session model while leaving the runtime unchanged. Thanks @vincentkoc.
 - Doctor/config: keep active `auth.profiles` metadata intact when `doctor --fix` strips stale secret fields from configs, repairing legacy `<provider>:default` API-key profile metadata when model fallbacks or explicit `model@profile` refs still depend on it. Fixes #77400.
