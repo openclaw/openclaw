@@ -255,7 +255,30 @@ Each entry under `channels.bluebubbles.groups.*` accepts an optional `systemProm
 }
 ```
 
-The key matches whatever BlueBubbles reports as `chatGuid` / `chatIdentifier` / numeric `chatId` for the group, and a `"*"` wildcard entry provides a default for every group without an exact match (same pattern used by `requireMention` and per-group tool policies). Exact matches always win over the wildcard. DMs ignore this field; use agent-level or account-level prompt customization instead.
+The key matches whatever BlueBubbles reports as `chatGuid` / `chatIdentifier` / numeric `chatId` for the group, and a `"*"` wildcard entry provides a default for every group without an exact match (same pattern used by `requireMention` and per-group tool policies). Exact matches always win over the wildcard.
+
+### Per-DM system prompt
+
+DMs support the same per-sender system prompt injection via `channels.bluebubbles.direct`. Use the sender's handle (phone number or email) as the key, or `"*"` as a catch-all wildcard for all DMs:
+
+```json5
+{
+  channels: {
+    bluebubbles: {
+      direct: {
+        "+15551234567": {
+          systemPrompt: "This contact prefers concise bullet-point answers. Keep replies under 5 lines.",
+        },
+        "*": {
+          systemPrompt: "Always sign off DMs with your name.",
+        },
+      },
+    },
+  },
+}
+```
+
+An exact handle match takes precedence over the `"*"` wildcard. The injected directive is appended to the agent system prompt on every DM turn from that sender, mirroring the `groups.<id>.systemPrompt` pattern.
 
 #### Worked example: threaded replies and tapback reactions (Private API)
 
