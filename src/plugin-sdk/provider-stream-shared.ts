@@ -250,8 +250,8 @@ function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLeve
   return normalized === "off" || normalized === "none";
 }
 
-function resolveDeepSeekV4ReasoningEffort(thinkingLevel: DeepSeekV4ThinkingLevel): "high" | "max" {
-  return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
+function resolveDeepSeekV4ReasoningEffort(thinkingLevel: DeepSeekV4ThinkingLevel): "high" | "xhigh" {
+  return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "xhigh" : "high";
 }
 
 function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {

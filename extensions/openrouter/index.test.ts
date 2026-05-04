@@ -73,7 +73,7 @@ describe("openrouter provider hooks", () => {
 
   it("advertises xhigh thinking for OpenRouter-routed DeepSeek V4 models", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
     expect(
       provider
@@ -309,7 +309,7 @@ describe("openrouter provider hooks", () => {
 
     expect(capturedPayload).toMatchObject({
       thinking: { type: "enabled" },
-      reasoning_effort: "max",
+      reasoning_effort: "xhigh",
       messages: [
         { role: "user", content: "read file" },
         {
