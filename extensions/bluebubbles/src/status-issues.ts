@@ -16,6 +16,9 @@ type BlueBubblesProbeResult = {
   ok?: boolean;
   status?: number | null;
   error?: string | null;
+  privateApi?: boolean | null;
+  helperConnected?: boolean | null;
+  osVersion?: string | null;
 };
 
 function asString(value: unknown): string | null {
@@ -45,11 +48,17 @@ function readBlueBubblesProbeResult(value: unknown): BlueBubblesProbeResult | nu
   if (!record) {
     return null;
   }
-  return {
-    ok: typeof record.ok === "boolean" ? record.ok : undefined,
+  const result: BlueBubblesProbeResult = {
     status: typeof record.status === "number" ? record.status : null,
     error: asString(record.error) ?? null,
+    privateApi: typeof record.privateApi === "boolean" ? record.privateApi : null,
+    helperConnected: typeof record.helperConnected === "boolean" ? record.helperConnected : null,
+    osVersion: asString(record.osVersion) ?? null,
   };
+  if (typeof record.ok === "boolean") {
+    result.ok = record.ok;
+  }
+  return result;
 }
 
 export function collectBlueBubblesStatusIssues(accounts: ChannelAccountSnapshot[]) {
@@ -85,6 +94,16 @@ export function collectBlueBubblesStatusIssues(accounts: ChannelAccountSnapshot[
           kind: "runtime",
           message: `BlueBubbles server unreachable${errorDetail}`,
           fix: "Check that the BlueBubbles server is running and accessible. Verify serverUrl and password in your config.",
+        });
+      }
+
+      if (probe?.ok !== false && probe?.privateApi === true && probe.helperConnected === false) {
+        issues.push({
+          channel: "bluebubbles",
+          accountId,
+          kind: "runtime",
+          message: "BlueBubbles Private API is enabled, but the helper is disconnected.",
+          fix: "Open BlueBubbles Private API settings and restart the Messages helper/server. If it stays disconnected, verify the BlueBubbles Private API prerequisites (SIP and Library Validation) before expecting helper-only features. Until it reconnects, sends may use the local imsg fallback and Private API-only features such as reply threading/effects are unavailable.",
         });
       }
 

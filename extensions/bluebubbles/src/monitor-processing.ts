@@ -848,15 +848,6 @@ async function processMessageAfterDedupe(
   };
 
   const cacheMessageId = message.messageId?.trim();
-  const confirmedOutboundCacheEntry = cacheMessageId
-    ? resolveReplyContextFromCache({
-        accountId: account.accountId,
-        replyToId: cacheMessageId,
-        chatGuid: message.chatGuid,
-        chatIdentifier: message.chatIdentifier,
-        chatId: message.chatId,
-      })
-    : null;
   let messageShortId: string | undefined;
   const cacheInboundMessage = () => {
     if (!cacheMessageId) {

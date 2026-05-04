@@ -41,6 +41,7 @@ describe("bluebubblesPlugin.status.probeAccount", () => {
     expect(probeBlueBubblesMock).toHaveBeenCalledWith({
       baseUrl: "http://localhost:1234",
       password: "test-password",
+      accountId: "default",
       timeoutMs: 5000,
       allowPrivateNetwork: true,
     });
@@ -68,6 +69,7 @@ describe("bluebubblesPlugin.status.probeAccount", () => {
     expect(probeBlueBubblesMock).toHaveBeenCalledWith({
       baseUrl: "http://localhost:1234",
       password: "test-password",
+      accountId: "default",
       timeoutMs: 5000,
       allowPrivateNetwork: false,
     });

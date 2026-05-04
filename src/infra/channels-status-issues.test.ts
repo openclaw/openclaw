@@ -46,4 +46,58 @@ describe("collectChannelStatusIssues", () => {
     expect(collectTelegramIssues).toHaveBeenCalledWith(telegramAccounts);
     expect(collectSlackIssues).toHaveBeenCalledWith(slackAccounts);
   });
+
+  it("surfaces BlueBubbles helper disconnect from gateway payload when plugin collectors are unavailable", () => {
+    listChannelPluginsMock.mockReturnValue([]);
+
+    expect(
+      collectChannelStatusIssues({
+        channelAccounts: {
+          bluebubbles: [
+            {
+              accountId: "default",
+              probe: {
+                ok: true,
+                privateApi: true,
+                helperConnected: false,
+              },
+            },
+          ],
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        channel: "bluebubbles",
+        accountId: "default",
+        kind: "runtime",
+        message: "BlueBubbles Private API is enabled, but the helper is disconnected.",
+      }),
+    ]);
+  });
+
+  it("does not duplicate BlueBubbles helper issues when a plugin collector handled the channel", () => {
+    const collectBlueBubblesIssues = vi.fn(() => [{ code: "bluebubbles.plugin" }]);
+    const bluebubblesAccounts = [
+      {
+        accountId: "default",
+        probe: {
+          ok: true,
+          privateApi: true,
+          helperConnected: false,
+        },
+      },
+    ];
+    listChannelPluginsMock.mockReturnValue([
+      { id: "bluebubbles", status: { collectStatusIssues: collectBlueBubblesIssues } },
+    ]);
+
+    expect(
+      collectChannelStatusIssues({
+        channelAccounts: {
+          bluebubbles: bluebubblesAccounts,
+        },
+      }),
+    ).toEqual([{ code: "bluebubbles.plugin" }]);
+    expect(collectBlueBubblesIssues).toHaveBeenCalledWith(bluebubblesAccounts);
+  });
 });

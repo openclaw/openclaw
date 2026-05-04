@@ -52,4 +52,32 @@ describe("collectBlueBubblesStatusIssues", () => {
       }),
     );
   });
+
+  it("reports disconnected Private API helper from probe server info", () => {
+    const issues = collectBlueBubblesStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        running: true,
+        probe: {
+          ok: true,
+          status: 200,
+          privateApi: true,
+          helperConnected: false,
+          osVersion: "26.5.0",
+        },
+      },
+    ]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "bluebubbles",
+        accountId: "default",
+        kind: "runtime",
+        message: "BlueBubbles Private API is enabled, but the helper is disconnected.",
+      }),
+    ]);
+    expect(issues[0]?.fix).toContain("imsg fallback");
+  });
 });

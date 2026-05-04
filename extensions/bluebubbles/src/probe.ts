@@ -6,6 +6,12 @@ import { normalizeSecretInputString } from "./secret-input.js";
 
 export type BlueBubblesProbe = BaseProbeResult & {
   status?: number | null;
+  privateApi?: boolean | null;
+  helperConnected?: boolean | null;
+  serverVersion?: string;
+  osVersion?: string;
+  proxyService?: string;
+  detectedIcloud?: string;
 };
 
 type BlueBubblesServerInfo = {
@@ -133,9 +139,37 @@ export function isMacOS26OrHigher(accountId?: string): boolean {
   return major !== null && major >= 26;
 }
 
+function projectServerInfoForProbe(info: BlueBubblesServerInfo | null): Partial<BlueBubblesProbe> {
+  if (!info) {
+    return {};
+  }
+  const out: Partial<BlueBubblesProbe> = {
+    privateApi: typeof info.private_api === "boolean" ? info.private_api : null,
+    helperConnected: typeof info.helper_connected === "boolean" ? info.helper_connected : null,
+  };
+  const serverVersion = normalizeOptionalString(info.server_version);
+  const osVersion = normalizeOptionalString(info.os_version);
+  const proxyService = normalizeOptionalString(info.proxy_service);
+  const detectedIcloud = normalizeOptionalString(info.detected_icloud);
+  if (serverVersion) {
+    out.serverVersion = serverVersion;
+  }
+  if (osVersion) {
+    out.osVersion = osVersion;
+  }
+  if (proxyService) {
+    out.proxyService = proxyService;
+  }
+  if (detectedIcloud) {
+    out.detectedIcloud = detectedIcloud;
+  }
+  return out;
+}
+
 export async function probeBlueBubbles(params: {
   baseUrl?: string | null;
   password?: string | null;
+  accountId?: string;
   timeoutMs?: number;
   allowPrivateNetwork?: boolean;
 }): Promise<BlueBubblesProbe> {
@@ -158,7 +192,14 @@ export async function probeBlueBubbles(params: {
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }
-    return { ok: true, status: res.status };
+    const info = await fetchBlueBubblesServerInfo({
+      baseUrl,
+      password,
+      accountId: params.accountId,
+      timeoutMs: params.timeoutMs,
+      allowPrivateNetwork: params.allowPrivateNetwork,
+    });
+    return { ok: true, status: res.status, ...projectServerInfoForProbe(info) };
   } catch (err) {
     return {
       ok: false,

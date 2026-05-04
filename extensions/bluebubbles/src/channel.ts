@@ -229,6 +229,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           (await loadBlueBubblesChannelRuntime()).probeBlueBubbles({
             baseUrl: account.baseUrl,
             password: account.config.password ?? null,
+            accountId: account.accountId,
             timeoutMs,
             allowPrivateNetwork: resolveBlueBubblesEffectiveAllowPrivateNetwork({
               baseUrl: account.baseUrl,
