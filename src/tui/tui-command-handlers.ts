@@ -642,8 +642,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
-        // Gateway has registered the run by this point. Track the runId so
-        // escape can abort during the gap before the first event echoes back.
         state.pendingChatRunId = runId;
         setActivityStatus("waiting");
         tui.requestRender();
