@@ -211,21 +211,30 @@ function resolveTelegramReasoningLevel(params: {
   telegramDeps: TelegramBotDeps;
 }): TelegramReasoningLevel {
   const { cfg, sessionKey, agentId, telegramDeps } = params;
-  if (!sessionKey) {
-    return "off";
-  }
-  try {
-    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
-    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-      skipCache: true,
-    });
-    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
-    const level = entry?.reasoningLevel;
-    if (level === "on" || level === "stream") {
-      return level;
+  if (sessionKey) {
+    try {
+      const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
+      const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+        skipCache: true,
+      });
+      const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const level = entry?.reasoningLevel;
+      if (level === "on" || level === "stream") {
+        return level;
+      }
+    } catch {
+      // Fall through to configured defaults.
     }
-  } catch {
-    // Fall through to default.
+  }
+  // Mirror the shared resolution order from get-reply-directives.ts:
+  // session-stored override (above) → per-agent default → global agent default → "off".
+  const perAgentDefault = cfg.agents?.list?.find((entry) => entry.id === agentId)?.reasoningDefault;
+  if (perAgentDefault === "on" || perAgentDefault === "stream") {
+    return perAgentDefault;
+  }
+  const globalDefault = cfg.agents?.defaults?.reasoningDefault;
+  if (globalDefault === "on" || globalDefault === "stream") {
+    return globalDefault;
   }
   return "off";
 }
