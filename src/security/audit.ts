@@ -4,6 +4,7 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
 import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
 import {
@@ -28,6 +29,7 @@ import type {
   SecurityAuditReport,
   SecurityAuditSeverity,
   SecurityAuditSummary,
+  SecurityAuditSuppressedFinding,
 } from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import type { ExecFn } from "./windows-acl.js";
@@ -188,6 +190,55 @@ function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary
     }
   }
   return { critical, warn, info };
+}
+
+function normalizeSuppressionText(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function findingMatchesSuppression(
+  finding: SecurityAuditFinding,
+  suppression: SecurityAuditSuppression,
+): boolean {
+  const checkId = suppression.checkId.trim();
+  if (!checkId || finding.checkId !== checkId) {
+    return false;
+  }
+  const titleNeedle = normalizeSuppressionText(suppression.titleIncludes);
+  if (titleNeedle && !finding.title.toLowerCase().includes(titleNeedle)) {
+    return false;
+  }
+  const detailNeedle = normalizeSuppressionText(suppression.detailIncludes);
+  if (detailNeedle && !finding.detail.toLowerCase().includes(detailNeedle)) {
+    return false;
+  }
+  return true;
+}
+
+export function applySecurityAuditSuppressions(
+  findings: SecurityAuditFinding[],
+  suppressions: SecurityAuditSuppression[] | undefined,
+): { findings: SecurityAuditFinding[]; suppressedFindings: SecurityAuditSuppressedFinding[] } {
+  if (!Array.isArray(suppressions) || suppressions.length === 0) {
+    return { findings, suppressedFindings: [] };
+  }
+  const active: SecurityAuditFinding[] = [];
+  const suppressedFindings: SecurityAuditSuppressedFinding[] = [];
+  for (const finding of findings) {
+    const suppression = suppressions.find((candidate) =>
+      findingMatchesSuppression(finding, candidate),
+    );
+    if (!suppression) {
+      active.push(finding);
+      continue;
+    }
+    const reason = suppression.reason?.trim();
+    suppressedFindings.push({
+      ...finding,
+      suppression: reason ? { reason } : {},
+    });
+  }
+  return { findings: active, suppressedFindings };
 }
 
 function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
@@ -1083,6 +1134,15 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const deep = deepProbeResult?.deep;
   findings.push(...collectDeepProbeFindings({ deep, authWarning: deepProbeResult?.authWarning }));
 
-  const summary = countBySeverity(findings);
-  return { ts: Date.now(), summary, findings, deep };
+  const filtered = applySecurityAuditSuppressions(findings, cfg.security?.audit?.suppressions);
+  const summary = countBySeverity(filtered.findings);
+  return {
+    ts: Date.now(),
+    summary,
+    findings: filtered.findings,
+    ...(filtered.suppressedFindings.length > 0
+      ? { suppressedFindings: filtered.suppressedFindings }
+      : {}),
+    deep,
+  };
 }

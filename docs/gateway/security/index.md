@@ -302,6 +302,7 @@ production.
     - `gateway.controlUi.allowInsecureAuth=true`
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
     - `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+    - `security.audit.suppressions configured (<count>)`
     - `hooks.gmail.allowUnsafeExternalContent=true`
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
     - `tools.exec.applyPatch.workspaceOnly=false`

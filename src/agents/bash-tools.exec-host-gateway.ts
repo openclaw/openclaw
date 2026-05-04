@@ -97,6 +97,16 @@ function hasGatewayAllowlistMiss(params: {
   );
 }
 
+function commandTouchesSecurityAuditSuppressions(command: string): boolean {
+  const normalized = command.toLowerCase();
+  return (
+    normalized.includes("security.audit.suppressions") ||
+    /["']?security["']?[\s\S]{0,200}["']?audit["']?[\s\S]{0,200}["']?suppressions["']?/.test(
+      normalized,
+    )
+  );
+}
+
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
   return outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
 }
@@ -332,6 +342,9 @@ export async function processGatewayAllowlist(
     allowlistSatisfied &&
     !enforcedCommand &&
     allowlistPlanUnavailableReason !== null;
+  const requiresSecurityAuditSuppressionApproval =
+    commandTouchesSecurityAuditSuppressions(params.command) &&
+    !(hostSecurity === "full" && hostAsk === "off");
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -342,7 +355,8 @@ export async function processGatewayAllowlist(
     }) ||
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
-    requiresInlineEvalApproval;
+    requiresInlineEvalApproval ||
+    requiresSecurityAuditSuppressionApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
@@ -351,6 +365,11 @@ export async function processGatewayAllowlist(
   if (requiresAllowlistPlanApproval) {
     params.warnings.push(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; explicit approval is required.`,
+    );
+  }
+  if (requiresSecurityAuditSuppressionApproval) {
+    params.warnings.push(
+      "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
     );
   }
 
