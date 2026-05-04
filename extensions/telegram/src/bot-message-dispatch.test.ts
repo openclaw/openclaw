@@ -1107,7 +1107,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({
       context: createContext({
-        ctxPayload: { SessionKey: "s-no-stored" } as unknown as TelegramMessageContext["ctxPayload"],
+        ctxPayload: {
+          SessionKey: "s-no-stored",
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
       }),
       cfg: {
         agents: {
@@ -1141,7 +1144,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({
       context: createContext({
-        ctxPayload: { SessionKey: "s-no-stored" } as unknown as TelegramMessageContext["ctxPayload"],
+        ctxPayload: {
+          SessionKey: "s-no-stored",
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
       }),
       cfg: {
         agents: {
@@ -1166,7 +1172,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({
       context: createContext({
-        ctxPayload: { SessionKey: "s-no-stored" } as unknown as TelegramMessageContext["ctxPayload"],
+        ctxPayload: {
+          SessionKey: "s-no-stored",
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
       }),
       cfg: {
         agents: {
@@ -1200,7 +1209,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({
       context: createContext({
-        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+        ctxPayload: {
+          SessionKey: "s1",
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
       }),
       // Both configured defaults set, but stored "on" should still take precedence.
       cfg: {
@@ -1219,6 +1231,40 @@ describe("dispatchTelegramMessage draft streaming", () => {
         }),
       }),
     );
+  });
+
+  it("does not fall back to configured reasoningDefault when sender is unauthorized", async () => {
+    loadSessionStore.mockReturnValue({});
+    let seenReasoningCallback: unknown;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        seenReasoningCallback = replyOptions?.onReasoningStream;
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s-no-stored",
+          CommandAuthorized: false,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      // Both configured defaults set to "stream"; an authorized sender would
+      // inherit draft streaming, but unauthorized senders must not.
+      cfg: {
+        agents: {
+          defaults: { reasoningDefault: "stream" },
+          list: [{ id: "default", reasoningDefault: "stream" }],
+        },
+      } as unknown as OpenClawConfig,
+      streamMode: "off",
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(seenReasoningCallback).toBeUndefined();
   });
 
   it("does not expose reasoning preview callbacks unless session reasoning is stream", async () => {

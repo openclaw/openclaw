@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram/reasoning: honor `agents.list[].reasoningDefault` and `agents.defaults.reasoningDefault` so Telegram sessions inherit configured reasoning defaults on first message, gated by Telegram command authorization to avoid widening reasoning disclosure to senders who never explicitly opted in via `/reasoning`. Fixes #77227.
 - Gateway/startup: start cron and record the post-ready memory trace even when deferred maintenance timers fail after readiness, so a non-fatal timer setup issue does not silently leave scheduled jobs idle. Thanks @vincentkoc.
 - Agents/session status: keep semantic `session_status({ sessionKey: "current" })` on the live run session even before that run has a persisted session-store entry, instead of falling back to the sandbox policy key. Thanks @vincentkoc.
 - QA/Slack: resolve bundled official plugin public-surface package aliases during source-mode QA runs, so release Slack live validation can load `@openclaw/slack/api.js` without workspace symlinks. Thanks @vincentkoc.
