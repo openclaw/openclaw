@@ -260,6 +260,12 @@ export function createOpenClawTools(
     sandboxBrowserBridgeUrl?: string;
     allowHostBrowserControl?: boolean;
     agentSessionKey?: string;
+    /**
+     * The actual live run session key. When the tool is constructed with a sandbox/policy
+     * session key, this allows `session_status({sessionKey:"current"})` to resolve to
+     * the live run session instead of the stale sandbox key.
+     */
+    runSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     /** Delivery target for topic/thread routing. */
@@ -588,6 +594,7 @@ export function createOpenClawTools(
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
     }),
