@@ -44,7 +44,8 @@ function resolveQueueSettings(params: {
   channel?: string;
 }) {
   return {
-    mode: (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "none",
+    mode:
+      (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "followup",
   };
 }
 
@@ -59,10 +60,6 @@ export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRunti
     resolveStorePath: options.resolveStorePath,
     isEmbeddedPiRunActive: options.isEmbeddedPiRunActive,
     queueEmbeddedPiMessage: options.queueEmbeddedPiMessage,
-    isSteeringQueueMode: (mode: string) =>
-      mode === "steer" || mode === "queue" || mode === "steer-backlog",
-    resolvePiSteeringModeForQueueMode: (mode: string) =>
-      mode === "queue" ? "one-at-a-time" : "all",
     getGlobalHookRunner: () => ({ hasHooks: () => options.hasHooks?.() ?? false }),
     createBoundDeliveryRouter: () => ({
       resolveDestination: () => ({ mode: "none" }),

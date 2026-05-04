@@ -19118,10 +19118,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 anyOf: [
                   {
                     type: "string",
-                    const: "steer",
-                  },
-                  {
-                    type: "string",
                     const: "followup",
                   },
                   {
@@ -19130,24 +19126,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   {
                     type: "string",
-                    const: "steer-backlog",
-                  },
-                  {
-                    type: "string",
-                    const: "steer+backlog",
-                  },
-                  {
-                    type: "string",
-                    const: "queue",
-                  },
-                  {
-                    type: "string",
                     const: "interrupt",
                   },
                 ],
-                title: "Queue Mode",
+                title: "Queue Fallback Mode",
                 description:
-                  'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
+                  'Fallback queue mode when same-turn steering is unavailable. Use "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
               },
               byChannel: {
                 type: "object",
@@ -19156,27 +19140,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     anyOf: [
                       {
                         type: "string",
-                        const: "steer",
-                      },
-                      {
-                        type: "string",
                         const: "followup",
                       },
                       {
                         type: "string",
                         const: "collect",
-                      },
-                      {
-                        type: "string",
-                        const: "steer-backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "steer+backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "queue",
                       },
                       {
                         type: "string",
@@ -19188,27 +19156,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     anyOf: [
                       {
                         type: "string",
-                        const: "steer",
-                      },
-                      {
-                        type: "string",
                         const: "followup",
                       },
                       {
                         type: "string",
                         const: "collect",
-                      },
-                      {
-                        type: "string",
-                        const: "steer-backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "steer+backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "queue",
                       },
                       {
                         type: "string",
@@ -19220,27 +19172,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     anyOf: [
                       {
                         type: "string",
-                        const: "steer",
-                      },
-                      {
-                        type: "string",
                         const: "followup",
                       },
                       {
                         type: "string",
                         const: "collect",
-                      },
-                      {
-                        type: "string",
-                        const: "steer-backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "steer+backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "queue",
                       },
                       {
                         type: "string",
@@ -19252,27 +19188,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     anyOf: [
                       {
                         type: "string",
-                        const: "steer",
-                      },
-                      {
-                        type: "string",
                         const: "followup",
                       },
                       {
                         type: "string",
                         const: "collect",
-                      },
-                      {
-                        type: "string",
-                        const: "steer-backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "steer+backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "queue",
                       },
                       {
                         type: "string",
@@ -19284,27 +19204,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     anyOf: [
                       {
                         type: "string",
-                        const: "steer",
-                      },
-                      {
-                        type: "string",
                         const: "followup",
                       },
                       {
                         type: "string",
                         const: "collect",
-                      },
-                      {
-                        type: "string",
-                        const: "steer-backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "steer+backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "queue",
                       },
                       {
                         type: "string",
@@ -19316,27 +19220,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     anyOf: [
                       {
                         type: "string",
-                        const: "steer",
-                      },
-                      {
-                        type: "string",
                         const: "followup",
                       },
                       {
                         type: "string",
                         const: "collect",
-                      },
-                      {
-                        type: "string",
-                        const: "steer-backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "steer+backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "queue",
                       },
                       {
                         type: "string",
@@ -19348,27 +19236,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     anyOf: [
                       {
                         type: "string",
-                        const: "steer",
-                      },
-                      {
-                        type: "string",
                         const: "followup",
                       },
                       {
                         type: "string",
                         const: "collect",
-                      },
-                      {
-                        type: "string",
-                        const: "steer-backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "steer+backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "queue",
                       },
                       {
                         type: "string",
@@ -19380,27 +19252,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     anyOf: [
                       {
                         type: "string",
-                        const: "steer",
-                      },
-                      {
-                        type: "string",
                         const: "followup",
                       },
                       {
                         type: "string",
                         const: "collect",
-                      },
-                      {
-                        type: "string",
-                        const: "steer-backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "steer+backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "queue",
                       },
                       {
                         type: "string",
@@ -19412,27 +19268,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     anyOf: [
                       {
                         type: "string",
-                        const: "steer",
-                      },
-                      {
-                        type: "string",
                         const: "followup",
                       },
                       {
                         type: "string",
                         const: "collect",
-                      },
-                      {
-                        type: "string",
-                        const: "steer-backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "steer+backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "queue",
                       },
                       {
                         type: "string",
@@ -19444,27 +19284,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     anyOf: [
                       {
                         type: "string",
-                        const: "steer",
-                      },
-                      {
-                        type: "string",
                         const: "followup",
                       },
                       {
                         type: "string",
                         const: "collect",
-                      },
-                      {
-                        type: "string",
-                        const: "steer-backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "steer+backlog",
-                      },
-                      {
-                        type: "string",
-                        const: "queue",
                       },
                       {
                         type: "string",
@@ -19474,17 +19298,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 },
                 additionalProperties: false,
-                title: "Queue Mode by Channel",
+                title: "Queue Fallback by Channel",
                 description:
-                  "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel’s traffic pattern needs different queue behavior than global defaults.",
+                  "Per-channel fallback queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel’s traffic pattern needs different fallback behavior than global defaults.",
               },
               debounceMs: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
-                title: "Queue Debounce (ms)",
+                title: "Queue Fallback Debounce (ms)",
                 description:
-                  "Global followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
+                  "Global fallback followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
               },
               debounceMsByChannel: {
                 type: "object",
@@ -19496,9 +19320,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   minimum: 0,
                   maximum: 9007199254740991,
                 },
-                title: "Queue Debounce by Channel (ms)",
+                title: "Queue Fallback Debounce by Channel (ms)",
                 description:
-                  "Per-channel debounce overrides for queue behavior keyed by provider id. Use this to tune burst handling independently for chat surfaces with different pacing.",
+                  "Per-channel debounce overrides for fallback queue behavior keyed by provider id. Use this to tune burst handling independently for chat surfaces with different pacing.",
               },
               cap: {
                 type: "integer",
@@ -19531,7 +19355,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             additionalProperties: false,
             title: "Inbound Queue",
             description:
-              "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is steer, with followup fallback when steering is unavailable.",
+              "Fallback queue strategy for inbound messages that arrive while a session run is active but cannot accept default same-turn steering.",
           },
           inbound: {
             type: "object",
@@ -28609,27 +28433,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.queue": {
       label: "Inbound Queue",
-      help: "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is steer, with followup fallback when steering is unavailable.",
+      help: "Fallback queue strategy for inbound messages that arrive while a session run is active but cannot accept default same-turn steering.",
       tags: ["advanced"],
     },
     "messages.queue.mode": {
-      label: "Queue Mode",
-      help: 'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
+      label: "Queue Fallback Mode",
+      help: 'Fallback queue mode when same-turn steering is unavailable. Use "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
       tags: ["advanced"],
     },
     "messages.queue.byChannel": {
-      label: "Queue Mode by Channel",
-      help: "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel’s traffic pattern needs different queue behavior than global defaults.",
+      label: "Queue Fallback by Channel",
+      help: "Per-channel fallback queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel’s traffic pattern needs different fallback behavior than global defaults.",
       tags: ["advanced"],
     },
     "messages.queue.debounceMs": {
-      label: "Queue Debounce (ms)",
-      help: "Global followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
+      label: "Queue Fallback Debounce (ms)",
+      help: "Global fallback followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
       tags: ["performance"],
     },
     "messages.queue.debounceMsByChannel": {
-      label: "Queue Debounce by Channel (ms)",
-      help: "Per-channel debounce overrides for queue behavior keyed by provider id. Use this to tune burst handling independently for chat surfaces with different pacing.",
+      label: "Queue Fallback Debounce by Channel (ms)",
+      help: "Per-channel debounce overrides for fallback queue behavior keyed by provider id. Use this to tune burst handling independently for chat surfaces with different pacing.",
       tags: ["performance"],
     },
     "messages.queue.cap": {

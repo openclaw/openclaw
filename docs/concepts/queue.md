@@ -1,8 +1,8 @@
 ---
-summary: "Auto-reply queue modes, defaults, and per-session overrides"
+summary: "Auto-reply fallback queue modes, defaults, and per-session overrides"
 read_when:
   - Changing auto-reply execution or concurrency
-  - Explaining /queue modes or message steering behavior
+  - Explaining /queue fallback modes or message steering behavior
 title: "Command queue"
 ---
 
@@ -25,30 +25,29 @@ We serialize inbound auto-reply runs (all channels) through a tiny in-process qu
 
 When unset, all inbound channel surfaces use:
 
-- `mode: "steer"`
+- same-turn steering for prompts that arrive while a session run is active
+- fallback `mode: "followup"`
 - `debounceMs: 500`
 - `cap: 20`
 - `drop: "summarize"`
 
-`steer` is the default because it keeps the active model turn responsive without
-starting a second session run. It drains all steering messages that arrived
-before the next model boundary. If the current run cannot accept steering,
-OpenClaw falls back to a followup queue entry.
+Same-turn steering is automatic. A prompt that arrives mid-run is first injected
+into the active runtime when the run can accept steering, so no second session
+run is started. If the active run cannot accept steering, OpenClaw uses the
+fallback queue mode.
 
 ## Queue modes
 
-Inbound messages can steer the current run, wait for a followup turn, or do both:
+`/queue` controls fallback behavior after steering is unavailable or disabled by
+`interrupt`. It no longer has steering-specific modes:
 
-- `steer`: queue steering messages into the active runtime. Pi delivers all pending steering messages **after the current assistant turn finishes executing its tool calls**, before the next LLM call; Codex app-server receives one batched `turn/steer`. If the run is not actively streaming or steering is unavailable, OpenClaw falls back to a followup queue entry.
-- `queue` (legacy): old one-at-a-time steering. Pi delivers one queued steering message at each model boundary; Codex app-server receives separate `turn/steer` requests. Prefer `steer` unless you need the previous serialized behavior.
 - `followup`: enqueue each message for a later agent turn after the current run ends.
 - `collect`: coalesce queued messages into a **single** followup turn after the quiet window. If messages target different channels/threads, they drain individually to preserve routing.
-- `steer-backlog` (aka `steer+backlog`): steer now **and** preserve the same message for a followup turn.
-- `interrupt` (legacy): abort the active run for that session, then run the newest message.
+- `interrupt`: abort the active run for that session, then run the newest message.
 
-Steer-backlog means you can get a followup response after the steered run, so
-streaming surfaces can look like duplicates. Prefer `collect`/`steer` if you want
-one response per inbound message.
+Pi delivers steered messages **after the current assistant turn finishes
+executing its tool calls**, before the next LLM call. Codex app-server receives
+one batched `turn/steer` request after the quiet window.
 
 For runtime-specific timing and dependency behavior, see
 [Steering queue](/concepts/queue-steering). For the explicit `/steer <message>`
@@ -60,7 +59,7 @@ Configure globally or per channel via `messages.queue`:
 {
   messages: {
     queue: {
-      mode: "steer",
+      mode: "followup",
       debounceMs: 500,
       cap: 20,
       drop: "summarize",
@@ -72,7 +71,7 @@ Configure globally or per channel via `messages.queue`:
 
 ## Queue options
 
-Options apply to `followup`, `collect`, and `steer-backlog` (and to `steer` or legacy `queue` when steering falls back to followup):
+Options apply to followup fallback delivery:
 
 - `debounceMs`: quiet window before draining queued followups. Bare numbers are milliseconds; units `ms`, `s`, `m`, `h`, and `d` are accepted by `/queue` options.
 - `cap`: max queued messages per session. Values below `1` are ignored.
@@ -89,7 +88,7 @@ For mode selection, OpenClaw resolves:
 1. Inline or stored per-session `/queue` override.
 2. `messages.queue.byChannel.<channel>`.
 3. `messages.queue.mode`.
-4. Default `steer`.
+4. Default `followup`.
 
 For options, inline or stored `/queue` options win over config. Then
 channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin
@@ -99,7 +98,7 @@ keys.
 
 ## Per-session overrides
 
-- Send `/queue <mode>` as a standalone command to store the mode for the current session.
+- Send `/queue <followup|collect|interrupt>` as a standalone command to store the fallback mode for the current session.
 - Options can be combined: `/queue collect debounce:0.5s cap:25 drop:summarize`
 - `/queue default` or `/queue reset` clears the session override.
 
