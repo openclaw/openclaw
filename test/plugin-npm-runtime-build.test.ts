@@ -64,6 +64,10 @@ describe("plugin npm runtime build planning", () => {
       "openclaw.plugin.json",
       "README.md",
       "skills/**",
+      "index.ts",
+      "api.ts",
+      "runtime-api.ts",
+      "src/**",
     ]);
   });
 });
