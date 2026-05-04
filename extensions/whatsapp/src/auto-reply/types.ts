@@ -23,6 +23,7 @@ export type WebChannelStatus = {
     status?: number;
     error?: string;
     loggedOut?: boolean;
+    expected?: boolean;
   } | null;
   lastInboundAt?: number | null;
   lastMessageAt?: number | null;

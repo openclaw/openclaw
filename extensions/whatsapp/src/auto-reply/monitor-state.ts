@@ -39,6 +39,10 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
     noteConnected(at = Date.now()) {
       Object.assign(status, createConnectedChannelStatusPatch(at));
       Object.assign(status, createTransportActivityStatusPatch(at));
+      if (status.lastDisconnect?.expected) {
+        status.lastDisconnect = null;
+        status.reconnectAttempts = 0;
+      }
       status.lastError = null;
       status.healthState = "healthy";
       emit();
@@ -78,6 +82,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       error?: string;
       reconnectAttempts: number;
       healthState: WebChannelHealthState;
+      expected?: boolean;
     }) {
       const at = params.at ?? Date.now();
       status.connected = false;
@@ -87,6 +92,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
         status: params.statusCode,
         error: params.error,
         loggedOut: Boolean(params.loggedOut),
+        expected: params.expected === true,
       };
       status.lastError = params.error ?? null;
       status.reconnectAttempts = params.reconnectAttempts;
