@@ -294,14 +294,6 @@ describe("memory tools", () => {
         snippet: "Memory result A",
         source: "memory" as const,
       },
-      {
-        path: "memory/note-b.md",
-        startLine: 1,
-        endLine: 2,
-        score: 0.8,
-        snippet: "Memory result B",
-        source: "memory" as const,
-      },
     ]);
     registerMemoryCorpusSupplement("memory-wiki", {
       search: async () => [
@@ -358,10 +350,14 @@ describe("memory tools", () => {
     const details = result.details as { results: Array<{ corpus: string; path: string }> };
     const corpora = details.results.map((r) => r.corpus);
 
-    // Memory results must appear despite lower numeric scores.
+    // Memory results must appear despite lower numeric scores, and the spare
+    // memory quota should be backfilled by the remaining wiki result.
     expect(corpora).toContain("memory");
     expect(corpora).toContain("wiki");
-    expect(details.results.length).toBeLessThanOrEqual(5);
+    expect(details.results).toHaveLength(5);
+    expect(
+      details.results.filter((entry) => entry.corpus === "wiki").map((entry) => entry.path),
+    ).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
   });
 
   it("merges memory and wiki corpus search results for corpus=all", async () => {
