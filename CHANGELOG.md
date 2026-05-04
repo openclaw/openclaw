@@ -63,6 +63,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/status: label Linux managed gateway services as `systemd user`, making status output explicit about the user-service scope instead of implying a system-level unit. Thanks @vincentkoc.
 - Plugins/install: remove the previous managed plugin directory when a reinstall switches sources, so stale ClawHub and npm copies no longer keep duplicate plugin ids in discovery after the new install wins. Thanks @vincentkoc.
 - Plugins/install: let official plugin reinstall recovery repair source-only installed runtime shadows, so `openclaw plugins install npm:@openclaw/discord --force` can replace the bad package instead of stopping at stale config validation. Thanks @vincentkoc.
+- Plugins/update: when the OpenClaw beta channel probes an npm plugin `@beta` tag that ships TypeScript-only runtime entries without compiled output, fall back to the saved default spec instead of breaking plugin update. Thanks @vincentkoc.
 - Plugins/commands: allow the official ClawHub Codex plugin package to keep reserved `/codex` command ownership, matching the existing npm-managed Codex package behavior. Thanks @vincentkoc.
 - Auth/OpenAI Codex: rewrite invalidated per-agent Codex auth-order and session profile overrides toward a healthy relogin profile, so revoked OAuth accounts do not stay pinned after signing in again. Thanks @BunsDev.
 - Plugins/commands: scope QQBot framework slash commands to the QQBot channel so `/bot-*` command handlers and native specs do not leak onto unrelated chat surfaces. Thanks @vincentkoc.

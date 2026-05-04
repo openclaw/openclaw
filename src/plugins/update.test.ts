@@ -25,6 +25,7 @@ vi.mock("./install.js", () => ({
   resolvePluginInstallDir: (pluginId: string, extensionsDir = "/tmp") =>
     `${extensionsDir}/${pluginId}`,
   PLUGIN_INSTALL_ERROR_CODE: {
+    INVALID_OPENCLAW_EXTENSIONS: "invalid_openclaw_extensions",
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
   },
 }));
@@ -1285,6 +1286,58 @@ describe("updateNpmInstalledPlugins", () => {
       }),
     );
     expect(warnMessages).toEqual([expect.stringContaining("has no beta npm release")]);
+    expectCodexAppServerInstallState({
+      result,
+      spec: "openclaw-codex-app-server",
+      version: "0.2.6",
+      resolvedSpec: "openclaw-codex-app-server@0.2.6",
+    });
+  });
+
+  it("falls back to the default npm spec when the beta package is not runtime-installable", async () => {
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "invalid_openclaw_extensions",
+        error:
+          "openclaw-codex-app-server@beta requires compiled runtime output for TypeScript entry ./index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, ./index.js, ./index.mjs, ./index.cjs",
+      })
+      .mockResolvedValueOnce(
+        createSuccessfulNpmUpdateResult({
+          pluginId: "openclaw-codex-app-server",
+          targetDir: "/tmp/openclaw-codex-app-server",
+          version: "0.2.6",
+          npmResolution: {
+            name: "openclaw-codex-app-server",
+            version: "0.2.6",
+            resolvedSpec: "openclaw-codex-app-server@0.2.6",
+          },
+        }),
+      );
+
+    const warnMessages: string[] = [];
+    const result = await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      updateChannel: "beta",
+      logger: { warn: (msg) => warnMessages.push(msg) },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+      }),
+    );
+    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server",
+      }),
+    );
+    expect(warnMessages).toEqual([expect.stringContaining("is not runtime-installable")]);
     expectCodexAppServerInstallState({
       result,
       spec: "openclaw-codex-app-server",

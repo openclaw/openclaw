@@ -435,9 +435,30 @@ function shouldFallbackBetaNpmUpdate(result: { ok: false; code?: string; error: 
   if (result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND) {
     return true;
   }
+  if (
+    result.code === PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS &&
+    result.error.includes("requires compiled runtime output for TypeScript entry")
+  ) {
+    return true;
+  }
   return /\b(ETARGET|notarget)\b|No matching version found|dist-tag|tag .*not found/i.test(
     result.error,
   );
+}
+
+function formatBetaNpmFallbackWarning(params: {
+  pluginId: string;
+  attemptedSpec: string;
+  fallbackSpec: string;
+  result: { code?: string; error: string };
+}): string {
+  if (
+    params.result.code === PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS &&
+    params.result.error.includes("requires compiled runtime output for TypeScript entry")
+  ) {
+    return `Plugin "${params.pluginId}" beta npm release for ${params.attemptedSpec} is not runtime-installable; falling back to ${params.fallbackSpec}.`;
+  }
+  return `Plugin "${params.pluginId}" has no beta npm release for ${params.attemptedSpec}; falling back to ${params.fallbackSpec}.`;
 }
 
 function isDefaultNpmSpecForBetaUpdate(spec: string): { name: string } | null {
@@ -1033,7 +1054,12 @@ export async function updateNpmInstalledPlugins(params: {
         shouldFallbackBetaNpmUpdate(probe)
       ) {
         logger.warn?.(
-          `Plugin "${pluginId}" has no beta npm release for ${npmSpecs.fallbackLabel ?? effectiveSpec}; falling back to ${npmSpecs.fallbackSpec}.`,
+          formatBetaNpmFallbackWarning({
+            pluginId,
+            attemptedSpec: npmSpecs.fallbackLabel ?? effectiveSpec,
+            fallbackSpec: npmSpecs.fallbackSpec,
+            result: probe,
+          }),
         );
         probe = await installPluginFromNpmSpec({
           spec: npmSpecs.fallbackSpec,
@@ -1214,7 +1240,12 @@ export async function updateNpmInstalledPlugins(params: {
       shouldFallbackBetaNpmUpdate(result)
     ) {
       logger.warn?.(
-        `Plugin "${pluginId}" has no beta npm release for ${npmSpecs.fallbackLabel ?? effectiveSpec}; falling back to ${npmSpecs.fallbackSpec}.`,
+        formatBetaNpmFallbackWarning({
+          pluginId,
+          attemptedSpec: npmSpecs.fallbackLabel ?? effectiveSpec,
+          fallbackSpec: npmSpecs.fallbackSpec,
+          result,
+        }),
       );
       result = await installPluginFromNpmSpec({
         spec: npmSpecs.fallbackSpec,
