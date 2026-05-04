@@ -179,6 +179,7 @@ function summarizeAccount(value: JsonValue | undefined): string {
 function formatRateLimitWindow(window: RateLimitSnapshot["primary"], label: string): string {
   if (!window) return `${label}: N/A`;
   const percent = Math.round(window.usedPercent * 100);
+  const labelStr = labelFromDurationMins(window.windowDurationMins ?? null);
   if (window.resetsAt) {
     const resetDate = new Date(window.resetsAt * 1000);
     const resetStr = resetDate.toLocaleString(undefined, {
@@ -187,9 +188,17 @@ function formatRateLimitWindow(window: RateLimitSnapshot["primary"], label: stri
       hour: "2-digit",
       minute: "2-digit",
     });
-    return `${label}: ${percent}% used · resets ${resetStr}`;
+    return `${labelStr}: ${percent}% used · resets ${resetStr}`;
   }
-  return `${label}: ${percent}% used`;
+  return `${labelStr}: ${percent}% used`;
+}
+
+function labelFromDurationMins(mins: number | null): string {
+  if (mins === null) return "Window";
+  if (mins < 60) return `${mins}m`;
+  if (mins < 1440) return `${Math.round(mins / 60)}h`;
+  if (mins < 10080) return `${Math.round(mins / 1440)}d`;
+  return `${Math.round(mins / 10080)}w`;
 }
 
 function formatRateLimits(value: JsonValue | undefined): string {
