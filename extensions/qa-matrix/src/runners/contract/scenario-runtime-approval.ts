@@ -616,7 +616,6 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
         buildMatrixApprovalArtifact(channelApproval.event),
         buildMatrixApprovalArtifact(dmApproval.event),
       ],
-      resolveResult: result,
       token,
     },
     details: [
