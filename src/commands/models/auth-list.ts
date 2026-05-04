@@ -39,7 +39,7 @@ function resolveTargetAgent(
 }
 
 function formatTimestamp(value: number | undefined): string | undefined {
-  if (!Number.isFinite(value)) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
   return new Date(value).toISOString();
@@ -56,6 +56,9 @@ function summarizeProfile(params: {
   profile: AuthProfileCredential;
   usage?: ProfileUsageStats;
 }): AuthProfileSummary {
+  const expiresAt = resolveProfileExpiry(params.profile);
+  const cooldownUntil = formatTimestamp(params.usage?.cooldownUntil);
+  const disabledUntil = formatTimestamp(params.usage?.disabledUntil);
   return {
     id: params.profileId,
     provider: normalizeProviderId(params.profile.provider),
@@ -67,15 +70,9 @@ function summarizeProfile(params: {
     }),
     ...(params.profile.email ? { email: params.profile.email } : {}),
     ...(params.profile.displayName ? { displayName: params.profile.displayName } : {}),
-    ...(resolveProfileExpiry(params.profile)
-      ? { expiresAt: resolveProfileExpiry(params.profile) }
-      : {}),
-    ...(formatTimestamp(params.usage?.cooldownUntil)
-      ? { cooldownUntil: formatTimestamp(params.usage?.cooldownUntil) }
-      : {}),
-    ...(formatTimestamp(params.usage?.disabledUntil)
-      ? { disabledUntil: formatTimestamp(params.usage?.disabledUntil) }
-      : {}),
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(cooldownUntil ? { cooldownUntil } : {}),
+    ...(disabledUntil ? { disabledUntil } : {}),
   };
 }
 
