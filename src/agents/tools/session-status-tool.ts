@@ -147,14 +147,14 @@ function synthesizeImplicitCurrentSessionEntry(): SessionEntry {
 
 function resolveImplicitCurrentSessionFallback(params: {
   allowFallback: boolean;
-  storeScopedRequesterKey: string;
+  fallbackKey: string;
 }): { key: string; entry: SessionEntry } | null {
-  const requesterKey = params.storeScopedRequesterKey.trim();
-  if (!params.allowFallback || !requesterKey) {
+  const fallbackKey = params.fallbackKey.trim();
+  if (!params.allowFallback || !fallbackKey) {
     return null;
   }
   return {
-    key: requesterKey,
+    key: fallbackKey,
     entry: synthesizeImplicitCurrentSessionEntry(),
   };
 }
@@ -511,7 +511,10 @@ export function createSessionStatusTool(opts?: {
       if (!resolved) {
         const fallback = resolveImplicitCurrentSessionFallback({
           allowFallback: isSemanticCurrentRequest || requestedKeyParam === undefined,
-          storeScopedRequesterKey,
+          fallbackKey:
+            isSemanticCurrentRequest && opts?.runSessionKey
+              ? opts.runSessionKey
+              : storeScopedRequesterKey,
         });
         if (fallback) {
           resolved = fallback;

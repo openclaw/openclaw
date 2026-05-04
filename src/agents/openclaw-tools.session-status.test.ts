@@ -521,6 +521,28 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:main");
   });
 
+  it("synthesizes semantic current from runSessionKey when the live run is not persisted yet", async () => {
+    resetSessionStore({
+      "agent:main:telegram:default:direct:1234": {
+        sessionId: "s-tg-direct",
+        updatedAt: 5,
+        status: "done",
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-unpersisted-run", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+    expect(details.statusText).toContain("OpenClaw");
+  });
+
   it("rejects explicit cross-session key under tree visibility even when it equals runSessionKey (#76708)", async () => {
     resetSessionStore({
       "agent:main:telegram:default:direct:1234": {
