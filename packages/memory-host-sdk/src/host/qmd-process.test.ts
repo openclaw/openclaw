@@ -146,7 +146,20 @@ describe("checkQmdBinaryAvailability", () => {
 
     await expect(
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
-    ).resolves.toEqual({ available: false, error: "spawn qmd ENOENT" });
+    ).resolves.toEqual({ available: false, reason: "binary", error: "spawn qmd ENOENT" });
+  });
+
+  it("returns an explicit workspace error when cwd is missing", async () => {
+    const missingDir = path.join(tempDir, "missing-workspace");
+
+    await expect(
+      checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: missingDir }),
+    ).resolves.toEqual({
+      available: false,
+      reason: "workspace-cwd",
+      error: `workspace directory missing: ${missingDir}`,
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("does not treat close-before-spawn as a successful availability probe", async () => {
@@ -160,6 +173,6 @@ describe("checkQmdBinaryAvailability", () => {
 
     await expect(
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
-    ).resolves.toEqual({ available: false, error: "spawn qmd ENOENT" });
+    ).resolves.toEqual({ available: false, reason: "binary", error: "spawn qmd ENOENT" });
   });
 });
