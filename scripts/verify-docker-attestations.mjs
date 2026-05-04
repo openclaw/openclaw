@@ -85,14 +85,27 @@ export function collectDockerAttestationErrors(params) {
     const predicates = new Set();
     for (const descriptor of attestationDescriptors) {
       const attestation = inspectAttestation(descriptor.digest);
-      if (attestation?.artifactType !== "application/vnd.docker.attestation.manifest.v1+json") {
+      // Identify a Docker attestation manifest by either the legacy
+      // `artifactType` field (older buildx) or by every layer carrying the
+      // `application/vnd.in-toto+json` mediaType (current buildx, which omits
+      // the artifactType and emits a plain OCI image manifest with in-toto
+      // layers). The descriptor in the index already pre-filters by
+      // `vnd.docker.reference.type=attestation-manifest`, so we just need to
+      // confirm the manifest payload looks like an attestation.
+      const layers = Array.isArray(attestation?.layers) ? attestation.layers : [];
+      const hasLegacyArtifactType =
+        attestation?.artifactType === "application/vnd.docker.attestation.manifest.v1+json";
+      const hasInTotoLayers =
+        layers.length > 0 &&
+        layers.every((layer) => layer?.mediaType === "application/vnd.in-toto+json");
+      if (!hasLegacyArtifactType && !hasInTotoLayers) {
         errors.push(
-          `${imageRef}: ${platformLabel} attestation ${descriptor.digest} has unexpected artifactType ${JSON.stringify(
+          `${imageRef}: ${platformLabel} attestation ${descriptor.digest} is not a recognized Docker attestation manifest (artifactType ${JSON.stringify(
             attestation?.artifactType,
-          )}`,
+          )}, layer mediaTypes ${JSON.stringify(layers.map((layer) => layer?.mediaType))})`,
         );
       }
-      for (const layer of attestation?.layers ?? []) {
+      for (const layer of layers) {
         const predicate = layer?.annotations?.["in-toto.io/predicate-type"];
         if (typeof predicate === "string") {
           predicates.add(predicate);
