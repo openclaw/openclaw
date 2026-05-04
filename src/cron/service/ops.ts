@@ -286,6 +286,9 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       if (enabledFilter === "disabled" && isJobEnabled(job)) {
         return false;
       }
+      if (opts?.agentId && job.agentId !== opts.agentId) {
+        return false;
+      }
       if (!query) {
         return true;
       }
