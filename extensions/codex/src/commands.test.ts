@@ -227,6 +227,52 @@ describe("codex command", () => {
     expect(deps.readCodexStatusProbes).toHaveBeenCalledWith(undefined, config);
   });
 
+  it("rejects extra operands for read-only Codex commands", async () => {
+    const readCodexStatusProbes = vi.fn();
+    const listCodexAppServerModels = vi.fn();
+    const safeCodexControlRequest = vi.fn();
+    const codexControlRequest = vi.fn();
+    const getCurrentConversationBinding = vi.fn();
+    const deps = createDeps({
+      codexControlRequest,
+      listCodexAppServerModels,
+      readCodexStatusProbes,
+      safeCodexControlRequest,
+    });
+
+    await expect(handleCodexCommand(createContext("status now"), { deps })).resolves.toEqual({
+      text: "Usage: /codex status",
+    });
+    await expect(handleCodexCommand(createContext("models all"), { deps })).resolves.toEqual({
+      text: "Usage: /codex models",
+    });
+    await expect(handleCodexCommand(createContext("account refresh"), { deps })).resolves.toEqual({
+      text: "Usage: /codex account",
+    });
+    await expect(handleCodexCommand(createContext("mcp list"), { deps })).resolves.toEqual({
+      text: "Usage: /codex mcp",
+    });
+    await expect(handleCodexCommand(createContext("skills list"), { deps })).resolves.toEqual({
+      text: "Usage: /codex skills",
+    });
+    await expect(
+      handleCodexCommand(
+        createContext("binding current", undefined, {
+          getCurrentConversationBinding,
+        }),
+        { deps },
+      ),
+    ).resolves.toEqual({
+      text: "Usage: /codex binding",
+    });
+
+    expect(readCodexStatusProbes).not.toHaveBeenCalled();
+    expect(listCodexAppServerModels).not.toHaveBeenCalled();
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    expect(getCurrentConversationBinding).not.toHaveBeenCalled();
+  });
+
   it("formats generated account/read responses", async () => {
     const safeCodexControlRequest = vi
       .fn()

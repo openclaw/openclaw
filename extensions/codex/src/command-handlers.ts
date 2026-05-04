@@ -186,11 +186,17 @@ export async function handleCodexSubcommand(
     return { text: buildHelp() };
   }
   if (normalized === "status") {
+    if (rest.length > 0) {
+      return { text: "Usage: /codex status" };
+    }
     return {
       text: formatCodexStatus(await deps.readCodexStatusProbes(options.pluginConfig, ctx.config)),
     };
   }
   if (normalized === "models") {
+    if (rest.length > 0) {
+      return { text: "Usage: /codex models" };
+    }
     return {
       text: formatModels(
         await deps.listCodexAppServerModels(
@@ -215,6 +221,9 @@ export async function handleCodexSubcommand(
     return { text: await detachConversation(deps, ctx) };
   }
   if (normalized === "binding") {
+    if (rest.length > 0) {
+      return { text: "Usage: /codex binding" };
+    }
     return { text: await describeConversationBinding(deps, ctx) };
   }
   if (normalized === "stop") {
@@ -274,6 +283,9 @@ export async function handleCodexSubcommand(
     };
   }
   if (normalized === "mcp") {
+    if (rest.length > 0) {
+      return { text: "Usage: /codex mcp" };
+    }
     return {
       text: formatList(
         await deps.codexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.listMcpServers, {
@@ -284,6 +296,9 @@ export async function handleCodexSubcommand(
     };
   }
   if (normalized === "skills") {
+    if (rest.length > 0) {
+      return { text: "Usage: /codex skills" };
+    }
     return {
       text: formatList(
         await deps.codexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}),
@@ -292,6 +307,9 @@ export async function handleCodexSubcommand(
     };
   }
   if (normalized === "account") {
+    if (rest.length > 0) {
+      return { text: "Usage: /codex account" };
+    }
     const [account, limits] = await Promise.all([
       deps.safeCodexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.account, {
         refreshToken: false,
