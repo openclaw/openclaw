@@ -1491,24 +1491,24 @@ export async function startGatewayServer(
     });
     if (!minimalTestGateway) {
       const handle = setTimeout(() => {
-        void (async () => {
-          const maintenance = await earlyRuntime.startMaintenance();
-          if (maintenance) {
+        void gatewayRuntimeServices.runGatewayPostReadyMaintenance({
+          startMaintenance: earlyRuntime.startMaintenance,
+          applyMaintenance: (maintenance) => {
             runtimeState.tickInterval = maintenance.tickInterval;
             runtimeState.healthInterval = maintenance.healthInterval;
             runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
             runtimeState.mediaCleanup = maintenance.mediaCleanup;
-          }
-          if (!gatewayCronStartHandled) {
+          },
+          shouldStartCron: () => !gatewayCronStartHandled,
+          markCronStartHandled: () => {
             gatewayCronStartHandled = true;
-            gatewayRuntimeServices.startGatewayCronWithLogging({
-              cron: runtimeState.cronState.cron,
-              logCron,
-            });
-          }
-          startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
-        })().catch((err) => {
-          log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
+          },
+          cron: runtimeState.cronState.cron,
+          logCron,
+          log,
+          recordPostReadyMemory: () => {
+            startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
+          },
         });
       }, POST_READY_MAINTENANCE_DELAY_MS);
       handle.unref?.();

@@ -5,6 +5,7 @@ import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snap
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
+import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 
 type GatewayRuntimeServiceLogger = {
   child: (name: string) => {
@@ -14,6 +15,12 @@ type GatewayRuntimeServiceLogger = {
   };
   error: (message: string) => void;
 };
+type GatewayPostReadyLogger = {
+  warn: (message: string) => void;
+};
+type GatewayMaintenanceHandles = NonNullable<
+  Awaited<ReturnType<typeof startGatewayMaintenanceTimers>>
+>;
 
 export type GatewayChannelManager = Parameters<
   typeof startChannelHealthMonitor
@@ -51,6 +58,34 @@ export function startGatewayCronWithLogging(params: {
   logCron: { error: (message: string) => void };
 }): void {
   void params.cron.start().catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
+}
+
+export async function runGatewayPostReadyMaintenance(params: {
+  startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
+  applyMaintenance: (maintenance: GatewayMaintenanceHandles) => void;
+  shouldStartCron: () => boolean;
+  markCronStartHandled: () => void;
+  cron: { start: () => Promise<void> };
+  logCron: { error: (message: string) => void };
+  log: GatewayPostReadyLogger;
+  recordPostReadyMemory: () => void;
+}): Promise<void> {
+  try {
+    const maintenance = await params.startMaintenance();
+    if (maintenance) {
+      params.applyMaintenance(maintenance);
+    }
+  } catch (err) {
+    params.log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
+  }
+  if (params.shouldStartCron()) {
+    params.markCronStartHandled();
+    startGatewayCronWithLogging({
+      cron: params.cron,
+      logCron: params.logCron,
+    });
+  }
+  params.recordPostReadyMemory();
 }
 
 function recoverPendingOutboundDeliveries(params: {
