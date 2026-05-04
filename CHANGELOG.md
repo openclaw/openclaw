@@ -1631,6 +1631,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- amazon-bedrock/discovery: backfill Claude 3.x context-window entries (Claude 3 Opus, Claude 3 Sonnet, Claude 3.5 Sonnet v1/v2, Claude 3.7 Sonnet, Claude Opus 4) and add an `anthropic.claude-(3|4)*` family fallback so unlisted Bedrock variants and region-prefixed inference profiles resolve to 200K instead of inheriting the conservative 32K discovery default and triggering compaction-restart loops on prompts that fit. Fixes #73328. Thanks @markthebest12.
 - Gateway/device tokens: stop echoing rotated bearer tokens from shared/admin `device.token.rotate` responses while preserving the same-device token handoff needed by token-only clients before reconnect. (#66773) Thanks @MoerAI.
 - Agents/sessions_spawn: resolve configured bare model aliases for spawn model overrides using the target agent runtime default provider, carrying forward the alias-specific #69029 review fixes from #59681 without the unrelated active-session pruning path. Fixes #59681. Thanks @HowdyDooToYou.
 - Control UI/Talk: keep Google Live browser sessions on the WebSocket transport instead of falling back to WebRTC, validate browser Google Live WebSocket endpoints, cap Gateway relay sessions per browser connection, and remove stale browser-native voice buttons that did not use the configured Talk/TTS provider. Thanks @BunsDev.

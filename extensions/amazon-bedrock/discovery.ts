@@ -44,7 +44,12 @@ const DEFAULT_MAX_TOKENS = 4096;
  */
 const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic Claude
+  "anthropic.claude-3-opus-20240229-v1:0": 200_000,
+  "anthropic.claude-3-sonnet-20240229-v1:0": 200_000,
+  "anthropic.claude-3-5-sonnet-20240620-v1:0": 200_000,
+  "anthropic.claude-3-5-sonnet-20241022-v2:0": 200_000,
   "anthropic.claude-3-7-sonnet-20250219-v1:0": 200_000,
+  "anthropic.claude-opus-4-20250514-v1:0": 200_000,
   "anthropic.claude-opus-4-7": 1_000_000,
   "anthropic.claude-opus-4-6-v1": 1_000_000,
   "anthropic.claude-opus-4-6-v1:0": 1_000_000,
@@ -113,9 +118,22 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
 };
 
 /**
- * Resolve the real context window for a Bedrock model ID.
- * Strips inference profile prefixes (us., eu., ap., global.) before lookup.
+ * Family-level context window fallbacks for Bedrock model IDs that are not
+ * explicitly listed in `KNOWN_CONTEXT_WINDOWS`. AWS does not expose token
+ * limits via the foundation-models API, so without these patterns any newly
+ * released or undocumented variant within a known family would silently inherit
+ * the conservative discovery default and trigger spurious context-overflow
+ * compaction loops on prompts that the model can actually handle. Each entry
+ * matches against the inference-profile-stripped model id.
+ *
+ * See https://github.com/openclaw/openclaw/issues/73328.
  */
+const KNOWN_CONTEXT_WINDOW_FAMILIES: ReadonlyArray<{ pattern: RegExp; contextWindow: number }> = [
+  // All Anthropic Claude 3.x and 4.x models on Bedrock are 200K unless an
+  // explicit entry above raises the value (e.g. the 1M Claude 4.6/4.7 tier).
+  { pattern: /^anthropic\.claude-(?:3|4)/, contextWindow: 200_000 },
+];
+
 function resolveKnownContextWindow(modelId: string): number | undefined {
   const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
   const candidates = [modelId, stripped];
@@ -129,6 +147,13 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
       KNOWN_CONTEXT_WINDOWS[withoutVersionSuffix] !== undefined
     ) {
       return KNOWN_CONTEXT_WINDOWS[withoutVersionSuffix];
+    }
+  }
+  for (const candidate of candidates) {
+    for (const family of KNOWN_CONTEXT_WINDOW_FAMILIES) {
+      if (family.pattern.test(candidate)) {
+        return family.contextWindow;
+      }
     }
   }
   return undefined;
