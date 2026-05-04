@@ -8,6 +8,7 @@ import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
+import type { EmbeddedPiMcpPolicy } from "../../embedded-pi-mcp.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type {
@@ -99,6 +100,12 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Command name hint for narrow runtime/plugin gating. */
+  commandName?: string;
+  /** Effective tool policy for narrow runtime/plugin gating. */
+  effectiveToolPolicy?: string;
+  /** Embedded MCP policy applied before MCP runtime creation/materialization. */
+  embeddedMcpPolicy?: EmbeddedPiMcpPolicy;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */

@@ -1,3 +1,4 @@
+import { appendAgentExecDebug } from "../../cli/agent-exec-debug.js";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
 import * as externalCliSync from "./external-cli-sync.js";
@@ -34,16 +35,34 @@ function normalizeExternalAuthProfile(
   };
 }
 
-function resolveExternalAuthProfileMap(params: {
-  store: AuthProfileStore;
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ExternalAuthProfileMap {
+type ExternalAuthRuntimeContextParams = {
+  commandName?: string;
+  effectiveToolPolicy?: string;
+};
+
+function resolveExternalAuthProfileMap(
+  params: {
+    store: AuthProfileStore;
+    agentDir?: string;
+    env?: NodeJS.ProcessEnv;
+  } & ExternalAuthRuntimeContextParams,
+): ExternalAuthProfileMap {
   const env = params.env ?? process.env;
+  const usesRuntimeOverride = resolveExternalAuthProfilesForRuntime != null;
   const resolveProfiles =
     resolveExternalAuthProfilesForRuntime ?? resolveExternalAuthProfilesWithPlugins;
+  appendAgentExecDebug("external-auth", "externalAuth_resolveProfiles_call", {
+    raw_commandName: params.commandName ?? null,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+    has_commandName: params.commandName !== undefined,
+    has_effectiveToolPolicy: params.effectiveToolPolicy !== undefined,
+    uses_runtime_override: usesRuntimeOverride,
+    selected_resolver: usesRuntimeOverride ? "runtime_override" : "with_plugins",
+  });
   const profiles = resolveProfiles({
     env,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     context: {
       config: undefined,
       agentDir: params.agentDir,
@@ -72,43 +91,53 @@ function resolveExternalAuthProfileMap(params: {
   return resolved;
 }
 
-function listRuntimeExternalAuthProfiles(params: {
-  store: AuthProfileStore;
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): RuntimeExternalOAuthProfile[] {
+function listRuntimeExternalAuthProfiles(
+  params: {
+    store: AuthProfileStore;
+    agentDir?: string;
+    env?: NodeJS.ProcessEnv;
+  } & ExternalAuthRuntimeContextParams,
+): RuntimeExternalOAuthProfile[] {
   return Array.from(
     resolveExternalAuthProfileMap({
       store: params.store,
       agentDir: params.agentDir,
       env: params.env,
+      commandName: params.commandName,
+      effectiveToolPolicy: params.effectiveToolPolicy,
     }).values(),
   );
 }
 
 export function overlayExternalAuthProfiles(
   store: AuthProfileStore,
-  params?: { agentDir?: string; env?: NodeJS.ProcessEnv },
+  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalAuthRuntimeContextParams,
 ): AuthProfileStore {
   const profiles = listRuntimeExternalAuthProfiles({
     store,
     agentDir: params?.agentDir,
     env: params?.env,
+    commandName: params?.commandName,
+    effectiveToolPolicy: params?.effectiveToolPolicy,
   });
   return overlayRuntimeExternalOAuthProfiles(store, profiles);
 }
 
-export function shouldPersistExternalAuthProfile(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  credential: OAuthCredential;
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
+export function shouldPersistExternalAuthProfile(
+  params: {
+    store: AuthProfileStore;
+    profileId: string;
+    credential: OAuthCredential;
+    agentDir?: string;
+    env?: NodeJS.ProcessEnv;
+  } & ExternalAuthRuntimeContextParams,
+): boolean {
   const profiles = listRuntimeExternalAuthProfiles({
     store: params.store,
     agentDir: params.agentDir,
     env: params.env,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
   });
   return shouldPersistRuntimeExternalOAuthProfile({
     profileId: params.profileId,

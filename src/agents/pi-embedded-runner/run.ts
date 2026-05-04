@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import process from "node:process";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
@@ -204,6 +205,22 @@ function backfillSessionKey(params: {
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
+  const emitPostPrepareDebug = (stream: string, data?: Record<string, unknown>) => {
+    if (process.env.OPENCLAW_AGENT_EXEC_DEBUG !== "1") {
+      return;
+    }
+    params.onAgentEvent?.({ stream, data: data ?? {} });
+  };
+  emitPostPrepareDebug("debug", {
+    event: "embeddedRunner_runEmbeddedPiAgent_enter",
+    raw_commandName: params.commandName ?? null,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+    has_commandName: typeof params.commandName === "string" && params.commandName.length > 0,
+    has_effectiveToolPolicy:
+      typeof params.effectiveToolPolicy === "string" && params.effectiveToolPolicy.length > 0,
+    will_forward_to_ensureOpenClawModelsJson: true,
+    will_forward_to_resolveModelAsync: true,
+  });
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
@@ -277,6 +294,8 @@ export async function runEmbeddedPiAgent(
         config: params.config,
         workspaceDir: resolvedWorkspace,
         allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+        commandName: params.commandName,
+        effectiveToolPolicy: params.effectiveToolPolicy,
       });
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
@@ -288,7 +307,19 @@ export async function runEmbeddedPiAgent(
         agentId: params.agentId,
         sessionKey: normalizedSessionKey,
       });
-      await ensureOpenClawModelsJson(params.config, agentDir);
+      emitPostPrepareDebug("debug", {
+        event: "embeddedRunner_before_ensureOpenClawModelsJson",
+        raw_commandName: params.commandName ?? null,
+        raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+        has_commandName: typeof params.commandName === "string" && params.commandName.length > 0,
+        has_effectiveToolPolicy:
+          typeof params.effectiveToolPolicy === "string" && params.effectiveToolPolicy.length > 0,
+        calls_ensureOpenClawModelsJson: true,
+      });
+      await ensureOpenClawModelsJson(params.config, agentDir, {
+        commandName: params.commandName,
+        effectiveToolPolicy: params.effectiveToolPolicy,
+      });
       const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
@@ -321,6 +352,10 @@ export async function runEmbeddedPiAgent(
         modelId,
         agentDir,
         params.config,
+        {
+          commandName: params.commandName,
+          effectiveToolPolicy: params.effectiveToolPolicy,
+        },
       );
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
@@ -342,6 +377,8 @@ export async function runEmbeddedPiAgent(
 
       const authStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
+        commandName: params.commandName,
+        effectiveToolPolicy: params.effectiveToolPolicy,
       });
       const preferredProfileId = params.authProfileId?.trim();
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
@@ -686,6 +723,11 @@ export async function runEmbeddedPiAgent(
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
           }
 
+          emitPostPrepareDebug("post_prepare_debug:before_embedded_runner", {
+            provider,
+            model: modelId,
+            session_id: params.sessionId,
+          });
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
             sessionKey: resolvedSessionKey,
@@ -776,6 +818,7 @@ export async function runEmbeddedPiAgent(
             bootstrapContextMode: params.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             toolsAllow: params.toolsAllow,
+            embeddedMcpPolicy: params.embeddedMcpPolicy,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             requireExplicitMessageTarget: params.requireExplicitMessageTarget,
@@ -931,6 +974,7 @@ export async function runEmbeddedPiAgent(
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
+                    embeddedMcpPolicy: params.embeddedMcpPolicy,
                   }),
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
@@ -1073,6 +1117,7 @@ export async function runEmbeddedPiAgent(
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
+                    embeddedMcpPolicy: params.embeddedMcpPolicy,
                   }),
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,

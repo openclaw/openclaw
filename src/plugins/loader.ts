@@ -7,6 +7,7 @@ import {
   restoreRegisteredAgentHarnesses,
 } from "../agents/harness/registry.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { appendAgentExecDebug } from "../cli/agent-exec-debug.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -82,7 +83,12 @@ import {
   normalizePluginIdScope,
   serializePluginIdScope,
 } from "./plugin-scope.js";
-import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
+import {
+  createEmptyPluginRegistry,
+  createPluginRegistry,
+  type PluginRecord,
+  type PluginRegistry,
+} from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import {
   getActivePluginRegistry,
@@ -133,6 +139,8 @@ export type PluginLoadOptions = {
   mode?: "full" | "validate";
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   /**
    * Prefer `setupEntry` for configured channel plugins that explicitly opt in
    * via package metadata because their setup entry covers the pre-listen startup surface.
@@ -266,6 +274,37 @@ function profilePluginLoaderSync<T>(params: {
       `[plugin-load-profile] phase=${params.phase} plugin=${params.pluginId ?? "(core)"} elapsedMs=${elapsedMs.toFixed(1)} source=${params.source}`,
     );
   }
+}
+
+function appendPluginLoaderDebug(event: string, extra: Record<string, unknown> = {}) {
+  let jobStatus: unknown;
+  let proofReady = false;
+  const argv = process.argv;
+  const jobPathIndex = argv.indexOf("--job-path");
+  const jobPathValue = jobPathIndex >= 0 ? argv[jobPathIndex + 1] : undefined;
+  if (typeof jobPathValue === "string" && jobPathValue.trim().length > 0) {
+    const resolvedJobPath = path.resolve(jobPathValue);
+    const jobFolder = path.dirname(resolvedJobPath);
+    try {
+      const job = JSON.parse(fs.readFileSync(resolvedJobPath, "utf8")) as Record<string, unknown>;
+      jobStatus = job.status;
+    } catch {}
+    try {
+      const proofPath = path.join(jobFolder, "agent-proof.json");
+      if (fs.existsSync(proofPath)) {
+        const proof = JSON.parse(fs.readFileSync(proofPath, "utf8")) as Record<string, unknown>;
+        proofReady = proof.ready_for_dom_review === true;
+      }
+    } catch {}
+  }
+  appendAgentExecDebug("plugin-loader", event, {
+    command_name: "agent-exec",
+    job_status: jobStatus,
+    proof_ready: proofReady,
+    force_rerun: false,
+    early_refusal_eligible: false,
+    ...extra,
+  });
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
@@ -411,17 +450,65 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
 function runPluginRegisterSync(
   register: NonNullable<OpenClawPluginDefinition["register"]>,
   api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
+  debugContext?: {
+    pluginId?: string;
+    sourcePath?: string;
+    registrationMode?: string | null;
+  },
 ): void {
   const guarded = createGuardedPluginRegistrationApi(api);
+  appendPluginLoaderDebug("runPluginRegisterSync_enter", {
+    plugin_id: debugContext?.pluginId,
+    source_path: debugContext?.sourcePath,
+    registration_mode: debugContext?.registrationMode,
+  });
   try {
+    appendPluginLoaderDebug("runPluginRegisterSync_before_register_call", {
+      plugin_id: debugContext?.pluginId,
+      source_path: debugContext?.sourcePath,
+      registration_mode: debugContext?.registrationMode,
+    });
     const result = register(guarded.api);
+    appendPluginLoaderDebug("runPluginRegisterSync_after_register_call", {
+      plugin_id: debugContext?.pluginId,
+      source_path: debugContext?.sourcePath,
+      registration_mode: debugContext?.registrationMode,
+    });
     if (isPromiseLike(result)) {
+      appendPluginLoaderDebug("runPluginRegisterSync_promise_return_error", {
+        plugin_id: debugContext?.pluginId,
+        source_path: debugContext?.sourcePath,
+        registration_mode: debugContext?.registrationMode,
+      });
       void Promise.resolve(result).catch(() => {});
       throw new Error("plugin register must be synchronous");
     }
+    appendPluginLoaderDebug("runPluginRegisterSync_after_promise_check", {
+      plugin_id: debugContext?.pluginId,
+      source_path: debugContext?.sourcePath,
+      registration_mode: debugContext?.registrationMode,
+    });
+  } catch (error) {
+    appendPluginLoaderDebug("runPluginRegisterSync_error", {
+      plugin_id: debugContext?.pluginId,
+      source_path: debugContext?.sourcePath,
+      registration_mode: debugContext?.registrationMode,
+      error_message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   } finally {
+    appendPluginLoaderDebug("runPluginRegisterSync_finally", {
+      plugin_id: debugContext?.pluginId,
+      source_path: debugContext?.sourcePath,
+      registration_mode: debugContext?.registrationMode,
+    });
     guarded.close();
   }
+  appendPluginLoaderDebug("runPluginRegisterSync_exit", {
+    plugin_id: debugContext?.pluginId,
+    source_path: debugContext?.sourcePath,
+    registration_mode: debugContext?.registrationMode,
+  });
 }
 
 /**
@@ -643,7 +730,9 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.coreGatewayHandlers !== undefined ||
     options.includeSetupOnlyChannelPlugins === true ||
     options.preferSetupRuntimeForChannelPlugins === true ||
-    options.loadModules === false
+    options.loadModules === false ||
+    options.commandName !== undefined ||
+    options.effectiveToolPolicy !== undefined
   );
 }
 
@@ -897,6 +986,9 @@ function loadBundledRuntimeChannelPlugin(params: {
   registration: ReturnType<typeof resolveBundledRuntimeChannelRegistration>;
 }): {
   plugin?: ChannelPlugin;
+  skipped?: true;
+  skipReason?: string;
+  skipImporterPath?: string;
   loadError?: unknown;
 } {
   if (typeof params.registration.loadChannelPlugin !== "function") {
@@ -904,6 +996,24 @@ function loadBundledRuntimeChannelPlugin(params: {
   }
   try {
     const loadedPlugin = params.registration.loadChannelPlugin();
+    if (
+      loadedPlugin &&
+      typeof loadedPlugin === "object" &&
+      "skipped" in loadedPlugin &&
+      (loadedPlugin as { skipped?: unknown }).skipped === true
+    ) {
+      const skipResult = loadedPlugin as {
+        skipped: true;
+        reason?: unknown;
+        importerPath?: unknown;
+      };
+      return {
+        skipped: true,
+        skipReason: typeof skipResult.reason === "string" ? skipResult.reason : undefined,
+        skipImporterPath:
+          typeof skipResult.importerPath === "string" ? skipResult.importerPath : undefined,
+      };
+    }
     const loadedSecrets = params.registration.loadChannelSecrets?.();
     if (!loadedPlugin || typeof loadedPlugin !== "object") {
       return {};
@@ -1417,7 +1527,24 @@ function activatePluginRegistry(
   initializeGlobalHookRunner(registry);
 }
 
+function shouldSkipCoordinationOnlyPluginLoad(options: PluginLoadOptions): boolean {
+  return (
+    options.commandName === "agent-exec" && options.effectiveToolPolicy === "coordination_only"
+  );
+}
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+  const skipCoordinationOnlyPluginLoad = shouldSkipCoordinationOnlyPluginLoad(options);
+  appendPluginLoaderDebug("loadOpenClawPlugins_coordination_only_skip_decision", {
+    raw_commandName: options.commandName,
+    raw_effectiveToolPolicy: options.effectiveToolPolicy,
+    skipCoordinationOnlyPluginLoad,
+  });
+  if (skipCoordinationOnlyPluginLoad) {
+    appendPluginLoaderDebug("loadOpenClawPlugins_coordination_only_skipped");
+    return createEmptyPluginRegistry();
+  }
+  appendPluginLoaderDebug("loadOpenClawPlugins_enter");
   // Snapshot (non-activating) loads must disable the cache to avoid storing a registry
   // whose commands were never globally registered.
   if (options.activate === false && options.cache !== false) {
@@ -1582,11 +1709,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       activateGlobalSideEffects: shouldActivate,
     });
 
+    appendPluginLoaderDebug("loadOpenClawPlugins_before_discovery");
     const discovery = discoverOpenClawPlugins({
       workspaceDir: options.workspaceDir,
       extraPaths: normalized.loadPaths,
       cache: options.cache,
       env,
+    });
+    appendPluginLoaderDebug("loadOpenClawPlugins_after_discovery", {
+      candidate_count: discovery.candidates.length,
+      discovery_diagnostic_count: discovery.diagnostics.length,
+    });
+    appendPluginLoaderDebug("loadOpenClawPlugins_before_manifest_registry_load", {
+      candidate_count: discovery.candidates.length,
     });
     const manifestRegistry = loadPluginManifestRegistry({
       config: cfg,
@@ -1595,6 +1730,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       env,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
+    });
+    appendPluginLoaderDebug("loadOpenClawPlugins_after_manifest_registry_load", {
+      manifest_plugin_count: manifestRegistry.plugins.length,
+      manifest_diagnostic_count: manifestRegistry.diagnostics.length,
     });
     pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
     warnWhenAllowlistIsOpen({
@@ -1632,6 +1771,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
     });
 
+    appendPluginLoaderDebug("loadOpenClawPlugins_after_candidate_order", {
+      ordered_candidate_count: orderedCandidates.length,
+      ordered_candidate_ids: orderedCandidates
+        .map((candidate) => manifestByRoot.get(candidate.rootDir)?.id)
+        .filter((value): value is string => typeof value === "string"),
+    });
     const seenIds = new Map<string, PluginRecord["origin"]>();
     const bundledRuntimeDepsRetainSpecsByInstallRoot = new Map<string, string[]>();
     const memorySlot = normalized.slots.memory;
@@ -1640,8 +1785,20 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
 
     for (const candidate of orderedCandidates) {
-      const manifestRecord = manifestByRoot.get(candidate.rootDir);
+      const activeManifestRecord = manifestByRoot.get(candidate.rootDir);
+      const activePluginId = activeManifestRecord?.id;
+      appendPluginLoaderDebug("loadOpenClawPlugins_before_candidate_evaluation", {
+        plugin_id: activePluginId,
+        source_path: candidate.source,
+        candidate_origin: candidate.origin,
+      });
+      const manifestRecord = activeManifestRecord;
       if (!manifestRecord) {
+        appendPluginLoaderDebug("loadOpenClawPlugins_candidate_skipped", {
+          plugin_id: activePluginId,
+          source_path: candidate.source,
+          skip_reason: "manifest_record_missing",
+        });
         continue;
       }
       const pluginId = manifestRecord.id;
@@ -1652,6 +1809,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       // Filter again at import time as a final guard. The earlier manifest filter keeps
       // warnings scoped; this one prevents loading/registering anything outside the scope.
       if (!matchesRequestedScope) {
+        appendPluginLoaderDebug("loadOpenClawPlugins_candidate_skipped", {
+          plugin_id: pluginId,
+          source_path: candidate.source,
+          skip_reason: "outside_requested_scope",
+        });
         continue;
       }
       const activationState = resolveEffectivePluginActivationState({
@@ -1689,6 +1851,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
 
+      appendPluginLoaderDebug("loadOpenClawPlugins_before_enable_state_resolution", {
+        plugin_id: pluginId,
+        source_path: candidate.source,
+      });
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
         origin: candidate.origin,
@@ -1696,6 +1862,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rootConfig: cfg,
         enabledByDefault: manifestRecord.enabledByDefault,
         activationSource,
+      });
+      appendPluginLoaderDebug("loadOpenClawPlugins_after_enable_state_resolution", {
+        plugin_id: pluginId,
+        source_path: candidate.source,
+        enabled: enableState.enabled,
+        enable_reason: enableState.reason,
       });
       const entry = normalized.entries[pluginId];
       const record = createPluginRecord({
@@ -1719,6 +1891,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.configUiHints = manifestRecord.configUiHints;
       record.configJsonSchema = manifestRecord.configSchema;
       const pushPluginLoadError = (message: string) => {
+        appendPluginLoaderDebug("loadOpenClawPlugins_candidate_error_recorded", {
+          plugin_id: pluginId,
+          source_path: candidate.source,
+          error_message: message,
+        });
         record.status = "error";
         record.error = message;
         record.failedAt = new Date();
@@ -1735,6 +1912,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
 
       if (shouldLoadModules && candidate.origin === "bundled" && enableState.enabled) {
+        appendPluginLoaderDebug("loadOpenClawPlugins_before_bundled_runtime_dependency_prep", {
+          plugin_id: pluginId,
+          source_path: candidate.source,
+        });
         try {
           const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot);
           const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
@@ -1745,6 +1926,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             config: cfg,
             retainSpecs,
             installDeps: options.bundledRuntimeDepsInstaller,
+          });
+          appendPluginLoaderDebug("loadOpenClawPlugins_after_bundled_runtime_dependency_prep", {
+            plugin_id: pluginId,
+            source_path: candidate.source,
+            installed_spec_count: depsInstallResult.installedSpecs.length,
           });
           if (depsInstallResult.installedSpecs.length > 0) {
             bundledRuntimeDepsRetainSpecsByInstallRoot.set(
@@ -1785,6 +1971,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           : null;
 
       if (!registrationMode) {
+        appendPluginLoaderDebug("loadOpenClawPlugins_candidate_skipped", {
+          plugin_id: pluginId,
+          source_path: candidate.source,
+          skip_reason: "no_registration_mode",
+        });
         record.status = "disabled";
         record.error = enableState.reason;
         markPluginActivationDisabled(record, enableState.reason);
@@ -1931,6 +2122,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (!shouldLoadModules) {
+        appendPluginLoaderDebug("loadOpenClawPlugins_candidate_skipped", {
+          plugin_id: pluginId,
+          source_path: candidate.source,
+          skip_reason: "module_loading_disabled",
+        });
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
         continue;
@@ -1957,6 +2153,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const safeImportSource = toSafeImportPath(safeSource);
 
       let mod: OpenClawPluginModule | null = null;
+      appendPluginLoaderDebug("loadOpenClawPlugins_before_candidate_module_load", {
+        plugin_id: pluginId,
+        source_path: safeSource,
+        registration_mode: registrationMode,
+      });
       try {
         // Track the plugin as imported once module evaluation begins. Top-level
         // code may have already executed even if evaluation later throws.
@@ -1966,6 +2167,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           pluginId: record.id,
           source: safeSource,
           run: () => getJiti(safeSource)(safeImportSource) as OpenClawPluginModule,
+        });
+        appendPluginLoaderDebug("loadOpenClawPlugins_after_candidate_module_load", {
+          plugin_id: pluginId,
+          source_path: safeSource,
+          registration_mode: registrationMode,
         });
       } catch (err) {
         recordPluginError({
@@ -1980,6 +2186,23 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
           diagnosticMessagePrefix: "failed to load plugin: ",
         });
+        continue;
+      }
+
+      if (
+        skipCoordinationOnlyPluginLoad &&
+        (registrationMode === "setup-only" || registrationMode === "setup-runtime")
+      ) {
+        appendPluginLoaderDebug("loadOpenClawPlugins_candidate_skipped", {
+          plugin_id: pluginId,
+          source_path: candidate.source,
+          skip_reason: "coordination_only_channel_registration_disabled",
+        });
+        record.status = "disabled";
+        record.error = "coordination_only_channel_registration_disabled";
+        markPluginActivationDisabled(record, record.error);
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
         continue;
       }
 
@@ -2261,8 +2484,55 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
       const previousMemoryRuntime = getMemoryRuntime();
 
+      appendPluginLoaderDebug("loadOpenClawPlugins_before_candidate_register", {
+        plugin_id: pluginId,
+        source_path: candidate.source,
+        registration_mode: registrationMode,
+      });
+      appendPluginLoaderDebug("loadOpenClawPlugins_register_function_identity", {
+        plugin_id: pluginId,
+        source_path: candidate.source,
+        registration_mode: registrationMode,
+        register_typeof: typeof register,
+        register_name: typeof register === "function" ? register.name : undefined,
+        register_equals_def_register:
+          resolved.definition !== undefined &&
+          typeof resolved.definition === "object" &&
+          "register" in resolved.definition
+            ? register === resolved.definition.register
+            : undefined,
+        def_has_own_register:
+          resolved.definition !== undefined && typeof resolved.definition === "object"
+            ? Object.prototype.hasOwnProperty.call(resolved.definition, "register")
+            : undefined,
+        def_has_own_activate:
+          resolved.definition !== undefined && typeof resolved.definition === "object"
+            ? Object.prototype.hasOwnProperty.call(resolved.definition, "activate")
+            : undefined,
+        def_keys:
+          resolved.definition !== undefined && typeof resolved.definition === "object"
+            ? Object.keys(resolved.definition).slice(0, 24)
+            : undefined,
+        def_kind:
+          resolved.definition !== undefined && typeof resolved.definition === "object"
+            ? (resolved.definition as { kind?: unknown }).kind
+            : undefined,
+        debug_writer_defined:
+          typeof (globalThis as { __openclawAppendAgentExecDebug?: unknown })
+            .__openclawAppendAgentExecDebug === "function",
+        debug_env_enabled: process.env.OPENCLAW_AGENT_EXEC_DEBUG === "1",
+      });
       try {
-        runPluginRegisterSync(register, api);
+        runPluginRegisterSync(register, api, {
+          pluginId: pluginId,
+          sourcePath: candidate.source,
+          registrationMode: registrationMode,
+        });
+        appendPluginLoaderDebug("loadOpenClawPlugins_after_candidate_register", {
+          plugin_id: pluginId,
+          source_path: candidate.source,
+          registration_mode: registrationMode,
+        });
         // Snapshot loads should not replace process-global runtime prompt state.
         if (!shouldActivate) {
           restoreRegisteredAgentHarnesses(previousAgentHarnesses);
@@ -2328,7 +2598,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       env,
     });
 
+    appendPluginLoaderDebug("loadOpenClawPlugins_before_maybeThrowOnPluginLoadError", {
+      error_plugin_count: registry.plugins.filter((plugin) => plugin.status === "error").length,
+    });
     maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
+    appendPluginLoaderDebug("loadOpenClawPlugins_after_maybeThrowOnPluginLoadError", {
+      error_plugin_count: registry.plugins.filter((plugin) => plugin.status === "error").length,
+    });
 
     if (shouldActivate && options.mode !== "validate") {
       const failedPlugins = registry.plugins.filter((plugin) => plugin.failedAt != null);
@@ -2357,10 +2633,25 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
     }
     if (shouldActivate) {
+      appendPluginLoaderDebug("loadOpenClawPlugins_before_registry_activation", {
+        plugin_count: registry.plugins.length,
+      });
       activatePluginRegistry(registry, cacheKey, runtimeSubagentMode, options.workspaceDir);
+      appendPluginLoaderDebug("loadOpenClawPlugins_after_registry_activation", {
+        plugin_count: registry.plugins.length,
+      });
     }
+    appendPluginLoaderDebug("loadOpenClawPlugins_exit", {
+      plugin_count: registry.plugins.length,
+    });
     return registry;
+  } catch (error) {
+    appendPluginLoaderDebug("loadOpenClawPlugins_error", {
+      error_message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   } finally {
+    appendPluginLoaderDebug("loadOpenClawPlugins_finally");
     inFlightPluginRegistryLoads.delete(cacheKey);
   }
 }

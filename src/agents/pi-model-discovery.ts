@@ -6,6 +6,7 @@ import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
+import { appendAgentExecDebug } from "../cli/agent-exec-debug.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
@@ -62,7 +63,14 @@ function createInMemoryAuthStorageBackend(
   };
 }
 
-export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
+export function normalizeDiscoveredPiModel<T>(
+  value: T,
+  agentDir: string,
+  options?: {
+    commandName?: string;
+    effectiveToolPolicy?: string;
+  },
+): T {
   if (!isRecord(value)) {
     return value;
   }
@@ -77,6 +85,8 @@ export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
   const pluginNormalized =
     normalizeProviderResolvedModelWithPlugin({
       provider: model.provider,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
       context: {
         provider: model.provider,
         modelId: model.id,
@@ -87,6 +97,8 @@ export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
   const compatNormalized =
     applyProviderResolvedModelCompatWithPlugins({
       provider: model.provider,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
       context: {
         provider: model.provider,
         modelId: model.id,
@@ -97,6 +109,8 @@ export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
   const transportNormalized =
     applyProviderResolvedTransportWithPlugin({
       provider: model.provider,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
       context: {
         provider: model.provider,
         modelId: model.id,
@@ -136,6 +150,10 @@ function createOpenClawModelRegistry(
   authStorage: PiAuthStorage,
   modelsJsonPath: string,
   agentDir: string,
+  options?: {
+    commandName?: string;
+    effectiveToolPolicy?: string;
+  },
 ): PiModelRegistry {
   const registry = instantiatePiModelRegistry(authStorage, modelsJsonPath);
   const getAll = registry.getAll.bind(registry);
@@ -143,11 +161,11 @@ function createOpenClawModelRegistry(
   const find = registry.find.bind(registry);
 
   registry.getAll = () =>
-    getAll().map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
+    getAll().map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir, options));
   registry.getAvailable = () =>
-    getAvailable().map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
+    getAvailable().map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir, options));
   registry.find = (provider: string, modelId: string) =>
-    normalizeDiscoveredPiModel(find(provider, modelId), agentDir);
+    normalizeDiscoveredPiModel(find(provider, modelId), agentDir, options);
 
   return registry;
 }
@@ -264,8 +282,20 @@ export function addEnvBackedPiCredentials(
   return next;
 }
 
-export function resolvePiCredentialsForDiscovery(agentDir: string): PiCredentialMap {
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+type PiModelDiscoveryRuntimeContextParams = {
+  commandName?: string;
+  effectiveToolPolicy?: string;
+};
+
+export function resolvePiCredentialsForDiscovery(
+  agentDir: string,
+  options?: PiModelDiscoveryRuntimeContextParams,
+): PiCredentialMap {
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+    commandName: options?.commandName,
+    effectiveToolPolicy: options?.effectiveToolPolicy,
+  });
   const credentials = addEnvBackedPiCredentials(resolvePiCredentialMapFromStore(store));
   for (const provider of resolveRuntimeSyntheticAuthProviderRefs()) {
     if (credentials[provider]) {
@@ -273,6 +303,8 @@ export function resolvePiCredentialsForDiscovery(agentDir: string): PiCredential
     }
     const resolved = resolveProviderSyntheticAuthWithPlugin({
       provider,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
       context: {
         config: undefined,
         provider,
@@ -292,13 +324,39 @@ export function resolvePiCredentialsForDiscovery(agentDir: string): PiCredential
 }
 
 // Compatibility helpers for pi-coding-agent 0.50+ (discover* helpers removed).
-export function discoverAuthStorage(agentDir: string): PiAuthStorage {
-  const credentials = resolvePiCredentialsForDiscovery(agentDir);
+export function discoverAuthStorage(
+  agentDir: string,
+  options?: PiModelDiscoveryRuntimeContextParams,
+): PiAuthStorage {
+  appendAgentExecDebug(
+    "pi-model-discovery",
+    "piModelDiscovery_discoverAuthStorage_before_resolvePiCredentials",
+    {
+      raw_commandName: options?.commandName ?? null,
+      raw_effectiveToolPolicy: options?.effectiveToolPolicy ?? null,
+      has_commandName: options?.commandName !== undefined,
+      has_effectiveToolPolicy: options?.effectiveToolPolicy !== undefined,
+      has_options: options !== undefined,
+    },
+  );
+  const credentials = resolvePiCredentialsForDiscovery(agentDir, options);
   const authPath = path.join(agentDir, "auth.json");
   scrubLegacyStaticAuthJsonEntriesForDiscovery(authPath);
   return createAuthStorage(PiAuthStorageClass, authPath, credentials);
 }
 
-export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return createOpenClawModelRegistry(authStorage, path.join(agentDir, "models.json"), agentDir);
+export function discoverModels(
+  authStorage: PiAuthStorage,
+  agentDir: string,
+  options?: {
+    commandName?: string;
+    effectiveToolPolicy?: string;
+  },
+): PiModelRegistry {
+  return createOpenClawModelRegistry(
+    authStorage,
+    path.join(agentDir, "models.json"),
+    agentDir,
+    options,
+  );
 }

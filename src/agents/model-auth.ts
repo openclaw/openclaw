@@ -1,5 +1,6 @@
 import path from "node:path";
 import { type Api, type Model } from "@mariozechner/pi-ai";
+import { appendAgentExecDebug } from "../cli/agent-exec-debug.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
@@ -390,12 +391,24 @@ function shouldDeferSyntheticProfileAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   resolvedApiKey: string | undefined;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): boolean {
+  appendAgentExecDebug("model-auth", "modelAuth_shouldDeferSyntheticProfileAuth_enter", {
+    raw_commandName: params.commandName ?? null,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+    has_commandName: params.commandName !== undefined,
+    has_effectiveToolPolicy: params.effectiveToolPolicy !== undefined,
+    provider: params.provider,
+    has_resolvedApiKey: params.resolvedApiKey !== undefined,
+  });
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   return (
     shouldDeferProviderSyntheticProfileAuthWithPlugin({
       provider: params.provider,
       config: params.cfg,
+      commandName: params.commandName,
+      effectiveToolPolicy: params.effectiveToolPolicy,
       context: {
         config: params.cfg,
         provider: params.provider,
@@ -417,6 +430,8 @@ export async function resolveApiKeyForProvider(params: {
    *  silently overridden by env/config credentials. */
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
 
@@ -449,6 +464,8 @@ export async function resolveApiKeyForProvider(params: {
         cfg,
         provider,
         resolvedApiKey: resolved.apiKey,
+        commandName: params.commandName,
+        effectiveToolPolicy: params.effectiveToolPolicy,
       })
     ) {
       return resolveApiKeyForProvider({ ...params, profileId: undefined, lockedProfile: true }) //
@@ -522,6 +539,8 @@ export async function resolveApiKeyForProvider(params: {
             cfg,
             provider,
             resolvedApiKey: resolved.apiKey,
+            commandName: params.commandName,
+            effectiveToolPolicy: params.effectiveToolPolicy,
           })
         ) {
           deferredAuthProfileResult ??= result;
@@ -719,6 +738,8 @@ export async function getApiKeyForModel(params: {
   agentDir?: string;
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,

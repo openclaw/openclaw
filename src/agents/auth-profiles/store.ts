@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { appendAgentExecDebug } from "../../cli/agent-exec-debug.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { saveJsonFile } from "../../infra/json-file.js";
 import {
@@ -36,6 +37,8 @@ type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
   readOnly?: boolean;
   syncExternalCli?: boolean;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 };
 
 type SaveAuthProfileStoreOptions = {
@@ -52,6 +55,27 @@ const loadedAuthStoreCache = new Map<
     store: AuthProfileStore;
   }
 >();
+
+function appendAuthProfileStoreDebug(
+  event:
+    | "authProfileStore_loadAuthProfileStore_enter"
+    | "authProfileStore_loadAuthProfileStoreForRuntime_enter"
+    | "authProfileStore_ensureAuthProfileStore_enter"
+    | "authProfileStore_saveAuthProfileStore_enter"
+    | "authProfileStore_before_overlayExternalAuthProfiles"
+    | "authProfileStore_before_shouldPersistExternalAuthProfile",
+  params: {
+    auth_profile_store_branch: string;
+    raw_commandName?: string;
+    raw_effectiveToolPolicy?: string;
+    calls_overlayExternalAuthProfiles: boolean;
+    calls_shouldPersistExternalAuthProfile: boolean;
+    passes_commandName: boolean;
+    passes_effectiveToolPolicy: boolean;
+  },
+): void {
+  appendAgentExecDebug("auth-profile-store", event, params);
+}
 
 function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
   return structuredClone(store);
@@ -148,10 +172,39 @@ export async function updateAuthProfileStoreWithLock(params: {
   }
 }
 
-export function loadAuthProfileStore(): AuthProfileStore {
+export function loadAuthProfileStore(
+  options?: Pick<LoadAuthProfileStoreOptions, "commandName" | "effectiveToolPolicy">,
+): AuthProfileStore {
+  appendAuthProfileStoreDebug("authProfileStore_loadAuthProfileStore_enter", {
+    auth_profile_store_branch: "loadAuthProfileStore",
+    raw_commandName: options?.commandName,
+    raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+    calls_overlayExternalAuthProfiles: true,
+    calls_shouldPersistExternalAuthProfile: false,
+    passes_commandName:
+      typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+    passes_effectiveToolPolicy:
+      typeof options?.effectiveToolPolicy === "string" &&
+      options.effectiveToolPolicy.trim().length > 0,
+  });
   const asStore = loadPersistedAuthProfileStore();
   if (asStore) {
-    return overlayExternalAuthProfiles(asStore);
+    appendAuthProfileStoreDebug("authProfileStore_before_overlayExternalAuthProfiles", {
+      auth_profile_store_branch: "loadAuthProfileStore",
+      raw_commandName: options?.commandName,
+      raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+      calls_overlayExternalAuthProfiles: true,
+      calls_shouldPersistExternalAuthProfile: false,
+      passes_commandName:
+        typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+      passes_effectiveToolPolicy:
+        typeof options?.effectiveToolPolicy === "string" &&
+        options.effectiveToolPolicy.trim().length > 0,
+    });
+    return overlayExternalAuthProfiles(asStore, {
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
+    });
   }
   const legacy = loadLegacyAuthProfileStore();
   if (legacy) {
@@ -160,11 +213,41 @@ export function loadAuthProfileStore(): AuthProfileStore {
       profiles: {},
     };
     applyLegacyAuthStore(store, legacy);
-    return overlayExternalAuthProfiles(store);
+    appendAuthProfileStoreDebug("authProfileStore_before_overlayExternalAuthProfiles", {
+      auth_profile_store_branch: "loadAuthProfileStore",
+      raw_commandName: options?.commandName,
+      raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+      calls_overlayExternalAuthProfiles: true,
+      calls_shouldPersistExternalAuthProfile: false,
+      passes_commandName:
+        typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+      passes_effectiveToolPolicy:
+        typeof options?.effectiveToolPolicy === "string" &&
+        options.effectiveToolPolicy.trim().length > 0,
+    });
+    return overlayExternalAuthProfiles(store, {
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
+    });
   }
 
   const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
-  return overlayExternalAuthProfiles(store);
+  appendAuthProfileStoreDebug("authProfileStore_before_overlayExternalAuthProfiles", {
+    auth_profile_store_branch: "loadAuthProfileStore",
+    raw_commandName: options?.commandName,
+    raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+    calls_overlayExternalAuthProfiles: true,
+    calls_shouldPersistExternalAuthProfile: false,
+    passes_commandName:
+      typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+    passes_effectiveToolPolicy:
+      typeof options?.effectiveToolPolicy === "string" &&
+      options.effectiveToolPolicy.trim().length > 0,
+  });
+  return overlayExternalAuthProfiles(store, {
+    commandName: options?.commandName,
+    effectiveToolPolicy: options?.effectiveToolPolicy,
+  });
 }
 
 function loadAuthProfileStoreForAgent(
@@ -265,16 +348,58 @@ export function loadAuthProfileStoreForRuntime(
   agentDir?: string,
   options?: LoadAuthProfileStoreOptions,
 ): AuthProfileStore {
+  appendAuthProfileStoreDebug("authProfileStore_loadAuthProfileStoreForRuntime_enter", {
+    auth_profile_store_branch: "loadAuthProfileStoreForRuntime",
+    raw_commandName: options?.commandName,
+    raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+    calls_overlayExternalAuthProfiles: true,
+    calls_shouldPersistExternalAuthProfile: false,
+    passes_commandName:
+      typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+    passes_effectiveToolPolicy:
+      typeof options?.effectiveToolPolicy === "string" &&
+      options.effectiveToolPolicy.trim().length > 0,
+  });
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
-    return overlayExternalAuthProfiles(store, { agentDir });
+    appendAuthProfileStoreDebug("authProfileStore_before_overlayExternalAuthProfiles", {
+      auth_profile_store_branch: "loadAuthProfileStoreForRuntime",
+      raw_commandName: options?.commandName,
+      raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+      calls_overlayExternalAuthProfiles: true,
+      calls_shouldPersistExternalAuthProfile: false,
+      passes_commandName:
+        typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+      passes_effectiveToolPolicy:
+        typeof options?.effectiveToolPolicy === "string" &&
+        options.effectiveToolPolicy.trim().length > 0,
+    });
+    return overlayExternalAuthProfiles(store, {
+      agentDir,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
+    });
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
+  appendAuthProfileStoreDebug("authProfileStore_before_overlayExternalAuthProfiles", {
+    auth_profile_store_branch: "loadAuthProfileStoreForRuntime",
+    raw_commandName: options?.commandName,
+    raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+    calls_overlayExternalAuthProfiles: true,
+    calls_shouldPersistExternalAuthProfile: false,
+    passes_commandName:
+      typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+    passes_effectiveToolPolicy:
+      typeof options?.effectiveToolPolicy === "string" &&
+      options.effectiveToolPolicy.trim().length > 0,
+  });
   return overlayExternalAuthProfiles(mergeAuthProfileStores(mainStore, store), {
     agentDir,
+    commandName: options?.commandName,
+    effectiveToolPolicy: options?.effectiveToolPolicy,
   });
 }
 
@@ -297,24 +422,88 @@ export function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string): 
 
 export function ensureAuthProfileStore(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: {
+    allowKeychainPrompt?: boolean;
+    commandName?: string;
+    effectiveToolPolicy?: string;
+  },
 ): AuthProfileStore {
+  appendAuthProfileStoreDebug("authProfileStore_ensureAuthProfileStore_enter", {
+    auth_profile_store_branch: "ensureAuthProfileStore",
+    raw_commandName: options?.commandName,
+    raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+    calls_overlayExternalAuthProfiles: true,
+    calls_shouldPersistExternalAuthProfile: false,
+    passes_commandName:
+      typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+    passes_effectiveToolPolicy:
+      typeof options?.effectiveToolPolicy === "string" &&
+      options.effectiveToolPolicy.trim().length > 0,
+  });
   const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
   if (runtimeStore) {
-    return overlayExternalAuthProfiles(runtimeStore, { agentDir });
+    appendAuthProfileStoreDebug("authProfileStore_before_overlayExternalAuthProfiles", {
+      auth_profile_store_branch: "ensureAuthProfileStore",
+      raw_commandName: options?.commandName,
+      raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+      calls_overlayExternalAuthProfiles: true,
+      calls_shouldPersistExternalAuthProfile: false,
+      passes_commandName:
+        typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+      passes_effectiveToolPolicy:
+        typeof options?.effectiveToolPolicy === "string" &&
+        options.effectiveToolPolicy.trim().length > 0,
+    });
+    return overlayExternalAuthProfiles(runtimeStore, {
+      agentDir,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
+    });
   }
 
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
-    return overlayExternalAuthProfiles(store, { agentDir });
+    appendAuthProfileStoreDebug("authProfileStore_before_overlayExternalAuthProfiles", {
+      auth_profile_store_branch: "ensureAuthProfileStore",
+      raw_commandName: options?.commandName,
+      raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+      calls_overlayExternalAuthProfiles: true,
+      calls_shouldPersistExternalAuthProfile: false,
+      passes_commandName:
+        typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+      passes_effectiveToolPolicy:
+        typeof options?.effectiveToolPolicy === "string" &&
+        options.effectiveToolPolicy.trim().length > 0,
+    });
+    return overlayExternalAuthProfiles(store, {
+      agentDir,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
+    });
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
   const merged = mergeAuthProfileStores(mainStore, store);
 
-  return overlayExternalAuthProfiles(merged, { agentDir });
+  appendAuthProfileStoreDebug("authProfileStore_before_overlayExternalAuthProfiles", {
+    auth_profile_store_branch: "ensureAuthProfileStore",
+    raw_commandName: options?.commandName,
+    raw_effectiveToolPolicy: options?.effectiveToolPolicy,
+    calls_overlayExternalAuthProfiles: true,
+    calls_shouldPersistExternalAuthProfile: false,
+    passes_commandName:
+      typeof options?.commandName === "string" && options.commandName.trim().length > 0,
+    passes_effectiveToolPolicy:
+      typeof options?.effectiveToolPolicy === "string" &&
+      options.effectiveToolPolicy.trim().length > 0,
+  });
+  return overlayExternalAuthProfiles(merged, {
+    agentDir,
+    commandName: options?.commandName,
+    effectiveToolPolicy: options?.effectiveToolPolicy,
+  });
 }
 
 export function findPersistedAuthProfileCredential(params: {
@@ -370,6 +559,15 @@ export function saveAuthProfileStore(
   agentDir?: string,
   options?: SaveAuthProfileStoreOptions,
 ): void {
+  appendAuthProfileStoreDebug("authProfileStore_saveAuthProfileStore_enter", {
+    auth_profile_store_branch: "saveAuthProfileStore",
+    raw_commandName: undefined,
+    raw_effectiveToolPolicy: undefined,
+    calls_overlayExternalAuthProfiles: false,
+    calls_shouldPersistExternalAuthProfile: true,
+    passes_commandName: false,
+    passes_effectiveToolPolicy: false,
+  });
   const authPath = resolveAuthStorePath(agentDir);
   const statePath = resolveAuthStatePath(agentDir);
   const payload = buildPersistedAuthProfileSecretsStore(store, ({ profileId, credential }) => {
@@ -379,6 +577,15 @@ export function saveAuthProfileStore(
     if (options?.filterExternalAuthProfiles === false) {
       return true;
     }
+    appendAuthProfileStoreDebug("authProfileStore_before_shouldPersistExternalAuthProfile", {
+      auth_profile_store_branch: "saveAuthProfileStore",
+      raw_commandName: undefined,
+      raw_effectiveToolPolicy: undefined,
+      calls_overlayExternalAuthProfiles: false,
+      calls_shouldPersistExternalAuthProfile: true,
+      passes_commandName: false,
+      passes_effectiveToolPolicy: false,
+    });
     return shouldPersistExternalAuthProfile({
       store,
       profileId,

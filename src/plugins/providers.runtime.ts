@@ -1,3 +1,4 @@
+import { appendAgentExecDebug } from "../cli/agent-exec-debug.js";
 import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
@@ -80,6 +81,8 @@ function resolvePluginProviderLoadBase(params: {
   onlyPluginIds?: string[];
   providerRefs?: readonly string[];
   modelRefs?: readonly string[];
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }) {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
@@ -171,6 +174,13 @@ function resolveSetupProviderPluginLoadState(
   return { loadOptions };
 }
 
+function shouldSkipCoordinationOnlyProviderRuntimeRegistryLoad(params: {
+  commandName?: string;
+  effectiveToolPolicy?: string;
+}): boolean {
+  return params.commandName === "agent-exec" && params.effectiveToolPolicy === "coordination_only";
+}
+
 function resolveRuntimeProviderPluginLoadState(
   params: Parameters<typeof resolvePluginProviders>[0],
   base: ReturnType<typeof resolvePluginProviderLoadBase>,
@@ -233,6 +243,8 @@ function resolveRuntimeProviderPluginLoadState(
       pluginSdkResolution: params.pluginSdkResolution,
       cache: params.cache ?? false,
       activate: params.activate ?? false,
+      commandName: params.commandName,
+      effectiveToolPolicy: params.effectiveToolPolicy,
     },
   );
   return { loadOptions };
@@ -267,6 +279,8 @@ export function resolvePluginProviders(params: {
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
   mode?: "runtime" | "setup";
   includeUntrustedWorkspacePlugins?: boolean;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): ProviderPlugin[] {
   const base = resolvePluginProviderLoadBase(params);
   if (params.mode === "setup") {
@@ -280,6 +294,35 @@ export function resolvePluginProviders(params: {
     );
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base);
+  const skipProviderRuntimeRegistryLoad = shouldSkipCoordinationOnlyProviderRuntimeRegistryLoad({
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
+  });
+  appendAgentExecDebug(
+    "providers-runtime",
+    "providersRuntime_coordination_only_registry_load_decision",
+    {
+      raw_commandName: params.commandName,
+      raw_effectiveToolPolicy: params.effectiveToolPolicy,
+      has_commandName: params.commandName !== undefined,
+      has_effectiveToolPolicy: params.effectiveToolPolicy !== undefined,
+      skip_provider_runtime_registry_load: skipProviderRuntimeRegistryLoad,
+      calls_resolveRuntimePluginRegistry: !skipProviderRuntimeRegistryLoad,
+    },
+  );
+  if (skipProviderRuntimeRegistryLoad) {
+    appendAgentExecDebug(
+      "providers-runtime",
+      "providersRuntime_coordination_only_registry_load_skipped",
+      {
+        raw_commandName: params.commandName,
+        raw_effectiveToolPolicy: params.effectiveToolPolicy,
+        skip_provider_runtime_registry_load: true,
+        calls_resolveRuntimePluginRegistry: false,
+      },
+    );
+    return [];
+  }
   const registry = resolveRuntimePluginRegistry(loadState.loadOptions);
   if (!registry) {
     return [];

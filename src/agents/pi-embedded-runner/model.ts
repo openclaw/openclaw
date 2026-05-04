@@ -119,10 +119,14 @@ function applyResolvedTransportFallback(params: {
   cfg?: OpenClawConfig;
   runtimeHooks: ProviderRuntimeHooks;
   model: Model<Api>;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): Model<Api> | undefined {
   const normalized = params.runtimeHooks.normalizeProviderTransportWithPlugin({
     provider: params.provider,
     config: params.cfg,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     context: {
       provider: params.provider,
       api: params.model.api,
@@ -150,6 +154,8 @@ function normalizeResolvedModel(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): Model<Api> {
   const normalizedInputModel = {
     ...params.model,
@@ -164,6 +170,8 @@ function normalizeResolvedModel(params: {
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
     provider: params.provider,
     config: params.cfg,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     context: {
       config: params.cfg,
       agentDir: params.agentDir,
@@ -175,6 +183,8 @@ function normalizeResolvedModel(params: {
   const compatNormalized = runtimeHooks.applyProviderResolvedModelCompatWithPlugins?.({
     provider: params.provider,
     config: params.cfg,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     context: {
       config: params.cfg,
       agentDir: params.agentDir,
@@ -186,6 +196,8 @@ function normalizeResolvedModel(params: {
   const transportNormalized = runtimeHooks.applyProviderResolvedTransportWithPlugin?.({
     provider: params.provider,
     config: params.cfg,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     context: {
       config: params.cfg,
       agentDir: params.agentDir,
@@ -201,6 +213,8 @@ function normalizeResolvedModel(params: {
       cfg: params.cfg,
       runtimeHooks,
       model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+      commandName: params.commandName,
+      effectiveToolPolicy: params.effectiveToolPolicy,
     });
   return canonicalizeLegacyResolvedModel({
     provider: params.provider,
@@ -218,6 +232,8 @@ function resolveProviderTransport(params: {
   baseUrl?: string;
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): {
   api?: Api;
   baseUrl?: string;
@@ -226,6 +242,8 @@ function resolveProviderTransport(params: {
   const normalized = runtimeHooks.normalizeProviderTransportWithPlugin({
     provider: params.provider,
     config: params.cfg,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     context: {
       provider: params.provider,
       api: params.api,
@@ -372,6 +390,8 @@ function resolveExplicitModelWithRegistry(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
@@ -381,6 +401,8 @@ function resolveExplicitModelWithRegistry(params: {
       id: modelId,
       baseUrl: providerConfig?.baseUrl,
       config: cfg,
+      commandName: params.commandName,
+      effectiveToolPolicy: params.effectiveToolPolicy,
     })
   ) {
     return { kind: "suppressed" };
@@ -399,6 +421,8 @@ function resolveExplicitModelWithRegistry(params: {
         agentDir,
         model: inlineMatch as Model<Api>,
         runtimeHooks,
+        commandName: params.commandName,
+        effectiveToolPolicy: params.effectiveToolPolicy,
       }),
     };
   }
@@ -420,6 +444,8 @@ function resolveExplicitModelWithRegistry(params: {
           runtimeHooks,
         }),
         runtimeHooks,
+        commandName: params.commandName,
+        effectiveToolPolicy: params.effectiveToolPolicy,
       }),
     };
   }
@@ -439,6 +465,8 @@ function resolveExplicitModelWithRegistry(params: {
         agentDir,
         model: fallbackInlineMatch as Model<Api>,
         runtimeHooks,
+        commandName: params.commandName,
+        effectiveToolPolicy: params.effectiveToolPolicy,
       }),
     };
   }
@@ -454,6 +482,8 @@ function resolvePluginDynamicModelWithRegistry(params: {
   agentDir?: string;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): Model<Api> | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
@@ -462,6 +492,8 @@ function resolvePluginDynamicModelWithRegistry(params: {
     provider,
     config: cfg,
     workspaceDir,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     context: {
       config: cfg,
       agentDir,
@@ -488,6 +520,8 @@ function resolvePluginDynamicModelWithRegistry(params: {
     agentDir,
     model: overriddenDynamicModel,
     runtimeHooks,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
   });
 }
 
@@ -497,6 +531,8 @@ function resolveConfiguredFallbackModel(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): Model<Api> | undefined {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
@@ -517,6 +553,8 @@ function resolveConfiguredFallbackModel(params: {
     baseUrl: providerConfig?.baseUrl,
     cfg,
     runtimeHooks,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
   });
   const requestConfig = resolveProviderRequestConfig({
     provider,
@@ -533,6 +571,8 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     cfg,
     agentDir,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     model: attachModelProviderRequestTransport(
       {
         id: modelId,
@@ -572,12 +612,16 @@ function shouldCompareProviderRuntimeResolvedModel(params: {
   agentDir?: string;
   workspaceDir?: string;
   runtimeHooks: ProviderRuntimeHooks;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): boolean {
   return (
     params.runtimeHooks.shouldPreferProviderRuntimeResolvedModel?.({
       provider: params.provider,
       config: params.cfg,
       workspaceDir: params.workspaceDir,
+      commandName: params.commandName,
+      effectiveToolPolicy: params.effectiveToolPolicy,
       context: {
         provider: params.provider,
         modelId: params.modelId,
@@ -609,6 +653,8 @@ export function resolveModelWithRegistry(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): Model<Api> | undefined {
   const normalizedRef = {
     provider: params.provider,
@@ -634,6 +680,8 @@ export function resolveModelWithRegistry(params: {
         agentDir: normalizedParams.agentDir,
         workspaceDir,
         runtimeHooks,
+        commandName: normalizedParams.commandName,
+        effectiveToolPolicy: normalizedParams.effectiveToolPolicy,
       })
     ) {
       return explicitModel.model;
@@ -665,6 +713,8 @@ export function resolveModel(
     modelRegistry?: ModelRegistry;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
+    commandName?: string;
+    effectiveToolPolicy?: string;
   },
 ): {
   model?: Model<Api>;
@@ -687,6 +737,8 @@ export function resolveModel(
     cfg,
     agentDir: resolvedAgentDir,
     runtimeHooks,
+    commandName: options?.commandName,
+    effectiveToolPolicy: options?.effectiveToolPolicy,
   });
   if (model) {
     return { model, authStorage, modelRegistry };
@@ -716,6 +768,8 @@ export async function resolveModelAsync(
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
+    commandName?: string;
+    effectiveToolPolicy?: string;
   },
 ): Promise<{
   model?: Model<Api>;
@@ -728,8 +782,18 @@ export async function resolveModelAsync(
     model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
   };
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const authStorage =
+    options?.authStorage ??
+    discoverAuthStorage(resolvedAgentDir, {
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
+    });
+  const modelRegistry =
+    options?.modelRegistry ??
+    discoverModels(authStorage, resolvedAgentDir, {
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
+    });
   const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
     provider: normalizedRef.provider,
@@ -738,6 +802,8 @@ export async function resolveModelAsync(
     cfg,
     agentDir: resolvedAgentDir,
     runtimeHooks,
+    commandName: options?.commandName,
+    effectiveToolPolicy: options?.effectiveToolPolicy,
   });
   if (explicitModel?.kind === "suppressed") {
     return {
@@ -760,6 +826,8 @@ export async function resolveModelAsync(
     await runtimeHooks.prepareProviderDynamicModel({
       provider: normalizedRef.provider,
       config: cfg,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
       context: {
         config: cfg,
         agentDir: resolvedAgentDir,
@@ -776,6 +844,8 @@ export async function resolveModelAsync(
       cfg,
       agentDir: resolvedAgentDir,
       runtimeHooks,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
     });
   };
   let model =
@@ -786,6 +856,8 @@ export async function resolveModelAsync(
       cfg,
       agentDir: resolvedAgentDir,
       runtimeHooks,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
     })
       ? explicitModel.model
       : await resolveDynamicAttempt();

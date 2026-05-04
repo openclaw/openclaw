@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { appendAgentExecDebug } from "../cli/agent-exec-debug.js";
 import {
   getRuntimeConfigSourceSnapshot,
   projectConfigOntoRuntimeSourceSnapshot,
@@ -138,7 +139,21 @@ async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise
 export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
+  options?: {
+    commandName?: string;
+    effectiveToolPolicy?: string;
+  },
 ): Promise<{ agentDir: string; wrote: boolean }> {
+  if (process.env.OPENCLAW_AGENT_EXEC_DEBUG === "1") {
+    appendAgentExecDebug("models-config", "modelsConfig_ensureOpenClawModelsJson_enter", {
+      raw_commandName: options?.commandName ?? null,
+      raw_effectiveToolPolicy: options?.effectiveToolPolicy ?? null,
+      has_commandName: typeof options?.commandName === "string" && options.commandName.length > 0,
+      has_effectiveToolPolicy:
+        typeof options?.effectiveToolPolicy === "string" && options.effectiveToolPolicy.length > 0,
+      calls_planOpenClawModelsJson: true,
+    });
+  }
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
@@ -169,6 +184,8 @@ export async function ensureOpenClawModelsJson(
       env,
       existingRaw: existingModelsFile.raw,
       existingParsed: existingModelsFile.parsed,
+      commandName: options?.commandName,
+      effectiveToolPolicy: options?.effectiveToolPolicy,
     });
 
     if (plan.action === "skip") {

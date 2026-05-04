@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { appendAgentExecDebug } from "../cli/agent-exec-debug.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
@@ -9,6 +10,13 @@ import type {
   ProviderPrepareExtraParamsContext,
   ProviderWrapStreamFnContext,
 } from "./types.js";
+
+function shouldSkipProviderHookRuntimePlugins(params: {
+  commandName?: string;
+  effectiveToolPolicy?: string;
+}): boolean {
+  return params.commandName === "agent-exec" && params.effectiveToolPolicy === "coordination_only";
+}
 
 function matchesProviderId(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
@@ -90,6 +98,7 @@ export function resetProviderRuntimeHookCacheForTest(): void {
 
 export const __testing = {
   buildHookProviderCacheKey,
+  shouldSkipProviderHookRuntimePlugins,
 } as const;
 
 export function resolveProviderPluginsForHooks(params: {
@@ -98,7 +107,25 @@ export function resolveProviderPluginsForHooks(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   providerRefs?: string[];
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): ProviderPlugin[] {
+  appendAgentExecDebug(
+    "provider-hook-runtime",
+    "providerHookRuntime_resolveProviderPluginsForHooks_enter",
+    {
+      raw_commandName: params.commandName ?? null,
+      raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+      has_commandName: params.commandName !== undefined,
+      has_effectiveToolPolicy: params.effectiveToolPolicy !== undefined,
+      onlyPluginIds_count: params.onlyPluginIds?.length ?? 0,
+      providerRefs_count: params.providerRefs?.length ?? 0,
+      calls_resolvePluginProviders: !shouldSkipProviderHookRuntimePlugins(params),
+    },
+  );
+  if (shouldSkipProviderHookRuntimePlugins(params)) {
+    return [];
+  }
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const cacheBucket = resolveHookProviderCacheBucket({
@@ -118,9 +145,13 @@ export function resolveProviderPluginsForHooks(params: {
   }
   if (
     isPluginProvidersLoadInFlight({
-      ...params,
+      config: params.config,
       workspaceDir,
       env,
+      onlyPluginIds: params.onlyPluginIds,
+      providerRefs: params.providerRefs,
+      commandName: params.commandName,
+      effectiveToolPolicy: params.effectiveToolPolicy,
       activate: false,
       cache: false,
       bundledProviderAllowlistCompat: true,
@@ -129,10 +160,27 @@ export function resolveProviderPluginsForHooks(params: {
   ) {
     return [];
   }
+  appendAgentExecDebug(
+    "provider-hook-runtime",
+    "providerHookRuntime_before_resolvePluginProviders",
+    {
+      raw_commandName: params.commandName ?? null,
+      raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+      has_commandName: params.commandName !== undefined,
+      has_effectiveToolPolicy: params.effectiveToolPolicy !== undefined,
+      onlyPluginIds_count: params.onlyPluginIds?.length ?? 0,
+      providerRefs_count: params.providerRefs?.length ?? 0,
+      calls_resolvePluginProviders: true,
+    },
+  );
   const resolved = resolvePluginProviders({
-    ...params,
+    config: params.config,
     workspaceDir,
     env,
+    onlyPluginIds: params.onlyPluginIds,
+    providerRefs: params.providerRefs,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     activate: false,
     cache: false,
     bundledProviderAllowlistCompat: true,
@@ -147,12 +195,16 @@ export function resolveProviderRuntimePlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): ProviderPlugin | undefined {
   return resolveProviderPluginsForHooks({
     config: params.config,
     workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
     env: params.env,
     providerRefs: [params.provider],
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
   }).find((plugin) => matchesProviderId(plugin, params.provider));
 }
 
@@ -161,6 +213,8 @@ export function resolveProviderHookPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): ProviderPlugin | undefined {
   return (
     resolveProviderRuntimePlugin(params) ??
@@ -168,6 +222,8 @@ export function resolveProviderHookPlugin(params: {
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      commandName: params.commandName,
+      effectiveToolPolicy: params.effectiveToolPolicy,
     }).find((candidate) => matchesProviderId(candidate, params.provider))
   );
 }
@@ -177,6 +233,8 @@ export function prepareProviderExtraParams(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderPrepareExtraParamsContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.prepareExtraParams?.(params.context) ?? undefined;
@@ -187,6 +245,8 @@ export function wrapProviderStreamFn(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderWrapStreamFnContext;
 }) {
   return resolveProviderHookPlugin(params)?.wrapStreamFn?.(params.context) ?? undefined;

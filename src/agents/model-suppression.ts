@@ -8,6 +8,8 @@ function resolveBuiltInModelSuppression(params: {
   id?: string | null;
   baseUrl?: string | null;
   config?: OpenClawConfig;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }) {
   const provider = normalizeProviderId(params.provider ?? "");
   const modelId = normalizeLowercaseStringOrEmpty(params.id);
@@ -17,6 +19,8 @@ function resolveBuiltInModelSuppression(params: {
   return resolveProviderBuiltInModelSuppression({
     ...(params.config ? { config: params.config } : {}),
     env: process.env,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     context: {
       ...(params.config ? { config: params.config } : {}),
       env: process.env,
@@ -32,6 +36,8 @@ export function shouldSuppressBuiltInModel(params: {
   id?: string | null;
   baseUrl?: string | null;
   config?: OpenClawConfig;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }) {
   return resolveBuiltInModelSuppression(params)?.suppress ?? false;
 }

@@ -1,6 +1,7 @@
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
+import type { EmbeddedPiMcpPolicy } from "../embedded-pi-mcp.js";
 import type { SkillSnapshot } from "../skills.js";
 
 export type EmbeddedCompactionRuntimeContext = {
@@ -25,6 +26,7 @@ export type EmbeddedCompactionRuntimeContext = {
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  embeddedMcpPolicy?: EmbeddedPiMcpPolicy;
 };
 
 /**
@@ -90,6 +92,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  embeddedMcpPolicy?: EmbeddedPiMcpPolicy;
 }): EmbeddedCompactionRuntimeContext {
   const resolved = resolveEmbeddedCompactionTarget({
     config: params.config,
@@ -119,5 +122,6 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
+    embeddedMcpPolicy: params.embeddedMcpPolicy,
   };
 }

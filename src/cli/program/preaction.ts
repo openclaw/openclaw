@@ -5,7 +5,8 @@ import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getVerboseFlag, hasHelpOrVersion } from "../argv.js";
+import { appendAgentExecDebug, isAgentExecDebugEnabled } from "../agent-exec-debug.js";
+import { getFlagValue, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { resolveCliName } from "../cli-name.js";
 import {
   applyCliExecutionStartupPresentation,
@@ -19,21 +20,83 @@ import {
 } from "../plugin-install-config-policy.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 
-const AGENT_EXEC_DEBUG_ENV = "OPENCLAW_AGENT_EXEC_DEBUG";
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "archived", "published"]);
 
-function isAgentExecDebugEnabled(): boolean {
-  return process.env[AGENT_EXEC_DEBUG_ENV] === "1";
-}
+const AGENT_EXEC_CONFIG_CONTEXT_ENV = "OPENCLAW_ACTIVE_AGENT_EXEC_CONFIG_CONTEXT";
 
 function appendDispatchDebug(event: string, extra: Record<string, unknown> = {}) {
-  if (!isAgentExecDebugEnabled()) {
-    return;
+  appendAgentExecDebug("preaction", event, extra);
+}
+
+function buildPrebootstrapAgentExecConfigContext(
+  argv: string[],
+  commandPath: string[],
+): string | undefined {
+  if (commandPath[0] !== "agent-exec") {
+    return undefined;
   }
-  fs.appendFileSync(
-    "/tmp/openclaw-agent-exec-dispatch-debug.jsonl",
-    `${JSON.stringify({ timestamp: new Date().toISOString(), pid: process.pid, source: "preaction", event, ...extra })}\n`,
-  );
+  const jobId = getFlagValue(argv, "--job-id") ?? undefined;
+  const jobPath = getFlagValue(argv, "--job-path") ?? undefined;
+  const agent = getFlagValue(argv, "--agent") ?? undefined;
+  if (!jobId || !jobPath || !agent) {
+    appendDispatchDebug("agentExecBootstrapContext_missing_tool_policy", {
+      command_name: commandPath[0],
+      agent_id: agent,
+      job_id: jobId,
+      job_path: jobPath ? path.resolve(jobPath) : undefined,
+      tool_policy: undefined,
+      skip_plugin_registry: false,
+      reason: "missing_job_id_job_path_or_agent",
+    });
+    return undefined;
+  }
+  const resolvedJobPath = path.resolve(jobPath);
+  const job = fs.existsSync(resolvedJobPath) ? readOptionalJson(resolvedJobPath) : undefined;
+  const cliToolPolicy = getFlagValue(argv, "--tool-policy") ?? undefined;
+  const toolPolicy =
+    typeof cliToolPolicy === "string" && cliToolPolicy.trim().length > 0
+      ? cliToolPolicy.trim()
+      : typeof job?.context === "object" &&
+          job.context !== null &&
+          typeof (job.context as Record<string, unknown>).tool_policy === "string"
+        ? ((job.context as Record<string, unknown>).tool_policy as string).trim()
+        : undefined;
+  if (!toolPolicy) {
+    appendDispatchDebug("agentExecBootstrapContext_missing_tool_policy", {
+      command_name: commandPath[0],
+      agent_id: agent,
+      job_id: jobId,
+      job_path: resolvedJobPath,
+      tool_policy: undefined,
+      skip_plugin_registry: false,
+      reason: "cli_and_job_context_tool_policy_missing",
+    });
+    return undefined;
+  }
+  const context = {
+    command: "agent-exec",
+    jobId,
+    jobPath: resolvedJobPath,
+    agent,
+    skipLegacyPluginDoctorRules: true,
+    toolPolicy,
+    source: "preaction",
+  };
+  appendDispatchDebug("agentExecBootstrapContext_resolved", {
+    command_name: commandPath[0],
+    agent_id: agent,
+    job_id: jobId,
+    job_path: resolvedJobPath,
+    tool_policy: toolPolicy,
+    skip_plugin_registry: toolPolicy === "coordination_only",
+    reason:
+      toolPolicy === "coordination_only"
+        ? cliToolPolicy
+          ? "coordination_only_cli_flag"
+          : "coordination_only_job_context"
+        : "tool_policy_requires_normal_plugin_bootstrap",
+  });
+  return JSON.stringify(context);
 }
 
 function readOptionalJson(filePath: string): Record<string, unknown> | undefined {
@@ -254,6 +317,18 @@ function getEarlyAgentExecRefusal(
       early_refusal_eligible: false,
       ineligible_reason: "job_not_terminal_and_proof_not_ready",
     });
+    appendJobDebug(jobFolder, {
+      job_id: jobId,
+      event: "preaction_no_refusal_continue",
+      command_name: commandName,
+      parent_command_name: parentCommandName,
+      command_lineage: lineage,
+      command_path: commandPathFromInvocation,
+      job_status: jobStatus,
+      proof_ready: proofReady,
+      force_rerun: false,
+      early_refusal_eligible: false,
+    });
     return undefined;
   }
 
@@ -339,6 +414,39 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       process.exit(0);
     }
 
+    const agentExecOpts =
+      actionCommand.name() === "agent-exec"
+        ? actionCommand.opts<Record<string, unknown>>()
+        : undefined;
+    const agentExecJobId =
+      typeof agentExecOpts?.jobId === "string" ? agentExecOpts.jobId.trim() : "";
+    const agentExecJobPath =
+      typeof agentExecOpts?.jobPath === "string" ? path.resolve(agentExecOpts.jobPath.trim()) : "";
+    const agentExecJobFolder = agentExecJobPath ? path.dirname(agentExecJobPath) : "";
+    const agentExecJob =
+      agentExecJobPath && fs.existsSync(agentExecJobPath)
+        ? readOptionalJson(agentExecJobPath)
+        : undefined;
+    const agentExecProof = agentExecJobFolder
+      ? readOptionalJson(path.join(agentExecJobFolder, "agent-proof.json"))
+      : undefined;
+    const agentExecJobStatus = agentExecJob?.status;
+    const agentExecProofReady = agentExecProof?.ready_for_dom_review === true;
+    const agentExecEarlyEligible =
+      (typeof agentExecJobStatus === "string" &&
+        TERMINAL_JOB_STATUSES.has(agentExecJobStatus.trim().toLowerCase())) ||
+      agentExecProofReady;
+    if (agentExecJobFolder) {
+      appendJobDebug(agentExecJobFolder, {
+        job_id: agentExecJobId,
+        event: "preaction_before_config_bootstrap",
+        command_name: actionCommand.name(),
+        job_status: agentExecJobStatus,
+        proof_ready: agentExecProofReady,
+        force_rerun: false,
+        early_refusal_eligible: agentExecEarlyEligible,
+      });
+    }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
@@ -379,15 +487,81 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       argv,
       command_path: commandPath,
     });
-    await ensureCliExecutionBootstrap({
-      runtime: defaultRuntime,
-      commandPath,
-      startupPolicy,
-      allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
-    });
+    const priorAgentExecConfigContext = process.env[AGENT_EXEC_CONFIG_CONTEXT_ENV];
+    const nextAgentExecConfigContext = buildPrebootstrapAgentExecConfigContext(argv, commandPath);
+    if (nextAgentExecConfigContext) {
+      process.env[AGENT_EXEC_CONFIG_CONTEXT_ENV] = nextAgentExecConfigContext;
+      appendDispatchDebug("preaction_agent_exec_config_context_set", {
+        command_path: commandPath,
+        context_source: "preaction",
+        has_prior_context: typeof priorAgentExecConfigContext === "string",
+      });
+      appendDispatchDebug("direct_agent_exec_context_set", {
+        command_path: commandPath,
+        context_source: "preaction",
+      });
+    }
+    try {
+      await ensureCliExecutionBootstrap({
+        runtime: defaultRuntime,
+        commandPath,
+        startupPolicy,
+        allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
+      });
+    } finally {
+      if (nextAgentExecConfigContext) {
+        if (typeof priorAgentExecConfigContext === "string") {
+          process.env[AGENT_EXEC_CONFIG_CONTEXT_ENV] = priorAgentExecConfigContext;
+        } else {
+          delete process.env[AGENT_EXEC_CONFIG_CONTEXT_ENV];
+        }
+        appendDispatchDebug("preaction_agent_exec_config_context_cleared", {
+          command_path: commandPath,
+          restored_prior_context: typeof priorAgentExecConfigContext === "string",
+        });
+        appendDispatchDebug("direct_agent_exec_context_cleared", {
+          command_path: commandPath,
+          restored_prior_context: typeof priorAgentExecConfigContext === "string",
+        });
+      }
+    }
+    if (agentExecJobFolder) {
+      appendJobDebug(agentExecJobFolder, {
+        job_id: agentExecJobId,
+        event: "preaction_after_config_bootstrap",
+        command_name: actionCommand.name(),
+        job_status: agentExecJobStatus,
+        proof_ready: agentExecProofReady,
+        force_rerun: false,
+        early_refusal_eligible: agentExecEarlyEligible,
+      });
+      appendJobDebug(agentExecJobFolder, {
+        job_id: agentExecJobId,
+        event: "action_handler_expected",
+        command_name: actionCommand.name(),
+        job_status: agentExecJobStatus,
+        proof_ready: agentExecProofReady,
+        force_rerun: false,
+        early_refusal_eligible: agentExecEarlyEligible,
+      });
+      appendJobDebug(agentExecJobFolder, {
+        job_id: agentExecJobId,
+        event: "preaction_before_return",
+        command_name: actionCommand.name(),
+        job_status: agentExecJobStatus,
+        proof_ready: agentExecProofReady,
+        force_rerun: false,
+        early_refusal_eligible: agentExecEarlyEligible,
+      });
+    }
     appendDispatchDebug("preaction_hook_after_execution_bootstrap", {
       argv,
       command_path: commandPath,
+    });
+    appendDispatchDebug("preaction_hook_before_return", {
+      argv,
+      command_path: commandPath,
+      selected_command: actionCommand.name(),
     });
   });
 }

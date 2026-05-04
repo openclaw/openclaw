@@ -25,6 +25,8 @@ export type AgentRunContext = {
   hasRepliedRef?: { value: boolean };
 };
 
+import type { EmbeddedPiMcpPolicy } from "../embedded-pi-mcp.js";
+
 export type AgentCommandOpts = {
   message: string;
   /** Optional image attachments for multimodal messages. */
@@ -90,6 +92,18 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Optional tool allow-list; when set, only these tools are sent to the model. */
+  toolsAllow?: string[];
+  /** Disable built-in tools for this run (LLM-only mode). */
+  disableTools?: boolean;
+  /** Embedded MCP policy applied before MCP runtime creation/materialization. */
+  embeddedMcpPolicy?: EmbeddedPiMcpPolicy;
+  /** Optional direct agent-exec debug context for job-local instrumentation. */
+  agentExecDebugContext?: {
+    jobId?: string;
+    jobPath?: string;
+    runId?: string;
+  };
 };
 
 export type AgentCommandIngressOpts = Omit<

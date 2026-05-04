@@ -4,6 +4,7 @@ import {
   mergePluginTextTransforms,
 } from "../agents/plugin-text-transforms.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
+import { appendAgentExecDebug } from "../cli/agent-exec-debug.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -13,8 +14,8 @@ import {
   prepareProviderExtraParams,
   resetProviderRuntimeHookCacheForTest,
   resolveProviderHookPlugin,
-  resolveProviderPluginsForHooks,
-  resolveProviderRuntimePlugin,
+  resolveProviderPluginsForHooks as resolveProviderHookRuntimePluginsForHooks,
+  resolveProviderRuntimePlugin as resolveProviderHookRuntimePlugin,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
@@ -72,18 +73,64 @@ export {
   clearProviderRuntimeHookCache,
   prepareProviderExtraParams,
   resetProviderRuntimeHookCacheForTest,
-  resolveProviderRuntimePlugin,
+  resolveProviderRuntimePluginWithCoordinationGuard as resolveProviderRuntimePlugin,
   wrapProviderStreamFn,
 };
 
 export const __testing = {
   ...providerHookRuntimeTesting,
+  shouldSkipProviderRuntimePlugins,
 } as const;
+
+function shouldSkipProviderRuntimePlugins(params: {
+  commandName?: string;
+  effectiveToolPolicy?: string;
+}): boolean {
+  return params.commandName === "agent-exec" && params.effectiveToolPolicy === "coordination_only";
+}
+
+function resolveProviderPluginsForHooks(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
+  providerRefs?: readonly string[];
+  commandName?: string;
+  effectiveToolPolicy?: string;
+}): ProviderPlugin[] {
+  const willSkipProviderHookRuntimePlugins = shouldSkipProviderRuntimePlugins(params);
+  appendProviderRuntimeDebug("providerRuntime_resolveProviderPluginsForHooks_enter", {
+    provider_runtime_helper: "resolveProviderPluginsForHooks",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    will_skip_provider_hook_runtime_plugins: willSkipProviderHookRuntimePlugins,
+    calls_resolvePluginProviders: !willSkipProviderHookRuntimePlugins,
+  });
+  if (willSkipProviderHookRuntimePlugins) {
+    return [];
+  }
+  appendProviderRuntimeDebug(
+    "providerRuntime_resolveProviderPluginsForHooks_before_resolvePluginProviders",
+    {
+      provider_runtime_helper: "resolveProviderPluginsForHooks",
+      raw_commandName: params.commandName,
+      raw_effectiveToolPolicy: params.effectiveToolPolicy,
+      will_skip_provider_hook_runtime_plugins: false,
+      calls_resolvePluginProviders: true,
+    },
+  );
+  return resolveProviderHookRuntimePluginsForHooks({
+    ...params,
+    providerRefs: params.providerRefs ? [...params.providerRefs] : undefined,
+  });
+}
 
 function resolveProviderPluginsForCatalogHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): ProviderPlugin[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const onlyPluginIds = resolveCatalogHookProviderPluginIds({
@@ -101,14 +148,54 @@ function resolveProviderPluginsForCatalogHooks(params: {
   });
 }
 
-export function runProviderDynamicModel(params: {
+type ProviderRuntimeInvocationParams = {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  context: ProviderResolveDynamicModelContext;
-}): ProviderRuntimeModel | undefined {
-  return resolveProviderRuntimePlugin(params)?.resolveDynamicModel?.(params.context) ?? undefined;
+  commandName?: string;
+  effectiveToolPolicy?: string;
+};
+
+function appendProviderRuntimeDebug(
+  event:
+    | "providerRuntime_branch_enter"
+    | "providerRuntime_resolveProviderRuntimePlugin_call"
+    | "providerRuntime_resolveProviderPluginsForHooks_call"
+    | "providerRuntime_resolveProviderPluginsForHooks_enter"
+    | "providerRuntime_resolveProviderPluginsForHooks_before_resolvePluginProviders"
+    | "providerRuntime_shouldDeferSyntheticProfileAuth_enter",
+  params: Record<string, unknown>,
+) {
+  appendAgentExecDebug("provider-runtime", event, params);
+}
+
+function resolveProviderRuntimePluginWithCoordinationGuard(
+  params: ProviderRuntimeInvocationParams,
+) {
+  if (shouldSkipProviderRuntimePlugins(params)) {
+    return undefined;
+  }
+  return resolveProviderHookRuntimePlugin({
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
+    env: params.env,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
+  });
+}
+
+export function runProviderDynamicModel(
+  params: ProviderRuntimeInvocationParams & {
+    context: ProviderResolveDynamicModelContext;
+  },
+): ProviderRuntimeModel | undefined {
+  return (
+    resolveProviderRuntimePluginWithCoordinationGuard(params)?.resolveDynamicModel?.(
+      params.context,
+    ) ?? undefined
+  );
 }
 
 export function resolveProviderSystemPromptContribution(params: {
@@ -116,11 +203,14 @@ export function resolveProviderSystemPromptContribution(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderSystemPromptContributionContext;
 }): ProviderSystemPromptContribution | undefined {
   return (
-    resolveProviderRuntimePlugin(params)?.resolveSystemPromptContribution?.(params.context) ??
-    undefined
+    resolveProviderRuntimePluginWithCoordinationGuard(params)?.resolveSystemPromptContribution?.(
+      params.context,
+    ) ?? undefined
   );
 }
 
@@ -129,9 +219,11 @@ export function transformProviderSystemPrompt(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderTransformSystemPromptContext;
 }): string {
-  const plugin = resolveProviderRuntimePlugin(params);
+  const plugin = resolveProviderRuntimePluginWithCoordinationGuard(params);
   const textTransforms = mergePluginTextTransforms(
     resolveRuntimeTextTransforms(),
     plugin?.textTransforms,
@@ -146,10 +238,12 @@ export function resolveProviderTextTransforms(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): PluginTextTransforms | undefined {
   return mergePluginTextTransforms(
     resolveRuntimeTextTransforms(),
-    resolveProviderRuntimePlugin(params)?.textTransforms,
+    resolveProviderRuntimePluginWithCoordinationGuard(params)?.textTransforms,
   );
 }
 
@@ -158,9 +252,13 @@ export async function prepareProviderDynamicModel(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderPrepareDynamicModelContext;
 }): Promise<void> {
-  await resolveProviderRuntimePlugin(params)?.prepareDynamicModel?.(params.context);
+  await resolveProviderRuntimePluginWithCoordinationGuard(params)?.prepareDynamicModel?.(
+    params.context,
+  );
 }
 
 export function shouldPreferProviderRuntimeResolvedModel(params: {
@@ -168,10 +266,14 @@ export function shouldPreferProviderRuntimeResolvedModel(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderPreferRuntimeResolvedModelContext;
 }): boolean {
   return (
-    resolveProviderRuntimePlugin(params)?.preferRuntimeResolvedModel?.(params.context) ?? false
+    resolveProviderRuntimePluginWithCoordinationGuard(params)?.preferRuntimeResolvedModel?.(
+      params.context,
+    ) ?? false
   );
 }
 
@@ -180,6 +282,8 @@ export function normalizeProviderResolvedModelWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: {
     config?: OpenClawConfig;
     agentDir?: string;
@@ -190,7 +294,9 @@ export function normalizeProviderResolvedModelWithPlugin(params: {
   };
 }): ProviderRuntimeModel | undefined {
   return (
-    resolveProviderRuntimePlugin(params)?.normalizeResolvedModel?.(params.context) ?? undefined
+    resolveProviderRuntimePluginWithCoordinationGuard(params)?.normalizeResolvedModel?.(
+      params.context,
+    ) ?? undefined
   );
 }
 
@@ -199,9 +305,15 @@ function resolveProviderCompatHookPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }): ProviderPlugin[] {
+  if (shouldSkipProviderRuntimePlugins(params)) {
+    return [];
+  }
+
   const candidates = resolveProviderPluginsForHooks(params);
-  const owner = resolveProviderRuntimePlugin(params);
+  const owner = resolveProviderRuntimePluginWithCoordinationGuard(params);
   if (!owner) {
     return candidates;
   }
@@ -243,6 +355,8 @@ export function applyProviderResolvedModelCompatWithPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderNormalizeResolvedModelContext;
 }): ProviderRuntimeModel | undefined {
   let nextModel = params.context.model;
@@ -272,6 +386,8 @@ export function applyProviderResolvedTransportWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderNormalizeResolvedModelContext;
 }): ProviderRuntimeModel | undefined {
   const normalized = normalizeProviderTransportWithPlugin({
@@ -279,6 +395,8 @@ export function applyProviderResolvedTransportWithPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
     context: {
       provider: params.context.provider,
       api: params.context.model.api,
@@ -307,6 +425,8 @@ export function normalizeProviderModelIdWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderNormalizeModelIdContext;
 }): string | undefined {
   const plugin = resolveProviderHookPlugin(params);
@@ -318,6 +438,8 @@ export function normalizeProviderTransportWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderNormalizeTransportContext;
 }): { api?: string | null; baseUrl?: string } | undefined {
   const hasTransportChange = (normalized: { api?: string | null; baseUrl?: string }) =>
@@ -347,6 +469,8 @@ export function normalizeProviderConfigWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderNormalizeConfigContext;
 }): ModelProviderConfig | undefined {
   const hasConfigChange = (normalized: ModelProviderConfig) =>
@@ -380,6 +504,8 @@ export function applyProviderNativeStreamingUsageCompatWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderNormalizeConfigContext;
 }): ModelProviderConfig | undefined {
   return (
@@ -393,6 +519,8 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderResolveConfigApiKeyContext;
 }): string | undefined {
   const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
@@ -409,6 +537,8 @@ export function resolveProviderReplayPolicyWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderReplayPolicyContext;
 }): ProviderReplayPolicy | undefined {
   return resolveProviderHookPlugin(params)?.buildReplayPolicy?.(params.context) ?? undefined;
@@ -419,6 +549,8 @@ export async function sanitizeProviderReplayHistoryWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderSanitizeReplayHistoryContext;
 }) {
   return await resolveProviderHookPlugin(params)?.sanitizeReplayHistory?.(params.context);
@@ -429,6 +561,8 @@ export async function validateProviderReplayTurnsWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderValidateReplayTurnsContext;
 }) {
   return await resolveProviderHookPlugin(params)?.validateReplayTurns?.(params.context);
@@ -439,6 +573,8 @@ export function normalizeProviderToolSchemasWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderNormalizeToolSchemasContext;
 }) {
   return resolveProviderHookPlugin(params)?.normalizeToolSchemas?.(params.context) ?? undefined;
@@ -449,6 +585,8 @@ export function inspectProviderToolSchemasWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderNormalizeToolSchemasContext;
 }) {
   return resolveProviderHookPlugin(params)?.inspectToolSchemas?.(params.context) ?? undefined;
@@ -459,6 +597,8 @@ export function resolveProviderReasoningOutputModeWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderReasoningOutputModeContext;
 }): ProviderReasoningOutputMode | undefined {
   const mode = resolveProviderHookPlugin(params)?.resolveReasoningOutputMode?.(params.context);
@@ -470,9 +610,14 @@ export function resolveProviderStreamFn(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderCreateStreamFnContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.createStreamFn?.(params.context) ?? undefined;
+  return (
+    resolveProviderRuntimePluginWithCoordinationGuard(params)?.createStreamFn?.(params.context) ??
+    undefined
+  );
 }
 
 export function resolveProviderTransportTurnStateWithPlugin(params: {
@@ -480,6 +625,8 @@ export function resolveProviderTransportTurnStateWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderResolveTransportTurnStateContext;
 }): ProviderTransportTurnState | undefined {
   return (
@@ -492,6 +639,8 @@ export function resolveProviderWebSocketSessionPolicyWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderResolveWebSocketSessionPolicyContext;
 }): ProviderWebSocketSessionPolicy | undefined {
   return (
@@ -504,9 +653,27 @@ export async function createProviderEmbeddingProvider(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderCreateEmbeddingProviderContext;
 }) {
-  return await resolveProviderRuntimePlugin(params)?.createEmbeddingProvider?.(params.context);
+  appendProviderRuntimeDebug("providerRuntime_branch_enter", {
+    provider_runtime_branch: "createProviderEmbeddingProvider",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  appendProviderRuntimeDebug("providerRuntime_resolveProviderRuntimePlugin_call", {
+    provider_runtime_branch: "createProviderEmbeddingProvider",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  return await resolveProviderRuntimePluginWithCoordinationGuard(params)?.createEmbeddingProvider?.(
+    params.context,
+  );
 }
 
 export async function prepareProviderRuntimeAuth(params: {
@@ -514,9 +681,27 @@ export async function prepareProviderRuntimeAuth(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderPrepareRuntimeAuthContext;
 }) {
-  return await resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth?.(params.context);
+  appendProviderRuntimeDebug("providerRuntime_branch_enter", {
+    provider_runtime_branch: "prepareProviderRuntimeAuth",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  appendProviderRuntimeDebug("providerRuntime_resolveProviderRuntimePlugin_call", {
+    provider_runtime_branch: "prepareProviderRuntimeAuth",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  return await resolveProviderRuntimePluginWithCoordinationGuard(params)?.prepareRuntimeAuth?.(
+    params.context,
+  );
 }
 
 export async function resolveProviderUsageAuthWithPlugin(params: {
@@ -524,9 +709,27 @@ export async function resolveProviderUsageAuthWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderResolveUsageAuthContext;
 }) {
-  return await resolveProviderRuntimePlugin(params)?.resolveUsageAuth?.(params.context);
+  appendProviderRuntimeDebug("providerRuntime_branch_enter", {
+    provider_runtime_branch: "resolveProviderUsageAuthWithPlugin",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  appendProviderRuntimeDebug("providerRuntime_resolveProviderRuntimePlugin_call", {
+    provider_runtime_branch: "resolveProviderUsageAuthWithPlugin",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  return await resolveProviderRuntimePluginWithCoordinationGuard(params)?.resolveUsageAuth?.(
+    params.context,
+  );
 }
 
 export async function resolveProviderUsageSnapshotWithPlugin(params: {
@@ -534,9 +737,27 @@ export async function resolveProviderUsageSnapshotWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderFetchUsageSnapshotContext;
 }) {
-  return await resolveProviderRuntimePlugin(params)?.fetchUsageSnapshot?.(params.context);
+  appendProviderRuntimeDebug("providerRuntime_branch_enter", {
+    provider_runtime_branch: "resolveProviderUsageSnapshotWithPlugin",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  appendProviderRuntimeDebug("providerRuntime_resolveProviderRuntimePlugin_call", {
+    provider_runtime_branch: "resolveProviderUsageSnapshotWithPlugin",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  return await resolveProviderRuntimePluginWithCoordinationGuard(params)?.fetchUsageSnapshot?.(
+    params.context,
+  );
 }
 
 export function matchesProviderContextOverflowWithPlugin(params: {
@@ -544,6 +765,8 @@ export function matchesProviderContextOverflowWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderFailoverErrorContext;
 }): boolean {
   const plugins = params.provider
@@ -564,6 +787,8 @@ export function classifyProviderFailoverReasonWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderFailoverErrorContext;
 }) {
   const plugins = params.provider
@@ -585,9 +810,11 @@ export function formatProviderAuthProfileApiKeyWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: AuthProfileCredential;
 }) {
-  return resolveProviderRuntimePlugin(params)?.formatApiKey?.(params.context);
+  return resolveProviderRuntimePluginWithCoordinationGuard(params)?.formatApiKey?.(params.context);
 }
 
 export async function refreshProviderOAuthCredentialWithPlugin(params: {
@@ -595,9 +822,27 @@ export async function refreshProviderOAuthCredentialWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: OAuthCredential;
 }) {
-  return await resolveProviderRuntimePlugin(params)?.refreshOAuth?.(params.context);
+  appendProviderRuntimeDebug("providerRuntime_branch_enter", {
+    provider_runtime_branch: "refreshProviderOAuthCredentialWithPlugin",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  appendProviderRuntimeDebug("providerRuntime_resolveProviderRuntimePlugin_call", {
+    provider_runtime_branch: "refreshProviderOAuthCredentialWithPlugin",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  return await resolveProviderRuntimePluginWithCoordinationGuard(params)?.refreshOAuth?.(
+    params.context,
+  );
 }
 
 export async function buildProviderAuthDoctorHintWithPlugin(params: {
@@ -605,9 +850,27 @@ export async function buildProviderAuthDoctorHintWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderAuthDoctorHintContext;
 }) {
-  return await resolveProviderRuntimePlugin(params)?.buildAuthDoctorHint?.(params.context);
+  appendProviderRuntimeDebug("providerRuntime_branch_enter", {
+    provider_runtime_branch: "buildProviderAuthDoctorHintWithPlugin",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  appendProviderRuntimeDebug("providerRuntime_resolveProviderRuntimePlugin_call", {
+    provider_runtime_branch: "buildProviderAuthDoctorHintWithPlugin",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: false,
+  });
+  return await resolveProviderRuntimePluginWithCoordinationGuard(params)?.buildAuthDoctorHint?.(
+    params.context,
+  );
 }
 
 export function resolveProviderCacheTtlEligibility(params: {
@@ -615,9 +878,13 @@ export function resolveProviderCacheTtlEligibility(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderCacheTtlEligibilityContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.isCacheTtlEligible?.(params.context);
+  return resolveProviderRuntimePluginWithCoordinationGuard(params)?.isCacheTtlEligible?.(
+    params.context,
+  );
 }
 
 export function resolveProviderBinaryThinking(params: {
@@ -625,9 +892,13 @@ export function resolveProviderBinaryThinking(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderThinkingPolicyContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.isBinaryThinking?.(params.context);
+  return resolveProviderRuntimePluginWithCoordinationGuard(params)?.isBinaryThinking?.(
+    params.context,
+  );
 }
 
 export function resolveProviderXHighThinking(params: {
@@ -635,9 +906,13 @@ export function resolveProviderXHighThinking(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderThinkingPolicyContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.supportsXHighThinking?.(params.context);
+  return resolveProviderRuntimePluginWithCoordinationGuard(params)?.supportsXHighThinking?.(
+    params.context,
+  );
 }
 
 export function resolveProviderAdaptiveThinking(params: {
@@ -645,9 +920,13 @@ export function resolveProviderAdaptiveThinking(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderThinkingPolicyContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.supportsAdaptiveThinking?.(params.context);
+  return resolveProviderRuntimePluginWithCoordinationGuard(params)?.supportsAdaptiveThinking?.(
+    params.context,
+  );
 }
 
 export function resolveProviderMaxThinking(params: {
@@ -655,9 +934,13 @@ export function resolveProviderMaxThinking(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderThinkingPolicyContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.supportsMaxThinking?.(params.context);
+  return resolveProviderRuntimePluginWithCoordinationGuard(params)?.supportsMaxThinking?.(
+    params.context,
+  );
 }
 
 export function resolveProviderDefaultThinkingLevel(params: {
@@ -665,9 +948,13 @@ export function resolveProviderDefaultThinkingLevel(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderDefaultThinkingPolicyContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.resolveDefaultThinkingLevel?.(params.context);
+  return resolveProviderRuntimePluginWithCoordinationGuard(params)?.resolveDefaultThinkingLevel?.(
+    params.context,
+  );
 }
 
 export function applyProviderConfigDefaultsWithPlugin(params: {
@@ -675,13 +962,19 @@ export function applyProviderConfigDefaultsWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderApplyConfigDefaultsContext;
 }) {
   const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
   if (bundledSurface?.applyConfigDefaults) {
     return bundledSurface.applyConfigDefaults(params.context) ?? undefined;
   }
-  return resolveProviderRuntimePlugin(params)?.applyConfigDefaults?.(params.context) ?? undefined;
+  return (
+    resolveProviderRuntimePluginWithCoordinationGuard(params)?.applyConfigDefaults?.(
+      params.context,
+    ) ?? undefined
+  );
 }
 
 export function resolveProviderModernModelRef(params: {
@@ -689,9 +982,13 @@ export function resolveProviderModernModelRef(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderModernModelPolicyContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.isModernModelRef?.(params.context);
+  return resolveProviderRuntimePluginWithCoordinationGuard(params)?.isModernModelRef?.(
+    params.context,
+  );
 }
 
 export function buildProviderMissingAuthMessageWithPlugin(params: {
@@ -699,10 +996,14 @@ export function buildProviderMissingAuthMessageWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderBuildMissingAuthMessageContext;
 }) {
   return (
-    resolveProviderRuntimePlugin(params)?.buildMissingAuthMessage?.(params.context) ?? undefined
+    resolveProviderRuntimePluginWithCoordinationGuard(params)?.buildMissingAuthMessage?.(
+      params.context,
+    ) ?? undefined
   );
 }
 
@@ -711,9 +1012,15 @@ export function buildProviderUnknownModelHintWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderBuildUnknownModelHintContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.buildUnknownModelHint?.(params.context) ?? undefined;
+  return (
+    resolveProviderRuntimePluginWithCoordinationGuard(params)?.buildUnknownModelHint?.(
+      params.context,
+    ) ?? undefined
+  );
 }
 
 export function resolveProviderSyntheticAuthWithPlugin(params: {
@@ -721,19 +1028,47 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderResolveSyntheticAuthContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context) ?? undefined;
+  return (
+    resolveProviderRuntimePluginWithCoordinationGuard(params)?.resolveSyntheticAuth?.(
+      params.context,
+    ) ?? undefined
+  );
 }
 
 export function resolveExternalAuthProfilesWithPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderResolveExternalAuthProfilesContext;
 }): ProviderExternalAuthProfile[] {
+  appendProviderRuntimeDebug("providerRuntime_branch_enter", {
+    provider_runtime_branch: "resolveExternalAuthProfilesWithPlugins",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: true,
+  });
+  appendProviderRuntimeDebug("providerRuntime_resolveProviderPluginsForHooks_call", {
+    provider_runtime_branch: "resolveExternalAuthProfilesWithPlugins",
+    raw_commandName: params.commandName,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy,
+    uses_coordination_guard: false,
+    calls_resolveProviderPluginsForHooks_directly: true,
+  });
   const matches: ProviderExternalAuthProfile[] = [];
-  for (const plugin of resolveProviderPluginsForHooks(params)) {
+  for (const plugin of resolveProviderPluginsForHooks({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
+  })) {
     const profiles =
       plugin.resolveExternalAuthProfiles?.(params.context) ??
       plugin.resolveExternalOAuthProfiles?.(params.context);
@@ -749,6 +1084,8 @@ export function resolveExternalOAuthProfilesWithPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderResolveExternalOAuthProfilesContext;
 }): ProviderExternalAuthProfile[] {
   return resolveExternalAuthProfilesWithPlugins(params);
@@ -759,11 +1096,26 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderDeferSyntheticProfileAuthContext;
 }) {
+  appendProviderRuntimeDebug("providerRuntime_shouldDeferSyntheticProfileAuth_enter", {
+    raw_commandName: params.commandName ?? null,
+    raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+    has_commandName: params.commandName !== undefined,
+    has_effectiveToolPolicy: params.effectiveToolPolicy !== undefined,
+    provider: params.provider,
+  });
   return (
-    resolveProviderRuntimePlugin(params)?.shouldDeferSyntheticProfileAuth?.(params.context) ??
-    undefined
+    resolveProviderRuntimePluginWithCoordinationGuard({
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      commandName: params.commandName,
+      effectiveToolPolicy: params.effectiveToolPolicy,
+    })?.shouldDeferSyntheticProfileAuth?.(params.context) ?? undefined
   );
 }
 
@@ -771,6 +1123,8 @@ export function resolveProviderBuiltInModelSuppression(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderBuiltInModelSuppressionContext;
 }) {
   for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
@@ -786,6 +1140,8 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  commandName?: string;
+  effectiveToolPolicy?: string;
   context: ProviderAugmentModelCatalogContext;
 }) {
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];

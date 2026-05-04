@@ -2,6 +2,7 @@
 // the agent reports a model id. This includes custom models.json entries.
 
 import path from "node:path";
+import { appendAgentExecDebug } from "../cli/agent-exec-debug.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
@@ -32,6 +33,13 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0,
 };
+function isAgentExecCommandForContextWindow(argv: string[] = process.argv): boolean {
+  if (!isLikelyOpenClawCliProcess(argv)) {
+    return false;
+  }
+  const [primary] = getCommandPathFromArgv(argv);
+  return primary === "agent-exec";
+}
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
@@ -213,19 +221,39 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
     }
 
     try {
-      const { discoverAuthStorage, discoverModels } =
-        await import("./pi-model-discovery-runtime.js");
-      const agentDir = resolveOpenClawAgentDir();
-      const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;
-      const models =
-        typeof modelRegistry.getAvailable === "function"
-          ? modelRegistry.getAvailable()
-          : modelRegistry.getAll();
-      applyDiscoveredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
-        models,
+      const isAgentExecCommand = isAgentExecCommandForContextWindow();
+      appendAgentExecDebug("context-window", "contextWindow_plugin_discovery_skip_decision", {
+        is_agent_exec_command: isAgentExecCommand,
+        skips_plugin_backed_context_discovery: isAgentExecCommand,
+        fallback_configured_context_windows_still_runs: true,
+        reason: isAgentExecCommand
+          ? "agent_exec_context_window_plugin_discovery_skipped"
+          : "normal_context_window_discovery_path",
       });
+      if (!isAgentExecCommand) {
+        const { discoverAuthStorage, discoverModels } =
+          await import("./pi-model-discovery-runtime.js");
+        const agentDir = resolveOpenClawAgentDir();
+        appendAgentExecDebug("context-window", "contextWindow_before_discoverAuthStorage", {
+          raw_commandName: null,
+          raw_effectiveToolPolicy: null,
+          has_commandName: false,
+          has_effectiveToolPolicy: false,
+          has_agentDir: agentDir !== undefined,
+          has_cfg: cfg !== undefined,
+          context_window_async_load: true,
+        });
+        const authStorage = discoverAuthStorage(agentDir);
+        const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;
+        const models =
+          typeof modelRegistry.getAvailable === "function"
+            ? modelRegistry.getAvailable()
+            : modelRegistry.getAll();
+        applyDiscoveredContextWindows({
+          cache: MODEL_CONTEXT_TOKEN_CACHE,
+          models,
+        });
+      }
     } catch {
       // If model discovery fails, continue with config overrides only.
     }

@@ -1,3 +1,4 @@
+import { appendAgentExecDebug } from "../cli/agent-exec-debug.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import {
@@ -19,6 +20,8 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   explicitProviders: Record<string, ProviderConfig>;
+  commandName?: string;
+  effectiveToolPolicy?: string;
 }) => Promise<Record<string, ProviderConfig>>;
 
 export type ModelsJsonPlan =
@@ -38,11 +41,35 @@ export async function resolveProvidersForModelsJsonWithDeps(
     cfg: OpenClawConfig;
     agentDir: string;
     env: NodeJS.ProcessEnv;
+    commandName?: string;
+    effectiveToolPolicy?: string;
   },
   deps?: {
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
   },
 ): Promise<Record<string, ProviderConfig>> {
+  if (process.env.OPENCLAW_AGENT_EXEC_DEBUG === "1") {
+    appendAgentExecDebug(
+      "models-config",
+      "modelsConfig_resolveProvidersForModelsJsonWithDeps_enter",
+      {
+        raw_commandName: params.commandName ?? null,
+        raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+        has_commandName: typeof params.commandName === "string" && params.commandName.length > 0,
+        has_effectiveToolPolicy:
+          typeof params.effectiveToolPolicy === "string" && params.effectiveToolPolicy.length > 0,
+        calls_resolveImplicitProviders: true,
+      },
+    );
+    appendAgentExecDebug("models-config", "modelsConfig_before_resolveImplicitProviders", {
+      raw_commandName: params.commandName ?? null,
+      raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+      has_commandName: typeof params.commandName === "string" && params.commandName.length > 0,
+      has_effectiveToolPolicy:
+        typeof params.effectiveToolPolicy === "string" && params.effectiveToolPolicy.length > 0,
+      calls_resolveImplicitProviders: true,
+    });
+  }
   const { cfg, agentDir, env } = params;
   const explicitProviders = cfg.models?.providers ?? {};
   const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
@@ -51,6 +78,8 @@ export async function resolveProvidersForModelsJsonWithDeps(
     config: cfg,
     env,
     explicitProviders,
+    commandName: params.commandName,
+    effectiveToolPolicy: params.effectiveToolPolicy,
   });
   return mergeProviders({
     implicit: implicitProviders,
@@ -90,13 +119,33 @@ export async function planOpenClawModelsJsonWithDeps(
     env: NodeJS.ProcessEnv;
     existingRaw: string;
     existingParsed: unknown;
+    commandName?: string;
+    effectiveToolPolicy?: string;
   },
   deps?: {
     resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
   },
 ): Promise<ModelsJsonPlan> {
+  if (process.env.OPENCLAW_AGENT_EXEC_DEBUG === "1") {
+    appendAgentExecDebug("models-config", "modelsConfig_planOpenClawModelsJsonWithDeps_enter", {
+      raw_commandName: params.commandName ?? null,
+      raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+      has_commandName: typeof params.commandName === "string" && params.commandName.length > 0,
+      has_effectiveToolPolicy:
+        typeof params.effectiveToolPolicy === "string" && params.effectiveToolPolicy.length > 0,
+    });
+  }
   const { cfg, agentDir, env } = params;
-  const providers = await resolveProvidersForModelsJsonWithDeps({ cfg, agentDir, env }, deps);
+  const providers = await resolveProvidersForModelsJsonWithDeps(
+    {
+      cfg,
+      agentDir,
+      env,
+      commandName: params.commandName,
+      effectiveToolPolicy: params.effectiveToolPolicy,
+    },
+    deps,
+  );
 
   if (Object.keys(providers).length === 0) {
     return { action: "skip" };
@@ -143,5 +192,14 @@ export async function planOpenClawModelsJsonWithDeps(
 export async function planOpenClawModelsJson(
   params: Parameters<typeof planOpenClawModelsJsonWithDeps>[0],
 ): Promise<ModelsJsonPlan> {
+  if (process.env.OPENCLAW_AGENT_EXEC_DEBUG === "1") {
+    appendAgentExecDebug("models-config", "modelsConfig_planOpenClawModelsJson_enter", {
+      raw_commandName: params.commandName ?? null,
+      raw_effectiveToolPolicy: params.effectiveToolPolicy ?? null,
+      has_commandName: typeof params.commandName === "string" && params.commandName.length > 0,
+      has_effectiveToolPolicy:
+        typeof params.effectiveToolPolicy === "string" && params.effectiveToolPolicy.length > 0,
+    });
+  }
   return planOpenClawModelsJsonWithDeps(params);
 }
