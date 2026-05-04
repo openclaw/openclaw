@@ -109,10 +109,6 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv
   if (plugins?.enabled === false) {
     return ids;
   }
-  const allow = Array.isArray(plugins?.allow) ? plugins.allow : [];
-  for (const value of allow) {
-    addConfiguredPluginId(ids, value);
-  }
   const entries = asObjectRecord(plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
     if (asObjectRecord(entry)?.enabled === false) {
