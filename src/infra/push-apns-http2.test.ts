@@ -123,6 +123,25 @@ describe("connectApnsHttp2Session", () => {
     expect(connectSpy).toHaveBeenCalledWith("https://api.push.apple.com");
   });
 
+  it("rejects APNs authorities with non-origin URL components", async () => {
+    const { connectApnsHttp2Session, probeApnsHttp2ReachabilityViaProxy } =
+      await import("./push-apns-http2.js");
+
+    await expect(
+      connectApnsHttp2Session({
+        authority: "https://token@api.push.apple.com",
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow("Unsupported APNs authority");
+    await expect(
+      probeApnsHttp2ReachabilityViaProxy({
+        authority: "https://api.sandbox.push.apple.com/3/device/abc",
+        proxyUrl: "http://proxy.example:8080",
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow("Unsupported APNs authority");
+  });
+
   it("uses an HTTP CONNECT tunnel when managed proxy is active", async () => {
     const registration = registerActiveManagedProxyUrl(new URL("http://proxy.example:8080"));
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");

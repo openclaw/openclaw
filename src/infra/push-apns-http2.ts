@@ -41,6 +41,15 @@ function assertApnsAuthority(authority: string): ApnsAuthority {
   } catch {
     throw new Error(`Unsupported APNs authority: ${authority}`);
   }
+  if (
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error(`Unsupported APNs authority: ${authority}`);
+  }
   const port = parsed.port && parsed.port !== APNS_DEFAULT_PORT ? `:${parsed.port}` : "";
   const normalized = `${parsed.protocol}//${parsed.hostname}${port}`;
   if (!APNS_AUTHORITIES.has(normalized)) {
