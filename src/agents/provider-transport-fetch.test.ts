@@ -312,6 +312,54 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("does not stall when a readable SSE frame is split across chunks", async () => {
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode("event: message\n"));
+            controller.enqueue(encoder.encode('data: {"ok": true}\n\n'));
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: "https://api.openai.com/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)("https://api.openai.com/v1/responses", {
+      method: "POST",
+    });
+    const itemsPromise = (async () => {
+      const items = [];
+      for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+        items.push(item);
+      }
+      return items;
+    })();
+
+    const items = await Promise.race([
+      itemsPromise,
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 200)),
+    ]);
+
+    expect(items).not.toBe("timeout");
+    if (items === "timeout") {
+      return;
+    }
+    expect(items).toEqual([{ ok: true }]);
+  });
+
   it("drops whitespace-only SSE data frames with CRLF delimiters", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response('event: message\r\ndata:   \r\n\r\ndata: {"ok": true}\r\n\r\n', {
