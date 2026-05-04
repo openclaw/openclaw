@@ -311,10 +311,17 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const hasInputImages = (req.inputImages?.length ?? 0) > 0;
+      const imageSize = resolveFalImageSize({
+        size: req.size,
+        resolution: req.resolution,
+        aspectRatio: req.aspectRatio,
+        hasInputImages,
+      });
+      const model = ensureFalModelPath(req.model, hasInputImages);
+
+      // Flux models: enforce 1-image limit and no aspect ratio at runtime
       const isEditModel =
         model.startsWith("openai/gpt-image-") || model.startsWith("fal-ai/nano-banana-");
-
-      // Flux models: enforce 1-image limit and no aspect ratio
       if (hasInputImages && !isEditModel) {
         if ((req.inputImages?.length ?? 0) > 1) {
           throw new Error(
@@ -325,13 +332,6 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           throw new Error("fal flux image edit endpoint does not support aspectRatio overrides");
         }
       }
-      const imageSize = resolveFalImageSize({
-        size: req.size,
-        resolution: req.resolution,
-        aspectRatio: req.aspectRatio,
-        hasInputImages,
-      });
-      const model = ensureFalModelPath(req.model, hasInputImages);
       const explicitBaseUrl = req.cfg?.models?.providers?.fal?.baseUrl?.trim();
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
