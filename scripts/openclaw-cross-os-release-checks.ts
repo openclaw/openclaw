@@ -765,15 +765,7 @@ async function runUpgradeLane(params) {
 
     logLanePhase(lane, "update");
     const updateEnv = buildRealUpdateEnv(env);
-    const updateArgs = [
-      "update",
-      "--tag",
-      params.candidateUrl,
-      "--yes",
-      "--json",
-      "--timeout",
-      String(updateStepTimeoutSeconds()),
-    ];
+    const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);
     const updateResult = await runOpenClaw({
       lane,
       env: updateEnv,
@@ -1343,6 +1335,19 @@ export function verifyPackagedUpgradeUpdateResult(result, _options) {
       `${result.stdout}\n${result.stderr}`,
     )}`,
   );
+}
+
+export function buildPackagedUpgradeUpdateArgs(candidateUrl) {
+  return [
+    "update",
+    "--tag",
+    candidateUrl,
+    "--yes",
+    "--json",
+    "--no-restart",
+    "--timeout",
+    String(updateStepTimeoutSeconds()),
+  ];
 }
 
 export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
