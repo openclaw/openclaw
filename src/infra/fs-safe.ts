@@ -352,10 +352,20 @@ export async function statPathWithinRoot(params: {
   followSymlinks?: boolean;
   allowMissing?: boolean;
 }): Promise<SafePathStatResult> {
-  const { rootWithSep, resolved } = await resolvePathWithinRoot(params);
+  const resolved = await resolvePinnedBoundaryPathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    policy:
+      params.followSymlinks === false
+        ? PATH_ALIAS_POLICIES.unlinkTarget
+        : PATH_ALIAS_POLICIES.strict,
+  });
   let stat: Stats;
   try {
-    stat = params.followSymlinks === false ? await fs.lstat(resolved) : await fs.stat(resolved);
+    stat =
+      params.followSymlinks === false
+        ? await fs.lstat(resolved.canonicalPath)
+        : await fs.stat(resolved.canonicalPath);
   } catch (err) {
     if (isNotFoundPathError(err)) {
       if (params.allowMissing === true) {
@@ -368,8 +378,11 @@ export async function statPathWithinRoot(params: {
     throw err;
   }
 
-  const realPath = params.followSymlinks === false ? resolved : await fs.realpath(resolved);
-  if (!isPathInside(rootWithSep, realPath)) {
+  const realPath =
+    params.followSymlinks === false
+      ? resolved.canonicalPath
+      : await fs.realpath(resolved.canonicalPath);
+  if (!isPathInside(resolved.rootWithSep, realPath)) {
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
 

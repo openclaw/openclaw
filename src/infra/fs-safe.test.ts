@@ -407,6 +407,24 @@ describe("fs-safe", () => {
     expect(dirStat.exists).toBe(true);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects stat through symlinked parent directories outside root",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      await fs.writeFile(path.join(outside, "secret.txt"), "secret");
+      await fs.symlink(outside, path.join(root, "slot"));
+
+      await expect(
+        statPathWithinRoot({
+          rootDir: root,
+          relativePath: "slot/secret.txt",
+          followSymlinks: false,
+        }),
+      ).rejects.toMatchObject({ code: "invalid-path" });
+    },
+  );
+
   it("returns missing stat results within root when allowed", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
 
@@ -518,7 +536,7 @@ describe("fs-safe", () => {
     await expect(
       statPathWithinRoot({ rootDir: root, relativePath: "../escape.txt" }),
     ).rejects.toMatchObject({
-      code: "outside-workspace",
+      code: "invalid-path",
     });
     await expect(
       readdirWithinRoot({ rootDir: root, relativePath: "../escape" }),
