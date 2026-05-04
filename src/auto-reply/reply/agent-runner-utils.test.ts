@@ -147,7 +147,7 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true });
+    const run = makeRun({ enforceFinalTag: true, toolsAllow: ["read", "exec"] });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -168,6 +168,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.agentDir).toBe(run.agentDir);
     expect(resolved.config).toBe(run.config);
     expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);
+    expect(resolved.toolsAllow).toBe(run.toolsAllow);
     expect(resolved.ownerNumbers).toBe(run.ownerNumbers);
     expect(resolved.enforceFinalTag).toBe(true);
     expect(resolved.provider).toBe("openai");

@@ -1890,6 +1890,7 @@ Docs: https://docs.openclaw.ai
 - Scripts/UI/Windows: launch `.cmd` and `.bat` UI runners through the shared cmd.exe escaping path with shell mode disabled, avoiding Node.js v24 DEP0190 warnings while preserving argument boundaries. (#62910) Thanks @nandanadileep.
 - Agents/CLI runner: disable supervisor stdout/stderr capture for prepared CLI runs while keeping bounded diagnostics and incremental JSONL output parsing, preventing long CLI output from being retained in memory. (#79617) Thanks @samzong.
 - Telegram: treat a DM binding that carries the chat id in both `conversationId` and `parentConversationId` as a direct conversation instead of a topic, so reverse delivery for Telegram DMs is not misrouted through a topic-shaped target. (#79700) Thanks @TSHOGX.
+- Control UI/WebChat: make accepted browser chat turns visible immediately, keep pending user prompts visible through refresh/reconnect, delay brief WebSocket detach cleanup, and compact high-context main sessions earlier without changing default tool capabilities. (#75776) Thanks @ZRAIVenture.
 
 ## 2026.5.7
 

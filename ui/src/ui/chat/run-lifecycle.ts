@@ -18,6 +18,7 @@ type RunLifecycleHost = Partial<Parameters<typeof resetToolStream>[0]> & {
   chatRunId?: string | null;
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
+  chatStreamEphemeral?: boolean;
   chatSideResultTerminalRuns?: Set<string>;
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: TimerHandle | number | null;
@@ -165,6 +166,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   if (options.clearChatStream) {
     host.chatStream = null;
     host.chatStreamStartedAt = null;
+    host.chatStreamEphemeral = false;
   }
   if (options.clearLocalRun) {
     host.chatRunId = null;

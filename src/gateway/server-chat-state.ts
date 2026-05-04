@@ -10,6 +10,13 @@ export type BufferedAgentEvent = {
   payload: AgentEventPayload & { spawnedBy?: string };
 };
 
+export type PendingChatUserMessage = {
+  sessionKey: string;
+  clientRunId: string;
+  message: Record<string, unknown>;
+  ts: number;
+};
+
 export type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunEntry) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
@@ -80,6 +87,7 @@ export type ChatRunState = {
   deltaLastBroadcastText: Map<string, string>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
+  pendingUserMessages: Map<string, PendingChatUserMessage>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
@@ -93,6 +101,7 @@ export function createChatRunState(): ChatRunState {
   const deltaLastBroadcastText = new Map<string, string>();
   const agentDeltaSentAt = new Map<string, number>();
   const bufferedAgentEvents = new Map<string, BufferedAgentEvent>();
+  const pendingUserMessages = new Map<string, PendingChatUserMessage>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
@@ -104,6 +113,7 @@ export function createChatRunState(): ChatRunState {
     deltaLastBroadcastText.clear();
     agentDeltaSentAt.clear();
     bufferedAgentEvents.clear();
+    pendingUserMessages.clear();
     abortedRuns.clear();
   };
 
@@ -116,6 +126,7 @@ export function createChatRunState(): ChatRunState {
     deltaLastBroadcastText,
     agentDeltaSentAt,
     bufferedAgentEvents,
+    pendingUserMessages,
     abortedRuns,
     clear,
   };

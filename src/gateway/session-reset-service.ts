@@ -63,17 +63,34 @@ import {
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
 
-function resolveResetSessionFile(params: {
+function shouldPreserveResetSessionFile(
+  entry: SessionEntry | undefined,
+  opts: Parameters<typeof resolveSessionFilePath>[2],
+): boolean {
+  const sessionFile = entry?.sessionFile?.trim();
+  if (!entry?.sessionId || !sessionFile) {
+    return false;
+  }
+  try {
+    const defaultPath = path.resolve(resolveSessionFilePath(entry.sessionId, undefined, opts));
+    const currentPath = path.resolve(
+      resolveSessionFilePath(entry.sessionId, { sessionFile }, opts),
+    );
+    return currentPath !== defaultPath;
+  } catch {
+    return false;
+  }
+}
+
+function resolveResetSessionFilePath(params: {
   nextSessionId: string;
-  currentEntry?: SessionEntry;
-  storePath: string;
-  agentId: string;
+  currentEntry: SessionEntry | undefined;
+  opts: Parameters<typeof resolveSessionFilePath>[2];
 }): string {
-  const currentEntry = params.currentEntry;
-  const rewrittenSessionFile = currentEntry?.sessionId
+  const rewrittenSessionFile = params.currentEntry?.sessionId
     ? rewriteSessionFileForNewSessionId({
-        sessionFile: currentEntry.sessionFile,
-        previousSessionId: currentEntry.sessionId,
+        sessionFile: params.currentEntry.sessionFile,
+        previousSessionId: params.currentEntry.sessionId,
         nextSessionId: params.nextSessionId,
       })
     : undefined;
@@ -81,14 +98,15 @@ function resolveResetSessionFile(params: {
     rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
       ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
       : rewrittenSessionFile;
-  const preservedSessionFile = normalizedRewrittenSessionFile ?? currentEntry?.sessionFile;
+  const preservedSessionFile =
+    normalizedRewrittenSessionFile ??
+    (shouldPreserveResetSessionFile(params.currentEntry, params.opts)
+      ? params.currentEntry?.sessionFile
+      : undefined);
   return resolveSessionFilePath(
     params.nextSessionId,
     preservedSessionFile ? { sessionFile: preservedSessionFile } : undefined,
-    resolveSessionFilePathOptions({
-      storePath: params.storePath,
-      agentId: params.agentId,
-    }),
+    params.opts,
   );
 }
 
@@ -717,11 +735,14 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    const sessionFile = resolveResetSessionFile({
-      nextSessionId,
-      currentEntry,
+    const sessionFileOptions = resolveSessionFilePathOptions({
       storePath,
       agentId: sessionAgentId,
+    });
+    const sessionFile = resolveResetSessionFilePath({
+      nextSessionId,
+      currentEntry,
+      opts: sessionFileOptions,
     });
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,

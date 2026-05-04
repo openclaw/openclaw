@@ -277,6 +277,7 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatStreamEphemeral?: boolean;
   lastError: string | null;
   resetChatInputHistoryNavigation?: () => void;
 };
@@ -284,7 +285,7 @@ export type ChatState = {
 export type ChatEventPayload = {
   runId?: string;
   sessionKey: string;
-  state: "delta" | "final" | "aborted" | "error";
+  state: "preflight" | "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
 };
@@ -357,6 +358,7 @@ export async function loadChatHistory(state: ChatState) {
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamEphemeral = false;
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
       return;
@@ -564,6 +566,7 @@ export async function sendChatMessage(
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  state.chatStreamEphemeral = false;
 
   try {
     await requestChatSend(state, { message: msg, attachments, runId });
@@ -701,7 +704,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       clearChatStream: true,
     });
 
-  if (payload.state === "delta") {
+  if (payload.state === "preflight") {
+    if (!state.chatRunId || payload.runId !== state.chatRunId) {
+      return null;
+    }
+    const next = extractText(payload.message);
+    if (typeof next === "string" && next.trim().length > 0 && !isSilentReplyStream(next)) {
+      state.chatStream = next;
+      state.chatStreamStartedAt = state.chatStreamStartedAt ?? Date.now();
+      state.chatStreamEphemeral = true;
+    }
+  } else if (payload.state === "delta") {
     const next = extractText(payload.message);
     if (
       typeof next === "string" &&
@@ -709,6 +722,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       !isAssistantHeartbeatAckForDisplay(payload.message)
     ) {
       state.chatStream = next;
+      state.chatStreamEphemeral = false;
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
@@ -716,6 +730,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = [...state.chatMessages, finalMessage];
     } else if (
       state.chatStream?.trim() &&
+      state.chatStreamEphemeral !== true &&
       !isSilentReplyStream(state.chatStream) &&
       !isHeartbeatAckStream(state.chatStream)
     ) {
@@ -737,6 +752,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       const streamedText = state.chatStream ?? "";
       if (
         streamedText.trim() &&
+        state.chatStreamEphemeral !== true &&
         !isSilentReplyStream(streamedText) &&
         !isHeartbeatAckStream(streamedText)
       ) {

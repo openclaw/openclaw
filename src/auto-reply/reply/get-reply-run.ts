@@ -1132,6 +1132,7 @@ export async function runPreparedReply(
       workspaceDir,
       config: cfg,
       skillsSnapshot,
+      toolsAllow: opts?.toolsAllow,
       provider,
       model,
       hasOneTurnModelOverride: hasAppliedImageModelOverride || undefined,

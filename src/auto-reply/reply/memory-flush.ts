@@ -4,6 +4,8 @@ import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+const PREFLIGHT_COMPACTION_MAX_THRESHOLD_TOKENS = 65_000;
+
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
   agentCfgContextTokens?: number;
@@ -36,6 +38,32 @@ function resolvePositiveTokenCount(value: number | undefined): number | undefine
     : undefined;
 }
 
+function resolveConfiguredCompactionThresholdTokens(params: {
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  softThresholdTokens: number;
+}): number | undefined {
+  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
+  const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
+  const threshold = Math.max(0, contextWindow - reserveTokens - softThreshold);
+  return threshold > 0 ? threshold : undefined;
+}
+
+export function resolvePreflightCompactionThresholdTokens(params: {
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  softThresholdTokens: number;
+}): number {
+  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  const configuredThreshold = resolveConfiguredCompactionThresholdTokens(params);
+  const proactiveThreshold = Math.max(
+    1,
+    Math.min(PREFLIGHT_COMPACTION_MAX_THRESHOLD_TOKENS, Math.floor(contextWindow * 0.25)),
+  );
+  return Math.min(configuredThreshold ?? proactiveThreshold, proactiveThreshold);
+}
+
 function resolveMemoryFlushGateState<
   TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh">,
 >(params: {
@@ -55,11 +83,8 @@ function resolveMemoryFlushGateState<
     return null;
   }
 
-  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
-  const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
-  const threshold = Math.max(0, contextWindow - reserveTokens - softThreshold);
-  if (threshold <= 0) {
+  const threshold = resolveConfiguredCompactionThresholdTokens(params);
+  if (typeof threshold !== "number") {
     return null;
   }
 
@@ -105,8 +130,13 @@ export function shouldRunPreflightCompaction(params: {
   reserveTokensFloor: number;
   softThresholdTokens: number;
 }): boolean {
-  const state = resolveMemoryFlushGateState(params);
-  return Boolean(state && state.totalTokens >= state.threshold);
+  const totalTokens =
+    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
+  if (!totalTokens || totalTokens <= 0) {
+    return false;
+  }
+  const threshold = resolvePreflightCompactionThresholdTokens(params);
+  return totalTokens >= threshold;
 }
 
 /**
