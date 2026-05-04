@@ -28,6 +28,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { attachCodexMirrorIdentity } from "./transcript-mirror.js";
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
@@ -185,23 +186,47 @@ export class CodexAppServerEventProjector {
       assistantTexts.length > 0
         ? this.createAssistantMessage(assistantTexts.join("\n\n"))
         : undefined;
+    // Each snapshot entry is tagged with a stable mirror identity of the
+    // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
+    // from this identity rather than from snapshot position or content
+    // hash, so:
+    //   - Re-mirror of the same turn (retry) → same identity → no-op.
+    //   - Re-emit of a prior turn's entry into a later turn's snapshot
+    //     (the cross-turn drift mode named in #77012) → original identity
+    //     is preserved → on-disk key still matches → also a no-op.
+    //   - Two distinct turns where the user repeats verbatim content →
+    //     distinct turnIds → distinct identities → both kept.
+    const turnId = this.turnId;
     const messagesSnapshot: AgentMessage[] = [
-      {
-        role: "user",
-        content: this.params.prompt,
-        timestamp: Date.now(),
-      },
+      attachCodexMirrorIdentity(
+        {
+          role: "user",
+          content: this.params.prompt,
+          timestamp: Date.now(),
+        },
+        `${turnId}:prompt`,
+      ),
     ];
     // Codex owns the canonical thread. These mirror records keep enough local
     // context for OpenClaw history, search, and future harness switching.
     if (reasoningText) {
-      messagesSnapshot.push(this.createAssistantMirrorMessage("Codex reasoning", reasoningText));
+      messagesSnapshot.push(
+        attachCodexMirrorIdentity(
+          this.createAssistantMirrorMessage("Codex reasoning", reasoningText),
+          `${turnId}:reasoning`,
+        ),
+      );
     }
     if (planText) {
-      messagesSnapshot.push(this.createAssistantMirrorMessage("Codex plan", planText));
+      messagesSnapshot.push(
+        attachCodexMirrorIdentity(
+          this.createAssistantMirrorMessage("Codex plan", planText),
+          `${turnId}:plan`,
+        ),
+      );
     }
     if (lastAssistant) {
-      messagesSnapshot.push(lastAssistant);
+      messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
     }
     const turnFailed = this.completedTurn?.status === "failed";
     const turnInterrupted = this.completedTurn?.status === "interrupted";

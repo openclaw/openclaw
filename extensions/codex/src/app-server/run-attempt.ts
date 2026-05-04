@@ -1822,7 +1822,14 @@ async function mirrorTranscriptBestEffort(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
-      idempotencyScope: `codex-app-server:${params.threadId}:${params.turnId}`,
+      // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged
+      // with a per-turn `attachCodexMirrorIdentity` value carrying its own
+      // turnId, so distinct turns produce distinct dedupe keys via the
+      // identity (not via the scope). Dropping `turnId` from the scope
+      // here is what lets a re-emitted prior-turn entry — which still
+      // carries its original `${turnId}:${kind}` identity — collide with
+      // its existing on-disk key and be a true no-op.
+      idempotencyScope: `codex-app-server:${params.threadId}`,
       config: params.params.config,
     });
   } catch (error) {
