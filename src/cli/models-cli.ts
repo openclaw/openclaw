@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { validateProfileId } from "../agents/auth-profiles/sanitize.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -368,11 +369,18 @@ export function registerModelsCli(program: Command) {
     .action(async (opts, command) => {
       const agent = resolveOptionFromCommand<string>(command, "agent");
       await runModelsCommand(async () => {
+        const profileId = opts.profileId as string | undefined;
+        if (profileId) {
+          const err = validateProfileId(profileId);
+          if (err) {
+            throw new Error(`Invalid --profile-id: ${err}`);
+          }
+        }
         const { modelsAuthPasteTokenCommand } = await import("../commands/models/auth.js");
         await modelsAuthPasteTokenCommand(
           {
             provider: opts.provider as string | undefined,
-            profileId: opts.profileId as string | undefined,
+            profileId,
             expiresIn: opts.expiresIn as string | undefined,
             agent,
           },
@@ -395,6 +403,30 @@ export function registerModelsCli(program: Command) {
             method: "device",
             yes: Boolean(opts.yes),
             agent,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("clean")
+    .description(
+      "Remove stale profiles from auth-profiles.json that are not configured in openclaw.json",
+    )
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--dry-run", "Preview removals without writing changes")
+    .option("--json", "Output as JSON")
+    .action(async (opts, command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      await runModelsCommand(async () => {
+        const { modelsAuthCleanCommand } = await import("../commands/models/auth-clean.js");
+        await modelsAuthCleanCommand(
+          {
+            agent,
+            dryRun: Boolean(opts.dryRun),
+            json: Boolean(opts.json),
           },
           defaultRuntime,
         );
