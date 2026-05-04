@@ -31,6 +31,24 @@ export function resolveGatewayConfigPath(snapshot?: Pick<ConfigWriteSnapshot, "p
   return snapshot?.path ?? createConfigIO().configPath;
 }
 
+function normalizeStringListForAuthCompare(items: readonly string[] | undefined): string[] {
+  return [...(items ?? [])].toSorted();
+}
+
+function normalizeTrustedProxyAuthForCompare(auth: ReturnType<typeof resolveGatewayAuth>): {
+  userHeader: string | undefined;
+  requiredHeaders: string[];
+  allowUsers: string[];
+  allowLoopback: boolean | undefined;
+} {
+  return {
+    userHeader: auth.trustedProxy?.userHeader,
+    requiredHeaders: normalizeStringListForAuthCompare(auth.trustedProxy?.requiredHeaders),
+    allowUsers: normalizeStringListForAuthCompare(auth.trustedProxy?.allowUsers),
+    allowLoopback: auth.trustedProxy?.allowLoopback,
+  };
+}
+
 export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
   const prevResolvedAuth = resolveGatewayAuth({
     authConfig: prev.gateway?.auth,
@@ -47,8 +65,14 @@ export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawC
       return true;
     }
     return (
-      !isDeepStrictEqual(prevResolvedAuth.trustedProxy, nextResolvedAuth.trustedProxy) ||
-      !isDeepStrictEqual(prev.gateway?.trustedProxies ?? [], next.gateway?.trustedProxies ?? [])
+      !isDeepStrictEqual(
+        normalizeTrustedProxyAuthForCompare(prevResolvedAuth),
+        normalizeTrustedProxyAuthForCompare(nextResolvedAuth),
+      ) ||
+      !isDeepStrictEqual(
+        normalizeStringListForAuthCompare(prev.gateway?.trustedProxies),
+        normalizeStringListForAuthCompare(next.gateway?.trustedProxies),
+      )
     );
   }
 

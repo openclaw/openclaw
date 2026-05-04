@@ -27,8 +27,8 @@ function normalizeTrustedProxyConfig(trustedProxy: GatewayTrustedProxyConfig | u
 } {
   return {
     userHeader: trustedProxy?.userHeader,
-    requiredHeaders: [...(trustedProxy?.requiredHeaders ?? [])],
-    allowUsers: [...(trustedProxy?.allowUsers ?? [])],
+    requiredHeaders: [...(trustedProxy?.requiredHeaders ?? [])].toSorted(),
+    allowUsers: [...(trustedProxy?.allowUsers ?? [])].toSorted(),
     allowLoopback: trustedProxy?.allowLoopback,
   };
 }
@@ -49,7 +49,7 @@ export function resolveSharedGatewaySessionGeneration(
         JSON.stringify({
           mode: auth.mode,
           trustedProxy: normalizeTrustedProxyConfig(auth.trustedProxy),
-          trustedProxies: [...(trustedProxies ?? [])],
+          trustedProxies: [...(trustedProxies ?? [])].toSorted(),
         }),
         "utf8",
       )

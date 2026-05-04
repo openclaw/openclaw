@@ -1139,6 +1139,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               hasServerApprovedDeviceTokenBaseline = true;
             } else if (trustedProxyAuthOk) {
               clearUnboundScopes();
+            } else if (
+              skipControlUiPairingForDevice ||
+              (skipLocalBackendSelfPairing && authMethod !== "device-token")
+            ) {
+              hasServerApprovedDeviceTokenBaseline = true;
             }
           } else {
             hasServerApprovedDeviceTokenBaseline = true;

@@ -329,5 +329,27 @@ describe("gateway auth compatibility baseline", () => {
         ws.close();
       }
     });
+
+    test("keeps auth-none control ui first-connect token absence unchanged", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client: { ...CONTROL_UI_CLIENT },
+          scopes: ["operator.read"],
+        });
+        expect(res.ok).toBe(true);
+        const helloOk = res.payload as
+          | {
+              auth?: {
+                deviceToken?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.deviceToken).toBeUndefined();
+      } finally {
+        ws.close();
+      }
+    });
   });
 });
