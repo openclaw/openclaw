@@ -56,9 +56,9 @@ import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
+  buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
   buildBootstrapInjectionStats,
-  appendBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
@@ -155,6 +155,7 @@ import {
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { appendAgentBootstrapSystemPromptSupplement } from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   buildEmptyExplicitToolAllowlistError,
@@ -239,7 +240,6 @@ import { abortable as abortableWithSignal } from "./abortable.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
-  appendBootstrapFileToUserPromptPrefix,
   resolveAttemptWorkspaceBootstrapRouting,
   shouldStripBootstrapFromEmbeddedContext,
 } from "./attempt-bootstrap-routing.js";
@@ -1284,48 +1284,59 @@ export async function runEmbeddedAttempt(
         context: promptContributionContext,
       });
 
-    const builtAppendPrompt =
-      resolveSystemPromptOverride({
-        config: params.config,
-        agentId: sessionAgentId,
-      }) ??
-      buildEmbeddedSystemPrompt({
-        workspaceDir: effectiveWorkspace,
-        defaultThinkLevel: params.thinkLevel,
-        reasoningLevel: params.reasoningLevel ?? "off",
-        extraSystemPrompt: params.extraSystemPrompt,
-        ownerNumbers: params.ownerNumbers,
-        ownerDisplay: ownerDisplay.ownerDisplay,
-        ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-        reasoningTagHint,
-        heartbeatPrompt,
-        skillsPrompt: effectiveSkillsPrompt,
-        docsPath: openClawReferences.docsPath ?? undefined,
-        sourcePath: openClawReferences.sourcePath ?? undefined,
-        ttsHint,
-        workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
-        reactionGuidance,
-        promptMode: effectivePromptMode,
-        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-        silentReplyPromptMode: params.silentReplyPromptMode,
-        acpEnabled: isAcpRuntimeSpawnAvailable({
-          config: params.config,
-          sandboxed: sandboxInfo?.enabled === true,
-        }),
-        nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
-        runtimeInfo,
-        messageToolHints,
-        sandboxInfo,
-        tools: effectiveTools,
-        modelAliasLines: buildModelAliasLines(params.config),
-        userTimezone,
-        userTime,
-        userTimeFormat,
-        contextFiles,
-        includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
-        memoryCitationsMode: params.config?.memory?.citations,
-        promptContribution,
-      });
+    const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
+      bootstrapPromptWarning.lines,
+    );
+    const systemPromptOverrideText = resolveSystemPromptOverride({
+      config: params.config,
+      agentId: sessionAgentId,
+    });
+    const builtAppendPrompt = systemPromptOverrideText
+      ? appendAgentBootstrapSystemPromptSupplement({
+          systemPrompt: systemPromptOverrideText,
+          bootstrapMode,
+          bootstrapTruncationNotice,
+          contextFiles,
+        })
+      : buildEmbeddedSystemPrompt({
+          workspaceDir: effectiveWorkspace,
+          defaultThinkLevel: params.thinkLevel,
+          reasoningLevel: params.reasoningLevel ?? "off",
+          extraSystemPrompt: params.extraSystemPrompt,
+          ownerNumbers: params.ownerNumbers,
+          ownerDisplay: ownerDisplay.ownerDisplay,
+          ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
+          reasoningTagHint,
+          heartbeatPrompt,
+          skillsPrompt: effectiveSkillsPrompt,
+          docsPath: openClawReferences.docsPath ?? undefined,
+          sourcePath: openClawReferences.sourcePath ?? undefined,
+          ttsHint,
+          workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
+          reactionGuidance,
+          promptMode: effectivePromptMode,
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          silentReplyPromptMode: params.silentReplyPromptMode,
+          acpEnabled: isAcpRuntimeSpawnAvailable({
+            config: params.config,
+            sandboxed: sandboxInfo?.enabled === true,
+          }),
+          nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
+          runtimeInfo,
+          messageToolHints,
+          sandboxInfo,
+          tools: effectiveTools,
+          modelAliasLines: buildModelAliasLines(params.config),
+          userTimezone,
+          userTime,
+          userTimeFormat,
+          contextFiles,
+          bootstrapMode,
+          bootstrapTruncationNotice,
+          includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
+          memoryCitationsMode: params.config?.memory?.citations,
+          promptContribution,
+        });
     const appendPrompt = isRawModelRun
       ? ""
       : transformProviderSystemPrompt({
@@ -1375,11 +1386,6 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
-    const userPromptPrefixText = appendBootstrapFileToUserPromptPrefix({
-      prefixText: bootstrapRouting.userPromptPrefixText,
-      bootstrapMode,
-      contextFiles: remappedContextFiles,
-    });
     prepStages.mark("system-prompt");
 
     // Keep the session lock scoped to transcript/session mutations. Cold plugin
@@ -1831,7 +1837,6 @@ export async function runEmbeddedAttempt(
           toolsAllow: params.toolsAllow,
           skillsSnapshot: params.skillsSnapshot,
           systemPromptReport,
-          userPromptPrefixText,
         }),
       );
 
@@ -2593,16 +2598,7 @@ export async function runEmbeddedAttempt(
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
-        let effectivePrompt = appendBootstrapPromptWarning(
-          params.prompt,
-          bootstrapPromptWarning.lines,
-          {
-            preserveExactPrompt: heartbeatPrompt,
-          },
-        );
-        if (userPromptPrefixText) {
-          effectivePrompt = `${userPromptPrefixText}\n\n${effectivePrompt}`;
-        }
+        let effectivePrompt = params.prompt;
         const hookCtx = {
           runId: params.runId,
           trace: freezeDiagnosticTraceContext(diagnosticTrace),

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  appendBootstrapFileToUserPromptPrefix,
   resolveAttemptWorkspaceBootstrapRouting,
+  shouldStripBootstrapFromEmbeddedContext,
 } from "./attempt-bootstrap-routing.js";
 
 describe("runEmbeddedAttempt bootstrap routing", () => {
@@ -26,7 +26,7 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
     expect(isWorkspaceBootstrapPending).toHaveBeenCalledWith(canonicalWorkspace);
     expect(isWorkspaceBootstrapPending).not.toHaveBeenCalledWith(sandboxWorkspace);
     expect(routing.bootstrapMode).toBe("none");
-    expect(routing.userPromptPrefixText).toBeUndefined();
+    expect(routing.shouldStripBootstrapFromContext).toBe(true);
   });
 
   it("falls back to limited bootstrap wording when a primary run cannot read files", async () => {
@@ -41,30 +41,15 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
     });
 
     expect(routing.bootstrapMode).toBe("limited");
-    expect(routing.userPromptPrefixText).toContain("Bootstrap is still pending");
-    expect(routing.userPromptPrefixText).toContain("cannot safely complete");
+    expect(routing.shouldStripBootstrapFromContext).toBe(true);
   });
 
-  it("appends BOOTSTRAP.md contents to the user prompt prefix for full bootstrap turns", () => {
-    const prompt = appendBootstrapFileToUserPromptPrefix({
-      prefixText: "[Bootstrap pending]",
-      bootstrapMode: "full",
-      contextFiles: [{ path: "/tmp/workspace/BOOTSTRAP.md", content: "Ask who I am." }],
-    });
-
-    expect(prompt).toContain("[Bootstrap pending]");
-    expect(prompt).toContain("[BEGIN BOOTSTRAP.md]");
-    expect(prompt).toContain("Ask who I am.");
-    expect(prompt).toContain("workspace/user instructions");
+  it("keeps BOOTSTRAP.md in Project Context for full bootstrap turns", () => {
+    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "full" })).toBe(false);
   });
 
-  it("does not append BOOTSTRAP.md contents for limited bootstrap turns", () => {
-    const prompt = appendBootstrapFileToUserPromptPrefix({
-      prefixText: "[Bootstrap pending]",
-      bootstrapMode: "limited",
-      contextFiles: [{ path: "/tmp/workspace/BOOTSTRAP.md", content: "Ask who I am." }],
-    });
-
-    expect(prompt).toBe("[Bootstrap pending]");
+  it("strips BOOTSTRAP.md from Project Context outside full bootstrap turns", () => {
+    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "limited" })).toBe(true);
+    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "none" })).toBe(true);
   });
 });
