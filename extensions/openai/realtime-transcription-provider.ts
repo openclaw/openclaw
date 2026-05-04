@@ -150,23 +150,17 @@ function createOpenAIRealtimeTranscriptionSession(
       transport.sendJson({
         type: "transcription_session.update",
         session: {
-          audio: {
-            input: {
-              format: {
-                type: "audio/pcmu",
-              },
-              transcription: {
-                model: config.model,
-                ...(config.language ? { language: config.language } : {}),
-                ...(config.prompt ? { prompt: config.prompt } : {}),
-              },
-              turn_detection: {
-                type: "server_vad",
-                threshold: config.vadThreshold,
-                prefix_padding_ms: 300,
-                silence_duration_ms: config.silenceDurationMs,
-              },
-            },
+          input_audio_format: "g711_ulaw",
+          input_audio_transcription: {
+            model: config.model,
+            ...(config.language ? { language: config.language } : {}),
+            ...(config.prompt ? { prompt: config.prompt } : {}),
+          },
+          turn_detection: {
+            type: "server_vad",
+            threshold: config.vadThreshold,
+            prefix_padding_ms: 300,
+            silence_duration_ms: config.silenceDurationMs,
           },
         },
       });
