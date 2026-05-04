@@ -510,14 +510,16 @@ export function runAgentAttempt(params: {
       } catch (err) {
         if (
           err instanceof FailoverError &&
-          err.reason === "session_expired" &&
+          (err.reason === "session_expired" ||
+            err.reason === "timeout" ||
+            err.reason === "unknown") &&
           activeCliSessionBinding?.sessionId &&
           params.sessionKey &&
           params.sessionStore &&
           params.storePath
         ) {
           log.warn(
-            `CLI session expired, clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
+            `CLI session failed (reason=${err.reason}), clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
           );
 
           params.sessionEntry =

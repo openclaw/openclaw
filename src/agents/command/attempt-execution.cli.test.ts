@@ -226,6 +226,136 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
+  it("clears stale Claude CLI session IDs before retrying after session timeout", async () => {
+    const sessionKey = "agent:main:subagent:cli-timeout";
+    const homeDir = path.join(tmpDir, "home-timeout");
+    process.env.HOME = homeDir;
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir, "stale-cli-timeout-session.jsonl"),
+      `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "old" }] } })}\n`,
+      "utf-8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-timeout",
+      updatedAt: Date.now(),
+      cliSessionIds: { "claude-cli": "stale-cli-timeout-session" },
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    runCliAgentMock
+      .mockRejectedValueOnce(
+        new FailoverError("session timed out", {
+          reason: "timeout",
+          provider: "claude-cli",
+          model: "opus",
+        }),
+      )
+      .mockResolvedValueOnce(makeCliResult("recovered after timeout"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "retry after timeout",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-timeout",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe("stale-cli-timeout-session");
+    expect(runCliAgentMock.mock.calls[1]?.[0]?.cliSessionId).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+  });
+
+  it("clears stale Claude CLI session IDs before retrying after unknown FailoverError", async () => {
+    const sessionKey = "agent:main:subagent:cli-unknown";
+    const homeDir = path.join(tmpDir, "home-unknown");
+    process.env.HOME = homeDir;
+    const projectsDir2 = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    await fs.mkdir(projectsDir2, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir2, "stale-cli-unknown-session.jsonl"),
+      `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "old" }] } })}\n`,
+      "utf-8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-unknown",
+      updatedAt: Date.now(),
+      cliSessionIds: { "claude-cli": "stale-cli-unknown-session" },
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    runCliAgentMock
+      .mockRejectedValueOnce(
+        new FailoverError("unknown cli failure", {
+          reason: "unknown",
+          provider: "claude-cli",
+          model: "opus",
+        }),
+      )
+      .mockResolvedValueOnce(makeCliResult("recovered after unknown"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "retry after unknown",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-unknown",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe("stale-cli-unknown-session");
+    expect(runCliAgentMock.mock.calls[1]?.[0]?.cliSessionId).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+  });
+
   it("does not pass --resume when the stored Claude CLI transcript is missing", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript";
     const homeDir = path.join(tmpDir, "home");
