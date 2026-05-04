@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HealthSummary } from "../../commands/health.types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -2182,6 +2183,108 @@ describe("gateway healthHandlers.health cache freshness", () => {
       includeSensitive: false,
     });
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+});
+
+describe("gateway healthHandlers.health channel runtime overlay", () => {
+  let healthHandlers: typeof import("./health.js").healthHandlers;
+
+  beforeAll(async () => {
+    ({ healthHandlers } = await import("./health.js"));
+  });
+
+  it("merges live channel runtime into cached health responses", async () => {
+    const cached: HealthSummary = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 3,
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          configured: true,
+          linked: true,
+          running: false,
+          connected: false,
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              linked: true,
+              running: false,
+              connected: false,
+            },
+          },
+        },
+      },
+      channelOrder: ["whatsapp"],
+      channelLabels: { whatsapp: "WhatsApp" },
+      heartbeatSeconds: 30,
+      defaultAgentId: "default",
+      agents: [],
+      sessions: { path: "/tmp/sessions", count: 0, recent: [] },
+    };
+    const respond = vi.fn();
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot: vi.fn(async () => cached),
+        logHealth: { error: vi.fn() },
+        getRuntimeSnapshot: () => ({
+          channels: {
+            whatsapp: {
+              accountId: "default",
+              configured: true,
+              linked: true,
+              running: true,
+              connected: true,
+              healthState: "healthy",
+              lastConnectedAt: 1234,
+            },
+          },
+          channelAccounts: {
+            whatsapp: {
+              default: {
+                accountId: "default",
+                configured: true,
+                linked: true,
+                running: true,
+                connected: true,
+                healthState: "healthy",
+                lastConnectedAt: 1234,
+              },
+            },
+          },
+        }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          whatsapp: expect.objectContaining({
+            running: true,
+            connected: true,
+            healthState: "healthy",
+            accounts: expect.objectContaining({
+              default: expect.objectContaining({
+                running: true,
+                connected: true,
+                healthState: "healthy",
+              }),
+            }),
+          }),
+        }),
+      }),
+      undefined,
+      { cached: true },
+    );
   });
 });
 

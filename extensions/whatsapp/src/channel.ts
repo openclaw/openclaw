@@ -12,6 +12,7 @@ import { whatsappApprovalAuth } from "./approval-auth.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
   describeWhatsAppMessageActions,
+  resolveWhatsAppAgentReactionExtraGuidance,
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
 import { whatsappChannelOutbound } from "./channel-outbound.js";
@@ -111,7 +112,16 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             cfg,
             accountId: accountId ?? undefined,
           });
-          return level ? { level, channelLabel: "WhatsApp" } : undefined;
+          return level
+            ? {
+                level,
+                channelLabel: "WhatsApp",
+                extraGuidance: resolveWhatsAppAgentReactionExtraGuidance({
+                  cfg,
+                  accountId: accountId ?? undefined,
+                }),
+              }
+            : undefined;
         },
       },
       messaging: {

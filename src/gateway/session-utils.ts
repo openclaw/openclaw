@@ -1334,6 +1334,12 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
+      if (
+        normalizedProvider === "openai-codex" &&
+        normalizedCandidates.some((candidate) => candidate.startsWith("gpt-5.5"))
+      ) {
+        return true;
+      }
       return false;
     }
     if (
@@ -1345,6 +1351,12 @@ export async function resolveGatewayModelSupportsImages(params: {
           candidate === "haiku" ||
           candidate.startsWith("claude-"),
       )
+    ) {
+      return true;
+    }
+    if (
+      normalizedProvider === "openai-codex" &&
+      normalizedCandidates.some((candidate) => candidate.startsWith("gpt-5.5"))
     ) {
       return true;
     }

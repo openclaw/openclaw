@@ -1041,6 +1041,36 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+    expect(prompt).toContain(
+      "A well-placed reaction is better than a filler acknowledgement message",
+    );
+  });
+
+  it("renders extensive reaction guidance with natural-use framing", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reactionGuidance: {
+        level: "extensive",
+        channel: "WhatsApp",
+      },
+    });
+
+    expect(prompt).toContain("Reactions are enabled for WhatsApp in EXTENSIVE mode.");
+    expect(prompt).toContain("Use reactions like a good human chat participant would.");
+    expect(prompt).toContain("React first, then reply, when both are warranted");
+  });
+
+  it("includes channel-specific reaction policy guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reactionGuidance: {
+        level: "extensive",
+        channel: "WhatsApp",
+        extraGuidance: ["Allowed WhatsApp reaction emojis: 👨🏻‍💻 💯."],
+      },
+    });
+
+    expect(prompt).toContain("Allowed WhatsApp reaction emojis: 👨🏻‍💻 💯.");
   });
 
   it("keeps stable project context before volatile channel guidance for prefix-cache reuse", () => {

@@ -10,6 +10,10 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
+  looksLikePdfArchiveCandidate,
+  maybeShoarchiveOutboundPdf,
+} from "openclaw/plugin-sdk/shoarchive";
+import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
@@ -166,6 +170,22 @@ export async function sendMessageWhatsApp(
       } else {
         await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined);
       }
+    }
+    if (
+      primaryMediaUrl &&
+      looksLikePdfArchiveCandidate({
+        mediaUrl: primaryMediaUrl,
+        contentType: mediaType,
+        fileName: documentFileName,
+      })
+    ) {
+      await maybeShoarchiveOutboundPdf({
+        mediaUrl: primaryMediaUrl,
+        contentType: mediaType,
+        fileName: documentFileName,
+        recipient: to,
+        via: "WhatsApp",
+      });
     }
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;

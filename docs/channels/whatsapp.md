@@ -385,6 +385,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
+    - host-local document sends allow buffer-verified PDF, Office, ZIP, CSV, and Markdown payloads; renamed ZIP archives are sent as ZIP documents instead of fake Office documents
     - audio media is sent through the Baileys `audio` payload with `ptt: true`, so WhatsApp clients render it as a push-to-talk voice note
     - reply payloads preserve `audioAsVoice`; TTS voice-note output for WhatsApp stays on this PTT path even when the provider returns MP3 or WebM
     - native Ogg/Opus audio is sent as `audio/ogg; codecs=opus` for voice-note compatibility
@@ -457,7 +458,7 @@ Per-account overrides use `channels.whatsapp.accounts.<id>.reactionLevel`.
 ## Acknowledgment reactions
 
 WhatsApp supports immediate ack reactions on inbound receipt via `channels.whatsapp.ackReaction`.
-Ack reactions are gated by `reactionLevel` — they are suppressed when `reactionLevel` is `"off"`.
+Ack reactions are gated by `reactionLevel`; they are suppressed when `reactionLevel` is `"off"`.
 
 ```json5
 {
@@ -634,7 +635,7 @@ The effective `direct` map is determined first: if the account defines its own `
 `dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`). Prompt overrides live under `direct`.
 </Note>
 
-**Difference from Telegram multi-account behavior:** In Telegram, root `groups` is intentionally suppressed for all accounts in a multi-account setup — even accounts that define no `groups` of their own — to prevent a bot from receiving group messages for groups it does not belong to. WhatsApp does not apply this guard: root `groups` and root `direct` are always inherited by accounts that define no account-level override, regardless of how many accounts are configured. In a multi-account WhatsApp setup, if you want per-account group or direct prompts, define the full map under each account explicitly rather than relying on root-level defaults.
+**Difference from Telegram multi-account behavior:** In Telegram, root `groups` is intentionally suppressed for all accounts in a multi-account setup, even accounts that define no `groups` of their own, to prevent a bot from receiving group messages for groups it does not belong to. WhatsApp does not apply this guard: root `groups` and root `direct` are always inherited by accounts that define no account-level override, regardless of how many accounts are configured. In a multi-account WhatsApp setup, if you want per-account group or direct prompts, define the full map under each account explicitly rather than relying on root-level defaults.
 
 Important behavior:
 

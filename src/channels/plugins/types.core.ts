@@ -463,6 +463,8 @@ export type ChannelThreadingToolContext = {
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  /** Trusted provider-native participant for the current message, not model-supplied. */
+  currentMessageParticipant?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   /**
@@ -646,7 +648,9 @@ export type ChannelAgentPromptAdapter = {
   reactionGuidance?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-  }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
+  }) =>
+    | { level: "minimal" | "extensive"; channelLabel?: string; extraGuidance?: string[] }
+    | undefined;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";

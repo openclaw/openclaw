@@ -161,11 +161,34 @@ function recoverPendingOutboundDeliveries(params: {
     const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
     const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
     const logRecovery = params.log.child("delivery-recovery");
-    await recoverPendingDeliveries({
-      deliver: deliverOutboundPayloads,
-      log: logRecovery,
-      cfg: params.cfg,
-    });
+    const passes = isVitestRuntimeEnv()
+      ? [{ delayMs: 0, label: "test" }]
+      : [
+          { delayMs: 30_000, label: "initial" },
+          { delayMs: 90_000, label: "warm-up" },
+          { delayMs: 240_000, label: "post-warmup" },
+        ];
+    for (const pass of passes) {
+      if (pass.delayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, pass.delayMs));
+      }
+      const summary = await recoverPendingDeliveries({
+        deliver: deliverOutboundPayloads,
+        log: logRecovery,
+        cfg: params.cfg,
+      });
+      if (
+        summary.recovered === 0 &&
+        summary.failed === 0 &&
+        summary.skippedMaxRetries === 0 &&
+        summary.deferredBackoff === 0
+      ) {
+        break;
+      }
+      logRecovery.info(
+        `${pass.label} delivery recovery pass left work pending or deferred; follow-up pass scheduled`,
+      );
+    }
   })().catch((err) => params.log.error(`Delivery recovery failed: ${String(err)}`));
 }
 

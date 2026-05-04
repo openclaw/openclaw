@@ -4,9 +4,39 @@ import type { createWaSocket } from "../session.js";
 import { extractContextInfo } from "./extract.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
+const MESSAGE_WRAPPER_KEYS = [
+  "botInvokeMessage",
+  "ephemeralMessage",
+  "viewOnceMessage",
+  "viewOnceMessageV2",
+  "viewOnceMessageV2Extension",
+  "documentWithCaptionMessage",
+  "groupMentionedMessage",
+] as const;
+
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  const normalized = normalizeMessageContent(message);
-  return normalized;
+  let current = normalizeMessageContent(message);
+  while (current && typeof current === "object") {
+    let unwrapped = false;
+    for (const key of MESSAGE_WRAPPER_KEYS) {
+      const candidate = (current as Record<string, unknown>)[key];
+      if (
+        candidate &&
+        typeof candidate === "object" &&
+        "message" in (candidate as Record<string, unknown>) &&
+        (candidate as { message?: unknown }).message &&
+        typeof (candidate as { message?: unknown }).message === "object"
+      ) {
+        current = normalizeMessageContent((candidate as { message: proto.IMessage }).message);
+        unwrapped = true;
+        break;
+      }
+    }
+    if (!unwrapped) {
+      break;
+    }
+  }
+  return current;
 }
 
 /**

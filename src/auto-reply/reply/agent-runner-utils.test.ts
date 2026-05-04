@@ -260,4 +260,25 @@ describe("agent-runner-utils", () => {
       currentMessageId: "msg-9",
     });
   });
+
+  it("preserves the trusted WhatsApp group message participant for reaction tools", () => {
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "whatsapp",
+        To: "120363406331109499@g.us",
+        ChatType: "group",
+        MessageSid: "3EB03360313BC171647FB1",
+        MessageParticipant: "203873608286239:51@lid",
+      },
+      config: {},
+      hasRepliedRef: undefined,
+    });
+
+    expect(context).toMatchObject({
+      currentChannelProvider: "whatsapp",
+      currentChannelId: "120363406331109499@g.us",
+      currentMessageId: "3EB03360313BC171647FB1",
+      currentMessageParticipant: "203873608286239:51@lid",
+    });
+  });
 });

@@ -36,7 +36,11 @@ export function resolveInboundDebounceMs(params: {
 type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
+  maxTimeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  maxDebounceMs?: number;
+  maxBatchItems?: number;
+  startedAt: number;
   releaseReady: () => void;
   readyReleased: boolean;
   task: Promise<void>;
@@ -50,6 +54,10 @@ export type InboundDebounceCreateParams<T> = {
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
+  maxDebounceMs?: number;
+  resolveMaxDebounceMs?: (item: T) => number | undefined;
+  maxBatchItems?: number;
+  resolveMaxBatchItems?: (item: T) => number | undefined;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
 };
@@ -66,6 +74,20 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return defaultDebounceMs;
     }
     return Math.max(0, Math.trunc(resolved));
+  };
+  const resolveMaxDebounceMs = (item: T): number | undefined => {
+    const resolved = params.resolveMaxDebounceMs?.(item) ?? params.maxDebounceMs;
+    if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
+      return undefined;
+    }
+    return Math.max(1, Math.trunc(resolved));
+  };
+  const resolveMaxBatchItems = (item: T): number | undefined => {
+    const resolved = params.resolveMaxBatchItems?.(item) ?? params.maxBatchItems;
+    if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
+      return undefined;
+    }
+    return Math.max(1, Math.trunc(resolved));
   };
 
   const runFlush = async (items: T[]) => {
@@ -132,6 +154,10 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       clearTimeout(buffer.timeout);
       buffer.timeout = null;
     }
+    if (buffer.maxTimeout) {
+      clearTimeout(buffer.maxTimeout);
+      buffer.maxTimeout = null;
+    }
     // Reserve each key's execution slot as soon as the first buffered item
     // arrives, so later same-key work cannot overtake a timer-backed flush.
     releaseBuffer(buffer);
@@ -146,6 +172,26 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await flushBuffer(key, buffer);
   };
 
+  const clearKey = (key: string): T[] => {
+    const buffer = buffers.get(key);
+    if (!buffer) {
+      return [];
+    }
+    buffers.delete(key);
+    if (buffer.timeout) {
+      clearTimeout(buffer.timeout);
+      buffer.timeout = null;
+    }
+    if (buffer.maxTimeout) {
+      clearTimeout(buffer.maxTimeout);
+      buffer.maxTimeout = null;
+    }
+    const items = buffer.items.slice();
+    buffer.items = [];
+    releaseBuffer(buffer);
+    return items;
+  };
+
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
@@ -154,6 +200,22 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       await flushBuffer(key, buffer);
     }, buffer.debounceMs);
     buffer.timeout.unref?.();
+  };
+
+  const scheduleMaxFlush = (key: string, buffer: DebounceBuffer<T>) => {
+    if (buffer.maxTimeout) {
+      clearTimeout(buffer.maxTimeout);
+      buffer.maxTimeout = null;
+    }
+    if (buffer.maxDebounceMs === undefined) {
+      return;
+    }
+    const deadline = buffer.startedAt + buffer.maxDebounceMs;
+    const delay = Math.max(0, deadline - Date.now());
+    buffer.maxTimeout = setTimeout(async () => {
+      await flushBuffer(key, buffer);
+    }, delay);
+    buffer.maxTimeout.unref?.();
   };
 
   const canTrackKey = (key: string) => {
@@ -166,6 +228,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const enqueue = async (item: T) => {
     const key = params.buildKey(item);
     const debounceMs = resolveDebounceMs(item);
+    const maxDebounceMs = resolveMaxDebounceMs(item);
+    const maxBatchItems = resolveMaxBatchItems(item);
     const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
 
     if (!canDebounce || !key) {
@@ -201,6 +265,23 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (existing) {
       existing.items.push(item);
       existing.debounceMs = debounceMs;
+      if (
+        maxDebounceMs !== undefined &&
+        (existing.maxDebounceMs === undefined || maxDebounceMs < existing.maxDebounceMs)
+      ) {
+        existing.maxDebounceMs = maxDebounceMs;
+        scheduleMaxFlush(key, existing);
+      }
+      if (
+        maxBatchItems !== undefined &&
+        (existing.maxBatchItems === undefined || maxBatchItems < existing.maxBatchItems)
+      ) {
+        existing.maxBatchItems = maxBatchItems;
+      }
+      if (existing.maxBatchItems !== undefined && existing.items.length >= existing.maxBatchItems) {
+        await flushBuffer(key, existing);
+        return;
+      }
       scheduleFlush(key, existing);
       return;
     }
@@ -223,14 +304,19 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     buffer = {
       items: [item],
       timeout: null,
+      maxTimeout: null,
       debounceMs,
+      maxDebounceMs,
+      maxBatchItems,
+      startedAt: Date.now(),
       releaseReady: reservedTask.release,
       readyReleased: false,
       task: reservedTask.task,
     };
     buffers.set(key, buffer);
     scheduleFlush(key, buffer);
+    scheduleMaxFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  return { enqueue, flushKey, clearKey };
 }

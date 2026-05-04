@@ -6,7 +6,13 @@ describe("WhatsApp prompt config Zod validation", () => {
     const config = {
       groups: {
         "123@g.us": {
+          debounceMs: 4500,
+          debounceScope: "conversation",
+          selfAddressedDebounceMs: 2500,
+          debounceMaxWaitMs: 9000,
+          debounceMaxBatchItems: 8,
           systemPrompt: "This is a work group",
+          visibleReplies: "automatic",
         },
       },
     };
@@ -14,7 +20,13 @@ describe("WhatsApp prompt config Zod validation", () => {
     const result = WhatsAppConfigSchema.safeParse(config);
     expect(result.success).toBe(true);
     if (result.success) {
+      expect(result.data.groups?.["123@g.us"]?.debounceMs).toBe(4500);
+      expect(result.data.groups?.["123@g.us"]?.debounceScope).toBe("conversation");
+      expect(result.data.groups?.["123@g.us"]?.selfAddressedDebounceMs).toBe(2500);
+      expect(result.data.groups?.["123@g.us"]?.debounceMaxWaitMs).toBe(9000);
+      expect(result.data.groups?.["123@g.us"]?.debounceMaxBatchItems).toBe(8);
       expect(result.data.groups?.["123@g.us"]?.systemPrompt).toBe("This is a work group");
+      expect(result.data.groups?.["123@g.us"]?.visibleReplies).toBe("automatic");
     }
   });
 
@@ -97,43 +109,15 @@ describe("WhatsApp prompt config Zod validation", () => {
     }
   });
 
-  it("accepts deprecated exposeErrorText as a no-op compatibility key", () => {
+  it("rejects invalid group debounce scope", () => {
     const result = WhatsAppConfigSchema.safeParse({
-      exposeErrorText: false,
-      accounts: {
-        work: {
-          exposeErrorText: true,
+      groups: {
+        "123@g.us": {
+          debounceScope: "room",
         },
       },
     });
 
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(Object.hasOwn(result.data, "exposeErrorText")).toBe(false);
-      expect(Object.hasOwn(result.data.accounts?.work ?? {}, "exposeErrorText")).toBe(false);
-    }
-  });
-
-  it("keeps deprecated exposeErrorText out of generated config surfaces", () => {
-    const schema = WhatsAppConfigSchema.toJSONSchema({
-      target: "draft-07",
-      unrepresentable: "any",
-    }) as {
-      properties?: {
-        exposeErrorText?: unknown;
-        accounts?: {
-          additionalProperties?: {
-            properties?: {
-              exposeErrorText?: unknown;
-            };
-          };
-        };
-      };
-    };
-
-    expect(schema.properties?.exposeErrorText).toBeUndefined();
-    expect(schema.properties?.accounts?.additionalProperties?.properties?.exposeErrorText).toBe(
-      undefined,
-    );
+    expect(result.success).toBe(false);
   });
 });

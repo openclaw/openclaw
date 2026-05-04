@@ -330,6 +330,7 @@ const PROXY_ERROR_RE =
 const DNS_ERROR_RE = /\benotfound\b|\beai_again\b|\bgetaddrinfo\b|\bno such host\b|\bdns\b/i;
 const INTERRUPTED_NETWORK_ERROR_RE =
   /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
+const INTERRUPTED_REQUEST_RE = /^(?:terminated|aborted|cancelled|canceled)$/i;
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
 const SANDBOX_BLOCKED_RE =
@@ -465,7 +466,11 @@ function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
   if (!raw) {
     return false;
   }
-  if (isTimeoutErrorMessage(raw) || INTERRUPTED_NETWORK_ERROR_RE.test(raw)) {
+  if (
+    isTimeoutErrorMessage(raw) ||
+    INTERRUPTED_NETWORK_ERROR_RE.test(raw) ||
+    INTERRUPTED_REQUEST_RE.test(raw.trim())
+  ) {
     return true;
   }
   if (
@@ -1151,6 +1156,26 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
+// Surface-aware redaction for external messaging surfaces.
+// Strips internal details (file paths, session IDs, auth stores, model/provider names)
+// from text before it reaches external messaging surfaces like WhatsApp.
+const INTERNAL_PATH_RE = /(?:\/Users\/\S+|~\/\.\S+|\/home\/\S+|\/opt\/\S+)/g;
+const SESSION_KEY_RE = /agent:\S+:\S+:\S+/g;
+const AUTH_STORE_RE = /Auth store:\s*\S+/gi;
+const API_KEY_RE = /(?:API key|token|key)[^.]*?(?:for|in|at)\s+['"]?\S+['"]?/gi;
+const PROVIDER_MODEL_RE = /(?:anthropic|google|openai|minimax|deepseek|xai|meta)\/[\w.-]+/gi;
+
+export function redactInternalDetails(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return text
+    .replace(INTERNAL_PATH_RE, "[internal path]")
+    .replace(SESSION_KEY_RE, "[session]")
+    .replace(AUTH_STORE_RE, "Auth store: [redacted]")
+    .replace(API_KEY_RE, "[redacted credentials]")
+    .replace(PROVIDER_MODEL_RE, "[model]");
+}
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;

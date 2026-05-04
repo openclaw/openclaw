@@ -3,9 +3,14 @@ import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/r
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
   isReasoningReplyPayload,
+  normalizeOutboundReplyMediaDirectives,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  looksLikePdfArchiveCandidate,
+  maybeShoarchiveOutboundPdf,
+} from "openclaw/plugin-sdk/shoarchive";
 import type { WhatsAppSendResult } from "../inbound/send-result.js";
 import { loadWebMedia } from "../media.js";
 import {
@@ -62,7 +67,8 @@ export async function deliverWebReply(params: {
       providerAccepted: sendResults.some((result) => result.providerAccepted),
     };
   };
-  if (isReasoningReplyPayload(replyResult)) {
+  const normalizedReplyResult = normalizeOutboundReplyMediaDirectives(replyResult);
+  if (isReasoningReplyPayload(normalizedReplyResult)) {
     whatsappOutboundLog.debug(`Suppressed reasoning payload to ${msg.from}`);
     return finishDelivery();
   }
@@ -70,7 +76,7 @@ export async function deliverWebReply(params: {
   const chunkMode = params.chunkMode ?? "length";
   const normalizedReply =
     params.normalizedReplyResult ??
-    normalizeWhatsAppOutboundPayload(replyResult, {
+    normalizeWhatsAppOutboundPayload(normalizedReplyResult, {
       normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
     });
   const convertedText = markdownToWhatsApp(
@@ -128,7 +134,7 @@ export async function deliverWebReply(params: {
       connectionId: connectionId ?? null,
       to: msg.from,
       from: msg.to,
-      text: elide(replyResult.text, 240),
+      text: elide(normalizedReply.text ?? normalizedReplyResult.text, 240),
       mediaUrl: null,
       mediaSizeBytes: null,
       mediaKind: null,
@@ -217,6 +223,8 @@ export async function deliverWebReply(params: {
           ),
         );
       } else {
+        const fileName = media.fileName ?? "file";
+        const mimetype = media.mimetype;
         const quote = getQuote();
         rememberSendResult(
           await sendWithRetry(
@@ -224,15 +232,30 @@ export async function deliverWebReply(params: {
               msg.sendMedia(
                 {
                   document: media.buffer,
-                  fileName: media.fileName,
+                  fileName,
                   caption,
-                  mimetype: media.mimetype,
+                  mimetype,
                 },
                 quote,
               ),
             "media:document",
           ),
         );
+        if (
+          looksLikePdfArchiveCandidate({
+            mediaUrl,
+            contentType: mimetype,
+            fileName,
+          })
+        ) {
+          await maybeShoarchiveOutboundPdf({
+            mediaUrl,
+            contentType: mimetype,
+            fileName,
+            recipient: msg.from,
+            via: "WhatsApp",
+          });
+        }
       }
       whatsappOutboundLog.info(
         `Sent media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,

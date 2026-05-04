@@ -20,7 +20,7 @@ SIGN=0
 AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
 LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
-ATTACH_ONLY=1
+ATTACH_ONLY=0
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -102,7 +102,7 @@ for arg in "$@"; do
       log "Reset unsigned overrides:"
       log "  rm ~/.openclaw/disable-launchagent"
       log ""
-      log "Default behavior: Auto-detect signing keys, fallback to --no-sign if none found"
+      log "Default behavior: Rebuild, restart the gateway daemon, and launch the freshly packaged dist app"
       exit 0
       ;;
     *) ;;
@@ -191,16 +191,16 @@ choose_app_bundle() {
     return 0
   fi
 
-  if [[ -d "/Applications/OpenClaw.app" ]]; then
-    APP_BUNDLE="/Applications/OpenClaw.app"
-    return 0
-  fi
-
   if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
     APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
     if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
       fail "dist/OpenClaw.app missing Sparkle after packaging"
     fi
+    return 0
+  fi
+
+  if [[ -d "/Applications/OpenClaw.app" ]]; then
+    APP_BUNDLE="/Applications/OpenClaw.app"
     return 0
   fi
 
@@ -265,5 +265,5 @@ else
 fi
 
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "show gateway launch agent args (unsigned)" bash -lc "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist' | head -n 40 || true"
+  run_step "verify gateway launch agent plist (unsigned)" /usr/bin/plutil -lint "${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist"
 fi

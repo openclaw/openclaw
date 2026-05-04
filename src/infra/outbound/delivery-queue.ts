@@ -13,6 +13,7 @@ export {
   drainPendingDeliveries,
   isEntryEligibleForRecoveryRetry,
   isPermanentDeliveryError,
+  isTransientListenerDeliveryError,
   MAX_RETRIES,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,

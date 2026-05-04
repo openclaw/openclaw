@@ -316,6 +316,28 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("can clear a buffered key and return its items without flushing them", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "ambient", id: "1" });
+    await debouncer.enqueue({ key: "ambient", id: "2" });
+
+    expect(debouncer.clearKey("ambient").map((entry) => entry.id)).toEqual(["1", "2"]);
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(calls).toEqual([]);
+    vi.useRealTimers();
+  });
+
   it("flushes buffered items before non-debounced item", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];
@@ -355,6 +377,99 @@ describe("createInboundDebouncer", () => {
 
     expect(calls).toEqual([]);
     await vi.advanceTimersByTimeAsync(30);
+    expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("flushes at max debounce age even when new items keep extending the window", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      maxDebounceMs: 80,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await vi.advanceTimersByTimeAsync(40);
+    await debouncer.enqueue({ key: "a", id: "2" });
+
+    await vi.advanceTimersByTimeAsync(39);
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("flushes immediately when a buffered key reaches max batch items", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 1000,
+      maxBatchItems: 3,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "a", id: "2" });
+    expect(calls).toEqual([]);
+    await debouncer.enqueue({ key: "a", id: "3" });
+    expect(calls).toEqual([["1", "2", "3"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("ratchets max debounce age down when a later item has a tighter deadline", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string; maxAgeMs: number }>({
+      debounceMs: 200,
+      buildKey: (item) => item.key,
+      resolveMaxDebounceMs: (item) => item.maxAgeMs,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1", maxAgeMs: 200 });
+    await vi.advanceTimersByTimeAsync(40);
+    await debouncer.enqueue({ key: "a", id: "2", maxAgeMs: 80 });
+
+    await vi.advanceTimersByTimeAsync(39);
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("ratchets max batch size down when a later item has a tighter cap", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string; maxBatchItems: number }>({
+      debounceMs: 1000,
+      buildKey: (item) => item.key,
+      resolveMaxBatchItems: (item) => item.maxBatchItems,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1", maxBatchItems: 5 });
+    expect(calls).toEqual([]);
+    await debouncer.enqueue({ key: "a", id: "2", maxBatchItems: 2 });
     expect(calls).toEqual([["1", "2"]]);
 
     vi.useRealTimers();

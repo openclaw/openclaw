@@ -610,6 +610,7 @@ export const OpenClawSchema = z
           .min(1)
           .max(24 * 7)
           .optional(),
+        localRoots: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),

@@ -24,6 +24,10 @@ const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
   readCodexCliCredentialsCachedMock: vi.fn<() => OAuthCredential | null>(() => null),
 }));
 
+const { writeCodexCliCredentialsMock } = vi.hoisted(() => ({
+  writeCodexCliCredentialsMock: vi.fn(() => true),
+}));
+
 const {
   refreshProviderOAuthCredentialWithPluginMock,
   formatProviderAuthProfileApiKeyWithPluginMock,
@@ -39,6 +43,8 @@ const {
 vi.mock("../cli-credentials.js", () => ({
   readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
+  writeClaudeCliCredentials: () => true,
+  writeCodexCliCredentials: writeCodexCliCredentialsMock,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
 }));
@@ -112,6 +118,8 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
     readCodexCliCredentialsCachedMock.mockReset();
     readCodexCliCredentialsCachedMock.mockReturnValue(null);
+    writeCodexCliCredentialsMock.mockReset();
+    writeCodexCliCredentialsMock.mockReturnValue(true);
     refreshProviderOAuthCredentialWithPluginMock.mockReset();
     refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
     formatProviderAuthProfileApiKeyWithPluginMock.mockReset();

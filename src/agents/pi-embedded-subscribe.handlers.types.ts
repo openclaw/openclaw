@@ -106,6 +106,12 @@ export type EmbeddedPiSubscribeState = {
   deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;
   lastAssistant?: AgentMessage;
+  /**
+   * When `blockReplyPolicy` is `"final_only"`, tracks whether any tool call
+   * has been seen in the current assistant message. Used at `message_end` to
+   * decide whether buffered text should be discarded (tool-use turn) or emitted.
+   */
+  currentTurnHasToolCall: boolean;
 };
 
 export type EmbeddedPiSubscribeContext = {

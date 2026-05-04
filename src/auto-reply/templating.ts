@@ -81,6 +81,8 @@ export type MsgContext = {
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;
+  /** Provider-native group participant for the current message, when needed for reactions. */
+  MessageParticipant?: string;
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
@@ -96,6 +98,8 @@ export type MsgContext = {
   ReplyToIdFull?: string;
   ReplyToBody?: string;
   ReplyToSender?: string;
+  ReplyToSenderJid?: string;
+  ReplyToSenderE164?: string;
   ReplyToIsQuote?: boolean;
   /** Forward origin from the reply target (when reply_to_message is a forwarded message). */
   ReplyToForwardedFrom?: string;
@@ -188,6 +192,22 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** WhatsApp JIDs/LIDs mentioned in this message (from protobuf contextInfo.mentionedJid). */
+  MentionedJids?: string[];
+  /** Bot's own WhatsApp JID (may include device suffix, e.g. 57711827927237:0@lid). */
+  SelfJid?: string;
+  /** Bot's own E.164 phone number. */
+  SelfE164?: string;
+  /** Human-readable resolution of mentioned JIDs to display names (e.g. "57711827927237@lid = you (self)"). */
+  MentionedContacts?: string;
+  /** Trusted runtime state packet for social turn-taking and output-shape judgment. */
+  ConversationStatePacket?: Record<string, unknown>;
+  /** Optional lane label for active-run/queue isolation. */
+  ReplyRunPriorityLane?: "foreground" | "ambient";
+  /** Optional active-run key when execution should be lane-scoped while transcript/session stay canonical. */
+  ReplyRunKey?: string;
+  /** Canonical queue base key for sibling lane observability. */
+  ReplyRunBaseKey?: string;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;

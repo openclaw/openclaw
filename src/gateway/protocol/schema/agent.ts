@@ -43,6 +43,7 @@ export const MessageActionToolContextSchema = Type.Object(
     currentChannelProvider: Type.Optional(Type.String()),
     currentThreadTs: Type.Optional(Type.String()),
     currentMessageId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+    currentMessageParticipant: Type.Optional(Type.String()),
     replyToMode: Type.Optional(
       Type.Union([
         Type.Literal("off"),

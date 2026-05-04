@@ -1416,7 +1416,10 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
-        #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
+        let patchedModels = await transport.patchedModels()
+        #expect(
+            patchedModels == ["openai/gpt-5.4", "openai/gpt-5.4-pro"],
+            "patched models: \(patchedModels)")
     }
 
     @Test func failedLatestModelSelectionRestoresEarlierSuccessWithoutReplay() async throws {

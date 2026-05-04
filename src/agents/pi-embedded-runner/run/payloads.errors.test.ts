@@ -109,6 +109,21 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("turns bare terminated assistant errors into safe user-facing copy", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["terminated"],
+      lastAssistant: makeAssistant({
+        errorMessage: "terminated",
+        content: [{ type: "text", text: "terminated" }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request was interrupted. Please try again.",
+      isError: true,
+    });
+  });
+
   it("suppresses pretty-printed error JSON that differs from the errorMessage", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
@@ -369,6 +384,42 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.isError).toBe(true);
     expect(payloads[1]?.text).toContain("Write");
     expect(payloads[1]?.text).not.toContain("missing");
+  });
+
+  it("suppresses recovered mutating tool errors when final output reports recovery", () => {
+    const text = "Gateway restart recovered and health verified.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "gateway",
+        meta: "config.patch",
+        error: "protected config path",
+        mutatingAction: true,
+        recoveredByLaterMutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
+  it("keeps unrecovered gateway tool failures visible once", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I will check the gateway state next."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "gateway",
+        meta: "config.patch",
+        error: "protected config path",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("I will check the gateway state next.");
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Gateway");
+    expect(payloads[1]?.text).not.toContain("protected config path");
   });
 
   it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {

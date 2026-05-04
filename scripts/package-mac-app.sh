@@ -290,7 +290,7 @@ else
   echo "WARN: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE (continuing)" >&2
 fi
 
-echo "📦 Copying Textual resources"
+echo "📦 Copying optional Textual resources"
 TEXTUAL_BUNDLE_DIR="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
 TEXTUAL_BUNDLE=""
 for candidate in \
@@ -309,12 +309,7 @@ if [ -n "$TEXTUAL_BUNDLE" ] && [ -d "$TEXTUAL_BUNDLE" ]; then
   rm -rf "$APP_ROOT/Contents/Resources/$(basename "$TEXTUAL_BUNDLE")"
   cp -R "$TEXTUAL_BUNDLE" "$APP_ROOT/Contents/Resources/"
 else
-  if [[ "${ALLOW_MISSING_TEXTUAL_BUNDLE:-0}" == "1" ]]; then
-    echo "WARN: Textual resource bundle not found (continuing due to ALLOW_MISSING_TEXTUAL_BUNDLE=1)" >&2
-  else
-    echo "ERROR: Textual resource bundle not found. Set ALLOW_MISSING_TEXTUAL_BUNDLE=1 to bypass." >&2
-    exit 1
-  fi
+  echo "Textual resource bundle not found; skipping."
 fi
 
 echo "⏹  Stopping any running OpenClaw"

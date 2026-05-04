@@ -53,6 +53,13 @@ function parseConversationInfoPayload(text: string): Record<string, unknown> {
   >;
 }
 
+function parseConversationStatePacket(text: string): Record<string, unknown> {
+  return parseUntrustedJsonBlock(
+    text,
+    "Conversation state packet (trusted runtime metadata; text fields remain untrusted human content):",
+  ) as Record<string, unknown>;
+}
+
 function parseSenderInfoPayload(text: string): Record<string, unknown> {
   return parseUntrustedJsonBlock(text, "Sender (untrusted metadata):") as Record<string, unknown>;
 }
@@ -278,6 +285,36 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["message_id_full"]).toBeUndefined();
     expect(conversationInfo["sender"]).toBe("+15551234567");
     expect(conversationInfo["conversation_label"]).toBeUndefined();
+  });
+
+  it("renders the trusted conversation state packet as a separate JSON block", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "123@g.us",
+      ConversationStatePacket: {
+        schema: "openclaw.conversation_state.v1",
+        routing: {
+          lane: { id: "direct_owner_pull", priority: 1 },
+          addressee: { confidence: "high", reason: "explicit_self_address" },
+        },
+        output_guidance: {
+          recommended_shape: "small_text",
+          reaction_tool: 'message(action="react")',
+        },
+      },
+    } as TemplateContext);
+
+    const packet = parseConversationStatePacket(text);
+    expect(packet["schema"]).toBe("openclaw.conversation_state.v1");
+    expect(packet).toMatchObject({
+      routing: {
+        lane: { id: "direct_owner_pull", priority: 1 },
+      },
+      output_guidance: {
+        recommended_shape: "small_text",
+      },
+    });
   });
 
   it("includes message identifiers for direct chats when channel is inferred from Provider", () => {
@@ -541,6 +578,8 @@ describe("buildInboundUserContextPrefix", () => {
       SenderId: "id-\0-9",
       ThreadStarterBody: "thread\0 starter",
       ReplyToSender: "Qu\0oter",
+      ReplyToSenderJid: "quo\0ter@s.whatsapp.net",
+      ReplyToSenderE164: "+1\0 555",
       ReplyToBody: "quoted\0 body",
       ForwardedFrom: "forward\0er",
       ForwardedFromTitle: "tit\0le",
@@ -561,6 +600,8 @@ describe("buildInboundUserContextPrefix", () => {
     expect(senderInfo["id"]).toBe("id--9");
 
     expect(text).toContain('"body": "thread starter"');
+    expect(text).toContain('"sender_jid": "quoter@s.whatsapp.net"');
+    expect(text).toContain('"sender_e164": "+1 555"');
     expect(text).toContain('"sender_label": "Quoter"');
     expect(text).toContain('"body": "quoted body"');
     expect(text).toContain('"from": "forwarder"');

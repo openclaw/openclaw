@@ -1,6 +1,7 @@
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
@@ -111,6 +112,36 @@ export function resolveOutboundMediaUrls(payload: {
     return [payload.mediaUrl];
   }
   return [];
+}
+
+/** Parse inline MEDIA: directives at late delivery boundaries. */
+export function normalizeOutboundReplyMediaDirectives<
+  T extends { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+>(payload: T): T {
+  const text = payload.text;
+  if (typeof text !== "string" || !/media:/i.test(text)) {
+    return payload;
+  }
+
+  const parsed = splitMediaFromOutput(text);
+  const parsedMediaUrls = parsed.mediaUrls ?? [];
+  const explicitMediaUrls = resolveOutboundMediaUrls(payload);
+  const mergedMediaUrls = Array.from(
+    new Set(
+      [...explicitMediaUrls, ...parsedMediaUrls].map((entry) => entry.trim()).filter(Boolean),
+    ),
+  );
+
+  if (mergedMediaUrls.length === 0 && parsed.text === text) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    text: parsed.text,
+    mediaUrl: mergedMediaUrls[0],
+    mediaUrls: mergedMediaUrls,
+  };
 }
 
 /** Resolve media URLs from a channel sendPayload context after legacy fallback normalization. */

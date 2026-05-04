@@ -301,13 +301,14 @@ describe("createModelSelectionState parent inheritance", () => {
     });
   }
 
-  it("inherits parent override from explicit parentSessionKey", async () => {
+  it("inherits parent override from explicit parentSessionKey when user-pinned", async () => {
     const cfg = {} as OpenClawConfig;
     const parentKey = "agent:main:discord:channel:c1";
     const sessionKey = "agent:main:discord:channel:c1:thread:123";
     const parentEntry = makeEntry({
       providerOverride: "openai",
       modelOverride: "gpt-4o",
+      modelOverrideSource: "user",
     });
     const state = await resolveStateWithParent({
       cfg,
@@ -321,6 +322,27 @@ describe("createModelSelectionState parent inheritance", () => {
     expect(state.model).toBe("gpt-4o");
   });
 
+  it("does not inherit parent override when it was auto-pinned", async () => {
+    const cfg = {} as OpenClawConfig;
+    const parentKey = "agent:main:discord:channel:c1";
+    const sessionKey = "agent:main:discord:channel:c1:thread:123";
+    const parentEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      modelOverrideSource: "auto",
+    });
+    const state = await resolveStateWithParent({
+      cfg,
+      parentKey,
+      sessionKey,
+      parentEntry,
+      parentSessionKey: parentKey,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+  });
+
   it("derives parent key from topic session suffix", async () => {
     const cfg = {} as OpenClawConfig;
     const parentKey = "agent:main:telegram:group:123";
@@ -328,6 +350,7 @@ describe("createModelSelectionState parent inheritance", () => {
     const parentEntry = makeEntry({
       providerOverride: "openai",
       modelOverride: "gpt-4o",
+      modelOverrideSource: "user",
     });
     const state = await resolveStateWithParent({
       cfg,
@@ -742,9 +765,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.resetModelOverride).toBe(false);
   });
 
-  it("does not touch an auto-failover override inherited from a parent session", async () => {
-    // Auto clearing only applies to a direct session override, not one inherited
-    // from a parent. The parent's own session state is managed separately.
+  it("ignores an auto-failover override inherited from a parent session", async () => {
     const cfg = {} as OpenClawConfig;
     const parentKey = "agent:main:telegram:direct:1";
     const childKey = "agent:main:telegram:direct:1:thread:99";
@@ -753,7 +774,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       modelOverride: "minimax/minimax-m2.7",
       modelOverrideSource: "auto",
     });
-    const childEntry = makeEntry(); // no override of its own
+    const childEntry = makeEntry();
     const sessionStore = { [parentKey]: parentEntry, [childKey]: childEntry };
 
     const state = await createModelSelectionState({
@@ -770,10 +791,8 @@ describe("createModelSelectionState auto-failover overrides", () => {
       hasModelDirective: false,
     });
 
-    // Parent auto-override is applied to the child (it has no direct override).
-    expect(state.provider).toBe("openrouter");
-    expect(state.model).toBe("minimax/minimax-m2.7");
-    // Parent session entry is not modified by the child's selection logic.
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
     expect(sessionStore[parentKey]?.providerOverride).toBe("openrouter");
     expect(state.resetModelOverride).toBe(false);
   });

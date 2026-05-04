@@ -12,6 +12,8 @@ const hoisted = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   controllerListeners: new Map<string, ActiveWebListener>(),
   runFfmpeg: vi.fn(),
+  maybeShoarchiveOutboundPdf: vi.fn(async () => {}),
+  looksLikePdfArchiveCandidate: vi.fn(),
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
@@ -79,6 +81,11 @@ vi.mock("./text-runtime.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/shoarchive", () => ({
+  looksLikePdfArchiveCandidate: hoisted.looksLikePdfArchiveCandidate,
+  maybeShoarchiveOutboundPdf: hoisted.maybeShoarchiveOutboundPdf,
+}));
+
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
   const sendMessage = vi.fn(async () => acceptedSendResult("text", "msg123"));
@@ -96,6 +103,20 @@ describe("web outbound", () => {
       fsSync.writeFileSync(args.at(-1) ?? "", Buffer.from("opus-output"));
       return "";
     });
+    hoisted.looksLikePdfArchiveCandidate.mockImplementation(
+      ({
+        contentType,
+        fileName,
+        mediaUrl,
+      }: {
+        contentType?: string;
+        fileName?: string;
+        mediaUrl: string;
+      }) =>
+        contentType === "application/pdf" ||
+        fileName?.toLowerCase().endsWith(".pdf") === true ||
+        mediaUrl.toLowerCase().endsWith(".pdf"),
+    );
     hoisted.loadOutboundMediaFromUrl.mockReset().mockImplementation(
       async (
         mediaUrl: string,
@@ -427,6 +448,63 @@ describe("web outbound", () => {
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
       fileName: "file.pdf",
+    });
+    expect(hoisted.maybeShoarchiveOutboundPdf).toHaveBeenCalledWith({
+      mediaUrl: "/tmp/file.pdf",
+      contentType: "application/pdf",
+      fileName: "file.pdf",
+      recipient: "+1555",
+      via: "WhatsApp",
+    });
+  });
+
+  it("sends ZIP media as a WhatsApp document with filename", async () => {
+    const buf = Buffer.from("zip");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/zip",
+      kind: "document",
+      fileName: "source-bundle.zip",
+    });
+
+    await sendMessageWhatsApp("+1555", "bundle", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/source-bundle.zip",
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "bundle", buf, "application/zip", {
+      fileName: "source-bundle.zip",
+    });
+    expect(hoisted.maybeShoarchiveOutboundPdf).not.toHaveBeenCalled();
+  });
+
+  it("shoarchives pdf documents even when mime falls back to octet-stream", async () => {
+    const buf = Buffer.from("pdf");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/octet-stream",
+      kind: "document",
+      fileName: "contract.pdf",
+    });
+
+    await sendMessageWhatsApp("+1555", "doc", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/contract.pdf",
+    });
+
+    expect(hoisted.looksLikePdfArchiveCandidate).toHaveBeenCalledWith({
+      mediaUrl: "/tmp/contract.pdf",
+      contentType: "application/octet-stream",
+      fileName: "contract.pdf",
+    });
+    expect(hoisted.maybeShoarchiveOutboundPdf).toHaveBeenCalledWith({
+      mediaUrl: "/tmp/contract.pdf",
+      contentType: "application/octet-stream",
+      fileName: "contract.pdf",
+      recipient: "+1555",
+      via: "WhatsApp",
     });
   });
 

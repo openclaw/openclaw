@@ -100,4 +100,31 @@ describe("applyGroupGating audio preflight mention text", () => {
       }),
     ]);
   });
+
+  it("stores inline reply context with skipped pending group history", async () => {
+    const msg = {
+      ...makeGroupAudioMsg(),
+      body: "can u see the message in my inline reply?",
+      mediaType: undefined,
+      mediaPath: undefined,
+      replyToId: "orig-1",
+      replyToBody: "hey shoar",
+      replyToSender: "Kavish",
+      replyToSenderJid: "919022233366@s.whatsapp.net",
+      replyToSenderE164: "+919022233366",
+    } as WebInboundMsg;
+
+    const result = await applyGroupGating({
+      ...makeParams(msg, groupHistories),
+    });
+
+    expect(result).toEqual({ shouldProcess: false });
+    expect(groupHistories.get("whatsapp:group:1203630")).toEqual([
+      expect.objectContaining({
+        body:
+          "can u see the message in my inline reply?\n\n" +
+          "[Replying to Kavish id:orig-1]\nhey shoar\n[/Replying]",
+      }),
+    ]);
+  });
 });

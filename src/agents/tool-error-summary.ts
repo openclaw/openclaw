@@ -7,6 +7,7 @@ export type ToolErrorSummary = {
   timedOut?: boolean;
   mutatingAction?: boolean;
   actionFingerprint?: string;
+  recoveredByLaterMutatingAction?: boolean;
 };
 
 const EXEC_LIKE_TOOL_NAMES = new Set(["exec", "bash"]);

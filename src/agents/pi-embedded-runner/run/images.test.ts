@@ -223,6 +223,11 @@ describe("modelSupportsImages", () => {
     expect(modelSupportsImages(model)).toBe(true);
   });
 
+  it("returns true for openai-codex gpt-5.5 even when catalog input is stale", () => {
+    const model = { id: "gpt-5.5", provider: "openai-codex", input: ["text"] };
+    expect(modelSupportsImages(model)).toBe(true);
+  });
+
   it("returns false when model input does not include image", () => {
     const model = { input: ["text"] };
     expect(modelSupportsImages(model)).toBe(false);

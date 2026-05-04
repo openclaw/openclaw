@@ -248,6 +248,9 @@ export class AcpSessionManager {
       if (!session.acp || !session.sessionKey) {
         continue;
       }
+      if (session.acp.mode !== "persistent") {
+        continue;
+      }
       const currentIdentity = resolveSessionIdentityFromMeta(session.acp);
       if (
         !isSessionIdentityPending(currentIdentity) ||

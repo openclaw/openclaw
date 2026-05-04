@@ -31,6 +31,11 @@ interface PendingSessionDeliveryDrainDecision {
 const MAX_SESSION_DELIVERY_RETRIES = 5;
 
 const BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
+const TRANSIENT_LISTENER_ERROR_PATTERNS: readonly RegExp[] = [
+  /no active .* listener/i,
+  /listener.*not.*(ready|active|available|started)/i,
+  /channel.*not.*(ready|connected|available|started)/i,
+];
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
 
@@ -91,13 +96,17 @@ export function isSessionDeliveryEligibleForRetry(
   return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
 }
 
+export function isTransientSessionDeliveryError(error: string): boolean {
+  return TRANSIENT_LISTENER_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
 async function drainQueuedEntry(opts: {
   entry: QueuedSessionDelivery;
   deliver: DeliverSessionDeliveryFn;
   stateDir?: string;
   onRecovered?: (entry: QueuedSessionDelivery) => void;
   onFailed?: (entry: QueuedSessionDelivery, errMsg: string) => void;
-}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
+}): Promise<"recovered" | "failed" | "deferred" | "moved-to-failed" | "already-gone"> {
   const { entry } = opts;
   try {
     await opts.deliver(entry);
@@ -106,6 +115,9 @@ async function drainQueuedEntry(opts: {
     return "recovered";
   } catch (err) {
     const errMsg = formatErrorMessage(err);
+    if (isTransientSessionDeliveryError(errMsg)) {
+      return "deferred";
+    }
     opts.onFailed?.(entry, errMsg);
     try {
       await failSessionDelivery(entry.id, errMsg, opts.stateDir);
@@ -177,7 +189,7 @@ export async function drainPendingSessionDeliveries(opts: {
           }
         }
 
-        await drainQueuedEntry({
+        const result = await drainQueuedEntry({
           entry: currentEntry,
           deliver: opts.deliver,
           stateDir: opts.stateDir,
@@ -185,6 +197,11 @@ export async function drainPendingSessionDeliveries(opts: {
             opts.log.warn(`${opts.logLabel}: retry failed for entry ${failedEntry.id}: ${errMsg}`);
           },
         });
+        if (result === "deferred") {
+          opts.log.info(
+            `${opts.logLabel}: entry ${currentEntry.id} deferred; channel listener not ready yet`,
+          );
+        }
       } finally {
         releaseRecoveryEntry(entry.id);
       }
@@ -261,6 +278,11 @@ export async function recoverPendingSessionDeliveries(opts: {
       });
       if (result === "recovered") {
         opts.log.info(`Recovered session delivery ${currentEntry.id}`);
+      } else if (result === "deferred") {
+        summary.deferredBackoff += 1;
+        opts.log.info(
+          `Session delivery ${currentEntry.id} deferred; channel listener not ready yet`,
+        );
       }
     } finally {
       releaseRecoveryEntry(entry.id);

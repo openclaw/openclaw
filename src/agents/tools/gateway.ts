@@ -141,7 +141,7 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
   const timeoutMs =
     typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1, Math.floor(opts.timeoutMs))
-      : 30_000;
+      : 120_000;
   return { url: validatedOverride?.url, token, timeoutMs };
 }
 

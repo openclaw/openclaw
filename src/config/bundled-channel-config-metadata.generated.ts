@@ -16991,8 +16991,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           additionalProperties: {
             type: "object",
             properties: {
+              name: {
+                type: "string",
+              },
               requireMention: {
                 type: "boolean",
+              },
+              visibleReplies: {
+                type: "string",
+                enum: ["automatic", "message_tool"],
               },
               tools: {
                 type: "object",
@@ -17048,6 +17055,173 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   additionalProperties: false,
                 },
               },
+              forceActivation: {
+                type: "string",
+                enum: ["always", "mention", "mentions", "never"],
+              },
+              debounceScope: {
+                type: "string",
+                enum: ["sender", "conversation"],
+              },
+              debounceMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              selfAddressedDebounceMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              debounceMaxWaitMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              debounceMaxBatchItems: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              priorityLanes: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  directOwnerPull: {
+                    type: "object",
+                    properties: {
+                      debounceMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxWaitMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxBatchItems: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      humanLatencyMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  inlineReplyToSelf: {
+                    type: "object",
+                    properties: {
+                      debounceMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxWaitMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxBatchItems: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      humanLatencyMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  bothBotAsk: {
+                    type: "object",
+                    properties: {
+                      debounceMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxWaitMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxBatchItems: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      humanLatencyMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  ambientRoomBurst: {
+                    type: "object",
+                    properties: {
+                      debounceMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxWaitMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxBatchItems: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      humanLatencyMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  otherTargetAmbient: {
+                    type: "object",
+                    properties: {
+                      debounceMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxWaitMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxBatchItems: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      humanLatencyMs: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
               systemPrompt: {
                 type: "string",
               },
@@ -17087,6 +17261,43 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           },
           required: ["direct", "group"],
+          additionalProperties: false,
+        },
+        allowedReactions: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        workIntakeReaction: {
+          type: "object",
+          properties: {
+            emoji: {
+              type: "string",
+            },
+            direct: {
+              default: true,
+              type: "boolean",
+            },
+            group: {
+              default: "mentions",
+              type: "string",
+              enum: ["always", "mentions", "never"],
+            },
+            cooldownMs: {
+              default: 120000,
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+            keywords: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+          },
+          required: ["direct", "group", "cooldownMs"],
           additionalProperties: false,
         },
         reactionLevel: {
@@ -17280,8 +17491,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 additionalProperties: {
                   type: "object",
                   properties: {
+                    name: {
+                      type: "string",
+                    },
                     requireMention: {
                       type: "boolean",
+                    },
+                    visibleReplies: {
+                      type: "string",
+                      enum: ["automatic", "message_tool"],
                     },
                     tools: {
                       type: "object",
@@ -17337,6 +17555,173 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         additionalProperties: false,
                       },
                     },
+                    forceActivation: {
+                      type: "string",
+                      enum: ["always", "mention", "mentions", "never"],
+                    },
+                    debounceScope: {
+                      type: "string",
+                      enum: ["sender", "conversation"],
+                    },
+                    debounceMs: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    selfAddressedDebounceMs: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    debounceMaxWaitMs: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    debounceMaxBatchItems: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    priorityLanes: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        directOwnerPull: {
+                          type: "object",
+                          properties: {
+                            debounceMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            maxWaitMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            maxBatchItems: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            humanLatencyMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                        inlineReplyToSelf: {
+                          type: "object",
+                          properties: {
+                            debounceMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            maxWaitMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            maxBatchItems: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            humanLatencyMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                        bothBotAsk: {
+                          type: "object",
+                          properties: {
+                            debounceMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            maxWaitMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            maxBatchItems: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            humanLatencyMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                        ambientRoomBurst: {
+                          type: "object",
+                          properties: {
+                            debounceMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            maxWaitMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            maxBatchItems: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            humanLatencyMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                        otherTargetAmbient: {
+                          type: "object",
+                          properties: {
+                            debounceMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            maxWaitMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            maxBatchItems: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            humanLatencyMs: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
                     systemPrompt: {
                       type: "string",
                     },
@@ -17376,6 +17761,43 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 },
                 required: ["direct", "group"],
+                additionalProperties: false,
+              },
+              allowedReactions: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              workIntakeReaction: {
+                type: "object",
+                properties: {
+                  emoji: {
+                    type: "string",
+                  },
+                  direct: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  group: {
+                    default: "mentions",
+                    type: "string",
+                    enum: ["always", "mentions", "never"],
+                  },
+                  cooldownMs: {
+                    default: 120000,
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  keywords: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                },
+                required: ["direct", "group", "cooldownMs"],
                 additionalProperties: false,
               },
               reactionLevel: {

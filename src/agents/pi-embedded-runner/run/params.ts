@@ -36,6 +36,10 @@ export type CurrentTurnPromptContext = {
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Active-run/steering key when execution should be lane-scoped but transcript/session stay canonical. */
+  replyRunKey?: string;
+  /** Command queue session lane key. Defaults to replyRunKey/sessionKey/sessionId. */
+  sessionLaneKey?: string;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
   agentId?: string;
@@ -81,6 +85,8 @@ export type RunEmbeddedPiAgentParams = {
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
+  /** Current provider-native group participant for action fallbacks (e.g. WhatsApp react). */
+  currentMessageParticipant?: string;
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -160,6 +166,7 @@ export type RunEmbeddedPiAgentParams = {
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
+  blockReplyPolicy?: "stream" | "final_only";
   blockReplyChunking?: BlockReplyChunking;
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onReasoningEnd?: () => void | Promise<void>;

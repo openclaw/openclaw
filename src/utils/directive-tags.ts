@@ -18,8 +18,9 @@ type InlineDirectiveParseOptions = {
 
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
+const SPLIT_TAG_RE = /\[\[\s*split\s*\]\]/gi;
 const INLINE_DIRECTIVE_TAG_WITH_PADDING_RE =
-  /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi;
+  /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]|\[\[\s*split\s*\]\])\s*/gi;
 const MAX_REPLY_DIRECTIVE_ID_LENGTH = 256;
 
 function replacementPreservesWordBoundary(source: string, offset: number, length: number): string {
@@ -86,7 +87,8 @@ export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDir
     return { text, changed: false };
   }
   const withoutAudio = text.replace(AUDIO_TAG_RE, "");
-  const stripped = withoutAudio.replace(REPLY_TAG_RE, "");
+  const withoutSplit = withoutAudio.replace(SPLIT_TAG_RE, "");
+  const stripped = withoutSplit.replace(REPLY_TAG_RE, "");
   return {
     text: stripped,
     changed: stripped !== text,

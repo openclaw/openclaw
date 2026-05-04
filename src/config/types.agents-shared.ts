@@ -24,6 +24,8 @@ export type AgentEmbeddedHarnessConfig = {
 export type AgentRuntimePolicyConfig = {
   /** Agent runtime id. Omitted uses "pi"; "auto" opts into plugin harness auto-selection. */
   id?: string;
+  /** @deprecated Accepted for compatibility with existing configs; runtime fallback is currently disabled. */
+  fallback?: string;
 };
 
 export type AgentSandboxConfig = {

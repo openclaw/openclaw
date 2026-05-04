@@ -49,6 +49,7 @@ describe("session-delivery queue recovery", () => {
         tempDir,
       );
 
+      const warn = vi.fn();
       const summary = await recoverPendingSessionDeliveries({
         deliver: vi.fn(async () => {
           throw new Error("transient failure");
@@ -56,15 +57,51 @@ describe("session-delivery queue recovery", () => {
         stateDir: tempDir,
         log: {
           info: vi.fn(),
-          warn: vi.fn(),
+          warn,
           error: vi.fn(),
         },
       });
 
       const [failedEntry] = await loadPendingSessionDeliveries(tempDir);
       expect(summary.failed).toBe(1);
+      expect(warn).toHaveBeenCalledTimes(1);
       expect(failedEntry?.retryCount).toBe(1);
       expect(failedEntry?.lastError).toBe("transient failure");
+    });
+  });
+
+  it("defers listener-not-ready errors without retrying or failing the entry", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "restart ok",
+          messageId: "restart-sentinel:agent:main:main:agentTurn:123",
+          idempotencyKey: "restart-sentinel:agent:main:main:agentTurn:123",
+        },
+        tempDir,
+      );
+
+      const log = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+      const summary = await recoverPendingSessionDeliveries({
+        deliver: vi.fn(async () => {
+          throw new Error("No active WhatsApp Web listener (account: default)");
+        }),
+        stateDir: tempDir,
+        log,
+      });
+
+      const [deferredEntry] = await loadPendingSessionDeliveries(tempDir);
+      expect(summary).toMatchObject({ recovered: 0, failed: 0, deferredBackoff: 1 });
+      expect(deferredEntry?.retryCount).toBe(0);
+      expect(deferredEntry?.lastError).toBeUndefined();
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(expect.stringContaining("listener not ready"));
     });
   });
 

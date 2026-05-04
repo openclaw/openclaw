@@ -124,6 +124,8 @@ export type OpenClawConfig = {
     preserveFilenames?: boolean;
     /** Optional retention window for persisted inbound media cleanup. */
     ttlHours?: number;
+    /** Extra local directories to allow for media file access (outbound). */
+    localRoots?: string[];
   };
   messages?: MessagesConfig;
   commands?: CommandsConfig;

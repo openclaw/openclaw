@@ -10,6 +10,7 @@ import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
+import { splitOnSplitTags } from "../utils/split-tag.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -183,6 +184,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
+    currentTurnHasToolCall: false,
   };
   const usageTotals = {
     input: 0,
@@ -269,6 +271,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.suppressBlockChunks = false;
     state.pendingAssistantUsage = undefined;
     state.assistantUsageCommitted = false;
+    state.currentTurnHasToolCall = false;
     state.assistantMessageIndex += 1;
     state.lastAssistantStreamItemId = undefined;
     state.lastAssistantTextMessageIndex = -1;
@@ -698,27 +701,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     return output;
   };
 
-  const emitBlockChunk = (
-    text: string,
-    options?: { assistantMessageIndex?: number; final?: boolean },
+  // Emit a single block chunk segment through directive parsing and block reply.
+  const emitBlockChunkSegment = (
+    chunk: string,
+    options?: { assistantMessageIndex?: number },
   ) => {
     if (state.suppressBlockChunks || params.silentExpected) {
-      return;
-    }
-    // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
-    // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
-    const chunk = stripDowngradedToolCallText(
-      stripBlockTags(text, state.blockState, { final: options?.final === true }),
-    ).trimEnd();
-    if (!chunk) {
       return;
     }
     if (chunk === state.lastBlockReplyText) {
       return;
     }
 
-    // Only check committed (successful) messaging tool texts - checking pending texts
-    // is risky because if the tool fails after suppression, the user gets no response
     const normalizedChunk = normalizeTextForComparison(chunk);
     if (isMessagingToolDuplicateNormalized(normalizedChunk, messagingToolSentTextsNormalized)) {
       log.debug(`Skipping block reply - already sent via messaging tool: ${chunk.slice(0, 50)}...`);
@@ -746,7 +740,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       replyToTag,
       replyToCurrent,
     } = splitResult;
-    // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       return;
     }
@@ -763,6 +756,29 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
       },
     );
+  };
+
+  const emitBlockChunk = (
+    text: string,
+    options?: { assistantMessageIndex?: number; final?: boolean },
+  ) => {
+    if (state.suppressBlockChunks || params.silentExpected) {
+      return;
+    }
+    // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
+    // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
+    const chunk = stripDowngradedToolCallText(
+      stripBlockTags(text, state.blockState, { final: options?.final === true }),
+    ).trimEnd();
+    if (!chunk) {
+      return;
+    }
+
+    // Split on [[SPLIT]] directives, each segment becomes a separate WhatsApp bubble.
+    const segments = splitOnSplitTags(chunk);
+    for (const segment of segments) {
+      emitBlockChunkSegment(segment, options);
+    }
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>

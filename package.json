@@ -146,6 +146,10 @@
       "types": "./dist/plugin-sdk/runtime-secret-resolution.d.ts",
       "default": "./dist/plugin-sdk/runtime-secret-resolution.js"
     },
+    "./plugin-sdk/shoarchive": {
+      "types": "./dist/plugin-sdk/shoarchive.d.ts",
+      "default": "./dist/plugin-sdk/shoarchive.js"
+    },
     "./plugin-sdk/setup": {
       "types": "./dist/plugin-sdk/setup.d.ts",
       "default": "./dist/plugin-sdk/setup.js"

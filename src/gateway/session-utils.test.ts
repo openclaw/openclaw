@@ -1705,6 +1705,40 @@ describe("deriveSessionTitle", () => {
 });
 
 describe("resolveGatewayModelSupportsImages", () => {
+  test("keeps openai-codex gpt-5.5 image-capable even when stale catalog metadata says text-only", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-5.5",
+        provider: "openai-codex",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "gpt-5.5",
+            name: "gpt-5.5",
+            provider: "openai-codex",
+            input: ["text"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("uses openai-codex gpt-5.5 catalog image metadata", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-5.5",
+        provider: "openai-codex",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "gpt-5.5",
+            name: "gpt-5.5",
+            provider: "openai-codex",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
   test("keeps Foundry GPT deployments image-capable even when stale catalog metadata says text-only", async () => {
     await expect(
       resolveGatewayModelSupportsImages({

@@ -144,6 +144,18 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("The user is saying hello");
   });
 
+  it("suppresses backstage silent reasoning before trailing NO_REPLY", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: "Kavish is replying to shoar. Not for me. Let it breathe.\n\nNO_REPLY",
+      },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(result).not.toBeNull();

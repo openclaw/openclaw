@@ -58,6 +58,12 @@ export type FollowupRun = {
     sessionId: string;
     sessionKey?: string;
     runtimePolicySessionKey?: string;
+    /** Active-run/steering key when execution is lane-scoped. */
+    replyRunKey?: string;
+    /** Command queue session lane key when execution is lane-scoped. */
+    sessionLaneKey?: string;
+    /** Human-readable lane label for diagnostics. */
+    replyRunPriorityLane?: "foreground" | "ambient";
     messageProvider?: string;
     agentAccountId?: string;
     groupId?: string;

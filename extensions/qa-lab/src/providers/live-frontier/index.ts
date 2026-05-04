@@ -26,7 +26,7 @@ export const liveFrontierProviderDefinition: QaProviderDefinition = {
   defaultModel: (options) => options?.preferredLiveModel ?? "openai/gpt-5.5",
   defaultImageGenerationProviderIds: ["openai"],
   defaultImageGenerationModel: ({ modelProviderIds }) =>
-    modelProviderIds.includes("openai") ? "openai/gpt-image-1" : null,
+    modelProviderIds.includes("openai") ? "openai/gpt-image-2" : null,
   usesFastModeByDefault: isQaFastModeModelRef,
   resolveModelParams: ({ modelRef, fastMode, thinkingDefault }) => ({
     transport: "sse",

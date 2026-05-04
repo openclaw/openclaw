@@ -8,6 +8,7 @@ import { generateSecureUuid } from "./secure-random.js";
 const QUEUE_DIRNAME = "session-delivery-queue";
 const FAILED_DIRNAME = "failed";
 const TMP_SWEEP_MAX_AGE_MS = 5_000;
+const DELIVERED_SWEEP_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
 type SessionDeliveryContext = {
   channel?: string;
@@ -85,6 +86,23 @@ async function unlinkStaleTmpBestEffort(filePath: string, now: number): Promise<
   }
 }
 
+async function unlinkStaleDeliveredBestEffort(filePath: string, now: number): Promise<void> {
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) {
+      return;
+    }
+    if (now - stat.mtimeMs < DELIVERED_SWEEP_MAX_AGE_MS) {
+      return;
+    }
+    await unlinkBestEffort(filePath);
+  } catch (err) {
+    if (getErrnoCode(err) !== "ENOENT") {
+      throw err;
+    }
+  }
+}
+
 async function writeQueueEntry(filePath: string, entry: QueuedSessionDelivery): Promise<void> {
   const tmp = `${filePath}.${process.pid}.tmp`;
   await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
@@ -132,13 +150,23 @@ export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   stateDir?: string,
 ): Promise<string> {
-  const queueDir = await ensureSessionDeliveryQueueDir(stateDir);
+  await ensureSessionDeliveryQueueDir(stateDir);
   const id = buildEntryId(params.idempotencyKey);
-  const filePath = path.join(queueDir, `${id}.json`);
+  const { jsonPath, deliveredPath } = resolveQueueEntryPaths(id, stateDir);
 
   if (params.idempotencyKey) {
     try {
-      const stat = await fs.promises.stat(filePath);
+      const stat = await fs.promises.stat(jsonPath);
+      if (stat.isFile()) {
+        return id;
+      }
+    } catch (err) {
+      if (getErrnoCode(err) !== "ENOENT") {
+        throw err;
+      }
+    }
+    try {
+      const stat = await fs.promises.stat(deliveredPath);
       if (stat.isFile()) {
         return id;
       }
@@ -149,7 +177,7 @@ export async function enqueueSessionDelivery(
     }
   }
 
-  await writeQueueEntry(filePath, {
+  await writeQueueEntry(jsonPath, {
     ...params,
     id,
     enqueuedAt: Date.now(),
@@ -165,12 +193,10 @@ export async function ackSessionDelivery(id: string, stateDir?: string): Promise
   } catch (err) {
     const code = getErrnoCode(err);
     if (code === "ENOENT") {
-      await unlinkBestEffort(deliveredPath);
       return;
     }
     throw err;
   }
-  await unlinkBestEffort(deliveredPath);
 }
 
 export async function failSessionDelivery(
@@ -222,7 +248,7 @@ export async function loadPendingSessionDeliveries(
   const now = Date.now();
   for (const file of files) {
     if (file.endsWith(".delivered")) {
-      await unlinkBestEffort(path.join(queueDir, file));
+      await unlinkStaleDeliveredBestEffort(path.join(queueDir, file), now);
     } else if (file.endsWith(".tmp")) {
       await unlinkStaleTmpBestEffort(path.join(queueDir, file), now);
     }

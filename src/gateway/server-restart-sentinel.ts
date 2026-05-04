@@ -10,7 +10,12 @@ import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
+import {
+  ackDelivery,
+  enqueueDelivery,
+  failDelivery,
+  withActiveDeliveryClaim,
+} from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
@@ -113,47 +118,60 @@ async function deliverRestartSentinelNotice(params: {
     payloads,
     bestEffort: false,
   }).catch(() => null);
-  for (let attempt = 1; attempt <= OUTBOUND_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      const results = await deliverOutboundPayloads({
-        cfg: params.cfg,
-        channel: params.channel,
-        to: params.to,
-        accountId: params.accountId,
-        replyToId: params.replyToId,
-        threadId: params.threadId,
-        payloads,
-        session: params.session,
-        deps: params.deps,
-        bestEffort: false,
-        skipQueue: true,
-      });
-      if (results.length > 0) {
-        if (queueId) {
-          await ackDelivery(queueId).catch(() => {});
+
+  const deliverWithRetries = async () => {
+    for (let attempt = 1; attempt <= OUTBOUND_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const results = await deliverOutboundPayloads({
+          cfg: params.cfg,
+          channel: params.channel,
+          to: params.to,
+          accountId: params.accountId,
+          replyToId: params.replyToId,
+          threadId: params.threadId,
+          payloads,
+          session: params.session,
+          deps: params.deps,
+          bestEffort: false,
+          skipQueue: true,
+        });
+        if (results.length > 0) {
+          if (queueId) {
+            await ackDelivery(queueId).catch(() => {});
+          }
+          return;
         }
-        return;
-      }
-      throw new Error("outbound delivery returned no results");
-    } catch (err) {
-      const retrying = attempt < OUTBOUND_MAX_ATTEMPTS;
-      const suffix = retrying ? `; retrying in ${OUTBOUND_RETRY_DELAY_MS}ms` : "";
-      log.warn(`${params.summary}: outbound delivery failed${suffix}: ${String(err)}`, {
-        channel: params.channel,
-        to: params.to,
-        sessionKey: params.sessionKey,
-        attempt,
-        maxAttempts: OUTBOUND_MAX_ATTEMPTS,
-      });
-      if (!retrying) {
-        if (queueId) {
-          await failDelivery(queueId, formatErrorMessage(err)).catch(() => undefined);
+        throw new Error("outbound delivery returned no results");
+      } catch (err) {
+        const retrying = attempt < OUTBOUND_MAX_ATTEMPTS;
+        const suffix = retrying ? `; retrying in ${OUTBOUND_RETRY_DELAY_MS}ms` : "";
+        log.warn(`${params.summary}: outbound delivery failed${suffix}: ${String(err)}`, {
+          channel: params.channel,
+          to: params.to,
+          sessionKey: params.sessionKey,
+          attempt,
+          maxAttempts: OUTBOUND_MAX_ATTEMPTS,
+        });
+        if (!retrying) {
+          if (queueId) {
+            await failDelivery(queueId, formatErrorMessage(err)).catch(() => undefined);
+          }
+          return;
         }
-        return;
+        await waitForOutboundRetry(OUTBOUND_RETRY_DELAY_MS);
       }
-      await waitForOutboundRetry(OUTBOUND_RETRY_DELAY_MS);
     }
+  };
+
+  if (queueId) {
+    const claim = await withActiveDeliveryClaim(queueId, deliverWithRetries);
+    if (claim.status === "claimed-by-other-owner") {
+      log.info(`${params.summary}: delivery ${queueId} already claimed by recovery`);
+    }
+    return;
   }
+
+  await deliverWithRetries();
 }
 
 function buildRestartContinuationMessageId(params: {
@@ -533,7 +551,10 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     await removeRestartSentinelFile(sentinelPath);
-    enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
+    const hasDirectRestartNoticeRoute = Boolean(resolvedTo && channel);
+    if (!hasDirectRestartNoticeRoute) {
+      enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
+    }
 
     if (resolvedTo && channel) {
       const outboundSession = buildOutboundSessionContext({

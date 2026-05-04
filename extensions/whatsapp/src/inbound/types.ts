@@ -52,6 +52,41 @@ export type WhatsAppStructuredContactContext = {
   }>;
 };
 
+export type WhatsAppQueueLaneId =
+  | "direct_owner_pull"
+  | "inline_reply_to_self"
+  | "both_bot_ask"
+  | "ambient_room_burst"
+  | "other_target_ambient";
+
+export type WhatsAppQueueLaneDecision = {
+  id: WhatsAppQueueLaneId;
+  priority: number;
+  reason: string;
+  debounceMs?: number;
+  maxWaitMs?: number;
+  maxBatchItems?: number;
+  humanLatencyMs?: number;
+};
+
+export type WhatsAppQueueBurst = {
+  size: number;
+  key?: string;
+  windowMs?: number;
+  debounceMs?: number;
+  maxWaitMs?: number;
+  maxBatchItems?: number;
+};
+
+export type WhatsAppPendingAmbientEntry = {
+  id?: string;
+  sender?: string;
+  senderJid?: string;
+  senderE164?: string;
+  body: string;
+  timestamp?: number;
+};
+
 export type WebInboundMessage = {
   id?: string;
   from: string; // conversation id: E.164 for direct chats, group JID for groups
@@ -103,4 +138,7 @@ export type WebInboundMessage = {
   }>;
   wasMentioned?: boolean;
   isBatched?: boolean;
+  queueLane?: WhatsAppQueueLaneDecision;
+  queueBurst?: WhatsAppQueueBurst;
+  pendingAmbientBurst?: WhatsAppPendingAmbientEntry[];
 };

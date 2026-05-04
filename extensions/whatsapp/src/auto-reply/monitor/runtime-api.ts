@@ -15,6 +15,7 @@ export {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 export { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+export { recordSessionMetaFromInbound } from "openclaw/plugin-sdk/session-store-runtime";
 export {
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContext,

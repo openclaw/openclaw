@@ -12,6 +12,7 @@ import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.
 import type { WebInboundMsg } from "../types.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
+import { classifyWhatsAppGroupAddressee } from "./group-addressee.js";
 import {
   hasControlCommand,
   implicitMentionKindWhen,
@@ -21,6 +22,7 @@ import {
   resolveInboundMentionDecision,
 } from "./group-gating.runtime.js";
 import { noteGroupMember } from "./group-members.js";
+import { formatReplyContext } from "./message-line.js";
 
 export type GroupHistoryEntry = {
   sender: string;
@@ -73,13 +75,15 @@ function recordPendingGroupHistoryEntry(params: {
         senderIdentity.e164 ??
         getPrimaryIdentityId(senderIdentity) ??
         "Unknown");
+  const body = params.body ?? params.msg.body;
+  const replyContext = formatReplyContext(params.msg);
   recordPendingHistoryEntryIfEnabled({
     historyMap: params.groupHistories,
     historyKey: params.groupHistoryKey,
     limit: params.groupHistoryLimit,
     entry: {
       sender,
-      body: params.body ?? params.msg.body,
+      body: replyContext ? `${body}\n\n${replyContext}` : body,
       timestamp: params.msg.timestamp,
       id: params.msg.id,
       senderJid: senderIdentity.jid ?? params.msg.senderJid,
@@ -197,15 +201,52 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
       commandAuthorized: false,
     },
   });
-  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
+  const routingWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
+  params.msg.wasMentioned = routingWasMentioned;
+  if (
+    !shouldBypassMention &&
+    requireMention &&
+    mentionDecision.shouldSkip &&
+    params.deferMissingMention === true
+  ) {
+    params.logVerbose(
+      `Deferring group mention skip until audio preflight completes in ${params.conversationId}`,
+    );
+    return { shouldProcess: false, needsMentionText: true } as const;
+  }
+  const addressee = classifyWhatsAppGroupAddressee({
+    cfg: params.cfg,
+    msg: mentionMsg,
+    agentId: params.agentId,
+    activation,
+    wasMentioned: routingWasMentioned,
+    authDir: params.authDir,
+    groupMemberNames: params.groupMemberNames.get(params.groupHistoryKey),
+    groupHistory: params.groupHistories.get(params.groupHistoryKey),
+    ownerControlCommand: shouldBypassMention,
+  });
+  const selfAddressed =
+    (addressee.state === "addressed_to_self" || addressee.state === "direct_task_to_self") &&
+    !(implicitReplyToSelf && addressee.reason === "reply_to_self");
+  const effectiveWasMentioned = routingWasMentioned || selfAddressed;
   params.msg.wasMentioned = effectiveWasMentioned;
-  if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
-    if (params.deferMissingMention === true) {
-      params.logVerbose(
-        `Deferring group mention skip until audio preflight completes in ${params.conversationId}`,
-      );
-      return { shouldProcess: false, needsMentionText: true } as const;
-    }
+  params.msg.groupAddressee = addressee;
+  params.replyLogger.debug(
+    {
+      conversationId: params.conversationId,
+      state: addressee.state,
+      allowReply: addressee.allowReply,
+      reason: addressee.reason,
+      ...addressee.debug,
+    },
+    "group addressee debug",
+  );
+  if (!addressee.allowReply) {
+    params.logVerbose(
+      `Group message visible with no-reply guidance from addressee routing (${addressee.reason}) in ${params.conversationId}`,
+    );
+  }
+  if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip && !selfAddressed) {
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${mentionMsg.body}`,

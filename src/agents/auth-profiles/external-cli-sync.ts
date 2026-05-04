@@ -130,6 +130,58 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   },
 ];
 
+const ANTHROPIC_DEFAULT_PROFILE_ID = "anthropic:default";
+
+function clearExternalCliProfileFailureState(store: AuthProfileStore, profileId: string): boolean {
+  const stats = store.usageStats?.[profileId];
+  if (!stats) {
+    return false;
+  }
+  const hadFailureState = Boolean(
+    stats.cooldownUntil ??
+    stats.cooldownReason ??
+    stats.cooldownModel ??
+    stats.disabledUntil ??
+    stats.disabledReason ??
+    stats.failureCounts ??
+    (stats.errorCount && stats.errorCount > 0),
+  );
+  stats.cooldownUntil = undefined;
+  stats.cooldownReason = undefined;
+  stats.cooldownModel = undefined;
+  stats.disabledUntil = undefined;
+  stats.disabledReason = undefined;
+  stats.errorCount = 0;
+  stats.failureCounts = undefined;
+  return hadFailureState;
+}
+
+export function syncExternalCliCredentials(
+  store: AuthProfileStore,
+  _opts?: { log?: boolean },
+): boolean {
+  let mutated = false;
+  const claudeCredential = readClaudeCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS });
+  if (claudeCredential?.type === "oauth" && claudeCredential.provider === "anthropic") {
+    const existing = store.profiles[ANTHROPIC_DEFAULT_PROFILE_ID];
+    const existingOAuth =
+      existing?.type === "oauth" && existing.provider === claudeCredential.provider
+        ? existing
+        : undefined;
+    if (
+      !existing ||
+      (existingOAuth && shouldReplaceStoredOAuthCredential(existingOAuth, claudeCredential))
+    ) {
+      store.profiles[ANTHROPIC_DEFAULT_PROFILE_ID] = claudeCredential;
+      mutated = true;
+    }
+    if (existingOAuth || store.profiles[ANTHROPIC_DEFAULT_PROFILE_ID] === claudeCredential) {
+      mutated = clearExternalCliProfileFailureState(store, ANTHROPIC_DEFAULT_PROFILE_ID) || mutated;
+    }
+  }
+  return mutated;
+}
+
 function resolveExternalCliSyncProvider(params: {
   profileId: string;
   credential?: OAuthCredential;

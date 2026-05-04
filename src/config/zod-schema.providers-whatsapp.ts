@@ -18,11 +18,42 @@ import {
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
+const WhatsAppPriorityLaneSchema = z
+  .object({
+    debounceMs: z.number().int().nonnegative().optional(),
+    maxWaitMs: z.number().int().nonnegative().optional(),
+    maxBatchItems: z.number().int().positive().optional(),
+    humanLatencyMs: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
+const WhatsAppPriorityLanesSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    directOwnerPull: WhatsAppPriorityLaneSchema,
+    inlineReplyToSelf: WhatsAppPriorityLaneSchema,
+    bothBotAsk: WhatsAppPriorityLaneSchema,
+    ambientRoomBurst: WhatsAppPriorityLaneSchema,
+    otherTargetAmbient: WhatsAppPriorityLaneSchema,
+  })
+  .strict()
+  .optional();
+
 const WhatsAppGroupEntrySchema = z
   .object({
+    name: z.string().optional(),
     requireMention: z.boolean().optional(),
+    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
+    forceActivation: z.enum(["always", "mention", "mentions", "never"]).optional(),
+    debounceScope: z.enum(["sender", "conversation"]).optional(),
+    debounceMs: z.number().int().nonnegative().optional(),
+    selfAddressedDebounceMs: z.number().int().nonnegative().optional(),
+    debounceMaxWaitMs: z.number().int().nonnegative().optional(),
+    debounceMaxBatchItems: z.number().int().positive().optional(),
+    priorityLanes: WhatsAppPriorityLanesSchema,
     systemPrompt: z.string().optional(),
   })
   .strict()
@@ -48,17 +79,16 @@ const WhatsAppAckReactionSchema = z
   .strict()
   .optional();
 
-function stripDeprecatedWhatsAppNoopKeys(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  if (!Object.hasOwn(value, "exposeErrorText")) {
-    return value;
-  }
-  const next = { ...(value as Record<string, unknown>) };
-  delete next.exposeErrorText;
-  return next;
-}
+const WhatsAppWorkIntakeReactionSchema = z
+  .object({
+    emoji: z.string().optional(),
+    direct: z.boolean().optional().default(true),
+    group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
+    cooldownMs: z.number().int().nonnegative().optional().default(120000),
+    keywords: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
 
 function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
   return {
@@ -90,6 +120,8 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     groups: WhatsAppGroupsSchema,
     direct: WhatsAppDirectSchema,
     ackReaction: WhatsAppAckReactionSchema,
+    allowedReactions: z.array(z.string()).optional(),
+    workIntakeReaction: WhatsAppWorkIntakeReactionSchema,
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     debounceMs: params.useDefaults
       ? z.number().int().nonnegative().optional().default(0)
@@ -142,7 +174,7 @@ function enforceAllowlistDmPolicyAllowFrom(params: {
   });
 }
 
-const WhatsAppAccountObjectSchema = z
+export const WhatsAppAccountSchema = z
   .object({
     ...buildWhatsAppCommonShape({ useDefaults: false }),
     name: z.string().optional(),
@@ -153,12 +185,7 @@ const WhatsAppAccountObjectSchema = z
   })
   .strict();
 
-export const WhatsAppAccountSchema = z.preprocess(
-  stripDeprecatedWhatsAppNoopKeys,
-  WhatsAppAccountObjectSchema,
-);
-
-const WhatsAppConfigObjectSchema = z
+export const WhatsAppConfigSchema = z
   .object({
     ...buildWhatsAppCommonShape({ useDefaults: true }),
     accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
@@ -223,8 +250,3 @@ const WhatsAppConfigObjectSchema = z
       });
     }
   });
-
-export const WhatsAppConfigSchema = z.preprocess(
-  stripDeprecatedWhatsAppNoopKeys,
-  WhatsAppConfigObjectSchema,
-);

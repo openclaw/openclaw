@@ -1,3 +1,15 @@
+type WhatsAppGroupEntry<T extends object> = T | null | undefined;
+
+function resolveWhatsAppGroupEntry<T extends object>(params: {
+  groups?: Record<string, WhatsAppGroupEntry<T>>;
+  groupId?: string | null;
+}): T | undefined {
+  if (!params.groupId) {
+    return undefined;
+  }
+  return params.groups?.[params.groupId] ?? params.groups?.["*"] ?? undefined;
+}
+
 export function resolveWhatsAppGroupSystemPrompt(params: {
   accountConfig?: { groups?: Record<string, { systemPrompt?: string | null }> } | null;
   groupId?: string | null;
@@ -12,6 +24,22 @@ export function resolveWhatsAppGroupSystemPrompt(params: {
   }
   const wildcard = groups?.["*"]?.systemPrompt;
   return wildcard != null ? wildcard.trim() || undefined : undefined;
+}
+
+export function resolveWhatsAppGroupVisibleReplies(params: {
+  accountConfig?: {
+    groups?: Record<
+      string,
+      { visibleReplies?: "automatic" | "message_tool" | null } | null | undefined
+    >;
+  } | null;
+  groupId?: string | null;
+}): "automatic" | "message_tool" | undefined {
+  const entry = resolveWhatsAppGroupEntry({
+    groups: params.accountConfig?.groups,
+    groupId: params.groupId,
+  });
+  return entry?.visibleReplies ?? undefined;
 }
 
 export function resolveWhatsAppDirectSystemPrompt(params: {

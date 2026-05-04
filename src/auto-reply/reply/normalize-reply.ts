@@ -1,3 +1,4 @@
+import { redactInternalDetails } from "../../agents/pi-embedded-helpers/errors.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -28,8 +29,45 @@ export type NormalizeReplyOptions = {
   stripHeartbeat?: boolean;
   silentToken?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  /** shoar local: When true, redact file paths, session keys, and model/provider details from output. */
+  redactInternals?: boolean;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
+
+function shouldSuppressSilentReasoningText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  if (/^[\p{Extended_Pictographic}\s]+$/u.test(text)) {
+    return false;
+  }
+  const exactMarkers = [
+    /\bnot for me\b/,
+    /\bnot addressed to me\b/,
+    /\bthis isn't addressed to me\b/,
+    /\blet it breathe\b/,
+    /\bstay quiet\b/,
+    /\bgoing quiet\b/,
+    /\bi(?:'m| am)\s+(?:going|staying)\s+quiet\b/,
+    /\bwait and watch\b/,
+    /\bwatch and wait\b/,
+    /\bprobably no need\b/,
+    /\blikely no need\b/,
+    /\bthat's for (?:shoar|brodie|them|him|her)\b/,
+  ];
+  if (exactMarkers.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+  const words = normalized.split(/\s+/).filter(Boolean);
+  return (
+    words.length >= 10 &&
+    /\b(i|me|my)\b/.test(normalized) &&
+    /\b(should|could|probably|likely|need|reply|respond|quiet|watch|breathe|addressed)\b/.test(
+      normalized,
+    )
+  );
+}
 
 export function normalizeReplyPayload(
   payload: ReplyPayload,
@@ -70,7 +108,12 @@ export function normalizeReplyPayload(
       text = stripLeadingSilentToken(text, silentToken);
     }
     if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
-      text = stripSilentToken(text, silentToken);
+      const stripped = stripSilentToken(text, silentToken);
+      if (stripped !== text && shouldSuppressSilentReasoningText(stripped)) {
+        opts.onSkip?.("silent");
+        return null;
+      }
+      text = stripped;
       if (!hasContent(text)) {
         opts.onSkip?.("silent");
         return null;
@@ -97,6 +140,9 @@ export function normalizeReplyPayload(
 
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+    if (opts.redactInternals) {
+      text = redactInternalDetails(text);
+    }
   }
   if (!hasContent(text)) {
     opts.onSkip?.("empty");

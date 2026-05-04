@@ -1,10 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  clearApprovalNativeRouteStateForTest,
-  createApprovalNativeRouteReporter,
-} from "../../infra/approval-native-route-coordinator.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
   AcpRuntime,
@@ -42,7 +37,10 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
-  markDiagnosticSessionProgress: vi.fn(),
+}));
+const powernapDrainMocks = vi.hoisted(() => ({
+  isPowernapDraining: vi.fn(() => false),
+  recordDrainedMessage: vi.fn(),
 }));
 const hookMocks = vi.hoisted(() => ({
   registry: {
@@ -148,9 +146,6 @@ const ttsMocks = vi.hoisted(() => {
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
   };
 });
-const transcriptMocks = vi.hoisted(() => ({
-  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
-}));
 const replyMediaPathMocks = vi.hoisted(() => ({
   createReplyMediaPathNormalizer: vi.fn(
     (_params?: unknown) => async (payload: ReplyPayload) => payload,
@@ -340,11 +335,15 @@ vi.mock("./abort.runtime.js", () => ({
   },
 }));
 
+vi.mock("./powernap-drain.js", () => ({
+  isPowernapDraining: powernapDrainMocks.isPowernapDraining,
+  recordDrainedMessage: powernapDrainMocks.recordDrainedMessage,
+}));
+
 vi.mock("../../logging/diagnostic.js", () => ({
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
-  markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
 }));
 vi.mock("../../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: (sessionKey: string | undefined) =>
@@ -478,10 +477,6 @@ vi.mock("../../tts/status-config.js", () => ({
 }));
 vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-}));
-vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
-  persistAcpDispatchTranscript: (params: unknown) =>
-    transcriptMocks.persistAcpDispatchTranscript(params),
 }));
 vi.mock("./dispatch-acp-session.runtime.js", () => ({
   readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
@@ -705,7 +700,6 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
 
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
-    clearAgentHarnesses();
     const discordTestPlugin = {
       ...createChannelTestPluginBase({
         id: "discord",
@@ -716,14 +710,7 @@ describe("dispatchReplyFromConfig", () => {
       }),
       outbound: {
         deliveryMode: "direct",
-        shouldSuppressLocalPayloadPrompt: ({
-          payload,
-          hint,
-        }: {
-          payload: ReplyPayload;
-          hint?: { nativeRouteActive?: boolean };
-        }) =>
-          hint?.nativeRouteActive === true &&
+        shouldSuppressLocalPayloadPrompt: ({ payload }: { payload: ReplyPayload }) =>
           Boolean(
             payload.channelData &&
             typeof payload.channelData === "object" &&
@@ -741,7 +728,6 @@ describe("dispatchReplyFromConfig", () => {
         },
       ]),
     );
-    clearApprovalNativeRouteStateForTest();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
     resetInboundDedupe();
@@ -751,7 +737,9 @@ describe("dispatchReplyFromConfig", () => {
     diagnosticMocks.logMessageQueued.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
     diagnosticMocks.logSessionStateChange.mockClear();
-    diagnosticMocks.markDiagnosticSessionProgress.mockClear();
+    powernapDrainMocks.isPowernapDraining.mockReset();
+    powernapDrainMocks.isPowernapDraining.mockReturnValue(false);
+    powernapDrainMocks.recordDrainedMessage.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "reply_dispatch",
@@ -806,7 +794,6 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.resolveTtsConfig.mockReturnValue({
       mode: "final",
     });
-    transcriptMocks.persistAcpDispatchTranscript.mockClear();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReset();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
       async (payload: ReplyPayload) => payload,
@@ -833,6 +820,41 @@ describe("dispatchReplyFromConfig", () => {
     expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
       hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
     );
+  });
+
+  it("skips powernap-drained inbound without poisoning inbound dedupe", async () => {
+    setNoAbort();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      From: "sender-1",
+      To: "chat-1",
+      MessageSid: "msg-powernap-drain",
+      SessionKey: "agent:main:whatsapp:direct:sender-1",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "fresh after drain" }) satisfies ReplyPayload);
+
+    powernapDrainMocks.isPowernapDraining.mockReturnValueOnce(true);
+    const skipped = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(skipped.queuedFinal).toBe(false);
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(powernapDrainMocks.recordDrainedMessage).toHaveBeenCalledWith("sender-1", "whatsapp");
+
+    const processed = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(processed.queuedFinal).toBe(true);
   });
 
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
@@ -1751,88 +1773,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("delivers text-only tool summaries when verbose overrides preview suppression", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "on",
-    };
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:main",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
-
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "🔧 exec: ls" });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
-  it("delivers plan and working-status progress when verbose overrides preview suppression", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      verboseLevel: "on",
-    };
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:main",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onPlanUpdate?.({
-        phase: "update",
-        explanation: "Inspect code.",
-        steps: ["Patch code"],
-      });
-      await opts?.onApprovalEvent?.({
-        phase: "requested",
-        status: "pending",
-        command: "pnpm test",
-      });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
-
-    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(1, {
-      text: "Inspect code.\n\n1. Patch code",
-    });
-    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(2, {
-      text: "Working: awaiting approval: pnpm test",
-    });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
   it("still delivers media-only tool payloads when preview tool-progress suppression is enabled", async () => {
     setNoAbort();
     const cfg = emptyConfig;
@@ -2414,22 +2354,18 @@ describe("dispatchReplyFromConfig", () => {
       id: "acpx",
       runtime,
     });
-    const boundConversationBinding = {
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
       bindingId: "binding-acp-current",
       targetSessionKey: boundSessionKey,
       targetKind: "session",
       conversation: {
-        channel: "discord",
+        channel: "slack",
         accountId: "default",
         conversationId: "C123",
       },
       status: "active",
       boundAt: Date.now(),
-    } satisfies SessionBindingRecord;
-    sessionBindingMocks.resolveByConversation.mockReturnValue(boundConversationBinding);
-    sessionBindingMocks.listBySession.mockImplementation((targetSessionKey: string) =>
-      targetSessionKey === boundSessionKey ? [boundConversationBinding] : [],
-    );
+    } satisfies SessionBindingRecord);
 
     const cfg = {
       acp: {
@@ -2441,13 +2377,13 @@ describe("dispatchReplyFromConfig", () => {
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "fallback reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:C123",
-      To: "discord:C123",
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      To: "slack:C123",
       AccountId: "default",
-      SessionKey: "agent:main:discord:C123",
+      SessionKey: "agent:main:slack:C123",
       BodyForAgent: "continue",
     });
 
@@ -2455,7 +2391,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result.queuedFinal).toBe(true);
     expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
-      channel: "discord",
+      channel: "slack",
       accountId: "default",
       conversationId: "C123",
     });
@@ -2692,7 +2628,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps local discord exec approval tool prompts when the native runtime is inactive", async () => {
+  it("suppresses local discord exec approval tool prompts when discord approvals are enabled", async () => {
     setNoAbort();
     const cfg = {
       channels: {
@@ -2727,65 +2663,10 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Approval required." }),
-    );
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "done" }),
     );
-  });
-
-  it("suppresses local discord exec approval tool prompts when the native runtime is active", async () => {
-    setNoAbort();
-    const cfg = {
-      channels: {
-        discord: {
-          enabled: true,
-          execApprovals: {
-            enabled: true,
-            approvers: ["123"],
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const reporter = createApprovalNativeRouteReporter({
-      handledKinds: new Set(["exec"]),
-      channel: "discord",
-      channelLabel: "Discord",
-      accountId: "default",
-      requestGateway: async <T>() => ({ ok: true }) as T,
-    });
-    reporter.start();
-    try {
-      const dispatcher = createDispatcher();
-      const ctx = buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        AccountId: "default",
-      });
-      const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
-        await options?.onToolResult?.({
-          text: "Approval required.",
-          channelData: {
-            execApproval: {
-              approvalId: "12345678-1234-1234-1234-123456789012",
-              approvalSlug: "12345678",
-              allowedDecisions: ["allow-once", "allow-always", "deny"],
-            },
-          },
-        });
-        return { text: "done" } as ReplyPayload;
-      });
-
-      await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "done" }),
-      );
-    } finally {
-      await reporter.stop();
-    }
   });
 
   it("deduplicates same-agent inbound replies across main and direct session keys", async () => {
@@ -2897,7 +2778,7 @@ describe("dispatchReplyFromConfig", () => {
       RawBody: "who are you",
       Body: "who are you",
       MessageSid: "msg-claim-1",
-      SessionKey: "agent:main:hook-test",
+      SessionKey: "agent:main:telegram:group:-10099:77",
     });
     const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
 
@@ -2928,7 +2809,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         type: "message",
         action: "received",
-        sessionKey: "agent:main:hook-test",
+        sessionKey: "agent:main:telegram:group:-10099:77",
       }),
     );
     expect(replyResolver).toHaveBeenCalledTimes(1);
@@ -3046,89 +2927,6 @@ describe("dispatchReplyFromConfig", () => {
         sessionKey: "agent:main:main",
       }),
     );
-  });
-
-  it("marks diagnostic progress for real reply events but not reply start callbacks", async () => {
-    setNoAbort();
-    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      SessionKey: "agent:main:main",
-      To: "slack:C123",
-    });
-    const onReplyStart = vi.fn(async () => {});
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-    ): Promise<ReplyPayload> => {
-      await opts?.onReplyStart?.();
-      await opts?.onToolResult?.({ text: "tool progress" });
-      return { text: "hi" };
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyOptions: { onReplyStart },
-      replyResolver,
-    });
-
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
-    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(1);
-    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-    });
-  });
-
-  it("keeps diagnostic progress when source progress callbacks are suppressed", async () => {
-    setNoAbort();
-    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      ChatType: "channel",
-      SessionKey: "agent:main:discord:channel:C1",
-      To: "discord:channel:C1",
-    });
-    const callbacks = {
-      toolStart: vi.fn(async () => {}),
-      itemEvent: vi.fn(async () => {}),
-      commandOutput: vi.fn(async () => {}),
-    };
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-    ): Promise<ReplyPayload> => {
-      await opts?.onToolStart?.({ name: "lookup" });
-      await opts?.onItemEvent?.({ progressText: "working" });
-      await opts?.onCommandOutput?.({ output: "line", status: "running" });
-      return { text: "hi" };
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-        onToolStart: callbacks.toolStart,
-        onItemEvent: callbacks.itemEvent,
-        onCommandOutput: callbacks.commandOutput,
-      },
-      replyResolver,
-    });
-
-    expect(callbacks.toolStart).not.toHaveBeenCalled();
-    expect(callbacks.itemEvent).not.toHaveBeenCalled();
-    expect(callbacks.commandOutput).not.toHaveBeenCalled();
-    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(3);
-    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
-      sessionKey: "agent:main:discord:channel:C1",
-    });
   });
 
   it("routes plugin-owned bindings to the owning plugin before generic inbound claim broadcast", async () => {
@@ -4158,8 +3956,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     hookMocks.runner.runReplyDispatch.mockResolvedValue(undefined);
     hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
-    threadInfoMocks.parseSessionThreadInfo.mockReset();
-    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
   });
 
   it("still calls the replyResolver when sendPolicy is deny", async () => {
@@ -4541,7 +4337,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(false);
-    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
@@ -4585,185 +4380,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("does not auto-route same-provider group/channel final replies in message-tool-only mode", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "final reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "channel",
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:C1",
-        SessionKey: "test:discord:channel:C1",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-  });
-
-  it("keeps default direct source delivery automatic", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible direct reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        SessionKey: "agent:main:telegram:direct:U1",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "visible direct reply" }),
-    );
-  });
-
-  it("uses harness defaults for direct source delivery when config is unset", async () => {
-    setNoAbort();
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      agentHarnessId: "codex",
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "final reply" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "direct",
-        SessionKey: "agent:main:main",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("falls back to automatic group/channel delivery when the message tool is unavailable", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "visible fallback" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "channel",
-        SessionKey: "test:discord:channel:C1",
-      }),
-      cfg: { tools: { allow: ["read"] } } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "visible fallback" }),
-    );
-  });
-
-  it("falls back to automatic group/channel delivery when group tools remove the message tool", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "group policy fallback" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "channel",
-        From: "discord:channel:C1",
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:main:discord:channel:C1",
-      }),
-      cfg: {
-        channels: {
-          discord: {
-            groups: {
-              C1: { tools: { allow: ["read"] } },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "group policy fallback" }),
-    );
-  });
-
-  it("falls back when a channel precomputed message-tool-only delivery but the message tool is unavailable", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
-      return { text: "requested fallback" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        ChatType: "channel",
-        SessionKey: "test:discord:channel:C1",
-      }),
-      cfg: { tools: { allow: ["read"] } } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "requested fallback" }),
-    );
   });
 
   it("keeps native command replies visible in group/channel turns", async () => {

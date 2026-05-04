@@ -93,6 +93,56 @@ describe("handleWhatsAppAction", () => {
     );
   });
 
+  it("allows configured reaction emojis", async () => {
+    await handleWhatsAppAction(
+      {
+        action: "react",
+        chatJid: "123@s.whatsapp.net",
+        messageId: "msg1",
+        emoji: "👨🏻‍💻",
+      },
+      {
+        channels: {
+          whatsapp: {
+            actions: { reactions: true },
+            reactionLevel: "extensive",
+            allowedReactions: ["👨🏻‍💻", "💯"],
+          },
+        },
+      } as OpenClawConfig,
+    );
+
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith("+123", "msg1", "👨🏻‍💻", {
+      verbose: false,
+      fromMe: undefined,
+      participant: undefined,
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+  });
+
+  it("blocks emojis outside the configured reaction allowlist", async () => {
+    await expect(
+      handleWhatsAppAction(
+        {
+          action: "react",
+          chatJid: "123@s.whatsapp.net",
+          messageId: "msg1",
+          emoji: "👍",
+        },
+        {
+          channels: {
+            whatsapp: {
+              actions: { reactions: true },
+              reactionLevel: "extensive",
+              allowedReactions: ["👨🏻‍💻", "💯"],
+            },
+          },
+        } as OpenClawConfig,
+      ),
+    ).rejects.toThrow(/not allowed/);
+    expect(sendReactionWhatsApp).not.toHaveBeenCalled();
+  });
+
   it("removes reactions on empty emoji", async () => {
     await handleWhatsAppAction(
       {

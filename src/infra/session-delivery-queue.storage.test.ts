@@ -39,6 +39,25 @@ describe("session-delivery queue storage", () => {
     });
   });
 
+  it("does not requeue an idempotent delivery after it was acked", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const payload = {
+        kind: "agentTurn" as const,
+        sessionKey: "agent:main:main",
+        message: "restart ok",
+        messageId: "restart-sentinel:agent:main:main:agentTurn:123",
+        idempotencyKey: "restart-sentinel:agent:main:main:agentTurn:123",
+      };
+      const firstId = await enqueueSessionDelivery(payload, tempDir);
+      await ackSessionDelivery(firstId, tempDir);
+
+      const secondId = await enqueueSessionDelivery(payload, tempDir);
+
+      expect(secondId).toBe(firstId);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+    });
+  });
+
   it("persists retry metadata and removes acked entries", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(

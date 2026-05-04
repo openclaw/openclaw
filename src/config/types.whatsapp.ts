@@ -22,8 +22,58 @@ export type WhatsAppActionConfig = {
 
 export type WhatsAppReactionLevel = ReactionLevel;
 
+export type WhatsAppGroupDebounceScope = "sender" | "conversation";
+
+export type WhatsAppPriorityLaneConfig = {
+  /** Optional inbound debounce window for this lane in milliseconds. */
+  debounceMs?: number;
+  /** Optional maximum age before this lane must flush, even during continued chatter. */
+  maxWaitMs?: number;
+  /** Optional maximum number of messages to batch before this lane flushes immediately. */
+  maxBatchItems?: number;
+  /** Optional minimum delivery latency hint for more human-feeling casual replies. */
+  humanLatencyMs?: number;
+};
+
+export type WhatsAppPriorityLanesConfig = {
+  /** Enables priority lane debounce keys for this group. Default: false. */
+  enabled?: boolean;
+  /** Owner explicitly pulling this bot by name/mention/reply. */
+  directOwnerPull?: WhatsAppPriorityLaneConfig;
+  /** Someone replying inline to this bot's previous message. */
+  inlineReplyToSelf?: WhatsAppPriorityLaneConfig;
+  /** A both-bots/comparison/independent-take prompt. */
+  bothBotAsk?: WhatsAppPriorityLaneConfig;
+  /** Ambient group chatter that should wait and become context. */
+  ambientRoomBurst?: WhatsAppPriorityLaneConfig;
+  /** Chatter clearly aimed away from this bot. Kept mostly for observability/context. */
+  otherTargetAmbient?: WhatsAppPriorityLaneConfig;
+};
+
 export type WhatsAppGroupConfig = {
+  /** Friendly display name for target resolution (e.g. "Bot Bros"). */
+  name?: string;
   requireMention?: boolean;
+  /** Per-group visible final reply delivery. Default: message_tool. */
+  visibleReplies?: "automatic" | "message_tool";
+  /** Force the runtime group activation mode, overriding session toggles. */
+  forceActivation?: "always" | "mention" | "mentions" | "never";
+  /**
+   * Inbound batching scope for this group.
+   * - "sender": batch only rapid messages from the same sender (default)
+   * - "conversation": batch rapid messages across the whole group conversation
+   */
+  debounceScope?: WhatsAppGroupDebounceScope;
+  /** Optional inbound debounce window override for this group in milliseconds. */
+  debounceMs?: number;
+  /** Optional shorter inbound debounce window when the message directly addresses this bot. */
+  selfAddressedDebounceMs?: number;
+  /** Optional maximum age before a debounced batch must flush, even during continued chatter. */
+  debounceMaxWaitMs?: number;
+  /** Optional maximum number of messages to batch before flushing immediately. */
+  debounceMaxBatchItems?: number;
+  /** Optional priority lanes for Bot Bros-style group turn-taking. */
+  priorityLanes?: WhatsAppPriorityLanesConfig;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Optional system prompt for this group. */
@@ -48,6 +98,25 @@ export type WhatsAppAckReactionConfig = {
    * Default: "mentions"
    */
   group?: "always" | "mentions" | "never";
+};
+
+export type WhatsAppWorkIntakeReactionConfig = {
+  /** Emoji to use when a message clearly asks the agent to start real work. Empty = disabled. */
+  emoji?: string;
+  /** Send work-intake reactions in direct chats. Default: true. */
+  direct?: boolean;
+  /**
+   * Send work-intake reactions in group chats:
+   * - "always": react to detected work-intake messages in groups
+   * - "mentions": react when mentioned or group-activated
+   * - "never": never react in groups
+   * Default: "mentions"
+   */
+  group?: "always" | "mentions" | "never";
+  /** Per chat/sender cooldown in milliseconds. Default: 120000. */
+  cooldownMs?: number;
+  /** Case-insensitive keyword hints that mark a message as work intake. */
+  keywords?: string[];
 };
 
 type WhatsAppSharedConfig = {
@@ -93,6 +162,10 @@ type WhatsAppSharedConfig = {
   direct?: Record<string, WhatsAppDirectConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
   ackReaction?: WhatsAppAckReactionConfig;
+  /** Optional allowlist for agent-sent WhatsApp reaction emojis. Empty = unrestricted. */
+  allowedReactions?: string[];
+  /** Deterministic reaction for clear work intake before the agent starts slower work. */
+  workIntakeReaction?: WhatsAppWorkIntakeReactionConfig;
   /**
    * Controls agent reaction behavior:
    * - "off": No reactions

@@ -13,6 +13,33 @@ import UIKit
 private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 
 @MainActor
+private final class ModelPatchIssueSignal {
+    private var signaled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !self.signaled else { return }
+        await withCheckedContinuation { continuation in
+            if self.signaled {
+                continuation.resume()
+            } else {
+                self.waiters.append(continuation)
+            }
+        }
+    }
+
+    func signal() {
+        guard !self.signaled else { return }
+        self.signaled = true
+        let waiters = self.waiters
+        self.waiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+
+@MainActor
 @Observable
 // swiftlint:disable:next type_body_length
 public final class OpenClawChatViewModel {
@@ -50,8 +77,10 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
-    // Session switches can overlap in-flight picker patches, so stale completions
-    // must compare against the latest request and latest desired value for that session.
+    // Rapid picker changes enqueue patches before earlier network requests finish,
+    // so completions must compare against the latest desired value for that session.
+    @ObservationIgnored
+    private var latestModelPatchIssueSignal: ModelPatchIssueSignal?
     private var nextModelSelectionRequestID: UInt64 = 0
     private var latestModelSelectionRequestIDsBySession: [String: UInt64] = [:]
     private var latestModelSelectionIDsBySession: [String: String] = [:]
@@ -135,7 +164,7 @@ public final class OpenClawChatViewModel {
     }
 
     public func selectModel(_ selectionID: String) {
-        Task { await self.performSelectModel(selectionID) }
+        self.beginSelectModel(selectionID)
     }
 
     public var sessionChoices: [OpenClawChatSessionEntry] {
@@ -697,7 +726,7 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func performSelectModel(_ selectionID: String) async {
+    private func beginSelectModel(_ selectionID: String) {
         let next = self.normalizedSelectionID(selectionID)
         guard next != self.modelSelectionID else { return }
 
@@ -712,6 +741,32 @@ public final class OpenClawChatViewModel {
         self.beginModelPatch(for: sessionKey)
         self.modelSelectionID = next
         self.errorText = nil
+
+        let previousIssueSignal = self.latestModelPatchIssueSignal
+        let issueSignal = ModelPatchIssueSignal()
+        self.latestModelPatchIssueSignal = issueSignal
+        Task { @MainActor [weak self] in
+            await previousIssueSignal?.wait()
+            issueSignal.signal()
+            guard let self, !Task.isCancelled else { return }
+            await self.persistSelectedModel(
+                next: next,
+                nextModelRef: nextModelRef,
+                previous: previous,
+                previousRequestID: previousRequestID,
+                requestID: requestID,
+                sessionKey: sessionKey)
+        }
+    }
+
+    private func persistSelectedModel(
+        next: String,
+        nextModelRef: String?,
+        previous: String,
+        previousRequestID: UInt64?,
+        requestID: UInt64,
+        sessionKey: String,
+    ) async {
         defer { self.endModelPatch(for: sessionKey) }
 
         do {

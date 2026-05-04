@@ -29,6 +29,10 @@ function isResetAuthorized(params: HandleCommandsParams): boolean {
   });
 }
 
+function shouldUseWhatsAppGroupReactionOnlyResetAck(params: HandleCommandsParams): boolean {
+  return params.command.channel === "whatsapp" && params.ctx.ChatType === "group";
+}
+
 export async function maybeHandleResetCommand(
   params: HandleCommandsParams,
 ): Promise<CommandHandlerResult | null> {
@@ -167,9 +171,10 @@ export async function maybeHandleResetCommand(
     workspaceDir: params.workspaceDir,
   });
   if (!resetTail) {
+    const useReactionOnlyAck = shouldUseWhatsAppGroupReactionOnlyResetAck(params);
     return {
       shouldContinue: false,
-      ...(hookResult.routedReply
+      ...(hookResult.routedReply || useReactionOnlyAck
         ? {}
         : {
             reply: {

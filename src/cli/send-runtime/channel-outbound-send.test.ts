@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createChannelOutboundRuntimeSend } from "./channel-outbound-send.js";
 
 const mocks = vi.hoisted(() => ({
   loadChannelOutboundAdapter: vi.fn(),
+  loadConfig: vi.fn(() => ({ test: true })),
 }));
 
 vi.mock("../../channels/plugins/outbound/load.js", () => ({
   loadChannelOutboundAdapter: mocks.loadChannelOutboundAdapter,
+}));
+
+vi.mock("../../config/config.js", () => ({
+  loadConfig: mocks.loadConfig,
 }));
 
 describe("createChannelOutboundRuntimeSend", () => {
@@ -14,13 +20,13 @@ describe("createChannelOutboundRuntimeSend", () => {
   });
 
   it("routes media sends through sendMedia and preserves media access", async () => {
+    const sendText = vi.fn();
     const sendMedia = vi.fn(async () => ({ channel: "whatsapp", messageId: "wa-1" }));
     mocks.loadChannelOutboundAdapter.mockResolvedValue({
-      sendText: vi.fn(),
+      sendText,
       sendMedia,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "whatsapp" as never,
@@ -37,7 +43,10 @@ describe("createChannelOutboundRuntimeSend", () => {
       mediaLocalRoots: ["/tmp/fallback-root"],
       mediaReadFile,
       accountId: "default",
+      threadId: "$thread-root",
+      replyToId: "$parent",
       gifPlayback: true,
+      gatewayClientScopes: ["messages:send"],
     });
 
     expect(sendMedia).toHaveBeenCalledWith(
@@ -53,6 +62,49 @@ describe("createChannelOutboundRuntimeSend", () => {
         mediaLocalRoots: ["/tmp/fallback-root"],
         mediaReadFile,
         accountId: "default",
+        threadId: "$thread-root",
+        replyToId: "$parent",
+        gifPlayback: true,
+        gatewayClientScopes: ["messages:send"],
+      }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("uses message thread aliases for plugin outbound sends", async () => {
+    const sendMedia = vi.fn(async () => ({ messageId: "wa-1" }));
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({
+      sendMedia,
+    });
+
+    const runtimeSend = createChannelOutboundRuntimeSend({
+      channelId: "whatsapp" as never,
+      unavailableMessage: "missing outbound",
+    });
+
+    await runtimeSend.sendMessage("120363426179087288@g.us", "caption", {
+      mediaUrl: "/tmp/agreement.pdf",
+      mediaLocalRoots: ["/tmp"],
+      accountId: "default",
+      messageThreadId: "thread-1",
+      replyToMessageId: "42",
+      silent: true,
+      forceDocument: true,
+      gifPlayback: true,
+    });
+
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: { test: true },
+        to: "120363426179087288@g.us",
+        text: "caption",
+        mediaUrl: "/tmp/agreement.pdf",
+        mediaLocalRoots: ["/tmp"],
+        accountId: "default",
+        threadId: "thread-1",
+        replyToId: "42",
+        silent: true,
+        forceDocument: true,
         gifPlayback: true,
       }),
     );
@@ -60,12 +112,12 @@ describe("createChannelOutboundRuntimeSend", () => {
 
   it("falls back to sendText for text-only sends", async () => {
     const sendText = vi.fn(async () => ({ channel: "whatsapp", messageId: "wa-2" }));
+    const sendMedia = vi.fn();
     mocks.loadChannelOutboundAdapter.mockResolvedValue({
       sendText,
-      sendMedia: vi.fn(),
+      sendMedia,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "whatsapp" as never,
       unavailableMessage: "unavailable",
@@ -84,6 +136,7 @@ describe("createChannelOutboundRuntimeSend", () => {
         accountId: "default",
       }),
     );
+    expect(sendMedia).not.toHaveBeenCalled();
   });
 
   it("accepts plugin outbound thread and reply aliases", async () => {
@@ -92,7 +145,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       sendText,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "matrix" as never,
       unavailableMessage: "unavailable",
@@ -178,7 +230,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       sendText,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "whatsapp" as never,

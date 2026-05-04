@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 import type { WebInboundMessage } from "../../inbound/types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 
@@ -11,16 +10,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../../send.js", () => ({
   sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
 }));
-
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    messageIds: [id],
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
 
 function createMessage(overrides: Partial<WebInboundMessage> = {}): WebInboundMessage {
   return {
@@ -33,8 +22,8 @@ function createMessage(overrides: Partial<WebInboundMessage> = {}): WebInboundMe
     chatType: "direct",
     chatId: "15551234567@s.whatsapp.net",
     sendComposing: async () => {},
-    reply: async () => acceptedSendResult("text", "r1"),
-    sendMedia: async () => acceptedSendResult("media", "m1"),
+    reply: async () => {},
+    sendMedia: async () => {},
     ...overrides,
   };
 }
@@ -114,6 +103,63 @@ describe("maybeSendAckReaction", () => {
     expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
   });
 
+  it.each(["/new", "/reset"])(
+    "sends a signature reaction for authorized bare group %s",
+    async (body) => {
+      await runAckReaction({
+        cfg: createConfig("extensive", {
+          workIntakeReaction: {
+            emoji: "👨🏻‍💻",
+            direct: true,
+            group: "always",
+            cooldownMs: 0,
+          },
+        }),
+        msg: createMessage({
+          body,
+          chatType: "group",
+          chatId: "120@g.us",
+          from: "120@g.us",
+          conversationId: "120@g.us",
+          sender: { jid: "999@s.whatsapp.net" },
+          senderJid: "203873608286239:51@lid",
+        }),
+        commandAuthorized: true,
+      });
+
+      expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith("120@g.us", "msg-1", "👨🏻‍💻", {
+        verbose: false,
+        fromMe: false,
+        participant: "203873608286239:51@lid",
+        accountId: "default",
+        cfg: expect.any(Object),
+      });
+    },
+  );
+
+  it("suppresses automatic reactions for unauthorized bare group /new", async () => {
+    await runAckReaction({
+      cfg: createConfig("extensive", {
+        workIntakeReaction: {
+          emoji: "👨🏻‍💻",
+          direct: true,
+          group: "always",
+          cooldownMs: 0,
+        },
+      }),
+      msg: createMessage({
+        body: "/new",
+        chatType: "group",
+        chatId: "120@g.us",
+        from: "120@g.us",
+        conversationId: "120@g.us",
+      }),
+      commandAuthorized: false,
+    });
+
+    expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
+  });
+
   it("uses the active account reactionLevel override for ack gating", async () => {
     const ackReaction = await runAckReaction({
       cfg: createConfig("off", {
@@ -166,5 +212,238 @@ describe("maybeSendAckReaction", () => {
       }),
       "failed to send ack reaction",
     );
+  });
+
+  it("sends work-intake reactions without generic ackReaction", async () => {
+    await maybeSendAckReaction({
+      cfg: createConfig("extensive", {
+        ackReaction: undefined,
+        workIntakeReaction: {
+          emoji: "👨🏻‍💻",
+          direct: true,
+          group: "always",
+          cooldownMs: 0,
+        },
+      }),
+      msg: createMessage({
+        body: "please fix this backend issue",
+      }),
+      agentId: "agent",
+      sessionKey: "whatsapp:default:15551234567",
+      conversationId: "15551234567",
+      verbose: false,
+      accountId: "default",
+      info: vi.fn(),
+      warn: vi.fn(),
+    });
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "15551234567@s.whatsapp.net",
+      "msg-1",
+      "👨🏻‍💻",
+      {
+        verbose: false,
+        fromMe: false,
+        participant: undefined,
+        accountId: "default",
+        cfg: expect.any(Object),
+      },
+    );
+  });
+
+  it("adds group participant on work-intake reactions", async () => {
+    await maybeSendAckReaction({
+      cfg: createConfig("extensive", {
+        ackReaction: undefined,
+        workIntakeReaction: {
+          emoji: "👨🏻‍💻",
+          direct: true,
+          group: "always",
+          cooldownMs: 0,
+        },
+      }),
+      msg: createMessage({
+        body: "okay go, patch the source code",
+        chatType: "group",
+        chatId: "120@g.us",
+        from: "120@g.us",
+        conversationId: "120@g.us",
+        sender: { jid: "999@s.whatsapp.net" },
+      }),
+      agentId: "agent",
+      sessionKey: "whatsapp:default:120@g.us",
+      conversationId: "120@g.us",
+      verbose: false,
+      accountId: "default",
+      info: vi.fn(),
+      warn: vi.fn(),
+    });
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith("120@g.us", "msg-1", "👨🏻‍💻", {
+      verbose: false,
+      fromMe: false,
+      participant: "999@s.whatsapp.net",
+      accountId: "default",
+      cfg: expect.any(Object),
+    });
+  });
+
+  it("preserves raw device-scoped LID participants for group work-intake reactions", async () => {
+    await maybeSendAckReaction({
+      cfg: createConfig("extensive", {
+        ackReaction: undefined,
+        workIntakeReaction: {
+          emoji: "👨🏻‍💻",
+          direct: true,
+          group: "always",
+          cooldownMs: 0,
+        },
+      }),
+      msg: createMessage({
+        body: "please patch this source issue",
+        chatType: "group",
+        chatId: "120@g.us",
+        from: "120@g.us",
+        conversationId: "120@g.us",
+        sender: { jid: "203873608286239@lid" },
+        senderJid: "203873608286239:51@lid",
+      }),
+      agentId: "agent",
+      sessionKey: "whatsapp:default:120@g.us",
+      conversationId: "120@g.us",
+      verbose: false,
+      accountId: "default",
+      info: vi.fn(),
+      warn: vi.fn(),
+    });
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith("120@g.us", "msg-1", "👨🏻‍💻", {
+      verbose: false,
+      fromMe: false,
+      participant: "203873608286239:51@lid",
+      accountId: "default",
+      cfg: expect.any(Object),
+    });
+  });
+
+  it("preserves raw device-scoped LID participants for group ack reactions", async () => {
+    const ackReaction = await runAckReaction({
+      msg: createMessage({
+        body: "shoar check this",
+        chatType: "group",
+        chatId: "120@g.us",
+        from: "120@g.us",
+        conversationId: "120@g.us",
+        sender: { jid: "203873608286239@lid" },
+        senderJid: "203873608286239:51@lid",
+        wasMentioned: true,
+      }),
+      sessionKey: "whatsapp:default:120@g.us",
+      conversationId: "120@g.us",
+    });
+
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith("120@g.us", "msg-1", "👀", {
+      verbose: false,
+      fromMe: false,
+      participant: "203873608286239:51@lid",
+      accountId: "default",
+      cfg: expect.any(Object),
+    });
+  });
+
+  it("does not send work-intake reactions for neutral messages", async () => {
+    await maybeSendAckReaction({
+      cfg: createConfig("extensive", {
+        ackReaction: undefined,
+        workIntakeReaction: {
+          emoji: "👨🏻‍💻",
+          direct: true,
+          group: "always",
+          cooldownMs: 0,
+        },
+      }),
+      msg: createMessage({
+        body: "haha this is wild",
+      }),
+      agentId: "agent",
+      sessionKey: "whatsapp:default:15551234567",
+      conversationId: "15551234567",
+      verbose: false,
+      accountId: "default",
+      info: vi.fn(),
+      warn: vi.fn(),
+    });
+
+    expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("does not send group work-intake reactions for keyword-only code chatter", async () => {
+    await maybeSendAckReaction({
+      cfg: createConfig("extensive", {
+        ackReaction: undefined,
+        workIntakeReaction: {
+          emoji: "👨🏻‍💻",
+          direct: true,
+          group: "always",
+          cooldownMs: 0,
+        },
+      }),
+      msg: createMessage({
+        body: "this code thing is so weird",
+        chatType: "group",
+        chatId: "120@g.us",
+        from: "120@g.us",
+        conversationId: "120@g.us",
+        sender: { jid: "999@s.whatsapp.net" },
+      }),
+      agentId: "agent",
+      sessionKey: "whatsapp:default:120@g.us",
+      conversationId: "120@g.us",
+      verbose: false,
+      accountId: "default",
+      info: vi.fn(),
+      warn: vi.fn(),
+    });
+
+    expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("sends group work-intake reactions for metadata self-mentions with task verbs", async () => {
+    await maybeSendAckReaction({
+      cfg: createConfig("extensive", {
+        ackReaction: undefined,
+        workIntakeReaction: {
+          emoji: "👨🏻‍💻",
+          direct: true,
+          group: "always",
+          cooldownMs: 0,
+        },
+      }),
+      msg: createMessage({
+        body: "check this",
+        chatType: "group",
+        chatId: "120@g.us",
+        from: "120@g.us",
+        conversationId: "120@g.us",
+        sender: { jid: "999@s.whatsapp.net" },
+        wasMentioned: true,
+      }),
+      agentId: "agent",
+      sessionKey: "whatsapp:default:120@g.us",
+      conversationId: "120@g.us",
+      verbose: false,
+      accountId: "default",
+      info: vi.fn(),
+      warn: vi.fn(),
+    });
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith("120@g.us", "msg-1", "👨🏻‍💻", {
+      verbose: false,
+      fromMe: false,
+      participant: "999@s.whatsapp.net",
+      accountId: "default",
+      cfg: expect.any(Object),
+    });
   });
 });

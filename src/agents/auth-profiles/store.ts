@@ -132,7 +132,7 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
   }
 
   if (mainStore && requestedStore) {
-    return mergeAuthProfileStores(mainStore, requestedStore);
+    return mergeAuthProfileStores(mainStore, requestedStore, { preferFresherOAuth: true });
   }
   if (requestedStore) {
     const persistedMainStore = loadAuthProfileStoreForAgent(undefined, {
@@ -503,7 +503,9 @@ export function ensureAuthProfileStoreWithoutExternalProfiles(
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
-  return mergeAuthProfileStores(mainStore, store);
+  const merged = mergeAuthProfileStores(mainStore, store, { preferFresherOAuth: true });
+
+  return overlayExternalAuthProfiles(merged, { agentDir });
 }
 
 export function findPersistedAuthProfileCredential(params: {

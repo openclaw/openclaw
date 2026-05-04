@@ -1904,6 +1904,54 @@ describe("capability cli", () => {
     });
   });
 
+  it("does not mark selected image providers configured without runtime auth", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "openai/gpt-image-2",
+          },
+        },
+      },
+    });
+    const imageRuntime = await import("../image-generation/runtime.js");
+    vi.mocked(imageRuntime.listRuntimeImageGenerationProviders).mockReturnValueOnce([
+      {
+        id: "openai",
+        label: "OpenAI",
+        defaultModel: "gpt-image-2",
+        models: ["gpt-image-2"],
+        isConfigured: () => false,
+        capabilities: {
+          generate: { maxCount: 4 },
+          edit: { enabled: true, maxInputImages: 5 },
+        },
+        generateImage: vi.fn(),
+      } as never,
+    ]);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "image", "providers", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([
+      {
+        available: true,
+        configured: false,
+        selected: true,
+        id: "openai",
+        label: "OpenAI",
+        defaultModel: "gpt-image-2",
+        models: ["gpt-image-2"],
+        capabilities: {
+          generate: { maxCount: 4 },
+          edit: { enabled: true, maxInputImages: 5 },
+        },
+      },
+    ]);
+  });
+
   it("surfaces selected and configured embedding provider state", async () => {
     mocks.loadConfig.mockReturnValue({});
     mocks.resolveMemorySearchConfig.mockReturnValue({
