@@ -71,7 +71,6 @@ const MAX_GOOGLE_AUTH_RESPONSE_BYTES = 1024 * 1024;
 const MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES = 64 * 1024;
 
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
-let googleAuthTransportPromise: Promise<GoogleAuthTransport> | null = null;
 
 function normalizeGoogleAuthPreparedRequestHeaders<T extends GoogleAuthRequestWithUnknownHeaders>(
   config: T,
@@ -536,22 +535,12 @@ export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
 }
 
 export async function getGoogleAuthTransport(): Promise<GoogleAuthTransport> {
-  if (!googleAuthTransportPromise) {
-    googleAuthTransportPromise = (async () => {
-      try {
-        const { Gaxios } = await loadGoogleAuthRuntime();
-        return installGoogleAuthHeaderCompatibilityInterceptor(
-          new Gaxios({
-            fetchImplementation: createGoogleAuthFetch(),
-          }),
-        );
-      } catch (error) {
-        googleAuthTransportPromise = null;
-        throw error;
-      }
-    })();
-  }
-  return await googleAuthTransportPromise;
+  const { Gaxios } = await loadGoogleAuthRuntime();
+  return installGoogleAuthHeaderCompatibilityInterceptor(
+    new Gaxios({
+      fetchImplementation: createGoogleAuthFetch(),
+    }),
+  );
 }
 
 export async function resolveValidatedGoogleChatCredentials(
@@ -570,7 +559,6 @@ export async function resolveValidatedGoogleChatCredentials(
 export const __testing = {
   resetGoogleAuthRuntimeForTests(): void {
     googleAuthRuntimePromise = null;
-    googleAuthTransportPromise = null;
   },
   normalizeGoogleAuthPreparedRequestHeaders,
   normalizeGoogleAuthResponseHeaders,

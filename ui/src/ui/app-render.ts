@@ -1814,6 +1814,7 @@ export function renderApp(state: AppViewState) {
                 error: state.cronError,
                 busy: state.cronBusy,
                 form: state.cronForm,
+                cronFormCollapsed: state.cronFormCollapsed,
                 channels: state.channelsSnapshot?.channelMeta?.length
                   ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
                   : (state.channelsSnapshot?.channelOrder ?? []),
@@ -1844,9 +1845,18 @@ export function renderApp(state: AppViewState) {
                 },
                 onRefresh: () => state.loadCron(),
                 onAdd: () => addCronJob(state),
-                onEdit: (job) => startCronEdit(state, job),
-                onClone: (job) => startCronClone(state, job),
+                onEdit: (job) => {
+                  state.cronFormCollapsed = false;
+                  startCronEdit(state, job);
+                },
+                onClone: (job) => {
+                  state.cronFormCollapsed = false;
+                  startCronClone(state, job);
+                },
                 onCancelEdit: () => cancelCronEdit(state),
+                onToggleFormCollapsed: (collapsed) => {
+                  state.cronFormCollapsed = collapsed;
+                },
                 onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
                 onRun: (job, mode) => runCronJob(state, job, mode ?? "force"),
                 onRemove: (job) => removeCronJob(state, job),

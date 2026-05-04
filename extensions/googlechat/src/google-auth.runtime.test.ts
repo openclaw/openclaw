@@ -359,6 +359,18 @@ describe("googlechat google auth runtime", () => {
     }
   });
 
+  it("keeps auth transports isolated from google-auth interceptor mutations", async () => {
+    const first = await getGoogleAuthTransport();
+    const second = await getGoogleAuthTransport();
+
+    expect(first).not.toBe(second);
+    expect(mocks.gaxiosCtor).toHaveBeenCalledTimes(2);
+    expect(first.interceptors.request.add).toHaveBeenCalledOnce();
+    expect(first.interceptors.response.add).toHaveBeenCalledOnce();
+    expect(second.interceptors.request.add).toHaveBeenCalledOnce();
+    expect(second.interceptors.response.add).toHaveBeenCalledOnce();
+  });
+
   it("normalizes Google auth request headers before upstream interceptors run", async () => {
     const config = {
       headers: { "x-test": "1" },
