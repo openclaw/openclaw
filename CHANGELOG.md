@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Skills: add bundled `post-update-awareness` skill so agents can read the CHANGELOG entry for a newly-installed OpenClaw version, distill new tools/breaking changes/optional-native-dep notices for the user, probe known-flaky optional deps (`sharp`, `ffmpeg-static`, `node-pty`), and surface a single brief "OpenClaw updated to vX — here's what changed for you" message via the active channel. Persists the last-known version in agent state so the surface fires once per version bump rather than on every heartbeat.
 - Models/auth: add `openclaw models auth list [--provider <id>] [--json]` so users can inspect saved per-agent auth profiles without dumping secrets or hitting the old “too many arguments” path. Thanks @vincentkoc.
 - Control UI/header: show the active agent name in dashboard breadcrumbs without adding the current session key, keeping non-chat views oriented without crowding the topbar.
 - Control UI/cron: make the New Job sidebar collapsible so the jobs list can reclaim space while keeping the form one click away. Thanks @BunsDev.
