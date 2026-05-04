@@ -37,6 +37,7 @@ export function registerQQBotFrameworkCommands(api: OpenClawPluginApi): void {
     api.registerCommand({
       name: cmd.name,
       description: cmd.description,
+      channels: ["qqbot"],
       requireAuth: true,
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {

@@ -63,6 +63,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/commands: scope QQBot framework slash commands to the QQBot channel so `/bot-*` command handlers and native specs do not leak onto unrelated chat surfaces. Thanks @vincentkoc.
 - fix: harden backend message action gateway routing [AI]. (#76374) Thanks @pgondhi987.
 - Gate QQBot streaming command auth [AI]. (#76375) Thanks @pgondhi987.
 - Plugins/install: suppress dangerous-pattern scanner warnings for trusted official OpenClaw npm installs, so installing `@openclaw/discord` no longer prints credential-harvesting warnings for the official package.

@@ -76,6 +76,7 @@ describe("registerQQBotFrameworkCommands", () => {
     const command = findCommand(registerCommands(), "bot-streaming");
 
     expect(command.requireAuth).toBe(true);
+    expect(command.channels).toEqual(["qqbot"]);
   });
 
   it("preserves the private-chat guard for bot-streaming on generic framework calls", async () => {
