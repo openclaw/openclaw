@@ -280,6 +280,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
     - `progress` keeps one editable status draft and updates it with tool progress until final delivery
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
+    - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are detected; run `openclaw doctor --fix` to migrate them to `channels.telegram.streaming.mode`
 
     Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, or patch summaries. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later. To keep the edited preview for answer text but hide tool-progress lines, set:
@@ -292,6 +293,41 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
             "mode": "partial",
             "preview": {
               "toolProgress": false
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    To keep tool-progress visible but hide command/exec text, set:
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "partial",
+            "preview": {
+              "commandText": "status"
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    For progress-draft mode, put the same command-text policy under `streaming.progress`:
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "progress",
+            "progress": {
+              "toolProgress": true,
+              "commandText": "status"
             }
           }
         }
@@ -318,6 +354,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Telegram-only reasoning stream:
 
     - `/reasoning stream` sends reasoning to the live preview while generating
+    - the reasoning preview is deleted after final delivery; use `/reasoning on` when reasoning should remain visible
     - final answer is sent without reasoning text
 
   </Accordion>
@@ -740,11 +777,12 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
       - `channels.telegram.dms["<user_id>"].historyLimit`
     - `channels.telegram.retry` config applies to Telegram send helpers (CLI/tools/actions) for recoverable outbound API errors. Inbound final-reply delivery also uses a bounded safe-send retry for Telegram pre-connect failures, but it does not retry ambiguous post-send network envelopes that could duplicate visible messages.
 
-    CLI send target can be numeric chat ID or username:
+    CLI and message-tool send targets can be numeric chat ID, username, or a forum topic target:
 
 ```bash
 openclaw message send --channel telegram --target 123456789 --message "hi"
 openclaw message send --channel telegram --target @name --message "hi"
+openclaw message send --channel telegram --target -1001234567890:topic:42 --message "hi topic"
 ```
 
     Telegram polls use `openclaw message poll` and support forum topics:

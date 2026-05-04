@@ -14,6 +14,7 @@ type DoctorConfigResult = {
   shouldWriteConfig?: boolean;
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
+  skipPluginValidationOnWrite?: boolean;
 };
 
 type DoctorHealthFlowContext = {
@@ -566,6 +567,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       afterWrite: { mode: "auto" },
       writeOptions: {
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true,
+        skipPluginValidation: ctx.configResult.skipPluginValidationOnWrite === true,
       },
     });
     logConfigUpdated(ctx.runtime);

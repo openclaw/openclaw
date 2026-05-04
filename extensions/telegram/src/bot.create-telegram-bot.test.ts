@@ -3768,7 +3768,7 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(String(editMessageTextSpy.mock.calls.at(-1)?.[2] ?? "")).toContain(
-      "Session-only selection. The agent default in openclaw.json is unchanged",
+      "Session-only model selection. Runtime unchanged.",
     );
     expect(
       editMessageTextSpy.mock.calls.some((call) =>

@@ -102,6 +102,7 @@ type DispatchInboundParams = {
       name?: string;
       phase?: string;
       args?: Record<string, unknown>;
+      detailMode?: "explain" | "raw";
     }) => Promise<void> | void;
     onItemEvent?: (payload: {
       progressText?: string;
@@ -1452,6 +1453,7 @@ describe("processDiscordMessage draft streaming", () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReplyStart?.();
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       return createNoQueuedDispatchResult();
     });
 
@@ -1477,7 +1479,7 @@ describe("processDiscordMessage draft streaming", () => {
     });
   });
 
-  it("starts Discord progress drafts when accepted turns dispatch", async () => {
+  it("does not start Discord progress drafts for text-only accepted turns", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
@@ -1495,17 +1497,17 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledTimes(1);
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
-    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(draftStream.flush).not.toHaveBeenCalled();
   });
 
-  it("keeps Discord progress drafts instead of delivering text-only interim blocks", async () => {
+  it("keeps Discord progress drafts instead of delivering text-only interim blocks after work expands", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendBlockReply({ text: "on it" });
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       await params?.dispatcher.sendFinalReply({ text: "done" });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 1 } };
     });
@@ -1523,8 +1525,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: exec");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• exec done");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
     expect(editMessageDiscord).toHaveBeenCalledWith(
       "c1",
@@ -1532,6 +1533,69 @@ describe("processDiscordMessage draft streaming", () => {
       { content: "done" },
       expect.objectContaining({ rest: expect.anything() }),
     );
+  });
+
+  it("uses raw tool-progress detail in Discord progress drafts", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Shelling\n🛠️ Exec: run tests, `pnpm test -- --watch=false`\n• done",
+    );
+  });
+
+  it("can hide raw command progress text in Discord progress drafts by config", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+            commandText: "status",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
   });
 
   it("keeps Discord progress lines across assistant boundaries", async () => {
@@ -1557,12 +1621,11 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: first");
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: first\n• tool: second");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🧩 First\n🧩 Second");
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps standalone Discord tool progress when partial preview lines are disabled", async () => {
+  it("suppresses standalone Discord tool progress when partial preview lines are disabled", async () => {
     createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
@@ -1582,7 +1645,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(
       dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions?.suppressDefaultToolProgressMessages,
-    ).toBeUndefined();
+    ).toBe(true);
   });
 
   it("strips reply tags from preview partials", async () => {

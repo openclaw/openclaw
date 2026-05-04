@@ -84,6 +84,7 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
   triggerInternalHook,
+  updateSessionStoreEntry,
 } from "./dispatch-from-config.runtime.js";
 import type {
   DispatchFromConfigParams,
@@ -325,6 +326,34 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
     return undefined;
   }
 };
+
+async function clearPendingFinalDeliveryAfterSuccess(params: {
+  storePath?: string;
+  sessionKey?: string;
+}): Promise<void> {
+  if (!params.storePath || !params.sessionKey) {
+    return;
+  }
+  await updateSessionStoreEntry({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    update: async (entry) => {
+      if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
+        return null;
+      }
+      return {
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        pendingFinalDeliveryLastAttemptAt: undefined,
+        pendingFinalDeliveryAttemptCount: undefined,
+        pendingFinalDeliveryLastError: undefined,
+        pendingFinalDeliveryContext: undefined,
+        updatedAt: Date.now(),
+      };
+    },
+  });
+}
 
 export type {
   DispatchFromConfigParams,
@@ -1470,6 +1499,8 @@ export async function dispatchReplyFromConfig(
 
     let queuedFinal = false;
     let routedFinalCount = 0;
+    let attemptedFinalDelivery = false;
+    let finalDeliveryFailed = false;
     if (!suppressDelivery) {
       for (const reply of replies) {
         // Suppress reasoning payloads from channel delivery — channels using this
@@ -1477,9 +1508,20 @@ export async function dispatchReplyFromConfig(
         if (reply.isReasoning === true) {
           continue;
         }
+        attemptedFinalDelivery = true;
         const finalReply = await sendFinalPayload(reply);
         queuedFinal = finalReply.queuedFinal || queuedFinal;
         routedFinalCount += finalReply.routedFinalCount;
+        if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
+          finalDeliveryFailed = true;
+        }
+      }
+
+      if (attemptedFinalDelivery && !finalDeliveryFailed) {
+        await clearPendingFinalDeliveryAfterSuccess({
+          storePath: sessionStoreEntry.storePath,
+          sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+        });
       }
 
       const ttsMode = resolveConfiguredTtsMode(cfg, {

@@ -482,7 +482,9 @@ async function compactEmbeddedPiSessionDirectOnce(
     };
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-  await ensureOpenClawModelsJson(params.config, agentDir);
+  await ensureOpenClawModelsJson(params.config, agentDir, {
+    workspaceDir: resolvedWorkspace,
+  });
   const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
     provider,
     modelId,
@@ -664,6 +666,10 @@ async function compactEmbeddedPiSessionDirectOnce(
       messageProvider: resolvedMessageProvider,
       agentAccountId: params.agentAccountId,
       sessionKey: sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
       sessionId: params.sessionId,
       runId: params.runId,
       groupId: params.groupId,

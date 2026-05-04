@@ -8,8 +8,10 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  markDiagnosticRunProgressForTest,
   markDiagnosticEmbeddedRunStarted,
 } from "./diagnostic-run-activity.js";
 import {
@@ -332,6 +334,7 @@ describe("stuck session diagnostics threshold", () => {
   it("reports active sessions as stalled instead of stuck when active work stops progressing", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -360,7 +363,44 @@ describe("stuck session diagnostics threshold", () => {
       reason: "active_work_without_progress",
       activeWorkKind: "embedded_run",
     });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("lastProgress=embedded_run:started"),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("lastProgressAge=60s"));
     expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("flags stale terminal bridge progress in stalled session diagnostics", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticRunProgressForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        reason: "codex_app_server:notification:rawResponseItem/completed",
+      });
+      startDiagnosticHeartbeat({
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+        },
+      });
+
+      vi.advanceTimersByTime(61_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("terminalProgressStale=true"));
+    expect(events.findLast((event) => event.type === "session.stalled")).toMatchObject({
+      terminalProgressStale: true,
+      lastProgressReason: "codex_app_server:notification:rawResponseItem/completed",
+    });
   });
 
   it("aborts and drains embedded runs after an extended no-progress stall", () => {
@@ -671,6 +711,53 @@ describe("stuck session diagnostics threshold", () => {
         queued: 1,
       }),
     );
+  });
+
+  it("adds phase and work labels to liveness warnings", async () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
+    let finishPhase!: () => void;
+    const phase = withDiagnosticPhase(
+      "startup.plugins.load",
+      () =>
+        new Promise<void>((resolve) => {
+          finishPhase = resolve;
+        }),
+    );
+
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        {
+          emitMemorySample: createEmitMemorySampleMock(),
+          sampleLiveness: () => ({
+            reasons: ["event_loop_delay"],
+            intervalMs: 30_000,
+            eventLoopDelayP99Ms: 1_500,
+            eventLoopDelayMaxMs: 2_000,
+          }),
+        },
+      );
+
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "telegram" });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      finishPhase();
+      await phase;
+      unsubscribe();
+    }
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("phase=startup.plugins.load"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("work=[queued=main("));
+    expect(events.findLast((event) => event.type === "diagnostic.liveness.warning")).toMatchObject({
+      phase: "startup.plugins.load",
+      queuedWorkLabels: [expect.stringContaining("main(")],
+    });
   });
 
   it("keeps transient event-loop max spikes debug-only when only background work is active", () => {

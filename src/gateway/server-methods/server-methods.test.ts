@@ -908,7 +908,7 @@ describe("exec approval handlers", () => {
         twoPhase: true,
         host: "gateway",
         command: "python3 -c 'print(1)'",
-        commandArgv: ["python3", "-c", "print(1)"],
+        commandArgv: ["python3", "script.py"],
         systemRunPlan: undefined,
         nodeId: undefined,
       },

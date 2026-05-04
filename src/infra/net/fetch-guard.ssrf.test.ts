@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchWithSsrFGuard,
   GUARDED_FETCH_MODE,
@@ -24,7 +24,20 @@ const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
     this.options = options;
   }),
 }));
+const { getDefaultAutoSelectFamily, isWSL2SyncMock } = vi.hoisted(() => ({
+  getDefaultAutoSelectFamily: vi.fn(() => true as boolean | undefined),
+  isWSL2SyncMock: vi.fn(() => false),
+}));
 const logWarnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:net", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:net")>()),
+  getDefaultAutoSelectFamily,
+}));
+
+vi.mock("../wsl.js", () => ({
+  isWSL2Sync: isWSL2SyncMock,
+}));
 
 vi.mock("../../logger.js", async () => {
   const actual = await vi.importActual<typeof import("../../logger.js")>("../../logger.js");
@@ -163,17 +176,32 @@ describe("fetchWithSsrFGuard hardening", () => {
     if (params.expectEnvProxy) {
       expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
       expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
+        connect: {
+          autoSelectFamily: true,
+          autoSelectFamilyAttemptTimeout: 300,
+        },
+        proxyTls: {
+          autoSelectFamily: true,
+          autoSelectFamilyAttemptTimeout: 300,
+        },
         allowH2: false,
       });
     }
     await result.release();
   }
 
+  beforeEach(() => {
+    getDefaultAutoSelectFamily.mockReturnValue(true);
+    isWSL2SyncMock.mockReturnValue(false);
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
     agentCtor.mockClear();
     envHttpProxyAgentCtor.mockClear();
     proxyAgentCtor.mockClear();
+    getDefaultAutoSelectFamily.mockClear();
+    isWSL2SyncMock.mockClear();
     logWarnMock.mockClear();
     resetGlobalUndiciStreamTimeoutsForTests();
     Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
@@ -511,6 +539,10 @@ describe("fetchWithSsrFGuard hardening", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://proxy.example:7890",
+      proxyTls: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
       allowH2: false,
       requestTls: {
         servername: "public.example",

@@ -272,6 +272,7 @@ function createMockReplyOperation(): {
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
       complete: vi.fn(),
+      completeThen: vi.fn((afterClear: () => void) => afterClear()),
       fail: failMock,
       abortByUser: vi.fn(),
       abortForRestart: vi.fn(),
@@ -1142,7 +1143,40 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("publishes Codex app-server telemetry to agent event subscribers", async () => {
+  it("forwards raw tool progress detail mode to tool-start reply options", async () => {
+    const onToolStart = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "pnpm test -- --watch=false" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+      toolProgressDetail: "raw",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "pnpm test -- --watch=false" },
+      detailMode: "raw",
+    });
+  });
+
+  it("leaves Codex app-server telemetry publication to the harness", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -1183,15 +1217,12 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(emitAgentEvent).toHaveBeenCalledWith({
-      runId: "run-codex",
-      stream: "codex_app_server.guardian",
-      sessionKey: "agent:main:subagent:codex-child",
-      data: {
-        phase: "blocked",
-        message: "command requires approval",
-      },
-    });
+    expect(emitAgentEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-codex",
+        stream: "codex_app_server.guardian",
+      }),
+    );
   });
 
   it("emits an embedded lifecycle terminal backstop when the runner returns without one", async () => {

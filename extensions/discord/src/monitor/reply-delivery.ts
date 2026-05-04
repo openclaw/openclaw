@@ -18,6 +18,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { RequestClient } from "../internal/discord.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
+import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
@@ -175,13 +176,17 @@ export async function deliverDiscordReply(params: {
   void params.runtime;
 
   const delivery = resolveDiscordDeliveryOptions(params);
+  const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies);
+  if (payloads.length === 0) {
+    return;
+  }
 
   await deliverOutboundPayloads({
     cfg: params.cfg,
     channel: "discord",
     to: delivery.to,
     accountId: params.accountId,
-    payloads: params.replies,
+    payloads,
     replyToId: normalizeOptionalString(params.replyToId),
     replyToMode: delivery.replyToMode,
     formatting: delivery.formatting,

@@ -98,7 +98,10 @@ function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]):
   if (!isMatrixStreamingConfig(streaming)) {
     return true;
   }
-  return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? true;
+  if (resolveMatrixStreamingMode(streaming) === "progress") {
+    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? true;
+  }
+  return streaming.preview?.toolProgress ?? true;
 }
 
 function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixConfig["streaming"]): boolean {

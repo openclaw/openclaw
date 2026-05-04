@@ -253,6 +253,11 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain(
       "assert_legacy_plugin_dependency_debris_before_doctor",
     );
+    expect(publishedUpgradeSurvivor.indexOf("phase seed-source-only-plugin-shadow")).toBeLessThan(
+      publishedUpgradeSurvivor.indexOf("phase assert-baseline"),
+    );
+    expect(publishedUpgradeSurvivor).toContain('"id": "opik-openclaw"');
+    expect(publishedUpgradeSurvivor).toContain('"configSchema": {');
     expect(publishedUpgradeSurvivor).toContain(
       "Legacy plugin dependency debris was already removed before doctor",
     );
@@ -309,6 +314,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'add_profile_suite native-live-src-gateway-core "minimum stable full"',
     );
+    expect(workflow).toContain('add_profile_suite native-live-src-infra "stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-docker "minimum stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
@@ -346,6 +352,10 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
+    expect(workflow).toContain("suite_id: native-live-src-infra");
+    expect(workflow).toContain(
+      "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
+    );
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-smoke");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-opus");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku");
@@ -518,11 +528,15 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "docker_lanes: doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update",
     );
-    expect(workflow).toContain("published_upgrade_survivor_baselines: all-since-2026.4.23");
-    expect(workflow).toContain("published_upgrade_survivor_scenarios: reported-issues");
+    expect(workflow).toContain(
+      "published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'all-since-2026.4.23' || '' }}",
+    );
+    expect(workflow).toContain(
+      "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
+    );
     expect(workflow).toContain("telegram_mode: mock-openai");
     expect(workflow).toContain(
-      "telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-mention-gating",
+      "telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-current-session-status-tool,telegram-mention-gating",
     );
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
     expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
@@ -541,7 +555,7 @@ describe("package artifact reuse", () => {
       "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
     );
     expect(workflow).toContain(
-      "contains(fromJSON('[\"all\",\"live-e2e\"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.live_suite_filter == ''",
+      "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.live_suite_filter == ''",
     );
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
@@ -568,6 +582,18 @@ describe("package artifact reuse", () => {
     expect(qaWorkflow).toContain(
       'pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"',
     );
+  });
+
+  it("keeps Slack live QA disabled in CI until credentials are provisioned", () => {
+    const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
+
+    expect(releaseWorkflow).toContain("qa_live_slack_enabled=false");
+    expect(releaseWorkflow).toContain(
+      "RELEASE_QA_SLACK_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED || 'false' }}",
+    );
+    expect(releaseWorkflow).toContain("vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'");
+    expect(qaWorkflow).toContain("if: vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'");
   });
 
   it("names package acceptance Telegram as artifact-backed package validation", () => {
@@ -651,7 +677,7 @@ describe("package artifact reuse", () => {
       "Focused `npm-telegram` reruns require `npm_telegram_package_spec`",
     );
     expectTextToIncludeAll(fullReleaseDocs, [
-      "full pre-publish candidate",
+      "pre-publish candidate",
       "silently skip that",
       "Telegram package lane",
       "| `npm-telegram`      | Published-package Telegram E2E; requires `npm_telegram_package_spec`. |",

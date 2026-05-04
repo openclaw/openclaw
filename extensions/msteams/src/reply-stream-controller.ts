@@ -1,6 +1,11 @@
 import {
+  createChannelProgressDraftGate,
+  formatChannelProgressDraftText,
+  isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftLabel,
+  resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
@@ -40,6 +45,11 @@ export function createTeamsReplyStreamController(params: {
   const streamMode = resolveChannelPreviewStreamMode(params.msteamsConfig, "partial");
   const shouldUseNativeStream =
     isPersonal && (streamMode === "partial" || streamMode === "progress");
+  const shouldSuppressDefaultToolProgressMessages =
+    shouldUseNativeStream && streamMode === "progress";
+  const shouldStreamPreviewToolProgress =
+    shouldSuppressDefaultToolProgressMessages &&
+    resolveChannelStreamingPreviewToolProgress(params.msteamsConfig);
   const stream = shouldUseNativeStream
     ? new TeamsHttpStream({
         sendActivity: (activity) => params.context.sendActivity(activity),
@@ -52,7 +62,69 @@ export function createTeamsReplyStreamController(params: {
 
   let streamReceivedTokens = false;
   let informativeUpdateSent = false;
+  let progressLines: string[] = [];
+  let lastInformativeText = "";
   let pendingFinalize: Promise<void> | undefined;
+
+  const renderInformativeUpdate = async () => {
+    if (!stream) {
+      return;
+    }
+    const informativeText = formatChannelProgressDraftText({
+      entry: params.msteamsConfig,
+      lines: shouldStreamPreviewToolProgress ? progressLines : [],
+      seed: params.progressSeed,
+      bullet: "-",
+    });
+    if (!informativeText || informativeText === lastInformativeText) {
+      return;
+    }
+    lastInformativeText = informativeText;
+    informativeUpdateSent = true;
+    await stream.sendInformativeUpdate(informativeText);
+  };
+
+  const progressDraftGate = createChannelProgressDraftGate({
+    onStart: renderInformativeUpdate,
+  });
+
+  const noteProgressWork = async (options?: { toolName?: string }): Promise<void> => {
+    if (!stream || streamMode !== "progress") {
+      return;
+    }
+    if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
+      return;
+    }
+    const hadStarted = progressDraftGate.hasStarted;
+    await progressDraftGate.noteWork();
+    if (hadStarted && progressDraftGate.hasStarted) {
+      await renderInformativeUpdate();
+    }
+  };
+
+  const pushProgressLine = async (
+    line?: string,
+    options?: { toolName?: string },
+  ): Promise<void> => {
+    if (!stream || streamMode !== "progress") {
+      return;
+    }
+    if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
+      return;
+    }
+    if (shouldStreamPreviewToolProgress) {
+      const normalized = line?.replace(/\s+/g, " ").trim();
+      if (normalized) {
+        const previous = progressLines.at(-1);
+        if (previous !== normalized) {
+          progressLines = [...progressLines, normalized].slice(
+            -resolveChannelProgressDraftMaxLines(params.msteamsConfig),
+          );
+        }
+      }
+    }
+    await noteProgressWork();
+  };
 
   const fallbackAfterStreamFailure = (
     payload: ReplyPayload,
@@ -74,19 +146,11 @@ export function createTeamsReplyStreamController(params: {
 
   return {
     async onReplyStart(): Promise<void> {
-      if (!stream || informativeUpdateSent) {
-        return;
-      }
-      const informativeText = pickInformativeStatusText({
-        config: params.msteamsConfig,
-        seed: params.progressSeed,
-        random: params.random,
-      });
-      if (!informativeText) {
-        return;
-      }
-      informativeUpdateSent = true;
-      await stream.sendInformativeUpdate(informativeText);
+      return;
+    },
+
+    async noteProgressWork(options?: { toolName?: string }): Promise<void> {
+      await noteProgressWork(options);
     },
 
     onPartialReply(payload: { text?: string }): void {
@@ -98,6 +162,18 @@ export function createTeamsReplyStreamController(params: {
       }
       streamReceivedTokens = true;
       stream.update(payload.text);
+    },
+
+    async pushProgressLine(line?: string, options?: { toolName?: string }): Promise<void> {
+      await pushProgressLine(line, options);
+    },
+
+    shouldSuppressDefaultToolProgressMessages(): boolean {
+      return shouldSuppressDefaultToolProgressMessages;
+    },
+
+    shouldStreamPreviewToolProgress(): boolean {
+      return shouldStreamPreviewToolProgress;
     },
 
     async preparePayload(payload: ReplyPayload): Promise<Maybe<ReplyPayload>> {
@@ -144,6 +220,7 @@ export function createTeamsReplyStreamController(params: {
     },
 
     async finalize(): Promise<void> {
+      progressDraftGate.cancel();
       await pendingFinalize;
       await stream?.finalize();
     },

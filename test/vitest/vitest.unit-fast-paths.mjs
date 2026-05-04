@@ -93,6 +93,7 @@ export const forcedUnitFastTestFiles = [
   "src/canvas-host/server.state-dir.test.ts",
   "src/docs/clawhub-plugin-docs.test.ts",
   "src/docs/channel-config-examples.test.ts",
+  "src/docs/plugin-doc-examples.test.ts",
   "src/docs/install-cloud-secrets.test.ts",
   "src/docker-build-cache.test.ts",
   "src/docker-image-digests.test.ts",

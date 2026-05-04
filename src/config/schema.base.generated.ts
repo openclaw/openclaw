@@ -5336,6 +5336,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              toolProgressDetail: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "explain",
+                  },
+                  {
+                    type: "string",
+                    const: "raw",
+                  },
+                ],
+              },
               reasoningDefault: {
                 anyOf: [
                   {
@@ -6338,6 +6350,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Thinking Default",
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+                },
+                verboseDefault: {
+                  type: "string",
+                  enum: ["off", "on", "full"],
+                },
+                toolProgressDetail: {
+                  type: "string",
+                  enum: ["explain", "raw"],
                 },
                 reasoningDefault: {
                   type: "string",
@@ -24166,6 +24186,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
           },
+          bundledDiscovery: {
+            type: "string",
+            enum: ["compat", "allowlist"],
+            title: "Bundled Plugin Discovery",
+            description:
+              'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
+          },
         },
         additionalProperties: false,
         title: "Plugins",
@@ -28845,6 +28872,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
       tags: ["access"],
     },
+    "plugins.bundledDiscovery": {
+      label: "Bundled Plugin Discovery",
+      help: 'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
+      tags: ["advanced"],
+    },
     "plugins.deny": {
       label: "Plugin Denylist",
       help: "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
@@ -29360,6 +29392,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.5.3",
+  version: "2026.5.4",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };
