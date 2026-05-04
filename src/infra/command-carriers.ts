@@ -11,6 +11,7 @@ const COMMAND_EXECUTING_OPTIONS = new Set(["-p"]);
 const COMMAND_QUERY_OPTIONS = new Set(["-v", "-V"]);
 const ENV_OPTIONS_WITH_VALUE = new Set([
   "-C",
+  "-P",
   "-S",
   "-s",
   "-u",

@@ -54,6 +54,9 @@ describe("command-analysis risks", () => {
     expect(detectInlineEvalArgv(["env", "-iS", "python3 -c 'print(1)'"])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["env", "-S", "python3 -c", "print(1)"])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["env", "-iSpython3 -c", "print(1)"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["env", "-P", "/usr/bin", "python3", "-c", "print(1)"])?.flag).toBe(
+      "-c",
+    );
     expect(detectInlineEvalArgv(["command", "node", "--eval", "1"])?.flag).toBe("--eval");
     expect(detectInlineEvalArgv(["env", "-S", 'python3 -c "print(1)"'])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["python3", "script.py"])).toBeNull();
@@ -173,6 +176,9 @@ describe("command-analysis risks", () => {
     expect(buildCommandPayloadCandidates(["env", "-iSbash -lc", "/approve abc deny"])).toEqual([
       "bash -lc /approve abc deny",
       "/approve abc deny",
+    ]);
+    expect(buildCommandPayloadCandidates(["env", "-P", "/usr/bin", "/approve", "abc"])).toEqual([
+      "/approve abc",
     ]);
     expect(buildCommandPayloadCandidates(["exec", "-a", "openclaw", "/approve", "abc"])).toEqual([
       "/approve abc",

@@ -337,6 +337,7 @@ describe("exec host env validation", () => {
     "env --ignore-environment /approve abc123 allow-once",
     "env -i FOO=1 /approve abc123 allow-once",
     "env -S '/approve abc123 deny'",
+    "env -P /usr/bin /approve abc123 deny",
     "env -iS'/approve abc123 deny'",
     "env -S '/approve abc123' deny",
     "env -iS'/approve abc123' deny",
