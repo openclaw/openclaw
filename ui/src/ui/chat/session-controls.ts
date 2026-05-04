@@ -77,7 +77,7 @@ async function refreshSessionOptions(state: AppViewState) {
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,
-    showArchived: state.sessionsShowArchived,
+    showArchived: state.sessionsShowArchived ?? false,
   });
 }
 
