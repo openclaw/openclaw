@@ -82,6 +82,20 @@ describe("exec heavy-command guard", () => {
       heavy: true,
       hit: { classification: "always", reason: "corepack pnpm exec vitest" },
     });
+    expect(analyzeHeavyExecCommand("pnpm --dir ui test")).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "pnpm test" },
+    });
+    expect(
+      analyzeHeavyExecCommand("corepack pnpm --filter ./ui exec vitest run src/foo.test.ts"),
+    ).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "corepack pnpm exec vitest" },
+    });
+    expect(analyzeHeavyExecCommand("npm --prefix ui run lint")).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "npm run lint" },
+    });
     expect(analyzeHeavyExecCommand("tsgolint src")).toMatchObject({
       heavy: true,
       hit: { classification: "always", reason: "tsgolint" },
