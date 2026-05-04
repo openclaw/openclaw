@@ -21034,7 +21034,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           maxChars: {
             type: "integer",
             minimum: 10,
-            maximum: 120,
+            maximum: 60,
           },
         },
         additionalProperties: false,
