@@ -465,6 +465,174 @@ Checks bot registration, AAD app, manifest, and SSO configuration in one pass.
 2. Find the bot in Teams and send a DM
 3. Check gateway logs for incoming activity
 
+## Teams SSO for delegated plugin tools
+
+OpenClaw can use Bot Framework Teams SSO to let trusted plugin tools request the current Teams user's delegated access token at tool execution time. This is for downstream APIs that need user delegation, including APIs that then perform Microsoft Entra on-behalf-of exchange to Microsoft Graph.
+
+For delegated SSO testing, create an **Azure Bot** resource first, then create or upload the Teams app manifest that references that bot's Microsoft App ID. The `teams app create` quick setup is fine for a plain bot smoke test, but it can create a Teams-managed bot registration that replies in Teams without exposing the Azure Bot **Configuration** page where Bot Framework OAuth connection settings are managed.
+
+Recommended first-time SSO order:
+
+1. Create an Azure Bot with a single-tenant Microsoft App ID, client secret, Teams channel, and messaging endpoint such as `https://<tunnel-host>/api/messages`.
+2. Create the downstream Entra app registration, expose a scope such as `api://<downstream-app-id>/downstream.access`, and add the Teams client apps as authorized clients.
+3. Add the Azure Bot OAuth connection that targets the downstream app scope.
+4. Upload a Teams app manifest whose `bots[].botId` is the Azure Bot Microsoft App ID and whose `webApplicationInfo` points at the downstream app ID and Application ID URI.
+5. Configure OpenClaw with the Azure Bot credentials and the OAuth connection name.
+
+If the Azure Bot can receive messages but OpenClaw queues replies with
+`AADSTS7000229` / "missing service principal", create the Enterprise
+Application/service principal for the bot app in the tenant:
+
+```bash
+az ad sp create --id <bot-microsoft-app-id>
+az ad sp show --id <bot-microsoft-app-id> --query '{appId:appId,displayName:displayName,id:id}' -o table
+```
+
+Configure the Bot Framework OAuth connection name:
+
+```json5
+{
+  channels: {
+    msteams: {
+      sso: {
+        enabled: true,
+        connectionName: "DownstreamApiConnection",
+      },
+    },
+  },
+}
+```
+
+Authorized tool plugins receive a runtime-only resolver on `ctx.auth`. The token is not added to the model prompt, inbound context payload, transcript JSONL, or generic tool metadata.
+
+Delegated auth is plugin-gated. Add an explicit token-release allowlist for each trusted plugin that may receive delegated user tokens:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "downstream-tools": {
+        auth: {
+          delegatedAccess: {
+            enabled: true,
+            providers: ["msteams"],
+            audiences: ["api://downstream-tools"],
+            scopes: ["downstream.access"],
+            chatTypes: ["direct"],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Plugins without this opt-in can still run their tools when otherwise enabled, but they do not receive `ctx.auth`.
+
+Delegated auth provider ids are channel-owned. The Teams channel exposes `msteams`; core enforces the plugin policy and calls the active channel resolver, but does not maintain a fixed provider-id list.
+
+When `audiences` or `scopes` are configured, OpenClaw checks both the plugin request and the returned JWT claims before releasing the token. The plugin request may only ask for configured scopes, and the returned token must contain the requested scopes; extra granted scopes in the token are allowed because Microsoft Entra can include previously consented scopes for the same resource. Returned audiences stay strict: every `aud` value must match the configured audience allowlist. When `chatTypes` is configured, OpenClaw releases delegated tokens only for trusted inbound route types from `direct`, `group`, or `channel`; this decision uses runtime route context, not plugin-supplied tool arguments.
+
+For Teams, delegated auth resolves only `channels.msteams.sso.connectionName`. A tool may omit `connectionName` or pass the same value, but it cannot select a different Bot Framework OAuth connection at runtime.
+
+When Bot Framework has no stored user token for that OAuth connection, OpenClaw sends a Teams OAuth card into the active conversation. If the Teams client suppresses the card, the same message includes the Bot Framework sign-in link as plain text. After the user completes the card or link, Teams sends `signin/tokenExchange`/`signin/verifyState`; in browser fallback flows Microsoft may instead show a six-digit code, which the user should paste back into the same Teams chat. The Teams channel verifies the code, stores the exchanged token, and later tool calls can resolve it. Plugins should not construct or send this consent card themselves.
+
+```typescript
+api.registerTool((ctx) => ({
+  name: "call_downstream_api",
+  description: "Call the signed-in user's downstream API",
+  parameters: { type: "object", properties: {}, additionalProperties: false },
+  async execute() {
+    const auth = await ctx.auth?.getDelegatedAccessToken({
+      provider: "msteams",
+      audience: "api://downstream-tools",
+      scopes: ["downstream.access"],
+    });
+    if (!auth?.ok) {
+      return {
+        content: [{ type: "text", text: `auth_required:${auth?.reason ?? "not_configured"}` }],
+      };
+    }
+    const response = await fetch("https://downstream.example.com/api/action", {
+      headers: { Authorization: `Bearer ${auth.token}` },
+    });
+    return { content: [{ type: "text", text: await response.text() }] };
+  },
+}));
+```
+
+For Microsoft Entra OBO, configure the Bot Framework OAuth connection for the downstream API, not for Graph directly. The downstream API should validate a token whose `aud` is that API, require the expected delegated scope, then exchange that token to Graph itself. Do not forward a Graph access token as the downstream API's bearer token. Microsoft Entra may emit the delegated token `aud` as the downstream app client id even when the Application ID URI is `api://<downstream-app-id>`; OpenClaw treats `api://<uuid>` policy audiences as equivalent to the bare UUID claim.
+
+### Production-shaped PoC
+
+Use two app registrations:
+
+- **Azure Bot app**: `channels.msteams.appId`, `channels.msteams.appPassword`, and `bots[].botId`.
+- **Downstream API app**: Teams SSO `webApplicationInfo.id`, OAuth connection client id/secret, and delegated token audience.
+
+Concrete setup:
+
+1. Create the single-tenant Azure Bot, enable the Teams channel, and set the messaging endpoint to `https://<host>/api/messages`.
+2. Create the downstream Entra app registration and set `requestedAccessTokenVersion` to `2`.
+3. Expose the downstream API as `api://<downstream-app-id>` with delegated scope `downstream.access`.
+4. Pre-authorize the Teams clients for that scope:
+   - Teams desktop/mobile: `1fec8e78-bce4-4aaf-ab1b-5451cc387264`
+   - Teams web: `5e3ce6c0-2b1f-4285-8d4b-75ee78787346`
+5. Add redirect URI `https://token.botframework.com/.auth/web/redirect` to the downstream app.
+6. Add Microsoft Graph delegated permissions such as `User.Read` to the downstream app and grant admin consent. OBO token acquisition has no interactive UI at the moment the downstream API requests Graph, so missing Graph consent appears as `AADSTS65001` or `graph_consent_required` in the local PoC server.
+7. On the Azure Bot, create OAuth connection `DownstreamApiConnection`:
+   - Service provider: `Azure Active Directory v2`
+   - Client ID/secret: downstream app registration
+   - Tenant ID: your tenant
+   - Token Exchange URL: `api://<downstream-app-id>`
+   - Scopes: `api://<downstream-app-id>/downstream.access`
+8. In the Teams app manifest, keep `bots[].botId` set to the Azure Bot app id, set `webApplicationInfo.id` to the downstream app id, set `webApplicationInfo.resource` to `api://<downstream-app-id>`, and include `token.botframework.com` in `validDomains`.
+9. Configure OpenClaw:
+
+   ```json5
+   {
+     channels: {
+       msteams: {
+         sso: {
+           enabled: true,
+           connectionName: "DownstreamApiConnection",
+         },
+       },
+     },
+     plugins: {
+       entries: {
+         "downstream-tools": {
+           auth: {
+             delegatedAccess: {
+               enabled: true,
+               providers: ["msteams"],
+               audiences: ["api://<downstream-app-id>"],
+               scopes: ["downstream.access"],
+               chatTypes: ["direct"],
+             },
+           },
+         },
+       },
+     },
+   }
+   ```
+
+The Bot Framework OAuth connection uses the full scope URI (`api://<downstream-app-id>/downstream.access`). OpenClaw plugin policy and tool requests use the JWT `scp` claim value (`downstream.access`). For the audience guard, use either the downstream app client id or `api://<downstream-app-id>`; OpenClaw accepts those two forms as equivalent for UUID app-id URIs.
+
+The in-repo PoC at `examples/plugins/msteams-graph-profile` follows this shape:
+the tool requests a downstream API token and calls a configured `/api/me`
+endpoint. The sibling `examples/msteams-obo-downstream-api` package includes a
+local-only downstream API server that validates the token and performs Graph OBO
+server-side.
+
+Manual validation:
+
+1. Send a Teams DM that invokes a trusted plugin tool using `ctx.auth.getDelegatedAccessToken`.
+2. Complete the Teams consent/sign-in card if OpenClaw sends one. If Teams only shows a Bot Framework sign-in link, open it and paste the six-digit code from Microsoft back into the same Teams chat.
+3. Verify the downstream API receives a JWT with `aud=<downstream-app-id>` or `aud=api://<downstream-app-id>`, `scp` containing `downstream.access`, the expected `tid`, and the user's object id claim.
+4. Verify the downstream API exchanges that token to Graph with OBO and calls `/me`.
+5. Confirm the bearer value does not appear in gateway logs, transcripts, prompt/debug context, or tool metadata.
+
 ## Environment variables
 
 All config keys can be set via environment variables instead:
@@ -554,7 +722,9 @@ Minimal, valid example with the required fields. Replace IDs and URLs.
   ],
   webApplicationInfo: {
     id: "11111111-1111-1111-1111-111111111111",
+    resource: "api://11111111-1111-1111-1111-111111111111",
   },
+  validDomains: ["token.botframework.com"],
   authorization: {
     permissions: {
       resourceSpecific: [
@@ -575,7 +745,9 @@ Minimal, valid example with the required fields. Replace IDs and URLs.
 ### Manifest caveats (must-have fields)
 
 - `bots[].botId` **must** match the Azure Bot App ID.
-- `webApplicationInfo.id` **must** match the Azure Bot App ID.
+- `webApplicationInfo.id` must match the Entra app used for Teams SSO. In a single-app bot setup this is the Azure Bot App ID; in a downstream API/OBO setup this is the downstream API app ID.
+- `webApplicationInfo.resource` must match that Entra app's Application ID URI, for example `api://<app-id>`.
+- `validDomains` must include `token.botframework.com` when Bot Framework OAuth/SSO is enabled.
 - `bots[].scopes` must include the surfaces you plan to use (`personal`, `team`, `groupChat`).
 - `bots[].supportsFiles: true` is required for file handling in personal scope.
 - `authorization.permissions.resourceSpecific` must include channel read/send if you want channel traffic.
@@ -702,7 +874,9 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `toolsBySender` keys should use explicit prefixes:
   `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
 - `channels.msteams.actions.memberInfo`: enable or disable the Graph-backed member info action (default: enabled when Graph credentials are available).
-- `channels.msteams.authType`: authentication type - `"secret"` (default) or `"federated"`.
+- `channels.msteams.sso.enabled`: enable Bot Framework Teams SSO token exchange for runtime delegated plugin auth.
+- `channels.msteams.sso.connectionName`: Bot Framework OAuth connection name used by `ctx.auth.getDelegatedAccessToken`.
+- `channels.msteams.authType`: authentication type — `"secret"` (default) or `"federated"`.
 - `channels.msteams.certificatePath`: path to PEM certificate file (federated + certificate auth).
 - `channels.msteams.certificateThumbprint`: certificate thumbprint (optional, not required for auth).
 - `channels.msteams.useManagedIdentity`: enable managed identity auth (federated mode).
@@ -984,6 +1158,11 @@ Bots have limited support in private channels:
 
 - **Images not showing in channels:** Graph permissions or admin consent missing. Reinstall the Teams app and fully quit/reopen Teams.
 - **No responses in channel:** mentions are required by default; set `channels.msteams.requireMention=false` or configure per team/channel.
+- **Inbound works, dispatch completes, but no Teams reply appears:** check the OpenClaw state directory's `delivery-queue/*.json` files for `lastError`. `AADSTS7000229` means the bot app is missing its service principal in the tenant; run `az ad sp create --id <bot-microsoft-app-id>`, then restart the Gateway.
+- **Delegated tool returns `unavailable` or no OAuth card appears:** confirm `channels.msteams.sso.connectionName` exactly matches the Azure Bot OAuth connection, the trusted plugin allowlist uses the downstream API audience and JWT `scp` value, and the Teams app manifest includes `token.botframework.com` in `validDomains`. With debug logging enabled, look for `msteams delegated auth token rejected by requested claims` (wrong OAuth connection audience/scope) or `msteams delegated auth consent challenge failed` (Bot Framework sign-in resource or card delivery failed). For Entra app-id URI audiences, `api://<downstream-app-id>` and the bare `<downstream-app-id>` JWT `aud` claim are treated as equivalent.
+- **Delegated example returns `auth_context_missing` or `not_configured`:** `auth_context_missing` means the tool ran without a runtime delegated-auth binding; reinstall changed local plugin code and restart the Gateway. `not_configured` means the plugin request did not pass the configured delegated-auth policy; check `providers`, `audiences`, `scopes`, and `channels.msteams.sso.connectionName`.
+- **Delegated auth returns `missing_consent`:** complete the OAuth card or sign-in link. If Microsoft shows a six-digit code, paste that code back into the same Teams chat, wait for the Gateway log that says the code was verified, then retry the tool.
+- **Downstream API returns `graph_consent_required` or logs `AADSTS65001`:** Teams delegated auth succeeded and the API reached the Graph OBO exchange, but the downstream Entra app does not have consent for its Graph delegated permission. In the downstream app registration, add Microsoft Graph delegated `User.Read` and click **Grant admin consent** for the tenant.
 - **Version mismatch (Teams still shows old manifest):** remove + re-add the app and fully quit Teams to refresh.
 - **401 Unauthorized from webhook:** Expected when testing manually without Azure JWT - means endpoint is reachable but auth failed. Use Azure Web Chat to test properly.
 
