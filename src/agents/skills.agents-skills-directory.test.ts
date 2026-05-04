@@ -121,6 +121,67 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
     expect(prompt2).not.toContain("Personal agents version");
   });
 
+  it("loads symlinked skills from personal ~/.agents/skills/", async () => {
+    const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
+
+    const externalDir = await createTempDir("external-skills-");
+    await writeSkill({
+      dir: path.join(externalDir, "ext-skill"),
+      name: "ext-skill",
+      description: "External symlinked skill",
+    });
+
+    const personalSkillsDir = path.join(fakeHome, ".agents", "skills");
+    await fs.mkdir(personalSkillsDir, { recursive: true });
+    await fs.symlink(
+      path.join(externalDir, "ext-skill"),
+      path.join(personalSkillsDir, "ext-skill"),
+    );
+
+    const prompt = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
+    expect(prompt).toContain("ext-skill");
+    expect(prompt).toContain("External symlinked skill");
+  });
+
+  it("loads symlinked skills from project .agents/skills/", async () => {
+    const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
+
+    const externalDir = await createTempDir("external-skills-");
+    await writeSkill({
+      dir: path.join(externalDir, "proj-ext-skill"),
+      name: "proj-ext-skill",
+      description: "Project external symlinked skill",
+    });
+
+    const projectSkillsDir = path.join(workspaceDir, ".agents", "skills");
+    await fs.mkdir(projectSkillsDir, { recursive: true });
+    await fs.symlink(
+      path.join(externalDir, "proj-ext-skill"),
+      path.join(projectSkillsDir, "proj-ext-skill"),
+    );
+
+    const prompt = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
+    expect(prompt).toContain("proj-ext-skill");
+    expect(prompt).toContain("Project external symlinked skill");
+  });
+
+  it("rejects symlinked skills from managed dir (non-user-managed source)", async () => {
+    const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
+
+    const externalDir = await createTempDir("external-skills-");
+    await writeSkill({
+      dir: path.join(externalDir, "managed-ext"),
+      name: "managed-ext",
+      description: "Managed external skill",
+    });
+
+    await fs.mkdir(managedDir, { recursive: true });
+    await fs.symlink(path.join(externalDir, "managed-ext"), path.join(managedDir, "managed-ext"));
+
+    const prompt = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
+    expect(prompt).not.toContain("managed-ext");
+  });
+
   it("loads unique skills from all .agents/skills/ sources alongside others", async () => {
     const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
 
