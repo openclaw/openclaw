@@ -107,6 +107,53 @@ describe("assistant text transcript persistence", () => {
     ).toHaveLength(1);
   });
 
+  it("treats short streamed chunks as covered by a persisted full assistant message", () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({ role: "user", content: "question A", timestamp: 1 });
+    sessionManager.appendMessage(textAssistant("All checks passed.\n\nDone.", 2));
+
+    expect(
+      resolveUnpersistedAssistantTexts({
+        assistantTexts: ["Done."],
+        messagesSnapshot: getPersistedMessages(sessionManager),
+        prePromptMessageCount: 0,
+      }),
+    ).toEqual([]);
+  });
+
+  it("persists short final replies that only appear inside earlier assistant text", () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({ role: "user", content: "question A", timestamp: 1 });
+    sessionManager.appendMessage(textAssistant("I'll get this done.", 2));
+    sessionManager.appendMessage(toolResult(3));
+    const messagesSnapshot = getPersistedMessages(sessionManager);
+
+    expect(
+      resolveUnpersistedAssistantTexts({
+        assistantTexts: ["Done."],
+        messagesSnapshot,
+        prePromptMessageCount: 0,
+      }),
+    ).toEqual(["Done."]);
+
+    const reconciled = reconcileAssistantTextsWithTranscript({
+      sessionManager,
+      messagesSnapshot,
+      prePromptMessageCount: 0,
+      assistantTexts: ["Done."],
+      provider: "openai-codex",
+      modelId: "gpt-test",
+      timestamp: 4,
+    });
+
+    expect(reconciled).toBeDefined();
+    const assistantMessages = getPersistedMessages(sessionManager).filter(
+      (message) => message.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(2);
+    expect(JSON.stringify(assistantMessages[1])).toContain("Done.");
+  });
+
   it("persists only visible text from delivery directive payloads", () => {
     expect(
       resolveUnpersistedAssistantTexts({

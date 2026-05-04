@@ -1,13 +1,22 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { normalizeTextForComparison } from "../../pi-embedded-helpers.js";
 import { extractAssistantVisibleText, isAssistantMessage } from "../../pi-embedded-utils.js";
-import { makeZeroUsageSnapshot, type NormalizedUsage } from "../../usage.js";
+import { makeZeroUsageSnapshot } from "../../usage.js";
 
 type SessionManagerAppender = Pick<SessionManager, "appendMessage">;
+
+const SHORT_SUBSTRING_COVERAGE_MAX_LENGTH = 16;
+
+function normalizedTextSegments(text: string): string[] {
+  return text
+    .split(/(?:\r?\n)+|(?<=[.!?])\s+/u)
+    .map((segment) => normalizeTextForComparison(segment))
+    .filter(Boolean);
+}
 
 function persistedTextCoversAssistantText(persisted: string, candidate: string): boolean {
   const persistedNormalized = normalizeTextForComparison(persisted);
@@ -18,7 +27,10 @@ function persistedTextCoversAssistantText(persisted: string, candidate: string):
   if (persistedNormalized === candidateNormalized) {
     return true;
   }
-  return candidateNormalized.length >= 20 && persistedNormalized.includes(candidateNormalized);
+  if (candidateNormalized.length <= SHORT_SUBSTRING_COVERAGE_MAX_LENGTH) {
+    return normalizedTextSegments(persisted).includes(candidateNormalized);
+  }
+  return persistedNormalized.includes(candidateNormalized);
 }
 
 function toPersistableAssistantText(text: string): string | undefined {
@@ -49,25 +61,6 @@ export function resolveUnpersistedAssistantTexts(params: {
     );
 }
 
-function toAssistantUsageSnapshot(usage?: NormalizedUsage): Usage {
-  const zero = makeZeroUsageSnapshot();
-  if (!usage) {
-    return zero;
-  }
-  const input = usage.input ?? 0;
-  const output = usage.output ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
-  return {
-    ...zero,
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    totalTokens: usage.total ?? input + output + cacheRead + cacheWrite,
-  };
-}
-
 export function reconcileAssistantTextsWithTranscript(params: {
   sessionManager: SessionManagerAppender;
   messagesSnapshot: AgentMessage[];
@@ -75,7 +68,6 @@ export function reconcileAssistantTextsWithTranscript(params: {
   assistantTexts: readonly string[];
   provider: string;
   modelId: string;
-  usage?: NormalizedUsage;
   timestamp?: number;
 }): AssistantMessage | undefined {
   const text = normalizeOptionalString(
@@ -95,7 +87,7 @@ export function reconcileAssistantTextsWithTranscript(params: {
     api: "openai-responses",
     provider: params.provider,
     model: params.modelId,
-    usage: toAssistantUsageSnapshot(params.usage),
+    usage: makeZeroUsageSnapshot(),
     stopReason: "stop",
     timestamp: params.timestamp ?? Date.now(),
   };

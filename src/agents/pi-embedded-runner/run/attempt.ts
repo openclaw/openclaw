@@ -3222,20 +3222,21 @@ export async function runEmbeddedAttempt(
           prePromptMessageCount,
         });
         attemptUsage = getUsageTotals();
-        if (!promptError && !aborted && !yieldAborted && !timedOutDuringCompaction) {
-          const reconciledAssistant = reconcileAssistantTextsWithTranscript({
+        if (
+          !promptError &&
+          !aborted &&
+          !yieldAborted &&
+          !timedOutDuringCompaction &&
+          !compactionOccurredThisAttempt
+        ) {
+          reconcileAssistantTextsWithTranscript({
             sessionManager,
             messagesSnapshot,
             prePromptMessageCount,
             assistantTexts,
             provider: params.provider,
             modelId: params.modelId,
-            usage: normalizeUsage(currentAttemptAssistant?.usage) ?? attemptUsage,
           });
-          if (reconciledAssistant) {
-            lastAssistant = reconciledAssistant;
-            currentAttemptAssistant = reconciledAssistant;
-          }
         }
         cacheBreak = cacheObservabilityEnabled
           ? completePromptCacheObservation({
