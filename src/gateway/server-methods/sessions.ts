@@ -477,9 +477,6 @@ function attachTrackedActiveSessionRuns<T extends SessionsListHashPayload>(param
 }
 
 function hashSessionsListResult(result: SessionsListHashPayload): string {
-  // `count` is intentionally omitted from the hash payload: when it changes because session
-  // data changed, the store/config fingerprint already invalidates the cache entry.
-  // `path` is included so clients cannot treat `{ unchanged: true }` as valid across store moves.
   const serialized = JSON.stringify({
     path: result.path,
     sessions: result.sessions,
@@ -742,7 +739,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
     const visibleResult = attachTrackedActiveSessionRuns({ context, result });
     const hash = hashSessionsListResult(visibleResult);
-    writeSessionsListResultCache({ cfg, listParams: p, hash, result });
+    writeSessionsListResultCache({ cfg, listParams: p, result });
     const clientHash = typeof p.lastHash === "string" ? p.lastHash : undefined;
     if (clientHash && clientHash === hash) {
       respond(true, { unchanged: true, hash, ts: Date.now(), count: result.count }, undefined);

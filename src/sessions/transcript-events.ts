@@ -11,10 +11,8 @@ type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
 
 const SESSION_TRANSCRIPT_LISTENERS = new Set<SessionTranscriptListener>();
 
-/** Monotonic counter bumped on every transcript update emission; used to invalidate caches that depend on transcript state. */
 let transcriptWriteGeneration = 0;
 
-/** Returns the current transcript write generation (monotonic). */
 export function getTranscriptWriteGeneration(): number {
   return transcriptWriteGeneration;
 }

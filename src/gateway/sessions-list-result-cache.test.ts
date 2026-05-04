@@ -62,7 +62,6 @@ describe("sessions list result cache immutability", () => {
           writeSessionsListResultCache({
             cfg,
             listParams,
-            hash: "hash-1",
             result: {
               ts: 1_690_000_000_000,
               path: sessionsPath,
@@ -90,7 +89,6 @@ describe("sessions list result cache immutability", () => {
           const second = tryReadSessionsListResultCache({ cfg, listParams });
           expect(second).not.toBeNull();
           expect(second).toMatchObject({
-            hash: "hash-1",
             path: sessionsPath,
             count: 1,
             defaults: {
@@ -221,7 +219,6 @@ describe("collectResolvedConfigSourceStatFingerprintSync", () => {
           writeSessionsListResultCache({
             cfg: cfg1,
             listParams,
-            hash: "hash-stale",
             result: {
               ts: Date.now(),
               path: sessionsPath,
@@ -271,7 +268,6 @@ describe("collectResolvedConfigSourceStatFingerprintSync", () => {
           writeSessionsListResultCache({
             cfg,
             listParams,
-            hash: "hash-null-fp",
             result: {
               ts: Date.now(),
               path: sessionsPath,
@@ -284,7 +280,6 @@ describe("collectResolvedConfigSourceStatFingerprintSync", () => {
           resetConfigStatFingerprintAtLastLoadForTest();
           const cached = tryReadSessionsListResultCache({ cfg, listParams });
           expect(cached).toMatchObject({
-            hash: "hash-null-fp",
             path: sessionsPath,
             count: 1,
             defaults: { modelProvider: null, model: null, contextTokens: 1234 },
@@ -321,7 +316,6 @@ describe("collectResolvedConfigSourceStatFingerprintSync", () => {
           writeSessionsListResultCache({
             cfg: cfg1,
             listParams,
-            hash: "hash-1",
             result: {
               ts: Date.now(),
               path: sessionsPath,
@@ -342,7 +336,6 @@ describe("collectResolvedConfigSourceStatFingerprintSync", () => {
 
           const cached = tryReadSessionsListResultCache({ cfg: cfg2, listParams });
           expect(cached).toMatchObject({
-            hash: "hash-1",
             path: sessionsPath,
             count: 1,
             defaults: {
@@ -386,7 +379,6 @@ describe("collectResolvedConfigSourceStatFingerprintSync", () => {
           writeSessionsListResultCache({
             cfg,
             listParams,
-            hash: "hash-tony",
             result: {
               ts: Date.now(),
               path: tonyStorePath,
@@ -399,7 +391,6 @@ describe("collectResolvedConfigSourceStatFingerprintSync", () => {
           fs.writeFileSync(otherStorePath, '{"other":{}}\n', "utf-8");
 
           expect(tryReadSessionsListResultCache({ cfg, listParams })).toMatchObject({
-            hash: "hash-tony",
             path: tonyStorePath,
           });
 

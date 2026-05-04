@@ -173,10 +173,8 @@ const runtimePluginsLoader = createLazyPromiseLoader(() =>
   importRuntimeModule<RuntimePluginsModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
 );
 
-/** Monotonic counter bumped on every registry mutation; used to invalidate caches that depend on subagent state. */
 let subagentRegistryGeneration = 0;
 
-/** Return the current monotonic generation counter for the subagent registry. */
 export function getSubagentRegistryGeneration(): number {
   return subagentRegistryGeneration;
 }
@@ -335,17 +333,6 @@ async function resolveSubagentRegistryContextEngine(
   return await resolveContextEngine(cfg, options);
 }
 
-/**
- * Persist the current subagent-runs map to disk.
- *
- * IMPORTANT: pass `{ bumpGeneration: true }` only when the preceding mutation
- * changed `sessions.list`-visible subagent state (for example Map .set() /
- * .delete(), or endedAt/outcome/endedReason/startedAt/sessionStartedAt changes).
- *
- * Bookkeeping-only updates can persist without a generation bump when safe
- * (for example steer-restart suppression flags and ended-hook bookkeeping),
- * to avoid invalidating list caches unnecessarily.
- */
 function persistSubagentRuns(opts?: { bumpGeneration?: boolean }) {
   if (opts?.bumpGeneration === true) {
     subagentRegistryGeneration += 1;

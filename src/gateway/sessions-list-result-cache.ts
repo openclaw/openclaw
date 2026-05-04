@@ -18,7 +18,6 @@ import { collectCombinedSessionStoreStatFingerprint } from "./session-utils.js";
 import type { GatewaySessionsDefaults, SessionsListResult } from "./session-utils.types.js";
 
 type CachedListPayload = {
-  hash: string;
   path: string;
   count: number;
   defaults: GatewaySessionsDefaults;
@@ -34,7 +33,6 @@ export function getSessionsListResultCacheTtlMs(): number {
 
 const DEFAULT_SESSIONS_LIST_RESULT_CACHE_MAX_ENTRIES = 128;
 
-/** Max cached list fingerprints; `OPENCLAW_SESSIONS_LIST_RESULT_CACHE_MAX_ENTRIES=0` disables the cap. */
 export function getSessionsListResultCacheMaxEntries(): number | undefined {
   const raw = process.env.OPENCLAW_SESSIONS_LIST_RESULT_CACHE_MAX_ENTRIES;
   if (raw === undefined || raw === "") {
@@ -69,12 +67,10 @@ export function clearSessionsListResultCacheForTest(): void {
 
 let sessionsListFullComputationHook: (() => void) | null = null;
 
-/** Register a callback invoked once per `sessions.list` full-computation path. */
 export function setSessionsListFullComputationHook(cb: (() => void) | null): void {
   sessionsListFullComputationHook = cb;
 }
 
-/** Notify that `sessions.list` executed a full computation (cache miss). */
 export function notifySessionsListFullComputation(): void {
   sessionsListFullComputationHook?.();
 }
@@ -100,10 +96,6 @@ export function isSessionsListResultCacheEligible(params: SessionsListParams): b
   return true;
 }
 
-/**
- * Shared canonical key for the overlapping sessions-list fields used by both the gateway
- * and UI clients.
- */
 function buildSessionsListResultCacheKey(params: {
   cfg: OpenClawConfig;
   listParams: SessionsListParams;
@@ -116,10 +108,6 @@ function buildSessionsListResultCacheKey(params: {
   const paramsKey = buildSessionsListParamsKey(params.listParams);
   const subagentGen = getSubagentRegistryGeneration();
   const txGen = getTranscriptWriteGeneration();
-  // When the config stat fingerprint has advanced past what loadConfig() last
-  // parsed, the cfg object may be stale (loadConfig has a ~200ms cache).
-  // Including a staleness flag ensures entries written from a stale cfg are
-  // not reused after loadConfig catches up to the on-disk state.
   const cfgFpAtLoad = getConfigStatFingerprintAtLastLoad();
   const cfgAligned = cfgFpAtLoad === null || cfgFp === cfgFpAtLoad ? "y" : "n";
   return `${cfgFp}\n${storesFp}\nsagen:${subagentGen}\ntxgen:${txGen}\ncfga:${cfgAligned}\n${paramsKey}`;
@@ -140,7 +128,6 @@ export function tryReadSessionsListResultCache(params: {
 export function writeSessionsListResultCache(params: {
   cfg: OpenClawConfig;
   listParams: SessionsListParams;
-  hash: string;
   result: SessionsListResult;
 }): void {
   if (!isSessionsListResultCacheEligible(params.listParams)) {
@@ -148,7 +135,6 @@ export function writeSessionsListResultCache(params: {
   }
   const key = buildSessionsListResultCacheKey(params);
   const payload: CachedListPayload = {
-    hash: params.hash,
     path: params.result.path,
     count: params.result.count,
     defaults: params.result.defaults,
