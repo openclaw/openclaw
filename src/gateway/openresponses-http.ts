@@ -11,6 +11,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
+import { normalizeToolName } from "../agents/tool-policy.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -272,6 +273,79 @@ function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
       strict: tool.strict,
     },
   }));
+}
+
+type CapturedBuiltInToolCall = {
+  /** Stable response-output item id, formatted as `call_<uuid>`. */
+  itemId: string;
+  /** Original tool call id from the agent event (mirrored as `call_id`). */
+  callId: string;
+  /** Tool name (e.g. `bash`, `read`, `grep`). */
+  name: string;
+  /** JSON-stringified arguments object, or `"{}"` when args are missing. */
+  arguments: string;
+};
+
+function stringifyToolArgs(args: unknown): string {
+  if (args === undefined || args === null) {
+    return "{}";
+  }
+  if (typeof args === "string") {
+    return args;
+  }
+  try {
+    return JSON.stringify(args);
+  } catch {
+    return "{}";
+  }
+}
+
+/**
+ * Returns a capture record when `evt` represents the *start* of a built-in
+ * (gateway-executed) tool invocation worth surfacing on the `/v1/responses`
+ * output, otherwise `null`. Pure: subscription/dispatch is the caller's job.
+ *
+ * Returns `null` for any event that should NOT be captured:
+ *  - events from a different run,
+ *  - non-`tool` streams or non-`start` phases,
+ *  - events whose tool name matches a caller-provided client tool — those go
+ *    through the existing `pendingToolCalls` delegate path, so the same call
+ *    must never appear as both an audit item and a delegate item,
+ *  - events with a missing/empty tool name or `toolCallId` (call_id stability
+ *    matters for clients correlating audit items, so synthesizing one is
+ *    worse than dropping the event).
+ *
+ * Dedupe note: the runtime applies `normalizeToolName` (lowercase + alias
+ * mapping like `bash` -> `exec`) before emitting tool-start events. This
+ * function therefore normalizes the event name on lookup, and callers must
+ * normalize the entries they put into `clientToolNames` too. Otherwise a
+ * caller passing `{ name: "Get_Weather" }` (case mismatch) or `{ name: "bash" }`
+ * (alias) would miss the dedupe and surface the same call twice.
+ */
+function tryCaptureBuiltInToolCall(params: {
+  evt: { runId: string; stream: string; data?: Record<string, unknown> };
+  runId: string;
+  clientToolNames: ReadonlySet<string>;
+}): CapturedBuiltInToolCall | null {
+  const { evt, runId, clientToolNames } = params;
+  if (evt.runId !== runId || evt.stream !== "tool" || evt.data?.phase !== "start") {
+    return null;
+  }
+  const name = typeof evt.data.name === "string" ? evt.data.name.trim() : "";
+  if (!name || clientToolNames.has(normalizeToolName(name))) {
+    return null;
+  }
+  const rawToolCallId = evt.data.toolCallId;
+  const toolCallId = typeof rawToolCallId === "string" ? rawToolCallId.trim() : "";
+  if (!toolCallId) {
+    return null;
+  }
+  return {
+    itemId: `call_${randomUUID()}`,
+    callId: toolCallId,
+    name,
+    arguments: stringifyToolArgs(evt.data.args),
+  };
 }
 
 function applyToolChoice(params: {
@@ -678,8 +752,30 @@ export async function handleOpenResponsesHttpRequest(
       ? { maxTokens: payload.max_output_tokens }
       : undefined;
 
+  const exposeBuiltInToolCalls = opts.config?.exposeBuiltInToolCalls === true;
+  // Tool-start events are emitted with normalizeToolName applied (lowercase +
+  // alias mapping like `bash` -> `exec`), so dedupe must compare normalized.
+  const clientToolNameSet = new Set<string>(
+    resolvedClientTools
+      .map((tool) => normalizeToolName(tool.function?.name ?? ""))
+      .filter((name): name is string => name.length > 0),
+  );
+
   if (!stream) {
     const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
+    const capturedBuiltInCalls: CapturedBuiltInToolCall[] = [];
+    const unsubscribeBuiltIn = exposeBuiltInToolCalls
+      ? onAgentEvent((evt) => {
+          const captured = tryCaptureBuiltInToolCall({
+            evt,
+            runId: responseId,
+            clientToolNames: clientToolNameSet,
+          });
+          if (captured) {
+            capturedBuiltInCalls.push(captured);
+          }
+        })
+      : () => {};
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
@@ -705,11 +801,22 @@ export async function handleOpenResponsesHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
+      const builtInToolItems: OutputItem[] = capturedBuiltInCalls.map((call) =>
+        createFunctionCallOutputItem({
+          id: call.itemId,
+          callId: call.callId,
+          name: call.name,
+          arguments: call.arguments,
+          status: "completed",
+        }),
+      );
+
       // If the agent invoked client tools, return one `function_call`
       // output item per call (in arrival order) plus any assistant text the
       // model produced before the tool calls. Pre-#52288 only the first
       // pending call was emitted, so multi-tool turns lost every call but
-      // the leading one.
+      // the leading one. Built-in audit items (when enabled) are appended
+      // after the assistant text and before the client-tool calls.
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
         const assistantText =
           Array.isArray(payloads) && payloads.length > 0
@@ -730,6 +837,7 @@ export async function handleOpenResponsesHttpRequest(
             }),
           );
         }
+        output.push(...builtInToolItems);
         for (const functionCall of pendingToolCalls) {
           output.push(
             createFunctionCallOutputItem({
@@ -761,6 +869,8 @@ export async function handleOpenResponsesHttpRequest(
               .join("\n\n")
           : "No response from OpenClaw.";
 
+      // Order matches streaming: assistant message first (output_index 0),
+      // built-in audit items after (output_index 1+).
       const response = createResponseResource({
         id: responseId,
         model,
@@ -772,6 +882,7 @@ export async function handleOpenResponsesHttpRequest(
             phase: "final_answer",
             status: "completed",
           }),
+          ...builtInToolItems,
         ],
         usage,
       });
@@ -804,6 +915,7 @@ export async function handleOpenResponsesHttpRequest(
       rememberResponseSession();
       sendJson(res, 500, response);
     } finally {
+      unsubscribeBuiltIn();
       stopWatchingDisconnect();
     }
     return true;
@@ -822,6 +934,39 @@ export async function handleOpenResponsesHttpRequest(
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+
+  const streamBuiltInItems: OutputItem[] = [];
+  // Index 0 is reserved for the assistant message; built-in audit items and an
+  // optional client-tool function_call use 1+ in arrival order.
+  let nextStreamOutputIndex = 1;
+
+  const emitStreamBuiltInToolCall = (call: CapturedBuiltInToolCall) => {
+    const outputIndex = nextStreamOutputIndex++;
+    writeSseEvent(res, {
+      type: "response.output_item.added",
+      output_index: outputIndex,
+      item: createFunctionCallOutputItem({
+        id: call.itemId,
+        callId: call.callId,
+        name: call.name,
+        arguments: call.arguments,
+        status: "in_progress",
+      }),
+    });
+    const completedItem = createFunctionCallOutputItem({
+      id: call.itemId,
+      callId: call.callId,
+      name: call.name,
+      arguments: call.arguments,
+      status: "completed",
+    });
+    writeSseEvent(res, {
+      type: "response.output_item.done",
+      output_index: outputIndex,
+      item: completedItem,
+    });
+    streamBuiltInItems.push(completedItem);
+  };
 
   const maybeFinalize = () => {
     if (closed) {
@@ -872,7 +1017,7 @@ export async function handleOpenResponsesHttpRequest(
       id: responseId,
       model,
       status: finalizeRequested.status,
-      output: [completedItem],
+      output: [completedItem, ...streamBuiltInItems],
       usage,
     });
 
@@ -952,6 +1097,18 @@ export async function handleOpenResponsesHttpRequest(
         content_index: 0,
         delta: content,
       });
+      return;
+    }
+
+    if (exposeBuiltInToolCalls && evt.stream === "tool") {
+      const captured = tryCaptureBuiltInToolCall({
+        evt,
+        runId: responseId,
+        clientToolNames: clientToolNameSet,
+      });
+      if (captured) {
+        emitStreamBuiltInToolCall(captured);
+      }
       return;
     }
 
@@ -1038,15 +1195,15 @@ export async function handleOpenResponsesHttpRequest(
           item: completedItem,
         });
 
-        // Emit one `function_call` output item per pending call, preserving
-        // arrival order. `output_index` continues past the assistant
-        // message at index 0 so the SSE stream keeps a single, monotonic
-        // index per response. Pre-#52288 the streaming path read only
-        // `pendingToolCalls[0]` and hard-coded `output_index: 1`, so a turn
-        // with multiple client tool calls dropped every call past the
-        // first.
+        // Emit one `function_call` output item per pending client tool call,
+        // preserving arrival order. `output_index` continues past the
+        // assistant message at index 0 and any built-in audit items already
+        // streamed at indices 1..N (when `exposeBuiltInToolCalls` is on),
+        // keeping the SSE stream's single monotonic index. Pre-#52288 the
+        // streaming path read only `pendingToolCalls[0]` and hard-coded
+        // `output_index: 1`, so a turn with multiple client tool calls
+        // dropped every call past the first.
         const functionCallItems: OutputItem[] = [];
-        let nextStreamOutputIndex = 1;
         for (const functionCall of pendingToolCalls) {
           const functionCallItemId = `call_${randomUUID()}`;
           const functionCallItem = createFunctionCallOutputItem({
@@ -1055,9 +1212,10 @@ export async function handleOpenResponsesHttpRequest(
             name: functionCall.name,
             arguments: functionCall.arguments,
           });
+          const clientToolOutputIndex = nextStreamOutputIndex++;
           writeSseEvent(res, {
             type: "response.output_item.added",
-            output_index: nextStreamOutputIndex,
+            output_index: clientToolOutputIndex,
             item: functionCallItem,
           });
           const completedFunctionCallItem = createFunctionCallOutputItem({
@@ -1069,18 +1227,17 @@ export async function handleOpenResponsesHttpRequest(
           });
           writeSseEvent(res, {
             type: "response.output_item.done",
-            output_index: nextStreamOutputIndex,
+            output_index: clientToolOutputIndex,
             item: completedFunctionCallItem,
           });
           functionCallItems.push(functionCallItem);
-          nextStreamOutputIndex += 1;
         }
 
         const incompleteResponse = createResponseResource({
           id: responseId,
           model,
           status: "incomplete",
-          output: [completedItem, ...functionCallItems],
+          output: [completedItem, ...streamBuiltInItems, ...functionCallItems],
           usage,
         });
         closed = true;

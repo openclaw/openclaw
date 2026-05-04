@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/ClawHub: annotate 429 errors from ClawHub with the reset window from `RateLimit-Reset`/`Retry-After` and append a `Sign in for higher rate limits.` hint when the request was unauthenticated, so users can see when downloads will recover and how to lift the cap. Thanks @romneyda.
 - Plugins/runtime state: add `registerIfAbsent` for atomic keyed-store dedupe claims that return whether a plugin successfully claimed a key without overwriting an existing live value. Thanks @amknight.
 - Plugin SDK: add plugin-owned `SessionEntry` slot projection and scoped trusted-policy session extension reads. (#75609; replaces part of #73384/#74483) Thanks @100yenadmin.
+- Gateway/responses: add opt-in `gateway.http.endpoints.responses.exposeBuiltInToolCalls` config flag that surfaces every built-in tool invocation (bash, edit, find, grep, ls, read, write, plus bundled plugin tools) as `function_call` output items in `/v1/responses` JSON and SSE responses, giving callers an audit trail of what the agent actually did. (#75075) Thanks @glow1128 and @mrinalgaur2005.
 
 ### Fixes
 

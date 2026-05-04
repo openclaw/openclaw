@@ -23241,6 +23241,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         additionalProperties: false,
                       },
+                      exposeBuiltInToolCalls: {
+                        type: "boolean",
+                      },
                     },
                     additionalProperties: false,
                   },

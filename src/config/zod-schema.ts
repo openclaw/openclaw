@@ -946,6 +946,7 @@ export const OpenClawSchema = z
                       })
                       .strict()
                       .optional(),
+                    exposeBuiltInToolCalls: z.boolean().optional(),
                   })
                   .strict()
                   .optional(),
