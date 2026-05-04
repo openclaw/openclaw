@@ -122,6 +122,7 @@ describe("plugin npm package manifest staging", () => {
     const packageDir = writePublishablePluginPackage(repoDir);
     writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
     writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeFileText(join(packageDir, "src", "utils.ts"), "export const x = 1;\n");
 
     const resolved = resolveAugmentedPluginNpmPackageJson({
       repoRoot: repoDir,
@@ -137,6 +138,7 @@ describe("plugin npm package manifest staging", () => {
         "skills/**",
         "index.ts",
         "setup-entry.ts",
+        "src/**",
       ],
       peerDependencies: {
         openclaw: ">=2026.4.30",
@@ -160,6 +162,7 @@ describe("plugin npm package manifest staging", () => {
       expect(stagedPackageJson.openclaw.runtimeSetupEntry).toBe("./dist/setup-entry.js");
       expect(stagedPackageJson.files).toContain("dist/**");
       expect(stagedPackageJson.files).toContain("skills/**");
+      expect(stagedPackageJson.files).toContain("src/**");
       expect(stagedPackageJson.files).toContain("index.ts");
       expect(stagedPackageJson.files).toContain("setup-entry.ts");
       expect(stagedPackageJson.peerDependencies.openclaw).toBe(">=2026.4.30");
