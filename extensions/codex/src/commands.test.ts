@@ -311,6 +311,27 @@ describe("codex command", () => {
     });
   });
 
+  it("rejects malformed compact and review commands before starting thread actions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const codexControlRequest = vi.fn();
+
+    await expect(
+      handleCodexCommand(createContext("compact now", sessionFile), {
+        deps: createDeps({ codexControlRequest }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex compact",
+    });
+    await expect(
+      handleCodexCommand(createContext("review staged", sessionFile), {
+        deps: createDeps({ codexControlRequest }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex review",
+    });
+    expect(codexControlRequest).not.toHaveBeenCalled();
+  });
+
   it("checks Codex Computer Use setup", async () => {
     const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
 

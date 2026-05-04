@@ -237,6 +237,7 @@ export async function handleCodexSubcommand(
         options.pluginConfig,
         CODEX_CONTROL_METHODS.compact,
         "compaction",
+        rest,
       ),
     };
   }
@@ -248,6 +249,7 @@ export async function handleCodexSubcommand(
         options.pluginConfig,
         CODEX_CONTROL_METHODS.review,
         "review",
+        rest,
       ),
     };
   }
@@ -1433,7 +1435,11 @@ async function startThreadAction(
   pluginConfig: unknown,
   method: typeof CODEX_CONTROL_METHODS.compact | typeof CODEX_CONTROL_METHODS.review,
   label: string,
+  args: string[],
 ): Promise<string> {
+  if (args.length > 0) {
+    return `Usage: /codex ${label === "compaction" ? "compact" : label}`;
+  }
   const sessionFile = await resolveControlSessionFile(ctx);
   if (!sessionFile) {
     return `Cannot start Codex ${label} because this command did not include an OpenClaw session file.`;
