@@ -1707,6 +1707,11 @@ Chrome talk-back modes need `BlackHole 2ch` plus either:
   audio path and must exit after starting or validating its daemon. This is only
   valid for `bidi` because `agent` mode needs direct command-pair access for TTS.
 
+When an agent calls the `google_meet` tool in agent mode, the meeting consultant
+session forks the caller's current transcript before answering participant
+speech. The Meet session still stays separate (`agent:<agentId>:subagent:google-meet:<sessionId>`)
+so meeting follow-ups do not mutate the caller transcript directly.
+
 For clean duplex audio, route Meet output and Meet microphone through separate
 virtual devices or a Loopback-style virtual device graph. A single shared
 BlackHole device can echo other participants back into the call.

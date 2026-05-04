@@ -741,6 +741,7 @@ export default definePluginEntry({
             pin: normalizeOptionalString(params?.pin),
             dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
             message: normalizeOptionalString(params?.message),
+            requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
           });
           respond(true, result);
         } catch (err) {
@@ -992,6 +993,7 @@ export default definePluginEntry({
             pin: normalizeOptionalString(params?.pin),
             dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
             message: normalizeOptionalString(params?.message),
+            requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
           });
           respond(true, result);
         } catch (err) {
@@ -1018,155 +1020,176 @@ export default definePluginEntry({
       },
     );
 
-    api.registerTool({
-      name: "google_meet",
-      label: "Google Meet",
-      description:
-        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline, local audio missing, or missing Twilio dial plan, surface that blocker instead of retrying or switching transports. Twilio cannot dial a Meet URL directly: provide dialInNumber plus optional pin/dtmfSequence, or configure twilio.defaultDialInNumber. Offline nodes are diagnostics only, not usable candidates. If local Chrome talk-back audio is unsupported on this OS, use mode=transcribe, transport=twilio, or a macOS chrome-node for agent/bidi Chrome. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
-      parameters: GoogleMeetToolSchema,
-      async execute(_toolCallId, params) {
-        const raw = asParamRecord(params);
-        try {
-          assertGoogleMeetAgentToolActionSupported({ config, raw });
-          switch (raw.action) {
-            case "join": {
-              return json(await callGoogleMeetGatewayFromTool({ config, action: "join", raw }));
-            }
-            case "create": {
-              return json(await callGoogleMeetGatewayFromTool({ config, action: "create", raw }));
-            }
-            case "test_speech": {
-              return json(
-                await callGoogleMeetGatewayFromTool({ config, action: "test_speech", raw }),
-              );
-            }
-            case "test_listen": {
-              return json(
-                await callGoogleMeetGatewayFromTool({ config, action: "test_listen", raw }),
-              );
-            }
-            case "status": {
-              return json(await callGoogleMeetGatewayFromTool({ config, action: "status", raw }));
-            }
-            case "recover_current_tab": {
-              return json(
-                await callGoogleMeetGatewayFromTool({
-                  config,
-                  action: "recover_current_tab",
-                  raw,
-                }),
-              );
-            }
-            case "setup_status": {
-              return json(
-                await callGoogleMeetGatewayFromTool({ config, action: "setup_status", raw }),
-              );
-            }
-            case "resolve_space": {
-              const { token: _token, ...result } = await resolveSpaceFromParams(config, raw);
-              return json(result);
-            }
-            case "preflight": {
-              const { meeting, token, space } = await resolveSpaceFromParams(config, raw);
-              return json(
-                buildGoogleMeetPreflightReport({
-                  input: meeting,
-                  space,
-                  previewAcknowledged: config.preview.enrollmentAcknowledged,
-                  tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
-                }),
-              );
-            }
-            case "latest": {
-              const token = await resolveGoogleMeetTokenFromParams(config, raw);
-              const resolved = await resolveMeetingFromParams({
-                config,
-                raw,
-                accessToken: token.accessToken,
-              });
-              return json({
-                ...(await fetchLatestGoogleMeetConferenceRecord({
-                  accessToken: token.accessToken,
-                  meeting: resolved.meeting,
-                })),
-                ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-              });
-            }
-            case "calendar_events": {
-              const token = await resolveGoogleMeetTokenFromParams(config, raw);
-              const window = raw.today === true ? buildGoogleMeetCalendarDayWindow() : {};
-              return json(
-                await listGoogleMeetCalendarEvents({
-                  accessToken: token.accessToken,
-                  calendarId: normalizeOptionalString(raw.calendarId),
-                  eventQuery: normalizeOptionalString(raw.event),
-                  ...window,
-                }),
-              );
-            }
-            case "artifacts": {
-              const resolved = await resolveArtifactQueryFromParams(config, raw);
-              return json(
-                await fetchGoogleMeetArtifacts({
-                  accessToken: resolved.token.accessToken,
-                  meeting: resolved.meeting,
-                  conferenceRecord: resolved.conferenceRecord,
-                  pageSize: resolved.pageSize,
-                  includeTranscriptEntries: resolved.includeTranscriptEntries,
-                  includeDocumentBodies: resolved.includeDocumentBodies,
-                  allConferenceRecords: resolved.allConferenceRecords,
-                }),
-              );
-            }
-            case "attendance": {
-              const resolved = await resolveArtifactQueryFromParams(config, raw);
-              return json(
-                await fetchGoogleMeetAttendance({
-                  accessToken: resolved.token.accessToken,
-                  meeting: resolved.meeting,
-                  conferenceRecord: resolved.conferenceRecord,
-                  pageSize: resolved.pageSize,
-                  allConferenceRecords: resolved.allConferenceRecords,
-                  mergeDuplicateParticipants: resolved.mergeDuplicateParticipants,
-                  lateAfterMinutes: resolved.lateAfterMinutes,
-                  earlyBeforeMinutes: resolved.earlyBeforeMinutes,
-                }),
-              );
-            }
-            case "export": {
-              return json(await exportGoogleMeetBundleFromParams(config, raw));
-            }
-            case "leave": {
-              const sessionId = normalizeOptionalString(raw.sessionId);
-              if (!sessionId) {
-                throw new Error("sessionId required");
+    api.registerTool(
+      (toolContext) => ({
+        name: "google_meet",
+        label: "Google Meet",
+        description:
+          "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline, local audio missing, or missing Twilio dial plan, surface that blocker instead of retrying or switching transports. Twilio cannot dial a Meet URL directly: provide dialInNumber plus optional pin/dtmfSequence, or configure twilio.defaultDialInNumber. Offline nodes are diagnostics only, not usable candidates. If local Chrome talk-back audio is unsupported on this OS, use mode=transcribe, transport=twilio, or a macOS chrome-node for agent/bidi Chrome. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
+        parameters: GoogleMeetToolSchema,
+        async execute(_toolCallId, params) {
+          const raw = asParamRecord(params);
+          const requesterSessionKey = normalizeOptionalString(toolContext.sessionKey);
+          const rawWithRequester = requesterSessionKey ? { ...raw, requesterSessionKey } : raw;
+          try {
+            assertGoogleMeetAgentToolActionSupported({ config, raw });
+            switch (raw.action) {
+              case "join": {
+                return json(
+                  await callGoogleMeetGatewayFromTool({
+                    config,
+                    action: "join",
+                    raw: rawWithRequester,
+                  }),
+                );
               }
-              return json(await callGoogleMeetGatewayFromTool({ config, action: "leave", raw }));
-            }
-            case "end_active_conference": {
-              return json(
-                await callGoogleMeetGatewayFromTool({
-                  config,
-                  action: "end_active_conference",
-                  raw,
-                }),
-              );
-            }
-            case "speak": {
-              const sessionId = normalizeOptionalString(raw.sessionId);
-              if (!sessionId) {
-                throw new Error("sessionId required");
+              case "create": {
+                return json(
+                  await callGoogleMeetGatewayFromTool({
+                    config,
+                    action: "create",
+                    raw: rawWithRequester,
+                  }),
+                );
               }
-              return json(await callGoogleMeetGatewayFromTool({ config, action: "speak", raw }));
+              case "test_speech": {
+                return json(
+                  await callGoogleMeetGatewayFromTool({
+                    config,
+                    action: "test_speech",
+                    raw: rawWithRequester,
+                  }),
+                );
+              }
+              case "test_listen": {
+                return json(
+                  await callGoogleMeetGatewayFromTool({ config, action: "test_listen", raw }),
+                );
+              }
+              case "status": {
+                return json(await callGoogleMeetGatewayFromTool({ config, action: "status", raw }));
+              }
+              case "recover_current_tab": {
+                return json(
+                  await callGoogleMeetGatewayFromTool({
+                    config,
+                    action: "recover_current_tab",
+                    raw,
+                  }),
+                );
+              }
+              case "setup_status": {
+                return json(
+                  await callGoogleMeetGatewayFromTool({ config, action: "setup_status", raw }),
+                );
+              }
+              case "resolve_space": {
+                const { token: _token, ...result } = await resolveSpaceFromParams(config, raw);
+                return json(result);
+              }
+              case "preflight": {
+                const { meeting, token, space } = await resolveSpaceFromParams(config, raw);
+                return json(
+                  buildGoogleMeetPreflightReport({
+                    input: meeting,
+                    space,
+                    previewAcknowledged: config.preview.enrollmentAcknowledged,
+                    tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+                  }),
+                );
+              }
+              case "latest": {
+                const token = await resolveGoogleMeetTokenFromParams(config, raw);
+                const resolved = await resolveMeetingFromParams({
+                  config,
+                  raw,
+                  accessToken: token.accessToken,
+                });
+                return json({
+                  ...(await fetchLatestGoogleMeetConferenceRecord({
+                    accessToken: token.accessToken,
+                    meeting: resolved.meeting,
+                  })),
+                  ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
+                });
+              }
+              case "calendar_events": {
+                const token = await resolveGoogleMeetTokenFromParams(config, raw);
+                const window = raw.today === true ? buildGoogleMeetCalendarDayWindow() : {};
+                return json(
+                  await listGoogleMeetCalendarEvents({
+                    accessToken: token.accessToken,
+                    calendarId: normalizeOptionalString(raw.calendarId),
+                    eventQuery: normalizeOptionalString(raw.event),
+                    ...window,
+                  }),
+                );
+              }
+              case "artifacts": {
+                const resolved = await resolveArtifactQueryFromParams(config, raw);
+                return json(
+                  await fetchGoogleMeetArtifacts({
+                    accessToken: resolved.token.accessToken,
+                    meeting: resolved.meeting,
+                    conferenceRecord: resolved.conferenceRecord,
+                    pageSize: resolved.pageSize,
+                    includeTranscriptEntries: resolved.includeTranscriptEntries,
+                    includeDocumentBodies: resolved.includeDocumentBodies,
+                    allConferenceRecords: resolved.allConferenceRecords,
+                  }),
+                );
+              }
+              case "attendance": {
+                const resolved = await resolveArtifactQueryFromParams(config, raw);
+                return json(
+                  await fetchGoogleMeetAttendance({
+                    accessToken: resolved.token.accessToken,
+                    meeting: resolved.meeting,
+                    conferenceRecord: resolved.conferenceRecord,
+                    pageSize: resolved.pageSize,
+                    allConferenceRecords: resolved.allConferenceRecords,
+                    mergeDuplicateParticipants: resolved.mergeDuplicateParticipants,
+                    lateAfterMinutes: resolved.lateAfterMinutes,
+                    earlyBeforeMinutes: resolved.earlyBeforeMinutes,
+                  }),
+                );
+              }
+              case "export": {
+                return json(await exportGoogleMeetBundleFromParams(config, raw));
+              }
+              case "leave": {
+                const sessionId = normalizeOptionalString(raw.sessionId);
+                if (!sessionId) {
+                  throw new Error("sessionId required");
+                }
+                return json(await callGoogleMeetGatewayFromTool({ config, action: "leave", raw }));
+              }
+              case "end_active_conference": {
+                return json(
+                  await callGoogleMeetGatewayFromTool({
+                    config,
+                    action: "end_active_conference",
+                    raw,
+                  }),
+                );
+              }
+              case "speak": {
+                const sessionId = normalizeOptionalString(raw.sessionId);
+                if (!sessionId) {
+                  throw new Error("sessionId required");
+                }
+                return json(await callGoogleMeetGatewayFromTool({ config, action: "speak", raw }));
+              }
+              default:
+                throw new Error("unknown google_meet action");
             }
-            default:
-              throw new Error("unknown google_meet action");
+          } catch (err) {
+            return json(formatGatewayError(err));
           }
-        } catch (err) {
-          return json(formatGatewayError(err));
-        }
-      },
-    });
+        },
+      }),
+      { name: "google_meet" },
+    );
 
     api.registerNodeHostCommand({
       command: "googlemeet.chrome",
