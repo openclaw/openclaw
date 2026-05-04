@@ -277,6 +277,7 @@ import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
+import { reconcileAssistantTextsWithTranscript } from "./assistant-text-persistence.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -4313,6 +4314,27 @@ export async function runEmbeddedAttempt(
             prePromptMessageCount,
           });
           attemptUsage = getUsageTotals();
+          lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
+          if (
+            !promptError &&
+            !aborted &&
+            !yieldAborted &&
+            !timedOutDuringCompaction &&
+            !compactionOccurredThisAttempt
+          ) {
+            const reconciledAssistant = reconcileAssistantTextsWithTranscript({
+              sessionManager,
+              mutableMessagesSnapshot: messagesSnapshot,
+              prePromptMessageCount,
+              assistantTexts,
+              api: params.model.api,
+              provider: params.provider,
+              modelId: params.modelId,
+            });
+            if (reconciledAssistant) {
+              lastAssistant = reconciledAssistant;
+            }
+          }
           cacheBreak = cacheObservabilityEnabled
             ? completePromptCacheObservation({
                 sessionId: params.sessionId,
@@ -4320,7 +4342,6 @@ export async function runEmbeddedAttempt(
                 usage: attemptUsage,
               })
             : null;
-          lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
           const promptCacheObservation =
             cacheObservabilityEnabled &&
             (cacheBreak || promptCacheChangesForTurn || typeof attemptUsage?.cacheRead === "number")
