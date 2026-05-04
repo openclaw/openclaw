@@ -31,6 +31,7 @@ type DiscordChannelOverrideConfig = {
   autoThread?: boolean;
   autoThreadName?: "message" | "generated";
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
+  sttEnabled?: boolean;
 };
 
 export type DiscordGuildEntryResolved = {
@@ -406,6 +407,7 @@ function resolveDiscordChannelConfigEntry(
     autoThread: entry.autoThread,
     autoThreadName: entry.autoThreadName,
     autoArchiveDuration: entry.autoArchiveDuration,
+    sttEnabled: entry.sttEnabled,
   };
   return resolved;
 }

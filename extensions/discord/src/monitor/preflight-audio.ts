@@ -15,6 +15,18 @@ function collectAudioAttachments(
   return attachments.filter((att) => att.content_type?.startsWith("audio/"));
 }
 
+/**
+ * Channel IDs for which Whisper STT transcription is always performed,
+ * regardless of mention-gating configuration.  The transcript replaces
+ * the (empty) message text so the agent can understand spoken content.
+ *
+ * These are the same two voice-channel IDs targeted by VC-02 TTS replies.
+ */
+export const STT_ALWAYS_TRANSCRIBE_CHANNEL_IDS = new Set([
+  "1490438088080490506",
+  "1490437981780312064",
+]);
+
 export async function resolveDiscordPreflightAudioMentionContext(params: {
   message: {
     attachments?: DiscordAudioAttachment[];
@@ -24,6 +36,12 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   shouldRequireMention: boolean;
   mentionRegexes: RegExp[];
   cfg: OpenClawConfig;
+  /** Channel ID — when set and present in STT_ALWAYS_TRANSCRIBE_CHANNEL_IDS,
+   *  transcription is performed unconditionally (bypasses mention gating). */
+  channelId?: string;
+  /** When true (from channelConfig.sttEnabled), transcription is performed
+   *  unconditionally for this channel regardless of mention config. */
+  sttEnabled?: boolean;
   abortSignal?: AbortSignal;
 }): Promise<{
   hasAudioAttachment: boolean;
@@ -33,13 +51,19 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   const audioAttachments = collectAudioAttachments(params.message.attachments);
   const hasAudioAttachment = audioAttachments.length > 0;
   const hasTypedText = Boolean(params.message.content?.trim());
+
+  // For designated STT channels, always transcribe audio regardless of mention config.
+  // Accepts either the hardcoded channel-ID list or a config-driven sttEnabled flag.
+  const isSttChannel =
+    params.sttEnabled === true ||
+    (Boolean(params.channelId) && STT_ALWAYS_TRANSCRIBE_CHANNEL_IDS.has(params.channelId!));
+
   const needsPreflightTranscription =
     !params.isDirectMessage &&
-    params.shouldRequireMention &&
     hasAudioAttachment &&
     // `baseText` includes media placeholders; gate on typed text only.
     !hasTypedText &&
-    params.mentionRegexes.length > 0;
+    (isSttChannel || (params.shouldRequireMention && params.mentionRegexes.length > 0));
 
   let transcript: string | undefined;
   if (needsPreflightTranscription) {

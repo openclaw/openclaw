@@ -66,6 +66,12 @@ export type DiscordGuildChannelConfig = {
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
   /** Naming strategy for auto-created threads. "message" uses message text; "generated" renames with an LLM title. */
   autoThreadName?: "message" | "generated";
+  /**
+   * If true, automatically transcribe audio attachments (voice messages) in this channel via the
+   * configured STT provider, even when requireMention is false. Use this for dedicated voice/PTT
+   * channels so transcripts are injected into the agent pipeline without requiring a bot @mention.
+   */
+  sttEnabled?: boolean;
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
