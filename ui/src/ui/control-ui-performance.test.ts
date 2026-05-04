@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { EventLogEntry } from "./app-events.ts";
 import {
   recordControlUiPerformanceEvent,
   startControlUiResponsivenessObserver,
@@ -46,8 +47,8 @@ function installPerformanceObserverMock(options: {
 function createHost() {
   return {
     tab: "chat" as const,
-    eventLog: [] as Array<{ payload: Record<string, unknown> }>,
-    eventLogBuffer: [] as Array<{ payload: Record<string, unknown> }>,
+    eventLog: [] as EventLogEntry[],
+    eventLogBuffer: [] as EventLogEntry[],
   };
 }
 
@@ -159,6 +160,35 @@ describe("startControlUiResponsivenessObserver", () => {
         }),
       }),
     ]);
+  });
+
+  it("caps responsiveness events so gateway events stay visible", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const mock = installPerformanceObserverMock({
+      supportedEntryTypes: ["longtask"],
+    });
+    const host = createHost();
+
+    for (let i = 0; i < 225; i += 1) {
+      recordControlUiPerformanceEvent(host, "gateway.event", { i }, { console: false });
+    }
+
+    startControlUiResponsivenessObserver(host);
+    for (let i = 0; i < 80; i += 1) {
+      mock.emit([
+        {
+          name: "self",
+          startTime: i,
+          duration: 51,
+        } as unknown as PerformanceEntry,
+      ]);
+    }
+
+    expect(host.eventLogBuffer).toHaveLength(250);
+    expect(
+      host.eventLogBuffer.filter((entry) => entry.event === "control-ui.longtask"),
+    ).toHaveLength(50);
+    expect(host.eventLogBuffer.some((entry) => entry.event === "gateway.event")).toBe(true);
   });
 
   it("returns null when responsiveness entries are unsupported or observe fails", () => {
