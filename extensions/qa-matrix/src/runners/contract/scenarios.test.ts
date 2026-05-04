@@ -2614,7 +2614,7 @@ describe("matrix live qa scenarios", () => {
           event: matrixQaMessageEvent({
             kind: "notice",
             eventId: previewEventId,
-            body: "Working...\n- `tool: read`",
+            body: "Barnacling...\n`📖 Read: from /tmp/qa/workspace/QA_KICKOFF_TASK.md`",
           }),
           since: "driver-sync-preview",
         },
@@ -2645,7 +2645,7 @@ describe("matrix live qa scenarios", () => {
     await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-trigger",
-        previewBodyPreview: "Working...\n- `tool: read`",
+        previewBodyPreview: "Barnacling...\n`📖 Read: from /tmp/qa/workspace/QA_KICKOFF_TASK.md`",
         previewEventId: "$tool-progress-preview",
         reply: {
           eventId: "$tool-progress-final",

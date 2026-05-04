@@ -951,7 +951,7 @@ export async function runToolProgressPreviewScenario(context: MatrixQaScenarioCo
     finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS"),
     label: "tool progress preview",
     allowGenericProgressLine: true,
-    progressPattern: /\btool:\s*read\b/i,
+    progressPattern: /\b(?:tool:\s*)?read\s*:\s*from\b|\btool:\s*read\b/i,
     triggerBodyBuilder: buildMatrixToolProgressPrompt,
   });
 }
