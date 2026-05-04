@@ -104,6 +104,69 @@ const OPEN_APPEND_CREATE_FLAGS =
 
 const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
 
+type PinnedStatPayload = {
+  mode: number;
+  size: number;
+  atimeMs: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  birthtimeMs: number;
+};
+
+function statKindFromMode(mode: number): SafePathKind {
+  const fileType = mode & fsConstants.S_IFMT;
+  if (fileType === fsConstants.S_IFREG) {
+    return "file";
+  }
+  if (fileType === fsConstants.S_IFDIR) {
+    return "directory";
+  }
+  if (fileType === fsConstants.S_IFLNK) {
+    return "symlink";
+  }
+  return "other";
+}
+
+function statsLikeFromPinnedPayload(payload: PinnedStatPayload): Stats {
+  const kind = statKindFromMode(payload.mode);
+  return {
+    mode: payload.mode,
+    size: payload.size,
+    atimeMs: payload.atimeMs,
+    mtimeMs: payload.mtimeMs,
+    ctimeMs: payload.ctimeMs,
+    birthtimeMs: payload.birthtimeMs,
+    atime: new Date(payload.atimeMs),
+    mtime: new Date(payload.mtimeMs),
+    ctime: new Date(payload.ctimeMs),
+    birthtime: new Date(payload.birthtimeMs),
+    isFile: () => kind === "file",
+    isDirectory: () => kind === "directory",
+    isSymbolicLink: () => kind === "symlink",
+    isBlockDevice: () => false,
+    isCharacterDevice: () => false,
+    isFIFO: () => false,
+    isSocket: () => false,
+  } as Stats;
+}
+
+function parsePinnedStatPayload(stdout: string): Stats {
+  const payload: unknown = JSON.parse(stdout);
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    typeof (payload as PinnedStatPayload).mode !== "number" ||
+    typeof (payload as PinnedStatPayload).size !== "number" ||
+    typeof (payload as PinnedStatPayload).atimeMs !== "number" ||
+    typeof (payload as PinnedStatPayload).mtimeMs !== "number" ||
+    typeof (payload as PinnedStatPayload).ctimeMs !== "number" ||
+    typeof (payload as PinnedStatPayload).birthtimeMs !== "number"
+  ) {
+    throw new SafeOpenError("invalid-path", "invalid stat result");
+  }
+  return statsLikeFromPinnedPayload(payload as PinnedStatPayload);
+}
+
 async function expandRelativePathWithHome(relativePath: string): Promise<string> {
   let home = process.env.HOME || process.env.USERPROFILE || os.homedir();
   try {
@@ -360,28 +423,66 @@ export async function statPathWithinRoot(params: {
         ? PATH_ALIAS_POLICIES.unlinkTarget
         : PATH_ALIAS_POLICIES.strict,
   });
+  let realPath = resolved.canonicalPath;
+  if (params.followSymlinks !== false) {
+    try {
+      realPath = await fs.realpath(resolved.canonicalPath);
+    } catch (err) {
+      if (isNotFoundPathError(err)) {
+        if (params.allowMissing === true) {
+          return { exists: false, kind: "missing" };
+        }
+        throw new SafeOpenError("not-found", "file not found", {
+          cause: err instanceof Error ? err : undefined,
+        });
+      }
+      throw err;
+    }
+  }
   let stat: Stats;
   try {
-    stat =
-      params.followSymlinks === false
-        ? await fs.lstat(resolved.canonicalPath)
-        : await fs.stat(resolved.canonicalPath);
-  } catch (err) {
-    if (isNotFoundPathError(err)) {
-      if (params.allowMissing === true) {
-        return { exists: false, kind: "missing" };
-      }
-      throw new SafeOpenError("not-found", "file not found", {
-        cause: err instanceof Error ? err : undefined,
+    if (process.platform === "win32") {
+      stat =
+        params.followSymlinks === false
+          ? await fs.lstat(resolved.canonicalPath)
+          : await fs.stat(resolved.canonicalPath);
+    } else {
+      const stdout = await runPinnedPathHelper({
+        operation: "stat",
+        rootPath: resolved.rootReal,
+        relativePath: path.relative(resolved.rootReal, realPath).split(path.sep).join("/"),
+        overwrite: params.followSymlinks !== false,
       });
+      stat = parsePinnedStatPayload(stdout);
     }
-    throw err;
+  } catch (err) {
+    if (isPinnedPathHelperSpawnError(err) || process.platform === "win32") {
+      try {
+        stat =
+          params.followSymlinks === false
+            ? await fs.lstat(resolved.canonicalPath)
+            : await fs.stat(resolved.canonicalPath);
+      } catch (fallbackErr) {
+        if (isNotFoundPathError(fallbackErr)) {
+          if (params.allowMissing === true) {
+            return { exists: false, kind: "missing" };
+          }
+          throw new SafeOpenError("not-found", "file not found", {
+            cause: fallbackErr instanceof Error ? fallbackErr : undefined,
+          });
+        }
+        throw fallbackErr;
+      }
+    } else {
+      const normalized = normalizePinnedPathError(err);
+      if (normalized instanceof SafeOpenError && normalized.code === "not-found") {
+        if (params.allowMissing === true) {
+          return { exists: false, kind: "missing" };
+        }
+      }
+      throw normalized;
+    }
   }
-
-  const realPath =
-    params.followSymlinks === false
-      ? resolved.canonicalPath
-      : await fs.realpath(resolved.canonicalPath);
   if (!isPathInside(resolved.rootWithSep, realPath)) {
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
