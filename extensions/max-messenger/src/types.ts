@@ -151,8 +151,8 @@ export type MaxEvent = {
   payload?: Record<string, any>;
 };
 
-/** Normalized inbound message — populated by Phase 1B handlers. */
-export type MaxMessage = {
+/** Normalized inbound message — produced by `normalizeMaxInboundMessage`. */
+export type MaxInboundMessage = {
   messageId: string;
   chatId: string;
   chatTitle?: string;
@@ -163,3 +163,6 @@ export type MaxMessage = {
   isGroupChat: boolean;
   replyToMessageId?: string;
 };
+
+/** @deprecated Use {@link MaxInboundMessage}. Kept for transitional callers. */
+export type MaxMessage = MaxInboundMessage;

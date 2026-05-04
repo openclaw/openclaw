@@ -19,12 +19,14 @@
 
 import type { ChannelGatewayContext, ChannelLogSink } from "openclaw/plugin-sdk/channel-contract";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
+import { handleMaxInbound, normalizeMaxInboundMessage } from "../inbound.js";
 import {
   runMaxPollingSupervisor,
   type MaxPollingSupervisorResult,
 } from "../polling/monitor-polling.runtime.js";
 import type { PollingLogger, PollingUpdate } from "../polling/polling-loop.js";
 import type { MaxEvent, MaxPollingConfig, MaxUpdateType, ResolvedMaxAccount } from "../types.js";
+import type { CoreConfig } from "../types.js";
 import { dispatchInboundEvent, type MaxInboundContext } from "./inbound.adapter.js";
 
 /**
@@ -81,28 +83,59 @@ const KNOWN_UPDATE_TYPES: ReadonlySet<MaxUpdateType> = new Set<MaxUpdateType>([
 ]);
 
 /**
- * Bridge supervisor `PollingUpdate` payloads into the inbound dispatch
- * skeleton from Phase 1A. Real handler wiring (agent reply for
- * `message_created`, callback routing, etc.) comes in later phases; for now
- * the dispatch skeleton just logs the update_type.
+ * Bridge supervisor `PollingUpdate` payloads into either the real agent
+ * reply pipeline (`handleMaxInbound`) for `message_created` events or the
+ * Phase 1A logging skeleton for everything else.
+ *
+ * Phase 1B.3 wires the message reply path; callback routing, attachments,
+ * and membership events are still routed through the skeleton until later
+ * phases pick them up.
  */
-function buildSupervisorDispatch(
-  inboundCtx: MaxInboundContext,
-): (update: PollingUpdate) => Promise<void> {
+function buildSupervisorDispatch(params: {
+  ctx: ChannelGatewayContext<ResolvedMaxAccount>;
+  inboundCtx: MaxInboundContext;
+}): (update: PollingUpdate) => Promise<void> {
+  const { ctx, inboundCtx } = params;
+  const account = ctx.account;
+  const statusSink = (patch: { lastInboundAt?: number; lastOutboundAt?: number }): void => {
+    const snapshot = ctx.getStatus();
+    ctx.setStatus({ ...snapshot, ...patch });
+  };
   return async (update) => {
+    if (update.update_type === "message_created") {
+      const message = normalizeMaxInboundMessage(update);
+      if (!message) {
+        // Malformed update payload — log via the skeleton for visibility but
+        // don't drag the agent pipeline through it.
+        ctx.log?.warn?.(
+          `[max-messenger:${account.accountId}] message_created without usable mid/chat/sender — dropping`,
+        );
+        return;
+      }
+      try {
+        await handleMaxInbound({
+          message,
+          account,
+          config: ctx.cfg as CoreConfig,
+          runtime: ctx.runtime,
+          statusSink,
+        });
+      } catch (err) {
+        ctx.log?.error?.(
+          `[max-messenger:${account.accountId}] handleMaxInbound threw: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return;
+    }
+
     const updateType = KNOWN_UPDATE_TYPES.has(update.update_type as MaxUpdateType)
       ? (update.update_type as MaxUpdateType)
       : undefined;
     if (!updateType) {
-      // dispatchInboundEvent already logs `unknown update_type`; preserve
-      // the call so future dispatch logic stays exhaustive.
-      const event: MaxEvent = {
-        update_type: "message_created", // safe placeholder; the dispatcher only reads update_type when known
+      const annotated: MaxEvent = {
+        update_type: update.update_type as MaxUpdateType,
         timestamp: typeof update.timestamp === "number" ? update.timestamp : Date.now(),
       };
-      // Override update_type to the literal observed value so the dispatcher's
-      // KNOWN_UPDATE_TYPES check sees the truth, not the placeholder.
-      const annotated: MaxEvent = { ...event, update_type: update.update_type as MaxUpdateType };
       dispatchInboundEvent(inboundCtx, annotated);
       return;
     }
@@ -134,7 +167,7 @@ export const maxMessengerLifecycleAdapter = {
       accountId: account.accountId,
       log: { info: (msg) => ctx.log?.info?.(msg) },
     };
-    const dispatch = buildSupervisorDispatch(inboundCtx);
+    const dispatch = buildSupervisorDispatch({ ctx, inboundCtx });
     const tunables = resolvePollingTunables(account.config.polling);
 
     pollingLogger.info("max-messenger.polling.start", {
