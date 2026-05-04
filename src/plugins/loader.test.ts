@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { listAgentHarnessIds } from "../agents/harness/registry.js";
+import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -11,6 +12,7 @@ import { getContextEngineFactory, listContextEngineIds } from "../context-engine
 import {
   clearInternalHooks,
   createInternalHookEvent,
+  type AgentBootstrapHookContext,
   getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
@@ -2181,6 +2183,81 @@ module.exports = { id: "throws-after-import", register() {} };`,
     await triggerInternalHook(event);
     expect(event.messages).toEqual(["plugin-config-visible"]);
     expect(event.context).toEqual({});
+
+    clearInternalHooks();
+  });
+
+  it("preserves plugin hook context mutations for agent bootstrap hooks", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "bootstrap-context-mutator",
+      filename: "bootstrap-context-mutator.cjs",
+      body: `module.exports = {
+        id: "bootstrap-context-mutator",
+        register(api) {
+          api.registerHook(
+            "agent:bootstrap",
+            (event) => {
+              const marker = event.context.pluginConfig?.marker;
+              if (marker !== "plugin-config-visible") {
+                throw new Error("plugin config missing from hook context");
+              }
+              event.context.bootstrapFiles = [
+                ...event.context.bootstrapFiles,
+                {
+                  name: "PLUGIN.md",
+                  path: event.context.workspaceDir + "/PLUGIN.md",
+                  content: marker,
+                  missing: false,
+                },
+              ];
+            },
+            { name: "bootstrap-context-mutator" },
+          );
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      configSchema: { type: "object" },
+    });
+
+    clearInternalHooks();
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["bootstrap-context-mutator"],
+          entries: {
+            "bootstrap-context-mutator": {
+              config: {
+                marker: "plugin-config-visible",
+              },
+            },
+          },
+        },
+      },
+      onlyPluginIds: ["bootstrap-context-mutator"],
+    });
+
+    const baseFile: WorkspaceBootstrapFile = {
+      name: "AGENTS.md",
+      path: path.join(plugin.dir, "AGENTS.md"),
+      content: "base",
+      missing: false,
+    };
+    const event = createInternalHookEvent("agent", "bootstrap", "agent:main:test:dm:peer", {
+      workspaceDir: plugin.dir,
+      bootstrapFiles: [baseFile],
+    });
+    await triggerInternalHook(event);
+
+    const context = event.context as AgentBootstrapHookContext & { pluginConfig?: unknown };
+    expect(context.bootstrapFiles.map((file) => file.name)).toEqual(["AGENTS.md", "PLUGIN.md"]);
+    expect(context.bootstrapFiles[1]?.content).toBe("plugin-config-visible");
+    expect("pluginConfig" in context).toBe(false);
 
     clearInternalHooks();
   });
