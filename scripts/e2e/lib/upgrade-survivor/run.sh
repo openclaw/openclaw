@@ -821,8 +821,8 @@ phase validate-baseline-config validate_baseline_config
 phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
 phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
 phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
-phase assert-baseline assert_baseline_state
 phase seed-source-only-plugin-shadow seed_source_only_plugin_shadow
+phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
 phase update-candidate update_candidate
