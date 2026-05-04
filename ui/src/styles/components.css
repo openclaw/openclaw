@@ -2653,7 +2653,8 @@ td.data-table-key-col {
 
 .sessions-filter-bar {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   padding: 0 6px 6px;
 }
@@ -2851,6 +2852,11 @@ td.data-table-key-col {
 }
 
 @media (max-width: 760px) {
+  .sessions-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .sessions-filter-bar,
   .session-filter-primary-row,
   .session-filter-toggle-group,
