@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/cron: make the New Job sidebar collapsible so the jobs list can reclaim space while keeping the form one click away. Thanks @BunsDev.
 - Gateway/startup: keep model-catalog test helpers, run-session lookup code, QR pairing helpers, and TypeBox memory-tool schema construction out of hot startup import paths, reducing default gateway benchmark plugin-load and memory pressure.
 - Control UI/performance: record browser long animation frame or long task entries in the debug event log when supported, making slow dashboard renders easier to attribute from the UI.
+- BlueBubbles/DM: add `direct.<handle>.systemPrompt` and `direct.”*”.systemPrompt` per-DM system-prompt config, mirroring the existing `groups.<id>.systemPrompt` pattern so operators can inject per-contact or catch-all DM behavioral directives without affecting group-chat handling. Exact sender handle takes precedence over the wildcard. Fixes #77009. (#77086) Thanks @hclsys.
 - Slack/streaming: add `streaming.progress.render: "rich"` for Block Kit progress drafts backed by structured progress line data.
 - Slack/streaming: keep the newest rich progress lines when Block Kit limits trim long progress drafts. Thanks @vincentkoc.
 - Channels/streaming: cap progress-draft tool lines by default so edited progress boxes avoid jumpy reflow from long wrapped lines.
