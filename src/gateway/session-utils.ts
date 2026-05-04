@@ -372,6 +372,7 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
 type SessionListRowContext = {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
+  thinkingLevelsByModelRef: Map<string, ReturnType<typeof listThinkingLevelOptions>>;
 };
 
 function resolveRuntimeChildSessionKeys(
@@ -488,7 +489,31 @@ function buildSessionListRowContext(params: {
   return {
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
+    thinkingLevelsByModelRef: new Map(),
   };
+}
+
+function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
+  return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
+}
+
+function resolveSessionRowThinkingLevels(params: {
+  provider: string;
+  model: string;
+  modelCatalog?: ModelCatalogEntry[];
+  rowContext?: SessionListRowContext;
+}): ReturnType<typeof listThinkingLevelOptions> {
+  if (!params.rowContext) {
+    return listThinkingLevelOptions(params.provider, params.model, params.modelCatalog);
+  }
+  const key = createSessionRowModelCacheKey(params.provider, params.model);
+  const cached = params.rowContext.thinkingLevelsByModelRef.get(key);
+  if (cached) {
+    return cached;
+  }
+  const levels = listThinkingLevelOptions(params.provider, params.model, params.modelCatalog);
+  params.rowContext.thinkingLevelsByModelRef.set(key, levels);
+  return levels;
 }
 
 function mergeChildSessionKeys(
@@ -1530,6 +1555,7 @@ export function buildGatewaySessionRow(params: {
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
+    !skipTranscriptUsage &&
     resolveEstimatedSessionCostUsd({
       cfg,
       provider: resolvedModel.provider,
@@ -1635,11 +1661,12 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = listThinkingLevelOptions(
-    thinkingProvider,
-    thinkingModel,
-    params.modelCatalog,
-  );
+  const thinkingLevels = resolveSessionRowThinkingLevels({
+    provider: thinkingProvider,
+    model: thinkingModel,
+    modelCatalog: params.modelCatalog,
+    rowContext,
+  });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 

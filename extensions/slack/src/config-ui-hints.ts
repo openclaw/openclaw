@@ -115,7 +115,7 @@ export const slackChannelConfigUiHints = {
   },
   "streaming.preview.toolProgress": {
     label: "Slack Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
   },
   "streaming.progress.label": {
     label: "Slack Progress Label",

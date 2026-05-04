@@ -91,6 +91,7 @@ type ToolStartPayload = {
   name?: string;
   phase?: string;
   args?: Record<string, unknown>;
+  detailMode?: "explain" | "raw";
 };
 
 function readToolStringArg(args: Record<string, unknown>, key: string): string | undefined {
@@ -668,12 +669,15 @@ export async function processDiscordMessage(
                   await maybeBindStatusReactionsToToolReaction(payload);
                   await statusReactions.setTool(payload.name);
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLine({
-                      event: "tool",
-                      name: payload.name,
-                      phase: payload.phase,
-                      args: payload.args,
-                    }),
+                    formatChannelProgressDraftLine(
+                      {
+                        event: "tool",
+                        name: payload.name,
+                        phase: payload.phase,
+                        args: payload.args,
+                      },
+                      payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+                    ),
                     { toolName: payload.name },
                   );
                 },

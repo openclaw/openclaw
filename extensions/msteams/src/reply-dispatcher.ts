@@ -381,14 +381,18 @@ export function createMSTeamsReplyDispatcher(params: {
               name?: string;
               phase?: string;
               args?: Record<string, unknown>;
+              detailMode?: "explain" | "raw";
             }) => {
               await streamController.pushProgressLine(
-                formatChannelProgressDraftLine({
-                  event: "tool",
-                  name: payload.name,
-                  phase: payload.phase,
-                  args: payload.args,
-                }),
+                formatChannelProgressDraftLine(
+                  {
+                    event: "tool",
+                    name: payload.name,
+                    phase: payload.phase,
+                    args: payload.args,
+                  },
+                  payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+                ),
                 { toolName: payload.name },
               );
             },

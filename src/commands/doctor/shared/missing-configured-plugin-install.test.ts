@@ -514,6 +514,40 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({ changes: [], warnings: [] });
   });
 
+  it("does not install channel plugins when the matching plugin entry is disabled", async () => {
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: {
+          npmSpec: "@openclaw/plugin-matrix@1.2.3",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            matrix: { enabled: false },
+          },
+        },
+        channels: {
+          matrix: { homeserver: "https://matrix.example.org" },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(result).toEqual({ changes: [], warnings: [] });
+  });
+
   it("does not download configured channel plugins that are still bundled", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
@@ -905,6 +939,23 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({ changes: [], warnings: [] });
   });
 
+  it("does not install plugins merely listed in plugins.allow", async () => {
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          allow: ["codex"],
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(result).toEqual({ changes: [], warnings: [] });
+  });
+
   it("installs a missing third-party downloadable plugin from npm only", async () => {
     mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
       ok: true,
@@ -1124,6 +1175,218 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
     expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(result).toEqual({ changes: [], warnings: [] });
+  });
+
+  it("does not install a channel catalog plugin when a configured plugin already owns that channel", async () => {
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "openclaw-lark",
+          origin: "config",
+          channels: ["feishu"],
+          channelConfigs: {
+            feishu: {
+              schema: {
+                type: "object",
+              },
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "feishu",
+        pluginId: "feishu",
+        meta: { label: "Feishu" },
+        install: {
+          npmSpec: "@openclaw/feishu",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            "openclaw-lark": {
+              enabled: true,
+            },
+          },
+        },
+        channels: {
+          feishu: {
+            footer: {
+              model: false,
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(result).toEqual({ changes: [], warnings: [] });
+  });
+
+  it("still installs a channel catalog plugin when the configured owner is blocked by the allowlist", async () => {
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "openclaw-lark",
+          origin: "config",
+          channels: ["feishu"],
+          channelConfigs: {
+            feishu: {
+              schema: {
+                type: "object",
+              },
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "feishu",
+        pluginId: "feishu",
+        meta: { label: "Feishu" },
+        install: {
+          npmSpec: "@openclaw/feishu",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "feishu",
+      targetDir: "/tmp/openclaw-plugins/feishu",
+      version: "2026.5.2",
+      npmResolution: {
+        name: "@openclaw/feishu",
+        version: "2026.5.2",
+        resolvedSpec: "@openclaw/feishu@2026.5.2",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          allow: ["some-other-plugin"],
+          entries: {
+            "openclaw-lark": {
+              enabled: true,
+            },
+          },
+        },
+        channels: {
+          feishu: {
+            footer: {
+              model: false,
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/feishu",
+        expectedPluginId: "feishu",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "feishu" from @openclaw/feishu.',
+    ]);
+  });
+
+  it("still installs a channel catalog plugin when that plugin is explicitly configured", async () => {
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "openclaw-lark",
+          origin: "config",
+          channels: ["feishu"],
+          channelConfigs: {
+            feishu: {
+              schema: {
+                type: "object",
+              },
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "feishu",
+        pluginId: "feishu",
+        meta: { label: "Feishu" },
+        install: {
+          npmSpec: "@openclaw/feishu",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "feishu",
+      targetDir: "/tmp/openclaw-plugins/feishu",
+      version: "2026.5.2",
+      npmResolution: {
+        name: "@openclaw/feishu",
+        version: "2026.5.2",
+        resolvedSpec: "@openclaw/feishu@2026.5.2",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            feishu: {
+              enabled: true,
+            },
+            "openclaw-lark": {
+              enabled: true,
+            },
+          },
+        },
+        channels: {
+          feishu: {
+            footer: {
+              model: false,
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/feishu",
+        expectedPluginId: "feishu",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "feishu" from @openclaw/feishu.',
+    ]);
   });
 
   it("reinstalls a missing configured plugin from its persisted install record", async () => {

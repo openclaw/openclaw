@@ -68,6 +68,7 @@ function createContext() {
 function createResolveToolsParams(params?: {
   context?: ReturnType<typeof createContext> & Record<string, unknown>;
   toolAllowlist?: readonly string[];
+  toolDenylist?: readonly string[];
   existingToolNames?: Set<string>;
   env?: NodeJS.ProcessEnv;
   suppressNameConflicts?: boolean;
@@ -76,6 +77,7 @@ function createResolveToolsParams(params?: {
   return {
     context: (params?.context ?? createContext()) as never,
     ...(params?.toolAllowlist ? { toolAllowlist: [...params.toolAllowlist] } : {}),
+    ...(params?.toolDenylist ? { toolDenylist: [...params.toolDenylist] } : {}),
     ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.suppressNameConflicts ? { suppressNameConflicts: true } : {}),
@@ -2175,6 +2177,30 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] }));
 
     expectResolvedToolNames(tools, ["browser"]);
+  });
+
+  it("does not materialize plugin tools blocked by explicit deny policy", () => {
+    const browserFactory = vi.fn(() => makeTool("browser"));
+    const browserEntry: MockRegistryToolEntry = {
+      pluginId: "browser",
+      optional: false,
+      source: "/tmp/browser.js",
+      names: ["browser"],
+      declaredNames: ["browser"],
+      factory: browserFactory,
+    };
+    setRegistry([browserEntry]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["*"],
+        toolDenylist: ["browser"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, []);
+    expect(browserFactory).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("includes optional tools when wildcard allowlist is active (#76507)", () => {

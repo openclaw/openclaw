@@ -5336,6 +5336,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              toolProgressDetail: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "explain",
+                  },
+                  {
+                    type: "string",
+                    const: "raw",
+                  },
+                ],
+              },
               reasoningDefault: {
                 anyOf: [
                   {
@@ -6338,6 +6350,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Thinking Default",
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+                },
+                verboseDefault: {
+                  type: "string",
+                  enum: ["off", "on", "full"],
+                },
+                toolProgressDetail: {
+                  type: "string",
+                  enum: ["explain", "raw"],
                 },
                 reasoningDefault: {
                   type: "string",

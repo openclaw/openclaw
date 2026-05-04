@@ -2,12 +2,14 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import type { GoogleMeetConfig } from "../config.js";
+import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import {
+  startNodeAgentAudioBridge,
   startNodeRealtimeAudioBridge,
   type ChromeNodeRealtimeAudioBridgeHandle,
 } from "../realtime-node.js";
 import {
+  startCommandAgentAudioBridge,
   startCommandRealtimeAudioBridge,
   type ChromeRealtimeAudioBridgeHandle,
 } from "../realtime.js";
@@ -45,6 +47,10 @@ export const __testing = {
   },
   meetStatusScriptForTest: meetStatusScript,
 };
+
+function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
+  return mode === "agent" || mode === "bidi";
+}
 
 export function outputMentionsBlackHole2ch(output: string): boolean {
   return /\bBlackHole\s+2ch\b/i.test(output);
@@ -86,7 +92,7 @@ export async function launchChromeMeet(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
   meetingSessionId: string;
-  mode: "realtime" | "transcribe";
+  mode: GoogleMeetMode;
   url: string;
   logger: RuntimeLogger;
 }): Promise<{
@@ -97,7 +103,7 @@ export async function launchChromeMeet(params: {
   browser?: GoogleMeetChromeHealth;
 }> {
   const checkRealtimeAudioPrerequisites = async () => {
-    if (params.mode !== "realtime") {
+    if (!isGoogleMeetTalkBackMode(params.mode)) {
       return;
     }
     await assertBlackHole2chAvailable({
@@ -123,10 +129,15 @@ export async function launchChromeMeet(params: {
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle)
     | undefined
   > => {
-    if (params.mode !== "realtime") {
+    if (!isGoogleMeetTalkBackMode(params.mode)) {
       return undefined;
     }
     if (params.config.chrome.audioBridgeCommand) {
+      if (params.mode === "agent") {
+        throw new Error(
+          "Chrome agent mode requires chrome.audioInputCommand and chrome.audioOutputCommand so OpenClaw can run STT and regular TTS directly.",
+        );
+      }
       const bridge = await params.runtime.system.runCommandWithTimeout(
         params.config.chrome.audioBridgeCommand,
         { timeoutMs: params.config.chrome.joinTimeoutMs },
@@ -140,20 +151,33 @@ export async function launchChromeMeet(params: {
     }
     if (!params.config.chrome.audioInputCommand || !params.config.chrome.audioOutputCommand) {
       throw new Error(
-        "Chrome realtime mode requires chrome.audioInputCommand and chrome.audioOutputCommand, or chrome.audioBridgeCommand for an external bridge.",
+        "Chrome talk-back mode requires chrome.audioInputCommand and chrome.audioOutputCommand, or chrome.audioBridgeCommand for an external bridge.",
       );
     }
     return {
       type: "command-pair",
-      ...(await startCommandRealtimeAudioBridge({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        meetingSessionId: params.meetingSessionId,
-        inputCommand: params.config.chrome.audioInputCommand,
-        outputCommand: params.config.chrome.audioOutputCommand,
-        logger: params.logger,
-      })),
+      ...(params.mode === "agent"
+        ? await startCommandAgentAudioBridge({
+            config: params.config,
+            fullConfig: params.fullConfig,
+            runtime: params.runtime,
+            meetingSessionId: params.meetingSessionId,
+            inputCommand: params.config.chrome.audioInputCommand,
+            outputCommand: params.config.chrome.audioOutputCommand,
+            logger: params.logger,
+          })
+        : await startCommandRealtimeAudioBridge({
+            config: {
+              ...params.config,
+              realtime: { ...params.config.realtime, strategy: "bidi" },
+            },
+            fullConfig: params.fullConfig,
+            runtime: params.runtime,
+            meetingSessionId: params.meetingSessionId,
+            inputCommand: params.config.chrome.audioInputCommand,
+            outputCommand: params.config.chrome.audioOutputCommand,
+            logger: params.logger,
+          })),
     };
   };
 
@@ -170,7 +194,7 @@ export async function launchChromeMeet(params: {
     url: params.url,
   });
   const shouldStartRealtimeBridge =
-    params.mode === "realtime" &&
+    isGoogleMeetTalkBackMode(params.mode) &&
     result.browser?.inCall === true &&
     result.browser.micMuted !== true &&
     result.browser.manualActionRequired !== true;
@@ -387,7 +411,7 @@ function meetStatusScript(params: {
   }
   if (!readOnly && allowMicrophone && mic && /turn on microphone/i.test(buttonLabel(mic))) {
     mic.click();
-    notes.push("Attempted to turn on the Meet microphone for realtime mode.");
+    notes.push("Attempted to turn on the Meet microphone for talk-back mode.");
   }
   if (!readOnly && !allowMicrophone && mic && /turn off microphone/i.test(mic.getAttribute('aria-label') || text(mic))) {
     mic.click();
@@ -595,7 +619,7 @@ async function openMeetWithBrowserProxy(params: {
   runtime: PluginRuntime;
   nodeId: string;
   config: GoogleMeetConfig;
-  mode: "realtime" | "transcribe";
+  mode: GoogleMeetMode;
   url: string;
 }): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
   return await openMeetWithBrowserRequest({
@@ -617,7 +641,7 @@ async function openMeetWithBrowserProxy(params: {
 async function openMeetWithBrowserRequest(params: {
   callBrowser: BrowserRequestCaller;
   config: GoogleMeetConfig;
-  mode: "realtime" | "transcribe";
+  mode: GoogleMeetMode;
   url: string;
 }): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
   if (!params.config.chrome.launch) {
@@ -670,7 +694,7 @@ async function openMeetWithBrowserRequest(params: {
   }
 
   const permissionNotes = await grantMeetMediaPermissions({
-    allowMicrophone: params.mode === "realtime",
+    allowMicrophone: isGoogleMeetTalkBackMode(params.mode),
     callBrowser: params.callBrowser,
     targetId,
     timeoutMs,
@@ -691,7 +715,7 @@ async function openMeetWithBrowserRequest(params: {
           kind: "evaluate",
           targetId,
           fn: meetStatusScript({
-            allowMicrophone: params.mode === "realtime",
+            allowMicrophone: isGoogleMeetTalkBackMode(params.mode),
             captureCaptions: params.mode === "transcribe",
             guestName: params.config.chrome.guestName,
             autoJoin: params.config.chrome.autoJoin,
@@ -700,7 +724,10 @@ async function openMeetWithBrowserRequest(params: {
         timeoutMs: Math.min(timeoutMs, 10_000),
       });
       browser = mergeBrowserNotes(parseMeetBrowserStatus(evaluated) ?? browser, permissionNotes);
-      if (browser?.inCall === true && (params.mode !== "realtime" || browser.micMuted !== true)) {
+      if (
+        browser?.inCall === true &&
+        (!isGoogleMeetTalkBackMode(params.mode) || browser.micMuted !== true)
+      ) {
         return { launched: true, browser };
       }
       if (browser?.manualActionRequired === true) {
@@ -747,7 +774,7 @@ function isRecoverableMeetTab(tab: BrowserTab, url?: string): boolean {
 async function inspectRecoverableMeetTab(params: {
   callBrowser: BrowserRequestCaller;
   config: GoogleMeetConfig;
-  mode?: "realtime" | "transcribe";
+  mode?: GoogleMeetMode;
   readOnly?: boolean;
   timeoutMs: number;
   tab: BrowserTab;
@@ -807,7 +834,7 @@ async function inspectRecoverableMeetTab(params: {
 
 export async function recoverCurrentMeetTab(params: {
   config: GoogleMeetConfig;
-  mode?: "realtime" | "transcribe";
+  mode?: GoogleMeetMode;
   readOnly?: boolean;
   url?: string;
 }): Promise<{
@@ -856,7 +883,7 @@ export async function recoverCurrentMeetTab(params: {
 export async function recoverCurrentMeetTabOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
-  mode?: "realtime" | "transcribe";
+  mode?: GoogleMeetMode;
   readOnly?: boolean;
   url?: string;
 }): Promise<{
@@ -923,7 +950,7 @@ export async function launchChromeMeetOnNode(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
   meetingSessionId: string;
-  mode: "realtime" | "transcribe";
+  mode: GoogleMeetMode;
   url: string;
   logger: RuntimeLogger;
 }): Promise<{
@@ -985,8 +1012,16 @@ export async function launchChromeMeetOnNode(params: {
     if (!result.bridgeId) {
       throw new Error("Google Meet node did not return an audio bridge id.");
     }
-    const bridge = await startNodeRealtimeAudioBridge({
-      config: params.config,
+    const bridge = await (
+      params.mode === "agent" ? startNodeAgentAudioBridge : startNodeRealtimeAudioBridge
+    )({
+      config:
+        params.mode === "agent"
+          ? params.config
+          : {
+              ...params.config,
+              realtime: { ...params.config.realtime, strategy: "bidi" },
+            },
       fullConfig: params.fullConfig,
       runtime: params.runtime,
       meetingSessionId: params.meetingSessionId,

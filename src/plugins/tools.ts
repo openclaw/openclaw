@@ -1,3 +1,4 @@
+import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -84,6 +85,39 @@ export function buildPluginToolMetadataKey(pluginId: string, toolName: string): 
 
 function normalizeAllowlist(list?: string[]) {
   return new Set((list ?? []).map(normalizeToolName).filter(Boolean));
+}
+
+function normalizeDenylist(list?: string[]) {
+  return compileGlobPatterns({
+    raw: list,
+    normalize: normalizeToolName,
+  });
+}
+
+function denylistBlocksName(name: string, denylist: ReturnType<typeof normalizeDenylist>): boolean {
+  const normalized = normalizeToolName(name);
+  return normalized ? matchesAnyGlobPattern(normalized, denylist) : false;
+}
+
+function denylistBlocksPlugin(params: {
+  pluginId: string;
+  denylist: ReturnType<typeof normalizeDenylist>;
+}): boolean {
+  return (
+    denylistBlocksName(params.pluginId, params.denylist) ||
+    matchesAnyGlobPattern("group:plugins", params.denylist)
+  );
+}
+
+function denylistBlocksPluginTool(params: {
+  pluginId: string;
+  toolName: string;
+  denylist: ReturnType<typeof normalizeDenylist>;
+}): boolean {
+  return (
+    denylistBlocksPlugin({ pluginId: params.pluginId, denylist: params.denylist }) ||
+    denylistBlocksName(params.toolName, params.denylist)
+  );
 }
 
 function allowlistIncludesDefaultPluginTools(allowlist: Set<string>): boolean {
@@ -331,15 +365,6 @@ function listManifestToolNamesForAllowlist(params: {
   return [...new Set([...defaultToolNames, ...matchedToolNames])];
 }
 
-function manifestToolContractMatchesAllowlist(params: {
-  plugin: PluginManifestRecord;
-  toolNames: readonly string[];
-  pluginId: string;
-  allowlist: Set<string>;
-}): boolean {
-  return listManifestToolNamesForAllowlist(params).length > 0;
-}
-
 function listManifestToolNamesForAvailability(params: {
   plugin: PluginManifestRecord;
   toolNames: readonly string[];
@@ -389,11 +414,13 @@ function resolvePluginToolRuntimePluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   toolAllowlist?: string[];
+  toolDenylist?: string[];
   hasAuthForProvider?: (providerId: string) => boolean;
   snapshot?: PluginMetadataManifestView;
 }): string[] {
   const pluginIds = new Set<string>();
   const allowlist = normalizeAllowlist(params.toolAllowlist);
+  const denylist = normalizeDenylist(params.toolDenylist);
   const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
   const snapshot =
     params.snapshot ??
@@ -418,22 +445,28 @@ function resolvePluginToolRuntimePluginIds(params: {
     ) {
       continue;
     }
+    if (denylistBlocksPlugin({ pluginId: plugin.id, denylist })) {
+      continue;
+    }
     const toolNames = plugin.contracts?.tools ?? [];
+    const selectedToolNames = listManifestToolNamesForAvailability({
+      toolNames,
+      plugin,
+      pluginId: plugin.id,
+      allowlist,
+    }).filter(
+      (toolName) =>
+        !denylistBlocksPluginTool({
+          pluginId: plugin.id,
+          toolName,
+          denylist,
+        }),
+    );
     if (
-      manifestToolContractMatchesAllowlist({
-        plugin,
-        toolNames,
-        pluginId: plugin.id,
-        allowlist,
-      }) &&
+      selectedToolNames.length > 0 &&
       hasManifestToolAvailability({
         plugin,
-        toolNames: listManifestToolNamesForAvailability({
-          toolNames,
-          plugin,
-          pluginId: plugin.id,
-          allowlist,
-        }),
+        toolNames: selectedToolNames,
         config: params.availabilityConfig ?? params.config,
         env: params.env,
         hasAuthForProvider: params.hasAuthForProvider,
@@ -553,6 +586,7 @@ function resolveCachedPluginTools(params: {
   availabilityConfig: PluginLoadOptions["config"];
   env: NodeJS.ProcessEnv;
   allowlist: Set<string>;
+  denylist: ReturnType<typeof normalizeDenylist>;
   hasAuthForProvider?: (providerId: string) => boolean;
   onlyPluginIds: readonly string[];
   existing: Set<string>;
@@ -570,6 +604,9 @@ function resolveCachedPluginTools(params: {
     if (!onlyPluginIdSet.has(plugin.id)) {
       continue;
     }
+    if (denylistBlocksPlugin({ pluginId: plugin.id, denylist: params.denylist })) {
+      continue;
+    }
     if (
       !isManifestPluginAvailableForControlPlane({
         snapshot: params.snapshot,
@@ -585,7 +622,14 @@ function resolveCachedPluginTools(params: {
       toolNames: contractToolNames,
       pluginId: plugin.id,
       allowlist: params.allowlist,
-    });
+    }).filter(
+      (toolName) =>
+        !denylistBlocksPluginTool({
+          pluginId: plugin.id,
+          toolName,
+          denylist: params.denylist,
+        }),
+    );
     const availableToolNames = filterManifestToolNamesForAvailability({
       plugin,
       toolNames: allowedToolNames,
@@ -639,6 +683,15 @@ function resolveCachedPluginTools(params: {
         continue;
       }
       const normalizedDescriptorName = normalizeToolName(cachedDescriptor.descriptor.name);
+      if (
+        denylistBlocksPluginTool({
+          pluginId: plugin.id,
+          toolName: cachedDescriptor.descriptor.name,
+          denylist: params.denylist,
+        })
+      ) {
+        continue;
+      }
       if (
         localNormalizedNames.has(normalizedDescriptorName) ||
         params.existingNormalized.has(normalizedDescriptorName)
@@ -732,6 +785,7 @@ function registryHasScopedPluginTools(
 function resolvePluginToolLoadState(params: {
   context: OpenClawPluginToolContext;
   toolAllowlist?: string[];
+  toolDenylist?: string[];
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
@@ -771,6 +825,7 @@ function resolvePluginToolLoadState(params: {
     workspaceDir: context.workspaceDir,
     env,
     toolAllowlist: params.toolAllowlist,
+    toolDenylist: params.toolDenylist,
     hasAuthForProvider: params.hasAuthForProvider,
     snapshot,
   });
@@ -786,6 +841,7 @@ function resolvePluginToolLoadState(params: {
 export function ensureStandalonePluginToolRegistryLoaded(params: {
   context: OpenClawPluginToolContext;
   toolAllowlist?: string[];
+  toolDenylist?: string[];
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
@@ -805,6 +861,7 @@ export function resolvePluginTools(params: {
   context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
+  toolDenylist?: string[];
   suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
@@ -821,6 +878,7 @@ export function resolvePluginTools(params: {
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
   const allowlist = normalizeAllowlist(params.toolAllowlist);
+  const denylist = normalizeDenylist(params.toolDenylist);
   const configCacheKeyMemo = createPluginToolDescriptorConfigCacheKeyMemo();
   let currentRuntimeConfigForDescriptorCache: PluginLoadOptions["config"] | null | undefined =
     params.context.runtimeConfig;
@@ -837,6 +895,7 @@ export function resolvePluginTools(params: {
     availabilityConfig: params.context.runtimeConfig ?? context.config,
     env,
     allowlist,
+    denylist,
     hasAuthForProvider: params.hasAuthForProvider,
     onlyPluginIds,
     existing,
@@ -919,6 +978,9 @@ export function resolvePluginTools(params: {
     if (!scopedPluginIds.has(entry.pluginId)) {
       continue;
     }
+    if (denylistBlocksPlugin({ pluginId: entry.pluginId, denylist })) {
+      continue;
+    }
     if (blockedPlugins.has(entry.pluginId)) {
       continue;
     }
@@ -948,7 +1010,14 @@ export function resolvePluginTools(params: {
           config: params.context.runtimeConfig ?? context.config,
           env,
           hasAuthForProvider: params.hasAuthForProvider,
-        })
+        }).filter(
+          (toolName) =>
+            !denylistBlocksPluginTool({
+              pluginId: entry.pluginId,
+              toolName,
+              denylist,
+            }),
+        )
       : declaredNames;
     if (manifestPlugin && availabilityNames.length > 0 && allowlistNames.length === 0) {
       continue;
@@ -995,15 +1064,23 @@ export function resolvePluginTools(params: {
           }),
         )
       : listRaw;
+    const policyAvailableList = availableList.filter(
+      (tool) =>
+        !denylistBlocksPluginTool({
+          pluginId: entry.pluginId,
+          toolName: readPluginToolName(tool),
+          denylist,
+        }),
+    );
     const list = entry.optional
-      ? availableList.filter((tool) =>
+      ? policyAvailableList.filter((tool) =>
           isOptionalToolAllowed({
             toolName: readPluginToolName(tool),
             pluginId: entry.pluginId,
             allowlist,
           }),
         )
-      : availableList;
+      : policyAvailableList;
     if (list.length === 0) {
       continue;
     }
@@ -1087,7 +1164,14 @@ export function resolvePluginTools(params: {
       toolNames: manifestPlugin.contracts?.tools ?? [],
       pluginId,
       allowlist,
-    });
+    }).filter(
+      (toolName) =>
+        !denylistBlocksPluginTool({
+          pluginId,
+          toolName,
+          denylist,
+        }),
+    );
     if (
       cachedDescriptorsCoverToolNames({
         descriptors,

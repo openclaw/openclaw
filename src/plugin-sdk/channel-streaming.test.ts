@@ -118,7 +118,7 @@ describe("channel-streaming", () => {
         { streaming: { mode: "partial", preview: { toolProgress: false } } },
         { draftStreamActive: true },
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       resolveChannelStreamingSuppressDefaultToolProgressMessages(
         { streaming: { mode: "partial", preview: { toolProgress: false } } },
@@ -186,6 +186,38 @@ describe("channel-streaming", () => {
     ).toBe("Shelling\n🛠️ Exec\n• plain update");
   });
 
+  it("bounds progress draft line length to reduce edit reflow", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: "Shelling" } } },
+        lines: ["x".repeat(80)],
+        formatLine: (line) => `\`${line}\``,
+      }),
+    ).toBe(`Shelling\n• \`${"x".repeat(71)}…\``);
+  });
+
+  it("keeps compacted raw progress lines from leaking unmatched markdown backticks", () => {
+    const line = formatChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: {
+          command:
+            "node scripts/check-something-with-a-very-long-path /tmp/openclaw/some/really/deep/path/that/keeps/going/and/going/index.ts --flag value",
+        },
+      },
+      { detailMode: "raw" },
+    );
+
+    const text = formatChannelProgressDraftText({
+      entry: { streaming: { progress: { label: "Shelling" } } },
+      lines: [line ?? ""],
+    });
+
+    expect(text).toBe("Shelling\n🛠️ Exec: run node script…that/keeps/going/and/going/index…");
+    expect(text.match(/`/g) ?? []).toHaveLength(0);
+  });
+
   it("formats progress draft lines with shared tool display labels", () => {
     expect(
       formatChannelProgressDraftLine({
@@ -208,6 +240,16 @@ describe("channel-streaming", () => {
         modified: ["/tmp/demo/index.html", "/tmp/demo/style.css"],
       }),
     ).toBe("🩹 Apply Patch: /tmp/demo/{index.html, style.css}");
+    expect(
+      formatChannelProgressDraftLine(
+        {
+          event: "tool",
+          name: "exec",
+          args: { command: "pnpm test -- --watch=false" },
+        },
+        { detailMode: "raw" },
+      ),
+    ).toBe("🛠️ Exec: run tests, `pnpm test -- --watch=false`");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {
