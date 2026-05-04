@@ -140,6 +140,23 @@ function appServerError(params: { message: string; willRetry: boolean }): Projec
   });
 }
 
+function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
+  return {
+    method: "account/rateLimits/updated",
+    params: {
+      rateLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
+        secondary: null,
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: "rate_limit_reached",
+      },
+    },
+  } as ProjectorNotification;
+}
+
 function turnCompleted(items: unknown[] = []): ProjectorNotification {
   return {
     method: "turn/completed",
@@ -278,6 +295,57 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.promptError).toBe("stream failed permanently");
     expect(result.promptErrorSource).toBe("prompt");
     expect(result.lastAssistant).toBeUndefined();
+  });
+
+  it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
+    const projector = await createProjector();
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+
+    await projector.handleNotification(rateLimitsUpdated(resetsAt));
+    await projector.handleNotification(
+      forCurrentTurn("error", {
+        error: {
+          message: "You've reached your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
+          additionalDetails: null,
+        },
+        willRetry: false,
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("Codex usage limit reached.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptError).toContain("Run /codex account");
+    expect(result.promptErrorSource).toBe("prompt");
+  });
+
+  it("uses Codex rate-limit resets for failed turns", async () => {
+    const projector = await createProjector();
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+
+    await projector.handleNotification(rateLimitsUpdated(resetsAt));
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          error: {
+            message: "You've reached your usage limit.",
+            codexErrorInfo: "usageLimitExceeded",
+            additionalDetails: null,
+          },
+          items: [],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("Codex usage limit reached.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptErrorSource).toBe("prompt");
   });
 
   it("normalizes snake_case current token usage fields", async () => {

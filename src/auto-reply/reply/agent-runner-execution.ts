@@ -303,6 +303,10 @@ function buildRateLimitCooldownMessage(err: unknown): string {
   if (!isFallbackSummaryError(err)) {
     return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
   }
+  const codexUsageLimitMessage = extractCodexUsageLimitFallbackMessage(err);
+  if (codexUsageLimitMessage) {
+    return codexUsageLimitMessage;
+  }
   const expiry = err.soonestCooldownExpiry;
   const now = Date.now();
   if (typeof expiry === "number" && expiry > now) {
@@ -314,6 +318,37 @@ function buildRateLimitCooldownMessage(err: unknown): string {
     return `⚠️ Rate-limited — ready in ~${minsLeft} min. Please try again shortly.`;
   }
   return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+}
+
+function extractCodexUsageLimitFallbackMessage(err: unknown): string | undefined {
+  if (!isFallbackSummaryError(err)) {
+    return undefined;
+  }
+  for (const attempt of err.attempts) {
+    const message = extractCodexUsageLimitMessage(attempt.error);
+    if (message) {
+      return `⚠️ ${message}`;
+    }
+  }
+  return undefined;
+}
+
+function extractCodexUsageLimitMessage(text: string): string | undefined {
+  const marker = "Codex usage limit reached.";
+  const markerIndex = text.indexOf(marker);
+  if (markerIndex < 0) {
+    return undefined;
+  }
+  const message = sanitizeUserFacingText(text.slice(markerIndex), { errorContext: true })
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (!message) {
+    return undefined;
+  }
+  return message.length > 500 ? `${message.slice(0, 497)}...` : message;
 }
 
 function isPureTransientRateLimitSummary(err: unknown): boolean {

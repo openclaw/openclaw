@@ -2024,6 +2024,56 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("surfaces Codex usage-limit reset details for pure fallback exhaustion", async () => {
+    const codexMessage =
+      "Codex usage limit reached. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(new Error(`All models failed (1): openai/gpt-5.5: ${codexMessage}`), {
+        name: "FallbackSummaryError",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: codexMessage,
+            reason: "rate_limit",
+          },
+        ],
+        soonestCooldownExpiry: null,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(`⚠️ ${codexMessage}`);
+      expect(result.payload.text).not.toContain("All models failed");
+    }
+  });
+
   it("surfaces billing guidance for pure billing cooldown fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(

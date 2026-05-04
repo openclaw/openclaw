@@ -126,6 +126,23 @@ function turnStartResult(turnId = "turn-1", status = "inProgress") {
   };
 }
 
+function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
+  return {
+    method: "account/rateLimits/updated",
+    params: {
+      rateLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
+        secondary: null,
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: "rate_limit_reached",
+      },
+    },
+  };
+}
+
 function assistantMessage(text: string, timestamp: number) {
   return {
     role: "assistant" as const,
@@ -1169,6 +1186,27 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("preserves Codex usage-limit reset details when turn/start fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    let harness!: ReturnType<typeof createStartedThreadHarness>;
+    harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        await harness.notify(rateLimitsUpdated(resetsAt));
+        throw Object.assign(new Error("You've reached your usage limit."), {
+          data: { codexErrorInfo: "usageLimitExceeded" },
+        });
+      }
+      return undefined;
+    });
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+
+    await expect(run).rejects.toThrow("Codex usage limit reached.");
+    await expect(run).rejects.toThrow("Next reset in");
   });
 
   it("cleans up native hook relay state when the Codex turn aborts", async () => {
