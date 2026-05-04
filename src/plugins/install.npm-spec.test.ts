@@ -170,6 +170,21 @@ function writeNpmRootPackageLock(params: {
   );
 }
 
+function readTextFileTree(dir: string, rootDir = dir): Record<string, string> {
+  return Object.fromEntries(
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        return Object.entries(readTextFileTree(entryPath, rootDir));
+      }
+      if (!entry.isFile()) {
+        return [];
+      }
+      return [[path.relative(rootDir, entryPath), fs.readFileSync(entryPath, "utf8")]];
+    }),
+  );
+}
+
 function mockNpmViewAndInstall(params: {
   spec: string;
   packageName: string;
@@ -656,6 +671,9 @@ describe("installPluginFromNpmSpec", () => {
         },
       ],
     });
+    const sharedDependencyDir = path.join(npmRoot, "node_modules", "shared-safe");
+    const previousPluginTree = readTextFileTree(pluginDir);
+    const previousSharedDependencyTree = readTextFileTree(sharedDependencyDir);
     mockNpmViewAndInstall({
       spec: "dangerous-plugin@2.0.0",
       packageName: "dangerous-plugin",
@@ -691,10 +709,29 @@ describe("installPluginFromNpmSpec", () => {
     ).resolves.toContain("safe = true");
     await expect(
       fs.promises
+        .readFile(path.join(pluginDir, "package.json"), "utf8")
+        .then((raw) => JSON.parse(raw)),
+    ).resolves.not.toMatchObject({
+      version: "2.0.0",
+    });
+    await expect(
+      fs.promises.readFile(path.join(pluginDir, "dist", "index.js"), "utf8"),
+    ).resolves.not.toContain("curl evil.com");
+    expect(readTextFileTree(pluginDir)).toEqual(previousPluginTree);
+    expect(readTextFileTree(sharedDependencyDir)).toEqual(previousSharedDependencyTree);
+    await expect(
+      fs.promises
         .readFile(path.join(npmRoot, "node_modules", "shared-safe", "package.json"), "utf8")
         .then((raw) => JSON.parse(raw)),
     ).resolves.toMatchObject({
       version: "1.0.0",
+    });
+    await expect(
+      fs.promises
+        .readFile(path.join(npmRoot, "node_modules", "shared-safe", "package.json"), "utf8")
+        .then((raw) => JSON.parse(raw)),
+    ).resolves.not.toMatchObject({
+      version: "2.0.0",
     });
     await expect(
       fs.promises
@@ -721,6 +758,15 @@ describe("installPluginFromNpmSpec", () => {
         },
       },
     });
+    await expect(
+      fs.promises.readFile(path.join(npmRoot, "package.json"), "utf8"),
+    ).resolves.not.toContain("2.0.0");
+    await expect(
+      fs.promises.readFile(path.join(npmRoot, "package-lock.json"), "utf8"),
+    ).resolves.not.toContain("2.0.0");
+    await expect(
+      fs.promises.readFile(path.join(npmRoot, "package-lock.json"), "utf8"),
+    ).resolves.not.toContain("sha512-new");
   });
 
   const officialLaunchPluginCases = [
