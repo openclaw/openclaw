@@ -61,4 +61,26 @@ describe("createWebChannelStatusController", () => {
     expect(last.lastTransportActivityAt).not.toBeNull();
     expect(typeof last.lastTransportActivityAt).toBe("number");
   });
+
+  it("clears expected reconnect history once the socket is healthy again", () => {
+    const patches: Record<string, unknown>[] = [];
+    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
+
+    controller.noteConnected(1000);
+    controller.noteClose({
+      at: 2000,
+      statusCode: 499,
+      error: "status=499",
+      reconnectAttempts: 1,
+      healthState: "reconnecting",
+      expected: true,
+    });
+    controller.noteConnected(3000);
+
+    const last = patches.at(-1)!;
+    expect(last.connected).toBe(true);
+    expect(last.healthState).toBe("healthy");
+    expect(last.reconnectAttempts).toBe(0);
+    expect(last.lastDisconnect).toBeNull();
+  });
 });

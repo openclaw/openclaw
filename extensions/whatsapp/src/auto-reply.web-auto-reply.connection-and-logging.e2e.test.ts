@@ -321,7 +321,7 @@ describe("web auto-reply connection", () => {
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
     try {
-      const { scripted, controller, run } = await startWatchdogScenario({
+      const { scripted, controller, run, runtime } = await startWatchdogScenario({
         monitorWebChannel,
       });
 
@@ -338,6 +338,11 @@ describe("web auto-reply connection", () => {
       scripted.resolveClose(1, { status: 499, isLoggedOut: false });
       await Promise.resolve();
       await run;
+
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("WhatsApp Web watchdog restarted a quiet connection"),
+      );
+      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("status 499"));
     } finally {
       vi.useRealTimers();
     }
