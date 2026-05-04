@@ -3,13 +3,16 @@ import {
   emitDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "../../infra/diagnostic-events.js";
-import { replaceGatewayModelPricingCache } from "../model-pricing-cache-state.js";
-import { __resetGatewayModelPricingCacheForTest } from "../model-pricing-cache.js";
 import {
   resetDiagnosticStabilityRecorderForTest,
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "../../logging/diagnostic-stability.js";
+import { replaceGatewayModelPricingCache } from "../model-pricing-cache-state.js";
+import {
+  GATEWAY_MODEL_PRICING_CACHE_TTL_MS,
+  __resetGatewayModelPricingCacheForTest,
+} from "../model-pricing-cache.js";
 import { diagnosticsHandlers } from "./diagnostics.js";
 
 describe("diagnostics gateway methods", () => {
@@ -75,7 +78,12 @@ describe("diagnostics gateway methods", () => {
 
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ cachedAt: null, age: null, size: 0 }),
+      expect.objectContaining({
+        cachedAt: null,
+        age: null,
+        ttlMs: GATEWAY_MODEL_PRICING_CACHE_TTL_MS,
+        size: 0,
+      }),
       undefined,
     );
   });
@@ -83,7 +91,9 @@ describe("diagnostics gateway methods", () => {
   it("returns pricing cache meta when populated", async () => {
     const now = Date.now();
     replaceGatewayModelPricingCache(
-      new Map([["anthropic/claude-sonnet-4-6", { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }]]),
+      new Map([
+        ["anthropic/claude-sonnet-4-6", { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }],
+      ]),
       now,
     );
     const respond = vi.fn();
@@ -100,7 +110,7 @@ describe("diagnostics gateway methods", () => {
     expect(payload.cachedAt).toBe(now);
     expect(payload.size).toBe(1);
     expect(typeof payload.age).toBe("number");
-    expect(typeof payload.ttlMs).toBe("number");
+    expect(payload.ttlMs).toBe(GATEWAY_MODEL_PRICING_CACHE_TTL_MS);
     __resetGatewayModelPricingCacheForTest();
   });
 

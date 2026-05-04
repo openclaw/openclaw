@@ -3,6 +3,7 @@ import {
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
 import { getGatewayModelPricingCacheMeta } from "../model-pricing-cache-state.js";
+import { GATEWAY_MODEL_PRICING_CACHE_TTL_MS } from "../model-pricing-cache.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -29,7 +30,7 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
       {
         cachedAt: meta.cachedAt === 0 ? null : meta.cachedAt,
         age: meta.cachedAt === 0 ? null : Date.now() - meta.cachedAt,
-        ttlMs: meta.ttlMs,
+        ttlMs: GATEWAY_MODEL_PRICING_CACHE_TTL_MS,
         size: meta.size,
       },
       undefined,
