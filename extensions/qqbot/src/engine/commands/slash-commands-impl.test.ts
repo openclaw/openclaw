@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import type { CommandsPort } from "../adapter/commands.port.js";
-import { resolveSlashCommandAuth } from "./slash-command-auth.js";
+import { resolveQQBotCommandsAllowFrom, resolveSlashCommandAuth } from "./slash-command-auth.js";
 import { getFrameworkCommands, initCommands, matchSlashCommand } from "./slash-commands-impl.js";
 import type { SlashCommandContext } from "./slash-commands.js";
 
@@ -123,6 +123,52 @@ describe("QQBot framework slash commands", () => {
     expect(commandAuthorized).toBe(false);
     expect(result).toContain("权限不足");
     expect(writes).toHaveLength(0);
+  });
+
+  it("writes streaming config when commands.allowFrom grants the sender in open DM configs", async () => {
+    const writes: OpenClawConfig[] = [];
+    installCommandRuntime(
+      {
+        commands: {
+          allowFrom: {
+            qqbot: ["TRUSTED_OPENID"],
+          },
+        },
+        channels: {
+          qqbot: {
+            allowFrom: ["*"],
+            streaming: false,
+          },
+        },
+      },
+      writes,
+    );
+
+    const commandAuthorized = resolveSlashCommandAuth({
+      senderId: "TRUSTED_OPENID",
+      isGroup: false,
+      allowFrom: ["*"],
+      commandsAllowFrom: resolveQQBotCommandsAllowFrom({
+        commands: {
+          allowFrom: {
+            qqbot: ["TRUSTED_OPENID"],
+          },
+        },
+      }),
+    });
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        senderId: "TRUSTED_OPENID",
+        accountConfig: { allowFrom: ["*"], streaming: false },
+        commandAuthorized,
+      }),
+    );
+
+    const qqbot = getWrittenQQBotConfig(writes[0]);
+    expect(commandAuthorized).toBe(true);
+    expect(result).toContain("已开启");
+    expect(writes).toHaveLength(1);
+    expect(qqbot?.streaming).toBe(true);
   });
 
   it("writes streaming config when the sender is command-authorized", async () => {
