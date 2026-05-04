@@ -129,7 +129,15 @@ describe("plugin npm package manifest staging", () => {
     });
     expect(resolved.changed).toBe(true);
     expect(resolved.packageJson).toMatchObject({
-      files: ["dist/**", "openclaw.plugin.json", "README.md", "SKILL.md", "skills/**"],
+      files: [
+        "dist/**",
+        "openclaw.plugin.json",
+        "README.md",
+        "SKILL.md",
+        "skills/**",
+        "index.ts",
+        "setup-entry.ts",
+      ],
       peerDependencies: {
         openclaw: ">=2026.4.30",
       },
@@ -152,6 +160,8 @@ describe("plugin npm package manifest staging", () => {
       expect(stagedPackageJson.openclaw.runtimeSetupEntry).toBe("./dist/setup-entry.js");
       expect(stagedPackageJson.files).toContain("dist/**");
       expect(stagedPackageJson.files).toContain("skills/**");
+      expect(stagedPackageJson.files).toContain("index.ts");
+      expect(stagedPackageJson.files).toContain("setup-entry.ts");
       expect(stagedPackageJson.peerDependencies.openclaw).toBe(">=2026.4.30");
       expect(stagedPackageJson.peerDependenciesMeta.openclaw.optional).toBe(true);
     });

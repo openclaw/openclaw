@@ -128,6 +128,12 @@ export function resolvePluginNpmRuntimePackageFiles(plan) {
   if (packageRelativePathExists(plan.packageDir, "skills")) {
     merged.add("skills/**");
   }
+  for (const entry of plan.sourceEntries) {
+    merged.add(entry.replace(/^\.\//u, ""));
+  }
+  if (packageRelativePathExists(plan.packageDir, "src")) {
+    merged.add("src/**");
+  }
   return [...merged];
 }
 
