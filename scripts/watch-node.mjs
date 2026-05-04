@@ -298,16 +298,11 @@ export async function runWatchMain(params = {}) {
     let shuttingDown = false;
     let restartRequested = false;
     let watchProcess = null;
+    let watcher = null;
     let lockHandle = null;
     let autoDoctorAttempted = false;
     let onSigInt;
     let onSigTerm;
-
-    const watcher = deps.createWatcher(deps.watchPaths, {
-      ignoreInitial: true,
-      ignored: (watchPath, stats) =>
-        isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, stats),
-    });
 
     const settle = (code) => {
       if (settled) {
@@ -321,7 +316,7 @@ export async function runWatchMain(params = {}) {
         deps.process.off("SIGTERM", onSigTerm);
       }
       releaseWatchLock(lockHandle);
-      watcher.close?.().catch?.(() => {});
+      watcher?.close?.().catch?.(() => {});
       resolve(code);
     };
 
@@ -352,6 +347,14 @@ export async function runWatchMain(params = {}) {
         }
         settle(exitSignal ? 1 : (exitCode ?? 1));
       });
+    };
+
+    const handleWatcherError = () => {
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+      settle(1);
     };
 
     const runAutoDoctorAndRestart = () => {
@@ -402,16 +405,17 @@ export async function runWatchMain(params = {}) {
       }
     };
 
-    watcher.on("add", requestRestart);
-    watcher.on("change", requestRestart);
-    watcher.on("unlink", requestRestart);
-    watcher.on("error", () => {
-      shuttingDown = true;
-      if (watchProcess && typeof watchProcess.kill === "function") {
-        watchProcess.kill(WATCH_RESTART_SIGNAL);
-      }
-      settle(1);
-    });
+    const startWatcher = () => {
+      watcher = deps.createWatcher(deps.watchPaths, {
+        ignoreInitial: true,
+        ignored: (watchPath, stats) =>
+          isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, stats),
+      });
+      watcher.on("add", requestRestart);
+      watcher.on("change", requestRestart);
+      watcher.on("unlink", requestRestart);
+      watcher.on("error", handleWatcherError);
+    };
 
     onSigInt = () => {
       shuttingDown = true;
@@ -434,6 +438,7 @@ export async function runWatchMain(params = {}) {
     if (deps.lockDisabled) {
       lockHandle = { lockPath: "", pid: deps.process.pid };
       startRunner();
+      startWatcher();
       return;
     }
 
@@ -445,6 +450,7 @@ export async function runWatchMain(params = {}) {
         }
         lockHandle = handle;
         startRunner();
+        startWatcher();
       })
       .catch((error) => {
         logWatcher(`Failed to acquire watcher lock: ${error?.message ?? "unknown error"}`, deps);
