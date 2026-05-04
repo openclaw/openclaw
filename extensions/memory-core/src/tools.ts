@@ -319,14 +319,26 @@ export function createMemorySearchTool(options: {
                 corpus: requestedCorpus,
               })
             : [];
-          const results = [...surfacedMemoryResults, ...supplementResults]
+          // When both corpora are present (corpus=all), wiki and memory scores
+          // use incomparable scales (integer point vs cosine similarity), so a
+          // raw-score sort lets wiki hits starve memory hits (#77337).
+          // Cap each corpus at ceil(maxResults/2) before the joint sort so both
+          // corpora are guaranteed representation in the final slice.
+          const effectiveMax = Math.max(1, maxResults ?? 10);
+          const perCorpusCap =
+            requestedCorpus === "all" && supplementResults.length > 0
+              ? Math.ceil(effectiveMax / 2)
+              : effectiveMax;
+          const cappedMemory = surfacedMemoryResults.slice(0, perCorpusCap);
+          const cappedSupplements = supplementResults.slice(0, perCorpusCap);
+          const results = [...cappedMemory, ...cappedSupplements]
             .toSorted((left, right) => {
               if (left.score !== right.score) {
                 return right.score - left.score;
               }
               return left.path.localeCompare(right.path);
             })
-            .slice(0, Math.max(1, maxResults ?? 10));
+            .slice(0, effectiveMax);
           return jsonResult({
             results,
             provider,
