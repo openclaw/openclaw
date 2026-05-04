@@ -21,6 +21,10 @@ stores cannot monopolize the Gateway event loop. Pass an explicit positive
 `limit` from RPC clients when a different result window is needed; responses
 include `totalCount`, `limitApplied`, and `hasMore` when callers need to show
 that more rows exist.
+RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
+discovery source but return only rows for agents currently present in config.
+Control UI uses that mode by default so deleted or disk-only agent stores do
+not reappear in the Sessions view.
 
 ```bash
 openclaw sessions
