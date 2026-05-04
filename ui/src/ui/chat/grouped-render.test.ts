@@ -903,7 +903,7 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&mediaTicket=ticket-user",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&mediaTicket=ticket-user&thumbnail=1",
     );
 
     container = renderUserMedia({
@@ -918,7 +918,7 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&mediaTicket=ticket-user",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&mediaTicket=ticket-user&thumbnail=1",
     );
 
     container = renderUserMedia({
@@ -935,8 +935,8 @@ describe("grouped chat rendering", () => {
         image.getAttribute("src"),
       ),
     ).toEqual([
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ffirst.png&mediaTicket=ticket-user",
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fsecond.jpg&mediaTicket=ticket-user",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ffirst.png&mediaTicket=ticket-user&thumbnail=1",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fsecond.jpg&mediaTicket=ticket-user&thumbnail=1",
     ]);
 
     const assistantContainer = document.createElement("div");
@@ -1034,8 +1034,24 @@ describe("grouped chat rendering", () => {
       },
       { interval: 1, timeout: 100 },
     );
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    try {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Open image"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(openSpy).toHaveBeenCalledWith(
+        new URL(
+          "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+          window.location.href,
+        ).toString(),
+        "_blank",
+        "noopener,noreferrer",
+      );
+    } finally {
+      openSpy.mockRestore();
+    }
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/thumbnail",
       expect.objectContaining({
         method: "GET",
         credentials: "same-origin",
@@ -1286,7 +1302,7 @@ describe("grouped chat rendering", () => {
     );
     expect(container.querySelector(".chat-image-actions")).not.toBeNull();
     expect(image?.getAttribute("src")).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-local",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-local&thumbnail=1",
     );
     expect(docLink?.getAttribute("href")).toBe(
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&mediaTicket=ticket-local",
