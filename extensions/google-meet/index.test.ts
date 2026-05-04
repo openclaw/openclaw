@@ -24,7 +24,11 @@ import {
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { startNodeRealtimeAudioBridge } from "./src/realtime-node.js";
-import { startCommandRealtimeAudioBridge } from "./src/realtime.js";
+import {
+  extendGoogleMeetOutputEchoSuppression,
+  isGoogleMeetLikelyAssistantEchoTranscript,
+  startCommandRealtimeAudioBridge,
+} from "./src/realtime.js";
 import { GoogleMeetRuntime, normalizeMeetUrl } from "./src/runtime.js";
 import {
   invokeGoogleMeetGatewayMethodForTest,
@@ -3764,6 +3768,60 @@ describe("google-meet plugin", () => {
     expect(sessionStore).toHaveProperty("agent:jay:subagent:google-meet:meet-1");
 
     await handle.stop();
+  });
+
+  it("tracks queued playback time when suppressing realtime input echo", () => {
+    const first = extendGoogleMeetOutputEchoSuppression({
+      audio: Buffer.alloc(48_000),
+      audioFormat: "pcm16-24khz",
+      nowMs: 1_000,
+      lastOutputPlayableUntilMs: 0,
+      suppressInputUntilMs: 0,
+    });
+    const second = extendGoogleMeetOutputEchoSuppression({
+      audio: Buffer.alloc(48_000),
+      audioFormat: "pcm16-24khz",
+      nowMs: 1_100,
+      lastOutputPlayableUntilMs: first.lastOutputPlayableUntilMs,
+      suppressInputUntilMs: first.suppressInputUntilMs,
+    });
+
+    expect(first).toMatchObject({
+      durationMs: 1_000,
+      lastOutputPlayableUntilMs: 2_000,
+      suppressInputUntilMs: 5_000,
+    });
+    expect(second).toMatchObject({
+      durationMs: 1_000,
+      lastOutputPlayableUntilMs: 3_000,
+      suppressInputUntilMs: 6_000,
+    });
+  });
+
+  it("detects assistant transcript echoes before agent consult", () => {
+    const nowMs = Date.parse("2026-05-04T01:00:00.000Z");
+    const transcript = [
+      {
+        at: new Date(nowMs - 1_000).toISOString(),
+        role: "assistant" as const,
+        text: "Hi Molty, glad to have you here. Let me know if there's anything specific you'd like to cover or if you need any support during the meeting.",
+      },
+    ];
+
+    expect(
+      isGoogleMeetLikelyAssistantEchoTranscript({
+        transcript,
+        text: "Let me know if there's anything specific you'd like to cover or if you need any support during the",
+        nowMs,
+      }),
+    ).toBe(true);
+    expect(
+      isGoogleMeetLikelyAssistantEchoTranscript({
+        transcript,
+        text: "Tell me a story.",
+        nowMs,
+      }),
+    ).toBe(false);
   });
 
   it("uses a local barge-in input command to clear active Chrome playback", async () => {

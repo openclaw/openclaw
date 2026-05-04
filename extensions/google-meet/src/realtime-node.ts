@@ -17,11 +17,13 @@ import {
   getGoogleMeetRealtimeTranscriptHealth,
   buildGoogleMeetSpeakExactUserMessage,
   GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
+  extendGoogleMeetOutputEchoSuppression,
   getGoogleMeetRealtimeEventHealth,
   recordGoogleMeetRealtimeTranscript,
   recordGoogleMeetRealtimeEvent,
   resolveGoogleMeetRealtimeAudioFormat,
   resolveGoogleMeetRealtimeProvider,
+  isGoogleMeetLikelyAssistantEchoTranscript,
   type GoogleMeetRealtimeEventEntry,
   type GoogleMeetRealtimeTranscriptEntry,
 } from "./realtime.js";
@@ -65,6 +67,10 @@ export async function startNodeRealtimeAudioBridge(params: {
   let lastClearAt: string | undefined;
   let lastInputBytes = 0;
   let lastOutputBytes = 0;
+  let suppressedInputBytes = 0;
+  let lastSuppressedInputAt: string | undefined;
+  let suppressInputUntil = 0;
+  let lastOutputPlayableUntilMs = 0;
   let consecutiveInputErrors = 0;
   let lastInputError: string | undefined;
   let clearCount = 0;
@@ -199,6 +205,15 @@ export async function startNodeRealtimeAudioBridge(params: {
     audioSink: {
       isOpen: () => !stopped,
       sendAudio: (audio) => {
+        const suppression = extendGoogleMeetOutputEchoSuppression({
+          audio,
+          audioFormat: params.config.chrome.audioFormat,
+          nowMs: Date.now(),
+          lastOutputPlayableUntilMs,
+          suppressInputUntilMs: suppressInputUntil,
+        });
+        suppressInputUntil = suppression.suppressInputUntilMs;
+        lastOutputPlayableUntilMs = suppression.lastOutputPlayableUntilMs;
         lastOutputAt = new Date().toISOString();
         lastOutputBytes += audio.byteLength;
         void params.runtime.nodes
@@ -222,6 +237,8 @@ export async function startNodeRealtimeAudioBridge(params: {
       clearAudio: () => {
         lastClearAt = new Date().toISOString();
         clearCount += 1;
+        suppressInputUntil = 0;
+        lastOutputPlayableUntilMs = 0;
         void params.runtime.nodes
           .invoke({
             nodeId: params.nodeId,
@@ -245,6 +262,12 @@ export async function startNodeRealtimeAudioBridge(params: {
         recordGoogleMeetRealtimeTranscript(transcript, role, text);
         params.logger.info(`[google-meet] node realtime ${role}: ${text}`);
         if (role === "user" && strategy === "agent") {
+          if (isGoogleMeetLikelyAssistantEchoTranscript({ transcript, text })) {
+            params.logger.info(
+              `[google-meet] node realtime ignored assistant echo transcript: ${text}`,
+            );
+            return;
+          }
           enqueueAgentConsultForUserTranscript(text);
         }
       }
@@ -332,6 +355,11 @@ export async function startNodeRealtimeAudioBridge(params: {
         const base64 = readString(result.base64);
         if (base64) {
           const audio = Buffer.from(base64, "base64");
+          if (Date.now() < suppressInputUntil) {
+            lastSuppressedInputAt = new Date().toISOString();
+            suppressedInputBytes += audio.byteLength;
+            continue;
+          }
           lastInputAt = new Date().toISOString();
           lastInputBytes += audio.byteLength;
           bridge?.sendAudio(audio);
@@ -372,9 +400,11 @@ export async function startNodeRealtimeAudioBridge(params: {
       audioOutputActive: lastOutputBytes > 0,
       lastInputAt,
       lastOutputAt,
+      lastSuppressedInputAt,
       lastClearAt,
       lastInputBytes,
       lastOutputBytes,
+      suppressedInputBytes,
       ...getGoogleMeetRealtimeTranscriptHealth(transcript),
       ...getGoogleMeetRealtimeEventHealth(realtimeEvents),
       consecutiveInputErrors,

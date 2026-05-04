@@ -1182,6 +1182,9 @@ configured OpenClaw agent before speaking. Set `realtime.strategy: "bidi"` when
 you want the realtime model to answer directly.
 Nearby final transcript fragments are coalesced before the consult so one spoken
 turn does not produce several stale partial answers.
+Realtime input is also suppressed while queued assistant audio is still playing,
+and recent assistant-like transcript echoes are ignored before the agent consult
+so BlackHole loopback does not make the agent answer its own speech.
 
 | Strategy | Who decides the answer        | Context behavior                                                                     | Use when                                              |
 | -------- | ----------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------- |

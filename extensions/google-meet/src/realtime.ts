@@ -100,6 +100,8 @@ export type GoogleMeetRealtimeEventEntry = RealtimeVoiceBridgeEvent & {
 };
 
 export const GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
+export const GOOGLE_MEET_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
+export const GOOGLE_MEET_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
 
 export function recordGoogleMeetRealtimeEvent(
   events: GoogleMeetRealtimeEventEntry[],
@@ -154,6 +156,80 @@ function readPcm16Stats(audio: Buffer): { rms: number; peak: number } {
   return {
     rms: samples > 0 ? Math.sqrt(sumSquares / samples) : 0,
     peak,
+  };
+}
+
+function normalizeTranscriptForEchoMatch(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length > 1);
+}
+
+function hasMeaningfulEchoOverlap(userTokens: string[], assistantTokens: string[]): boolean {
+  if (userTokens.length < 4 || assistantTokens.length < 4) {
+    return false;
+  }
+  const assistantTokenSet = new Set(assistantTokens);
+  const overlap = userTokens.filter((token) => assistantTokenSet.has(token)).length;
+  return overlap / userTokens.length >= 0.58;
+}
+
+export function isGoogleMeetLikelyAssistantEchoTranscript(params: {
+  transcript: GoogleMeetRealtimeTranscriptEntry[];
+  text: string;
+  nowMs?: number;
+}): boolean {
+  const userTokens = normalizeTranscriptForEchoMatch(params.text);
+  if (userTokens.length < 4) {
+    return false;
+  }
+  const nowMs = params.nowMs ?? Date.now();
+  const recentAssistantText = params.transcript
+    .filter((entry) => {
+      if (entry.role !== "assistant") {
+        return false;
+      }
+      const at = Date.parse(entry.at);
+      return Number.isFinite(at) && nowMs - at <= GOOGLE_MEET_TRANSCRIPT_ECHO_LOOKBACK_MS;
+    })
+    .slice(-6)
+    .map((entry) => entry.text)
+    .join(" ");
+  if (!recentAssistantText.trim()) {
+    return false;
+  }
+  const userNormalized = userTokens.join(" ");
+  const assistantTokens = normalizeTranscriptForEchoMatch(recentAssistantText);
+  const assistantNormalized = assistantTokens.join(" ");
+  return (
+    (userNormalized.length >= 18 && assistantNormalized.includes(userNormalized)) ||
+    (assistantNormalized.length >= 18 && userNormalized.includes(assistantNormalized)) ||
+    hasMeaningfulEchoOverlap(userTokens, assistantTokens)
+  );
+}
+
+export function extendGoogleMeetOutputEchoSuppression(params: {
+  audio: Buffer;
+  audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
+  nowMs: number;
+  lastOutputPlayableUntilMs: number;
+  suppressInputUntilMs: number;
+}): { lastOutputPlayableUntilMs: number; suppressInputUntilMs: number; durationMs: number } {
+  const bytesPerMs = params.audioFormat === "g711-ulaw-8khz" ? 8 : 48;
+  const durationMs = Math.ceil(params.audio.byteLength / bytesPerMs);
+  const playbackStartMs = Math.max(params.nowMs, params.lastOutputPlayableUntilMs);
+  const playbackEndMs = playbackStartMs + durationMs;
+  return {
+    durationMs,
+    lastOutputPlayableUntilMs: playbackEndMs,
+    suppressInputUntilMs: Math.max(
+      params.suppressInputUntilMs,
+      playbackEndMs + GOOGLE_MEET_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
+    ),
   };
 }
 
@@ -227,11 +303,15 @@ export async function startCommandRealtimeAudioBridge(params: {
   let agentConsultDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const suppressInputForOutput = (audio: Buffer) => {
-    const bytesPerMs = params.config.chrome.audioFormat === "g711-ulaw-8khz" ? 8 : 48;
-    const durationMs = Math.ceil(audio.byteLength / bytesPerMs);
-    const until = Date.now() + durationMs + 900;
-    suppressInputUntil = Math.max(suppressInputUntil, until);
-    lastOutputPlayableUntilMs = Math.max(lastOutputPlayableUntilMs, until);
+    const suppression = extendGoogleMeetOutputEchoSuppression({
+      audio,
+      audioFormat: params.config.chrome.audioFormat,
+      nowMs: Date.now(),
+      lastOutputPlayableUntilMs,
+      suppressInputUntilMs: suppressInputUntil,
+    });
+    suppressInputUntil = suppression.suppressInputUntilMs;
+    lastOutputPlayableUntilMs = suppression.lastOutputPlayableUntilMs;
   };
 
   const terminateProcess = (proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM") => {
@@ -521,6 +601,10 @@ export async function startCommandRealtimeAudioBridge(params: {
         recordGoogleMeetRealtimeTranscript(transcript, role, text);
         params.logger.info(`[google-meet] realtime ${role}: ${text}`);
         if (role === "user" && strategy === "agent") {
+          if (isGoogleMeetLikelyAssistantEchoTranscript({ transcript, text })) {
+            params.logger.info(`[google-meet] realtime ignored assistant echo transcript: ${text}`);
+            return;
+          }
           enqueueAgentConsultForUserTranscript(text);
         }
       }
