@@ -139,11 +139,11 @@ OpenRouter uses a Bearer token with your API key under the hood.
 On real OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw also adds
 OpenRouter's documented app-attribution headers:
 
-| Header                    | Value                 |
-| ------------------------- | --------------------- |
-| `HTTP-Referer`            | `https://openclaw.ai` |
-| `X-OpenRouter-Title`      | `OpenClaw`            |
-| `X-OpenRouter-Categories` | `cli-agent`           |
+| Header                    | Value                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `HTTP-Referer`            | `https://openclaw.ai`                                                                                  |
+| `X-OpenRouter-Title`      | `OpenClaw`                                                                                             |
+| `X-OpenRouter-Categories` | `cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent` |
 
 <Warning>
 If you repoint the OpenRouter provider at some other proxy or base URL, OpenClaw
