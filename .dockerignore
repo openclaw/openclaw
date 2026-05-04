@@ -57,6 +57,27 @@ apps/macos/.build
 apps/ios/build
 **/*.trace
 
+# CI/CD and repo metadata – not needed for Docker builds
+.github/
+LICENSE
+CONTRIBUTING.md
+SECURITY.md
+VISION.md
+AGENTS.md
+CLAUDE.md
+docs.acp.md
+appcast.xml
+
+# test files – not needed in production image
+**/*.test.ts
+**/*.test.js
+**/*.spec.ts
+**/*.spec.js
+**/__mocks__
+**/__fixtures__
+**/__snapshots__
+test/
+
 # large app trees not needed for CLI build
 apps/
 vendor/
