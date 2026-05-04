@@ -172,6 +172,47 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
   }
 }
 
+function describeSecureMobilePairingFix(source?: string): string {
+  const sourceNote = source ? ` Resolved source: ${source}.` : "";
+  return (
+    "Mobile pairing over non-loopback networks requires a secure gateway URL (wss://) or Tailscale Serve/Funnel." +
+    sourceNote +
+    " Fix: prefer gateway.tailscale.mode=serve, or set " +
+    "gateway.remote.url / plugins.entries.device-pair.config.publicUrl to a wss:// URL. " +
+    "ws:// setup codes are only valid for localhost/loopback or the Android emulator."
+  );
+}
+
+function normalizeHostForIpCheck(host: string): string {
+  let normalized = normalizeLowercaseStringOrEmpty(host);
+  if (normalized.startsWith("[") && normalized.endsWith("]")) {
+    normalized = normalized.slice(1, -1);
+  }
+  if (normalized.endsWith(".")) {
+    normalized = normalized.slice(0, -1);
+  }
+  const zoneIndex = normalized.indexOf("%");
+  if (zoneIndex >= 0) {
+    normalized = normalized.slice(0, zoneIndex);
+  }
+  return normalized;
+}
+
+function isLoopbackHost(host: string): boolean {
+  const normalized = normalizeHostForIpCheck(host);
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === "localhost" || normalized === "0.0.0.0" || normalized === "::") {
+    return true;
+  }
+  const octets = parseIPv4Octets(normalized);
+  if (octets) {
+    return octets[0] === 127;
+  }
+  return normalized === "::1" || normalized === "0:0:0:0:0:0:0:1";
+}
+
 function resolveScheme(
   cfg: OpenClawPluginApi["config"],
   opts?: { forceSecure?: boolean },
@@ -185,6 +226,9 @@ function resolveScheme(
 function parseIPv4Octets(address: string): [number, number, number, number] | null {
   const parts = address.split(".");
   if (parts.length !== 4) {
+    return null;
+  }
+  if (parts.some((part) => !/^\d+$/.test(part))) {
     return null;
   }
   const octets = parts.map((part) => Number.parseInt(part, 10));
@@ -219,6 +263,29 @@ function isTailnetIPv4(address: string): boolean {
   }
   const [a, b] = octets;
   return a === 100 && b >= 64 && b <= 127;
+}
+
+function isMobilePairingCleartextAllowedHost(host: string): boolean {
+  const normalized = normalizeHostForIpCheck(host);
+  return isLoopbackHost(normalized) || normalized === "10.0.2.2";
+}
+
+function validateMobilePairingUrl(url: string, source?: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "Resolved mobile pairing URL is invalid.";
+  }
+  const protocol =
+    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  if (protocol === "wss:") {
+    return null;
+  }
+  if (protocol !== "ws:" || isMobilePairingCleartextAllowedHost(parsed.hostname)) {
+    return null;
+  }
+  return describeSecureMobilePairingFix(source);
 }
 
 function pickMatchingIPv4(predicate: (address: string) => boolean): string | null {
@@ -360,6 +427,18 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     error:
       "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.",
   };
+}
+
+async function resolveMobilePairingGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResult> {
+  const result = await resolveGatewayUrl(api);
+  if (!result.url) {
+    return result;
+  }
+  const mobilePairingUrlError = validateMobilePairingUrl(result.url, result.source);
+  if (mobilePairingUrlError) {
+    return { error: mobilePairingUrlError };
+  }
+  return result;
 }
 
 function encodeSetupCode(payload: SetupPayload): string {
@@ -668,7 +747,7 @@ export default definePluginEntry({
           return buildMissingPairingScopeReply();
         }
 
-        const urlResult = await resolveGatewayUrl(api);
+        const urlResult = await resolveMobilePairingGatewayUrl(api);
         if (!urlResult.url) {
           return { text: `Error: ${urlResult.error ?? "Gateway URL unavailable."}` };
         }
