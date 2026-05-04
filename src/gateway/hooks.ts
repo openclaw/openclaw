@@ -11,6 +11,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
+import { resolveReservedHookSessionKeyPrefix } from "./hook-session-key.js";
 import {
   hasHookTemplateExpressions,
   type HookMappingResolved,
@@ -78,6 +79,12 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     !isSessionKeyAllowedByPrefix(defaultSessionKey, allowedSessionKeyPrefixes)
   ) {
     throw new Error("hooks.defaultSessionKey must match hooks.allowedSessionKeyPrefixes");
+  }
+  const reservedDefaultSessionPrefix = resolveReservedHookSessionKeyPrefix(defaultSessionKey);
+  if (reservedDefaultSessionPrefix) {
+    throw new Error(
+      `hooks.defaultSessionKey may not target internal session namespace ${reservedDefaultSessionPrefix}`,
+    );
   }
   if (
     !defaultSessionKey &&
@@ -316,6 +323,8 @@ const getHookSessionKeyRequestPolicyError = () =>
   "sessionKey is disabled for externally supplied hook payload values; set hooks.allowRequestSessionKey=true to enable";
 export const getHookSessionKeyPrefixError = (prefixes: string[]) =>
   `sessionKey must start with one of: ${prefixes.join(", ")}`;
+export const getHookSessionKeyReservedPrefixError = (prefix: string) =>
+  `sessionKey may not target internal session namespace ${prefix}`;
 
 export function resolveHookSessionKey(params: {
   hooksConfig: HooksConfigResolved;
@@ -334,6 +343,10 @@ export function resolveHookSessionKey(params: {
     const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
     if (allowedPrefixes && !isSessionKeyAllowedByPrefix(requested, allowedPrefixes)) {
       return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
+    }
+    const reservedPrefix = resolveReservedHookSessionKeyPrefix(requested);
+    if (reservedPrefix) {
+      return { ok: false, error: getHookSessionKeyReservedPrefixError(reservedPrefix) };
     }
     return { ok: true, value: requested };
   }

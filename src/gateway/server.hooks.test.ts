@@ -449,6 +449,64 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("rejects request hook session keys that target internal control namespaces", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:"],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const requestDenied = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        sessionKey: "agent:main:subagent:worker",
+      });
+      expect(requestDenied.status).toBe(400);
+      const requestDeniedBody = (await requestDenied.json()) as { error?: string };
+      expect(requestDeniedBody.error).toContain("internal session namespace subagent:");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+
+      const nestedDenied = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        sessionKey: "agent:main:agent:hooks:subagent:worker",
+      });
+      expect(nestedDenied.status).toBe(400);
+      const nestedDeniedBody = (await nestedDenied.json()) as { error?: string };
+      expect(nestedDeniedBody.error).toContain("internal session namespace subagent:");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+
+      const spacedDenied = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        sessionKey: "agent:main: subagent:worker",
+      });
+      expect(spacedDenied.status).toBe(400);
+      const spacedDeniedBody = (await spacedDenied.json()) as { error?: string };
+      expect(spacedDeniedBody.error).toContain("internal session namespace subagent:");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+    });
+  });
+
+  test("rejects mapped hook session keys that target internal control namespaces at startup", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:"],
+      mappings: [
+        {
+          match: { path: "mapped-subagent" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "agent:main:subagent:worker",
+        },
+      ],
+    };
+
+    await expect(withGatewayServer(async () => undefined)).rejects.toThrow(
+      "hook mapping 'mapping-1' sessionKey may not target internal session namespace subagent:",
+    );
+  });
+
   test("respects hooks session policy for request + mapping session keys", async () => {
     testState.hooksConfig = {
       enabled: true,
