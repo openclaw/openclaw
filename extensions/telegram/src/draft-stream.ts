@@ -201,6 +201,10 @@ export function createTelegramDraftStream(params: {
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
+  /** Skip the minInitialChars debounce (e.g. for reasoning lanes that should start immediately). */
+  skipMinInitialChars?: boolean;
+  /** Pre-send gate callback. Return false to suppress this send cycle (e.g. wait for another lane). */
+  beforeGate?: () => boolean;
   /** Optional preview renderer (e.g. markdown -> HTML + parse mode). */
   renderText?: (text: string) => TelegramDraftPreview;
   /** Renderer used for overflow continuation messages (textBaseOffset > 0). Falls back to renderText. */
@@ -218,7 +222,8 @@ export function createTelegramDraftStream(params: {
   );
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const chatSendIntervalMs = params.chatSendIntervalMs ?? CHAT_SEND_INTERVAL_MS;
-  const minInitialChars = params.minInitialChars;
+  const minInitialChars = params.skipMinInitialChars ? undefined : params.minInitialChars;
+  const beforeGate = params.beforeGate;
   const chatId = params.chatId;
   const streamId = ++_gateStreamIdCounter;
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.gateStreamIdCounter")] =
@@ -359,6 +364,9 @@ export function createTelegramDraftStream(params: {
         textBaseOffset = 0;
         resetStreamToNewMessage();
       }
+    }
+    if (beforeGate && !beforeGate()) {
+      return false;
     }
     const trimmed = text.trimEnd();
     if (!trimmed) {
