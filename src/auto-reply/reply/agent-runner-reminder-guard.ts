@@ -6,8 +6,14 @@ const UNSCHEDULED_REMINDER_NOTE =
   "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
 
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
-  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
-  /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
+  // Match unambiguous reminder-action verbs (not bare "remember" which overlaps with memory/knowledge retention)
+  /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check back|circle back)\b/i,
+  // "remember to [verb]" implies a future action/reminder, not memory storage
+  /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+(?:make sure to\s+)?remember\s+to\s+/i,
+  // Conjunction forms: "I'll remember and remind you", "I will remember, then set a reminder"
+  // Uses `s` (dotAll) flag so `.*?` crosses newlines in multi-line payloads
+  /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+(?:make sure to\s+)?remember\b.*?\b(?:and|then|,)\s*(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check back|circle back|(?:set|create|schedule)\s+(?:a\s+)?reminder)\b/is,
+  /\b(?:i\s*['\u2018\u2019]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 
 export function hasUnbackedReminderCommitment(text: string): boolean {
