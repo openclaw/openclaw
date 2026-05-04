@@ -86,6 +86,7 @@ import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js"
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { hasMessagingToolDeliveryEvidence } from "./delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
@@ -1409,6 +1410,11 @@ export async function runEmbeddedPiAgent(
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  ...resolveContextEngineCapabilities({
+                    config: params.config,
+                    sessionKey: params.sessionKey,
+                    purpose: "context-engine.timeout-compaction",
+                  }),
                   onCompactionHookMessages,
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
@@ -1565,6 +1571,11 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                  }),
+                  ...resolveContextEngineCapabilities({
+                    config: params.config,
+                    sessionKey: params.sessionKey,
+                    purpose: "context-engine.overflow-compaction",
                   }),
                   onCompactionHookMessages,
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),

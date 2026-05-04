@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   generateImage as generateRuntimeImage,
@@ -101,7 +102,13 @@ function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
 function createRuntimeLlmFacade(): PluginRuntime["llm"] {
   const loadLlm = createLazyRuntimeSurface(
     () => import("./runtime-llm.runtime.js"),
-    (m) => m.createRuntimeLlm(),
+    (m) =>
+      m.createRuntimeLlm({
+        getConfig: getRuntimeConfig,
+        authority: {
+          allowComplete: true,
+        },
+      }),
   );
   return {
     complete: async (params) => {

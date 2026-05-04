@@ -1,17 +1,47 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
-let cachedLlm: ContextEngineRuntimeContext["llm"] | undefined;
+export type ResolveContextEngineCapabilitiesParams = {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  purpose: string;
+};
+
+function resolveBoundAgentId(sessionKey?: string): string | undefined {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+  return parseAgentSessionKey(normalizedSessionKey)?.agentId;
+}
 
 /**
- * Lazily resolve LLM capabilities for context engine runtime contexts.
- * Capabilities are cached process-wide since the underlying factories are stateless.
+ * Build host-owned capabilities that are bound to one context-engine runtime call.
  */
-export async function resolveContextEngineCapabilities(): Promise<
-  Pick<ContextEngineRuntimeContext, "llm">
-> {
-  if (!cachedLlm) {
-    const { createRuntimeLlm } = await import("../../plugins/runtime/runtime-llm.runtime.js");
-    cachedLlm = createRuntimeLlm();
-  }
-  return { llm: cachedLlm };
+export function resolveContextEngineCapabilities(
+  params: ResolveContextEngineCapabilitiesParams,
+): Pick<ContextEngineRuntimeContext, "llm"> {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  const agentId = resolveBoundAgentId(sessionKey);
+  return {
+    llm: {
+      complete: async (request) => {
+        const { createRuntimeLlm } = await import("../../plugins/runtime/runtime-llm.runtime.js");
+        return await createRuntimeLlm({
+          getConfig: () => params.config,
+          authority: {
+            caller: { kind: "context-engine", id: params.purpose },
+            requiresBoundAgent: true,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(agentId ? { agentId } : {}),
+            allowAgentIdOverride: false,
+            allowModelOverride: false,
+            allowComplete: true,
+          },
+        }).complete(request);
+      },
+    },
+  };
 }
