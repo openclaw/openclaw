@@ -21,6 +21,7 @@ import {
   say,
   startHostServer,
   warn,
+  writeSummaryMarkdown,
   writeJson,
   type HostServer,
   type Mode,
@@ -388,6 +389,7 @@ class WindowsSmoke {
     await this.phase("fresh.ensure-git", 1200, () =>
       ensureGuestGit({ guest: this.guest, minGitZipPath: this.minGitZipPath, server: this.server }),
     );
+    await this.phase("fresh.preflight", 120, () => this.logGuestPreflight(true));
     await this.phase("fresh.install-main", 420, () => this.installMain("openclaw-main-fresh.tgz"));
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 120, () => this.verifyTargetVersion());
@@ -409,6 +411,7 @@ class WindowsSmoke {
     await this.phase("upgrade.ensure-git", 1200, () =>
       ensureGuestGit({ guest: this.guest, minGitZipPath: this.minGitZipPath, server: this.server }),
     );
+    await this.phase("upgrade.preflight", 120, () => this.logGuestPreflight(false));
     if (this.options.targetPackageSpec || this.options.upgradeFromPackedMain) {
       await this.phase("upgrade.install-baseline-package", 420, () =>
         this.installMain("openclaw-main-upgrade.tgz"),
@@ -565,6 +568,21 @@ class WindowsSmoke {
       run("sleep", ["3"], { quiet: true });
     }
     throw new Error("Windows guest did not become ready");
+  }
+
+  private logGuestPreflight(cleanOpenClaw: boolean): void {
+    const cleanScript = cleanOpenClaw
+      ? "npm.cmd uninstall -g openclaw --no-fund --no-audit --loglevel=error 2>$null; $global:LASTEXITCODE = 0"
+      : "";
+    this.guestPowerShell(
+      `$ErrorActionPreference = 'Continue'
+cmd.exe /d /s /c whoami
+Write-Host "USERPROFILE=$env:USERPROFILE"
+Write-Host "PATH=$env:PATH"
+npm.cmd root -g
+${cleanScript}`,
+      { check: false, timeoutMs: 120_000 },
+    );
   }
 
   private installLatestRelease(): void {
@@ -792,7 +810,7 @@ if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
 
   private async extractLastVersion(phaseName: string): Promise<string> {
     const log = await readFile(path.join(this.runDir, `${phaseName}.log`), "utf8").catch(() => "");
-    const matches = [...log.matchAll(/openclaw\s+([0-9][^\s]*)/g)];
+    const matches = [...log.matchAll(/OpenClaw\s+([0-9][^\s]*)/gi)];
     return matches.at(-1)?.[1] ?? "";
   }
 
@@ -827,6 +845,17 @@ if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
     };
     const summaryPath = path.join(this.runDir, "summary.json");
     await writeJson(summaryPath, summary);
+    await writeSummaryMarkdown({
+      lines: [
+        `- vm: ${summary.vm}`,
+        `- target package: ${summary.targetPackageSpec || "local-main"}`,
+        `- fresh: ${summary.freshMain.status} (${summary.freshMain.version}), gateway=${summary.freshMain.gateway}, agent=${summary.freshMain.agent}`,
+        `- upgrade: ${summary.upgrade.status} (${summary.upgrade.mainVersion}), precheck=${summary.upgrade.precheck}, gateway=${summary.upgrade.gateway}, agent=${summary.upgrade.agent}`,
+        `- logs: ${summary.runDir}`,
+      ],
+      summaryPath,
+      title: "Parallels Windows Smoke",
+    });
     return summaryPath;
   }
 

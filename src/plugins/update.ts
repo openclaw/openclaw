@@ -4,7 +4,11 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
-import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  compareOpenClawReleaseVersions,
+  isPrereleaseResolutionAllowed,
+  parseRegistryNpmSpec,
+} from "../infra/npm-registry-spec.js";
 import {
   expectedIntegrityForUpdate,
   readInstalledPackageVersion,
@@ -198,6 +202,10 @@ function shouldBypassTrustedOfficialUnchangedNpmCheck(params: {
 }
 
 function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
+  const releaseCmp = compareOpenClawReleaseVersions(bundledVersion, installedVersion);
+  if (releaseCmp !== null) {
+    return releaseCmp > 0;
+  }
   const bundled = parseComparableSemver(bundledVersion);
   const installed = parseComparableSemver(installedVersion);
   const cmp = compareComparableSemver(bundled, installed);
@@ -492,6 +500,36 @@ function isTrustedSourceLinkedOfficialBridgeNpmInstall(params: {
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);
 }
 
+function isBridgeNpmInstall(params: {
+  bridge: ExternalizedBundledPluginBridge;
+  record: PluginInstallRecord;
+}): boolean {
+  const npmSpec = getExternalizedBundledPluginNpmSpec(params.bridge);
+  if (!npmSpec || params.record.source !== "npm") {
+    return false;
+  }
+  const bridgePackageName = resolveNpmSpecPackageName(npmSpec);
+  const recordPackageName =
+    params.record.resolvedName ??
+    resolveNpmSpecPackageName(params.record.spec) ??
+    resolveNpmSpecPackageName(params.record.resolvedSpec);
+  return Boolean(bridgePackageName && recordPackageName === bridgePackageName);
+}
+
+function isBridgeClawHubInstall(params: {
+  bridge: ExternalizedBundledPluginBridge;
+  record: PluginInstallRecord;
+}): boolean {
+  if (params.record.source !== "clawhub") {
+    return false;
+  }
+  const clawhubSpec = getExternalizedBundledPluginClawHubSpec(params.bridge);
+  const bridgeClawHubPackage = clawhubSpec ? parseClawHubPluginSpec(clawhubSpec)?.name : undefined;
+  const recordClawHubPackage =
+    params.record.clawhubPackage ?? parseClawHubPluginSpec(params.record.spec ?? "")?.name;
+  return Boolean(bridgeClawHubPackage && recordClawHubPackage === bridgeClawHubPackage);
+}
+
 function resolveNpmUpdateSpecs(params: {
   record: PluginInstallRecord;
   specOverride?: string;
@@ -576,28 +614,20 @@ function isBridgeAlreadyInstalledFromPreferredSource(params: {
   bridge: ExternalizedBundledPluginBridge;
   record: PluginInstallRecord;
 }): boolean {
-  const npmSpec = getExternalizedBundledPluginNpmSpec(params.bridge);
-  if (npmSpec && params.record.source === "npm") {
-    const bridgePackageName = resolveNpmSpecPackageName(npmSpec);
-    const recordPackageName =
-      params.record.resolvedName ??
-      resolveNpmSpecPackageName(params.record.spec) ??
-      resolveNpmSpecPackageName(params.record.resolvedSpec);
-    if (bridgePackageName && recordPackageName === bridgePackageName) {
-      return true;
-    }
-  }
-  const clawhubSpec = getExternalizedBundledPluginClawHubSpec(params.bridge);
-  const bridgeClawHubPackage = clawhubSpec ? parseClawHubPluginSpec(clawhubSpec)?.name : undefined;
-  const recordClawHubPackage =
-    params.record.source === "clawhub"
-      ? (params.record.clawhubPackage ?? parseClawHubPluginSpec(params.record.spec ?? "")?.name)
-      : undefined;
-  return Boolean(
-    bridgeClawHubPackage &&
-    params.record.source === "clawhub" &&
-    recordClawHubPackage === bridgeClawHubPackage,
-  );
+  const preferredSource = getExternalizedBundledPluginPreferredSource(params.bridge);
+  return preferredSource === "clawhub"
+    ? isBridgeClawHubInstall(params)
+    : isBridgeNpmInstall(params);
+}
+
+function isBridgeInstalledFromFallbackSource(params: {
+  bridge: ExternalizedBundledPluginBridge;
+  record: PluginInstallRecord;
+}): boolean {
+  const preferredSource = getExternalizedBundledPluginPreferredSource(params.bridge);
+  return preferredSource === "clawhub"
+    ? isBridgeNpmInstall(params)
+    : isBridgeClawHubInstall(params);
 }
 
 function replacePluginIdInList(
@@ -1448,6 +1478,10 @@ export async function syncPluginsForUpdateChannel(params: {
           bridge,
           record: existing.record,
           env,
+        }) &&
+        !isBridgeInstalledFromFallbackSource({
+          bridge,
+          record: existing.record,
         })
       ) {
         continue;

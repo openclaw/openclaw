@@ -129,6 +129,10 @@ export const slackChannelConfigUiHints = {
     label: "Slack Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
   },
+  "streaming.progress.render": {
+    label: "Slack Progress Renderer",
+    help: 'Progress draft renderer: "text" uses one portable text body; "rich" renders structured Slack Block Kit fields with the same text fallback.',
+  },
   "streaming.progress.toolProgress": {
     label: "Slack Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",

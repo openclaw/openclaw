@@ -357,8 +357,9 @@ export function resolveGoogleMeetRealtimeProvider(params: {
   fullConfig: OpenClawConfig;
   providers?: RealtimeVoiceProviderPlugin[];
 }): ResolvedRealtimeProvider {
+  const providerId = params.config.realtime.voiceProvider ?? params.config.realtime.provider;
   return resolveConfiguredRealtimeVoiceProvider({
-    configuredProviderId: params.config.realtime.provider,
+    configuredProviderId: providerId,
     providerConfigs: params.config.realtime.providers,
     cfg: params.fullConfig,
     providers: params.providers,
@@ -376,19 +377,19 @@ export function resolveGoogleMeetRealtimeTranscriptionProvider(params: {
   if (providers.length === 0) {
     throw new Error("No configured realtime transcription provider registered");
   }
-  const configuredProvider = params.config.realtime.provider
+  const providerId =
+    params.config.realtime.transcriptionProvider ?? params.config.realtime.provider;
+  const configuredProvider = providerId
     ? (params.providers?.find(
-        (entry) =>
-          entry.id === params.config.realtime.provider ||
-          entry.aliases?.includes(params.config.realtime.provider ?? ""),
-      ) ?? getRealtimeTranscriptionProvider(params.config.realtime.provider, params.fullConfig))
+        (entry) => entry.id === providerId || entry.aliases?.includes(providerId),
+      ) ?? getRealtimeTranscriptionProvider(providerId, params.fullConfig))
     : undefined;
   const provider = configuredProvider ?? providers[0];
   if (!provider) {
     throw new Error("No configured realtime transcription provider registered");
   }
-  const rawConfig = params.config.realtime.provider
-    ? (params.config.realtime.providers[params.config.realtime.provider] ??
+  const rawConfig = providerId
+    ? (params.config.realtime.providers[providerId] ??
       params.config.realtime.providers[provider.id] ??
       {})
     : (params.config.realtime.providers[provider.id] ?? {});

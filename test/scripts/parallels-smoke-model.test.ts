@@ -375,6 +375,12 @@ console.log(JSON.stringify(result));
     }
   });
 
+  it("runs POSIX guest shell scripts with a normal install umask", () => {
+    const guestTransports = readFileSync(TS_PATHS.guestTransports, "utf8");
+
+    expect(guestTransports.match(/umask 022/g)).toHaveLength(2);
+  });
+
   it("provisions portable Git before Windows dev update lanes", () => {
     const script = readFileSync(TS_PATHS.windows, "utf8");
     const windowsGit = readFileSync(TS_PATHS.windowsGit, "utf8");

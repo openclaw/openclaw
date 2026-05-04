@@ -170,7 +170,7 @@ async function resolveCrabboxBin(params: {
 }
 
 function extractLeaseId(output: string) {
-  return output.match(/\bcbx_[a-f0-9]+\b/u)?.[0];
+  return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
 }
 
 function shellQuote(value: string) {
@@ -346,7 +346,7 @@ async function warmupCrabbox(params: {
   });
   const leaseId = extractLeaseId(`${result.stdout}\n${result.stderr}`);
   if (!leaseId) {
-    throw new Error("Crabbox warmup did not print a cbx_ lease id.");
+    throw new Error("Crabbox warmup did not print a lease id.");
   }
   return leaseId;
 }

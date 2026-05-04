@@ -281,7 +281,7 @@ export class LinuxGuest {
       "prlctl",
       ["exec", this.vmName, "/usr/bin/env", "HOME=/root", "dd", `of=${scriptPath}`, "bs=1048576"],
       {
-        input: script,
+        input: `umask 022\n${script}`,
         quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(),
       },
@@ -352,7 +352,9 @@ export class MacosGuest {
 
   sh(script: string, env: Record<string, string> = {}): string {
     const scriptPath = `/tmp/openclaw-parallels-${process.pid}-${Date.now()}.sh`;
-    this.exec(["/bin/dd", `of=${scriptPath}`, "bs=1048576"], { input: script });
+    this.exec(["/bin/dd", `of=${scriptPath}`, "bs=1048576"], {
+      input: `umask 022\n${script}`,
+    });
     try {
       return this.exec(["/bin/bash", scriptPath], { env });
     } finally {

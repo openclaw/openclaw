@@ -225,7 +225,8 @@ export function getGoogleMeetSetupStatus(
       Object.hasOwn(pluginEntries, "voice-call"));
   if (shouldCheckTwilioDelegation) {
     const voiceCallAllowed = !Array.isArray(pluginAllow) || pluginAllow.includes("voice-call");
-    const voiceCallEnabled = voiceCallEntry.enabled !== false;
+    const hasVoiceCallEntry = Object.hasOwn(pluginEntries, "voice-call");
+    const voiceCallEnabled = hasVoiceCallEntry && voiceCallEntry.enabled !== false;
     checks.push({
       id: "twilio-voice-call-plugin",
       ok: voiceCallAllowed && voiceCallEnabled,

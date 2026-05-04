@@ -161,7 +161,15 @@ const googleMeetConfigSchema = {
     },
     "realtime.provider": {
       label: "Speech Provider",
-      help: "Agent mode uses this for realtime transcription. Bidi mode uses it as the realtime voice provider.",
+      help: "Compatibility fallback for both realtime transcription and bidi voice. Prefer realtime.transcriptionProvider and realtime.voiceProvider for new configs.",
+    },
+    "realtime.transcriptionProvider": {
+      label: "Realtime Transcription Provider",
+      help: "Agent mode uses this provider to transcribe meeting audio before regular OpenClaw TTS answers.",
+    },
+    "realtime.voiceProvider": {
+      label: "Bidi Voice Provider",
+      help: "Bidi mode uses this realtime voice provider. Falls back to realtime.provider when unset.",
     },
     "realtime.model": {
       label: "Bidi Realtime Model",

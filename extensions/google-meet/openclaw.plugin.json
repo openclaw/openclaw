@@ -144,6 +144,11 @@
       "help": "Compatibility setting from the old post-connect DTMF flow. Twilio Meet joins now play DTMF before realtime connect.",
       "advanced": true
     },
+    "voiceCall.postDtmfSpeechDelayMs": {
+      "label": "Legacy Post-DTMF Speech Delay (ms)",
+      "help": "Compatibility setting from the old delayed-speech flow. Twilio Meet joins now carry the intro as the initial Voice Call message.",
+      "advanced": true
+    },
     "voiceCall.introMessage": {
       "label": "Voice Call Intro Message",
       "advanced": true
@@ -154,7 +159,15 @@
     },
     "realtime.provider": {
       "label": "Speech Provider",
-      "help": "Agent mode uses this for realtime transcription. Bidi mode uses it as the realtime voice provider."
+      "help": "Compatibility fallback for both realtime transcription and bidi voice. Prefer realtime.transcriptionProvider and realtime.voiceProvider for new configs."
+    },
+    "realtime.transcriptionProvider": {
+      "label": "Realtime Transcription Provider",
+      "help": "Agent mode uses this provider to transcribe meeting audio before regular OpenClaw TTS answers."
+    },
+    "realtime.voiceProvider": {
+      "label": "Bidi Voice Provider",
+      "help": "Bidi mode uses this realtime voice provider. Falls back to realtime.provider when unset."
     },
     "realtime.model": {
       "label": "Bidi Realtime Model",
@@ -413,6 +426,10 @@
             "type": "number",
             "default": 2500
           },
+          "postDtmfSpeechDelayMs": {
+            "type": "number",
+            "default": 5000
+          },
           "introMessage": {
             "type": "string"
           }
@@ -430,6 +447,13 @@
           "provider": {
             "type": "string",
             "default": "openai"
+          },
+          "transcriptionProvider": {
+            "type": "string",
+            "default": "openai"
+          },
+          "voiceProvider": {
+            "type": "string"
           },
           "model": {
             "type": "string"
@@ -501,5 +525,8 @@
         }
       }
     }
+  },
+  "configContracts": {
+    "compatibilityMigrationPaths": ["plugins.entries.google-meet.config.realtime.provider"]
   }
 }

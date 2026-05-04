@@ -15,6 +15,7 @@ import {
   type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
 import {
+  compareOpenClawReleaseVersions,
   formatPrereleaseResolutionError,
   isExactSemverVersion,
   isPrereleaseSemverVersion,
@@ -162,6 +163,10 @@ function isNpmPackageNotFoundMessage(error: string): boolean {
 }
 
 function compareNpmSemver(a: string, b: string): number {
+  const releaseCmp = compareOpenClawReleaseVersions(a, b);
+  if (releaseCmp !== null) {
+    return releaseCmp;
+  }
   return compareComparableSemver(parseComparableSemver(a), parseComparableSemver(b)) ?? 0;
 }
 

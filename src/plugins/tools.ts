@@ -128,6 +128,17 @@ function isManifestToolOptional(plugin: PluginManifestRecord, toolName: string):
   return plugin.toolMetadata?.[toolName]?.optional === true;
 }
 
+function isPluginToolOptional(params: {
+  entry: PluginToolRegistration;
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolName: string;
+}): boolean {
+  return (
+    params.entry.optional ||
+    (params.manifestPlugin ? isManifestToolOptional(params.manifestPlugin, params.toolName) : false)
+  );
+}
+
 function isOptionalToolAllowed(params: {
   toolName: string;
   pluginId: string;
@@ -1053,16 +1064,43 @@ export function resolvePluginTools(params: {
       continue;
     }
     const listRaw: unknown[] = Array.isArray(resolved) ? resolved : [resolved];
+    const selectedManifestToolNames =
+      manifestPlugin && availabilityNames.length > 0
+        ? new Set(allowlistNames.map((name) => normalizeToolName(name)))
+        : undefined;
+    const manifestContractToolNames =
+      manifestPlugin && availabilityNames.length > 0
+        ? new Set(availabilityNames.map((name) => normalizeToolName(name)))
+        : undefined;
     const availableList = manifestPlugin
-      ? listRaw.filter((tool) =>
-          isManifestToolNameAvailable({
+      ? listRaw.filter((tool) => {
+          const toolName = readPluginToolName(tool);
+          const normalizedToolName = normalizeToolName(toolName);
+          if (
+            isManifestToolOptional(manifestPlugin, toolName) &&
+            !isOptionalToolAllowed({
+              toolName,
+              pluginId: entry.pluginId,
+              allowlist,
+            })
+          ) {
+            return false;
+          }
+          if (
+            selectedManifestToolNames &&
+            manifestContractToolNames?.has(normalizedToolName) &&
+            !selectedManifestToolNames.has(normalizedToolName)
+          ) {
+            return false;
+          }
+          return isManifestToolNameAvailable({
             plugin: manifestPlugin,
-            toolName: readPluginToolName(tool),
+            toolName,
             config: params.context.runtimeConfig ?? context.config,
             env,
             hasAuthForProvider: params.hasAuthForProvider,
-          }),
-        )
+          });
+        })
       : listRaw;
     const policyAvailableList = availableList.filter(
       (tool) =>
@@ -1135,9 +1173,14 @@ export function resolvePluginTools(params: {
       normalizedNameSet.add(normalizedToolName);
       existing.add(tool.name);
       existingNormalized.add(normalizedToolName);
+      const optional = isPluginToolOptional({
+        entry,
+        manifestPlugin,
+        toolName: tool.name,
+      });
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
-        optional: entry.optional,
+        optional,
       });
       if (manifestPlugin) {
         const capturedDescriptors = capturedDescriptorsByPluginId.get(entry.pluginId) ?? [];
@@ -1145,7 +1188,7 @@ export function resolvePluginTools(params: {
           capturePluginToolDescriptor({
             pluginId: entry.pluginId,
             tool,
-            optional: entry.optional,
+            optional,
           }),
         );
         capturedDescriptorsByPluginId.set(entry.pluginId, capturedDescriptors);

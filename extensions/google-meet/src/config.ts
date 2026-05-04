@@ -65,6 +65,8 @@ export type GoogleMeetConfig = {
   realtime: {
     strategy: GoogleMeetRealtimeStrategy;
     provider?: string;
+    transcriptionProvider?: string;
+    voiceProvider?: string;
     model?: string;
     instructions?: string;
     introMessage?: string;
@@ -220,6 +222,7 @@ const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
   realtime: {
     strategy: "agent",
     provider: "openai",
+    transcriptionProvider: "openai",
     instructions: DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS,
     introMessage: DEFAULT_GOOGLE_MEET_REALTIME_INTRO_MESSAGE,
     toolPolicy: "safe-read-only",
@@ -440,6 +443,8 @@ export function resolveGoogleMeetConfigWithEnv(
   const twilio = asRecord(raw.twilio);
   const voiceCall = asRecord(raw.voiceCall);
   const realtime = asRecord(raw.realtime);
+  const realtimeProvider = normalizeOptionalString(realtime.provider);
+  const resolvedRealtimeProvider = realtimeProvider ?? DEFAULT_GOOGLE_MEET_CONFIG.realtime.provider;
   const oauth = asRecord(raw.oauth);
   const auth = asRecord(raw.auth);
 
@@ -534,8 +539,13 @@ export function resolveGoogleMeetConfigWithEnv(
         realtime.strategy,
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.strategy,
       ),
-      provider:
-        normalizeOptionalString(realtime.provider) ?? DEFAULT_GOOGLE_MEET_CONFIG.realtime.provider,
+      provider: resolvedRealtimeProvider,
+      transcriptionProvider:
+        normalizeOptionalString(realtime.transcriptionProvider) ??
+        (realtimeProvider && realtimeProvider !== "google"
+          ? resolvedRealtimeProvider
+          : DEFAULT_GOOGLE_MEET_CONFIG.realtime.transcriptionProvider),
+      voiceProvider: normalizeOptionalString(realtime.voiceProvider),
       model: normalizeOptionalString(realtime.model) ?? DEFAULT_GOOGLE_MEET_CONFIG.realtime.model,
       instructions:
         normalizeOptionalString(realtime.instructions) ??
