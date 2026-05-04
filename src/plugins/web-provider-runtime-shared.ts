@@ -64,6 +64,11 @@ type WebProviderRuntimeContext = {
   onlyPluginIds?: string[];
 };
 
+type RuntimeRegistryWebProviderResolution<TEntry> = {
+  providers: TEntry[];
+  shouldReturn: boolean;
+};
+
 function resolveWebProviderRuntimeContext<TEntry>(
   params: ResolvePluginWebProvidersParams,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
@@ -123,6 +128,25 @@ function resolveWebProviderLoadOptions(
         : {}),
     },
   );
+}
+
+function resolveRuntimeRegistryWebProviders<TEntry>(params: {
+  hasExplicitEmptyScope: boolean;
+  mapRegistryProviders: ResolveWebProviderRuntimeDeps<TEntry>["mapRegistryProviders"];
+  onlyPluginIds?: readonly string[];
+  registry: PluginRegistry | undefined;
+}): RuntimeRegistryWebProviderResolution<TEntry> | undefined {
+  if (!params.registry) {
+    return undefined;
+  }
+  const providers = params.mapRegistryProviders({
+    registry: params.registry,
+    onlyPluginIds: params.onlyPluginIds,
+  });
+  return {
+    providers,
+    shouldReturn: providers.length > 0 || params.hasExplicitEmptyScope,
+  };
 }
 
 export function resolvePluginWebProviders<TEntry>(
@@ -188,14 +212,16 @@ export function resolvePluginWebProviders<TEntry>(
   });
   const scopedPluginIds = context.onlyPluginIds;
   const hasExplicitEmptyScope = scopedPluginIds !== undefined && scopedPluginIds.length === 0;
-  if (compatible) {
-    const resolved = deps.mapRegistryProviders({
-      registry: compatible,
-      onlyPluginIds: context.onlyPluginIds,
-    });
-    if (resolved.length > 0 || hasExplicitEmptyScope) {
-      return resolved;
-    }
+  const compatibleProviders = resolveRuntimeRegistryWebProviders({
+    hasExplicitEmptyScope,
+    mapRegistryProviders: deps.mapRegistryProviders,
+    onlyPluginIds: context.onlyPluginIds,
+    registry: compatible,
+  });
+  if (compatibleProviders?.shouldReturn) {
+    return compatibleProviders.providers;
+  }
+  if (compatibleProviders) {
     // The active gateway plugin registry may be otherwise compatible with this
     // config while contributing zero web providers (for example when channels,
     // memory, harnesses, and sidecars are loaded but Brave/web providers are
@@ -225,16 +251,16 @@ export function resolveRuntimeWebProviders<TEntry>(
     workspaceDir: params.workspaceDir,
     requiredPluginIds: params.onlyPluginIds,
   });
-  if (runtimeRegistry) {
-    const resolved = deps.mapRegistryProviders({
-      registry: runtimeRegistry,
-      onlyPluginIds: params.onlyPluginIds,
-    });
-    const hasExplicitEmptyScope =
-      params.onlyPluginIds !== undefined && params.onlyPluginIds.length === 0;
-    if (resolved.length > 0 || hasExplicitEmptyScope) {
-      return resolved;
-    }
+  const hasExplicitEmptyScope =
+    params.onlyPluginIds !== undefined && params.onlyPluginIds.length === 0;
+  const runtimeProviders = resolveRuntimeRegistryWebProviders({
+    hasExplicitEmptyScope,
+    mapRegistryProviders: deps.mapRegistryProviders,
+    onlyPluginIds: params.onlyPluginIds,
+    registry: runtimeRegistry,
+  });
+  if (runtimeProviders?.shouldReturn) {
+    return runtimeProviders.providers;
   }
   return resolvePluginWebProviders(params, deps);
 }
