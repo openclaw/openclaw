@@ -7,10 +7,9 @@ read_when:
   - Looking for version naming and cadence
 ---
 
-OpenClaw has four public release lanes:
+OpenClaw has three public release lanes:
 
 - stable: tagged releases that publish to npm `beta` by default, or to npm `latest` when explicitly requested
-- alpha: prerelease tags that publish to npm `alpha`
 - beta: prerelease tags that publish to npm `beta`
 - dev: the moving head of `main`
 
@@ -20,13 +19,10 @@ OpenClaw has four public release lanes:
   - Git tag: `vYYYY.M.D`
 - Stable correction release version: `YYYY.M.D-N`
   - Git tag: `vYYYY.M.D-N`
-- Alpha prerelease version: `YYYY.M.D-alpha.N`
-  - Git tag: `vYYYY.M.D-alpha.N`
 - Beta prerelease version: `YYYY.M.D-beta.N`
   - Git tag: `vYYYY.M.D-beta.N`
 - Do not zero-pad month or day
 - `latest` means the current promoted stable npm release
-- `alpha` means the current alpha install target
 - `beta` means the current beta install target
 - Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
 - Every stable OpenClaw release ships the npm package and macOS app together;
@@ -79,15 +75,16 @@ the maintainer-only release runbook.
    file, lane, workflow job, package profile, provider, or model allowlist that
    proves the fix. Rerun the full umbrella only when the changed surface makes
    prior evidence stale.
-9. For alpha or beta, tag `vYYYY.M.D-alpha.N` or `vYYYY.M.D-beta.N`, then run `OpenClaw Release Publish` from
+9. For beta, tag `vYYYY.M.D-beta.N`, then run `OpenClaw Release Publish` from
    the matching `release/YYYY.M.D` branch. It verifies `pnpm plugins:sync:check`,
    publishes all publishable plugin packages to npm first, publishes the same
-   set to ClawHub second, and then promotes the prepared OpenClaw npm preflight
-   artifact with the matching dist-tag. After publish, run post-publish package
-   acceptance against the published `openclaw@YYYY.M.D-alpha.N`, `openclaw@alpha`,
-   `openclaw@YYYY.M.D-beta.N`, or `openclaw@beta` package. If a pushed or
-   published prerelease needs a fix, cut the next matching prerelease number;
-   do not delete or rewrite the old prerelease.
+   set to ClawHub second as ClawPack npm-pack tarballs, and then promotes the
+   prepared OpenClaw npm preflight artifact with the matching dist-tag. After
+   publish, run post-publish package
+   acceptance against the published `openclaw@YYYY.M.D-beta.N` or
+   `openclaw@beta` package. If a pushed or published prerelease needs a fix,
+   cut the next matching prerelease number; do not delete or rewrite the old
+   prerelease.
 10. For stable, continue only after the vetted beta or release candidate has the
     required validation evidence. Stable npm publish also goes through
     `OpenClaw Release Publish`, reusing the successful preflight artifact via
@@ -132,7 +129,7 @@ the maintainer-only release runbook.
   `gh workflow run full-release-validation.yml --ref main -f ref=release/YYYY.M.D`
 - Run the manual `Package Acceptance` workflow when you want side-channel proof
   for a package candidate while release work continues. Use `source=npm` for
-  `openclaw@alpha`, `openclaw@beta`, `openclaw@latest`, or an exact release version; `source=ref`
+  `openclaw@beta`, `openclaw@latest`, or an exact release version; `source=ref`
   to pack a trusted `package_ref` branch/tag/SHA with the current
   `workflow_ref` harness; `source=url` for an HTTPS tarball with a required
   SHA-256; or `source=artifact` for a tarball uploaded by another GitHub
@@ -214,6 +211,7 @@ Validation` or from the `main`/release workflow ref so workflow logic and
   against the published npm package using the shared leased Telegram credential
   pool. Local maintainer one-offs may omit the Convex vars and pass the three
   `OPENCLAW_QA_TELEGRAM_*` env credentials directly.
+- To run the full post-publish beta smoke from a maintainer machine, use `pnpm release:beta-smoke -- --beta betaN`. The helper runs Parallels npm update/fresh-target validation, dispatches `NPM Telegram Beta E2E`, polls the exact workflow run, downloads the artifact, and prints the Telegram report.
 - Maintainers can run the same post-publish check from GitHub Actions via the
   manual `NPM Telegram Beta E2E` workflow. It is intentionally manual-only and
   does not run on every merge.
@@ -290,8 +288,9 @@ gh workflow run full-release-validation.yml \
 ```
 
 The workflow resolves the target ref, dispatches manual `CI` with
-`target_ref=<release-ref>`, dispatches `OpenClaw Release Checks`, and dispatches
-standalone package Telegram E2E when `release_profile=full` with
+`target_ref=<release-ref>`, dispatches `OpenClaw Release Checks`, prepares a
+parent `release-package-under-test` artifact for package-facing checks, and
+dispatches standalone package Telegram E2E when `release_profile=full` with
 `rerun_group=all` or when `npm_telegram_package_spec` is set. `OpenClaw Release
 Checks` then fans out install smoke, cross-OS release checks, live/E2E Docker
 release-path coverage, Package Acceptance with Telegram package QA, QA Lab
@@ -559,16 +558,6 @@ gh workflow run openclaw-release-publish.yml \
   -f npm_dist_tag=beta
 ```
 
-Alpha publish example:
-
-```bash
-gh workflow run openclaw-release-publish.yml \
-  --ref release/YYYY.M.D \
-  -f tag=vYYYY.M.D-alpha.N \
-  -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
-  -f npm_dist_tag=alpha
-```
-
 Stable publish to the default beta dist-tag:
 
 ```bash
@@ -600,7 +589,7 @@ OpenClaw package must not be published.
 `OpenClaw NPM Release` accepts these operator-controlled inputs:
 
 - `tag`: required release tag such as `v2026.4.2`, `v2026.4.2-1`, or
-  `v2026.4.2-alpha.1` or `v2026.4.2-beta.1`; when `preflight_only=true`, it may also be the current
+  `v2026.4.2-beta.1`; when `preflight_only=true`, it may also be the current
   full 40-character workflow-branch commit SHA for validation-only preflight
 - `preflight_only`: `true` for validation/build/package only, `false` for the
   real publish path
@@ -630,7 +619,6 @@ OpenClaw package must not be published.
 Rules:
 
 - Stable and correction tags may publish to either `beta` or `latest`
-- Alpha prerelease tags may publish only to `alpha`
 - Beta prerelease tags may publish only to `beta`
 - For `OpenClaw NPM Release`, full commit SHA input is allowed only when
   `preflight_only=true`

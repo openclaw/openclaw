@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
@@ -180,6 +181,112 @@ describe("cron service ops seam coverage", () => {
 
     timeoutSpy.mockRestore();
     stop(state);
+  });
+
+  it("start persists load-time updatedAtMs repairs to the state sidecar only", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-04-09T08:00:00.000Z");
+    const createdAtMs = now - 86_400_000;
+    const nextRunAtMs = Date.parse("2026-04-10T09:00:00.000Z");
+    const jobId = "future-sidecar-repair";
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: jobId,
+              name: "future sidecar repair",
+              enabled: true,
+              createdAtMs,
+              schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "daily" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            [jobId]: {
+              state: { nextRunAtMs },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const configBefore = await fs.readFile(storePath, "utf-8");
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await start(state);
+
+      const configAfter = await fs.readFile(storePath, "utf-8");
+      const persistedState = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+        jobs: Record<string, { updatedAtMs?: unknown; state?: { nextRunAtMs?: unknown } }>;
+      };
+
+      expect(configAfter).toBe(configBefore);
+      expect(persistedState.jobs[jobId]?.updatedAtMs).toBe(createdAtMs);
+      expect(persistedState.jobs[jobId]?.state?.nextRunAtMs).toBe(nextRunAtMs);
+    } finally {
+      stop(state);
+    }
+  });
+
+  it("keeps manual acknowledgement IDs separate from recoverable task run IDs", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const restoreStateDir = withStateDirForStorePath(storePath);
+
+    try {
+      await writeDueIsolatedJobSnapshot(storePath, now);
+
+      const state = createOkIsolatedCronState({ storePath, now, summary: "done" });
+      const manualRunId = `manual:isolated-timeout:${now}:1`;
+
+      await expect(
+        run(state, "isolated-timeout", "force", { runId: manualRunId }),
+      ).resolves.toEqual({
+        ok: true,
+        ran: true,
+      });
+
+      expect(findTaskByRunId(`cron:isolated-timeout:${now}`)).toMatchObject({
+        runtime: "cron",
+        status: "succeeded",
+        sourceId: "isolated-timeout",
+      });
+      expect(findTaskByRunId(manualRunId)).toBeUndefined();
+    } finally {
+      restoreStateDir();
+    }
   });
 
   it("records timed out manual runs as timed_out in the shared task registry", async () => {

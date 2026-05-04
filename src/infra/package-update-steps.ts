@@ -36,6 +36,7 @@ type StagedNpmInstall = {
   prefix: string;
   layout: NpmGlobalPrefixLayout;
   packageRoot: string;
+  installTarget: ResolvedGlobalInstallTarget;
 };
 
 type NpmBinShimBackup = {
@@ -60,6 +61,17 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
+async function removePathBestEffort(targetPath: string): Promise<void> {
+  await fs
+    .rm(targetPath, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === "win32" ? 5 : 2,
+      retryDelay: 100,
+    })
+    .catch(() => undefined);
+}
+
 async function readPackageVersionIfPresent(packageRoot: string | null): Promise<string | null> {
   if (!packageRoot) {
     return null;
@@ -71,24 +83,60 @@ async function readPackageVersionIfPresent(packageRoot: string | null): Promise<
   }
 }
 
+function isUnambiguousNpmPrefixGlobalRoot(globalRoot: string | null): boolean {
+  const trimmed = globalRoot?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const normalized = path.resolve(trimmed);
+  if (path.basename(normalized) !== "node_modules") {
+    return false;
+  }
+  const parentDir = path.dirname(normalized);
+  if (path.basename(parentDir) === "lib") {
+    return true;
+  }
+  return process.platform === "win32" && path.basename(parentDir).toLowerCase() === "npm";
+}
+
+function resolveStagedNpmTargetLayout(
+  installTarget: ResolvedGlobalInstallTarget,
+): NpmGlobalPrefixLayout | null {
+  const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot);
+  if (!targetLayout) {
+    return null;
+  }
+  if (
+    installTarget.manager === "npm" ||
+    isUnambiguousNpmPrefixGlobalRoot(installTarget.globalRoot)
+  ) {
+    return targetLayout;
+  }
+  return null;
+}
+
 async function createStagedNpmInstall(
   installTarget: ResolvedGlobalInstallTarget,
   packageName: string,
 ): Promise<StagedNpmInstall | null> {
-  if (installTarget.manager !== "npm") {
-    return null;
-  }
-  const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot);
+  const targetLayout = resolveStagedNpmTargetLayout(installTarget);
   if (!targetLayout) {
     return null;
   }
   await fs.mkdir(targetLayout.globalRoot, { recursive: true });
   const prefix = await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw-update-stage-"));
   const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
+  const command = installTarget.manager === "npm" ? installTarget.command : "npm";
   return {
     prefix,
     layout,
     packageRoot: path.join(layout.globalRoot, packageName),
+    installTarget: {
+      manager: "npm",
+      command,
+      globalRoot: layout.globalRoot,
+      packageRoot: path.join(layout.globalRoot, packageName),
+    },
   };
 }
 
@@ -129,12 +177,12 @@ async function cleanupStagedNpmInstall(stage: StagedNpmInstall | null): Promise<
   if (!stage) {
     return;
   }
-  await fs.rm(stage.prefix, { recursive: true, force: true }).catch(() => undefined);
+  await removePathBestEffort(stage.prefix);
 }
 
 async function copyPathEntry(source: string, destination: string): Promise<void> {
   const stat = await fs.lstat(source);
-  await fs.rm(destination, { recursive: true, force: true }).catch(() => undefined);
+  await removePathBestEffort(destination);
   if (stat.isSymbolicLink()) {
     await fs.symlink(await fs.readlink(source), destination);
     return;
@@ -201,7 +249,7 @@ async function replaceNpmBinShims(params: {
     await restoreNpmBinShimBackup(backup);
     throw err;
   } finally {
-    await fs.rm(backup.backupDir, { recursive: true, force: true }).catch(() => undefined);
+    await removePathBestEffort(backup.backupDir);
   }
 }
 
@@ -209,7 +257,7 @@ async function restoreNpmBinShimBackup(backup: NpmBinShimBackup): Promise<void> 
   await fs.mkdir(backup.targetBinDir, { recursive: true });
   for (const entry of backup.entries) {
     const destination = path.join(backup.targetBinDir, entry.name);
-    await fs.rm(destination, { recursive: true, force: true }).catch(() => undefined);
+    await removePathBestEffort(destination);
     if (entry.hadExisting) {
       await copyPathEntry(path.join(backup.backupDir, entry.name), destination);
     }
@@ -253,7 +301,7 @@ async function swapStagedNpmInstall(params: {
       packageName: params.packageName,
     });
     if (movedExisting) {
-      await fs.rm(backupRoot, { recursive: true, force: true });
+      await removePathBestEffort(backupRoot);
     }
     return {
       name: "global install swap",
@@ -268,7 +316,7 @@ async function swapStagedNpmInstall(params: {
     };
   } catch (err) {
     if (movedStaged) {
-      await fs.rm(targetPackageRoot, { recursive: true, force: true }).catch(() => undefined);
+      await removePathBestEffort(targetPackageRoot);
     }
     if (movedExisting) {
       await fs.rename(backupRoot, targetPackageRoot).catch(() => undefined);
@@ -318,10 +366,11 @@ export async function runGlobalPackageUpdateSteps(params: {
       };
     }
 
+    const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
     const updateStep = await params.runStep({
       name: "global update",
       argv: globalInstallArgs(
-        params.installTarget,
+        installCommandTarget,
         params.installSpec,
         undefined,
         stagedInstall?.prefix,
@@ -352,7 +401,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
 
       const fallbackArgv = globalInstallFallbackArgs(
-        params.installTarget,
+        stagedInstall?.installTarget ?? params.installTarget,
         params.installSpec,
         undefined,
         stagedInstall?.prefix,

@@ -50,7 +50,7 @@ openclaw plugins install npm:<package>
 openclaw plugins install clawhub:<package>@1.2.3
 openclaw plugins install clawhub:<package>@beta
 openclaw plugins install npm:@scope/openclaw-plugin@1.2.3
-openclaw plugins install npm:@openclaw/codex@beta
+openclaw plugins install npm:@openclaw/codex
 
 # Install from git or a local development checkout.
 openclaw plugins install git:github.com/acme/openclaw-plugin@v1.0.0
@@ -92,7 +92,9 @@ when it was previously pinned to an exact version or tag.
 When `openclaw update` runs on the beta channel, default-line npm and ClawHub
 plugin records try the matching plugin `@beta` release first. If that beta
 release does not exist, OpenClaw falls back to the recorded default/latest spec.
-Exact versions and explicit tags such as `@rc` or `@beta` are preserved.
+For npm plugins, OpenClaw also falls back when the beta package exists but fails
+install validation. Exact versions and explicit tags such as `@rc` or `@beta`
+are preserved.
 
 ## Uninstall plugins
 

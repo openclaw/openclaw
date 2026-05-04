@@ -1164,6 +1164,7 @@
                 "pages": [
                   "concepts/messages",
                   "concepts/streaming",
+                  "concepts/progress-drafts",
                   "concepts/retry",
                   "concepts/queue",
                   "concepts/queue-steering"
@@ -1308,6 +1309,7 @@
                 "group": "Agent coordination",
                 "pages": [
                   "tools/agent-send",
+                  "tools/steer",
                   "tools/subagents",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
@@ -1497,6 +1499,7 @@
                     "pages": [
                       "gateway/security/index",
                       "gateway/security/audit-checks",
+                      "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"

@@ -18,6 +18,7 @@ export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
 export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
+export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
 
 ARTIFACT_ROOT="$(dirname "${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-/tmp/openclaw-upgrade-survivor-artifacts/summary.json}")"
 mkdir -p "$ARTIFACT_ROOT"
@@ -40,8 +41,7 @@ CURRENT_PHASE="setup"
 FAILURE_PHASE=""
 FAILURE_MESSAGE=""
 gateway_pid=""
-clawhub_fixture_pid=""
-configured_plugin_installs_clawhub_fixture_owned=""
+plugin_registry_pid=""
 baseline_spec=""
 baseline_version=""
 baseline_version_expected="0"
@@ -193,9 +193,8 @@ NODE
 }
 
 cleanup() {
-  if [ -n "${clawhub_fixture_pid:-}" ]; then
-    kill "$clawhub_fixture_pid" 2>/dev/null || true
-    wait "$clawhub_fixture_pid" 2>/dev/null || true
+  if [ -n "${plugin_registry_pid:-}" ]; then
+    kill "$plugin_registry_pid" >/dev/null 2>&1 || true
   fi
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
 }
@@ -258,7 +257,7 @@ legacy_runtime_deps_symlink_plugin() {
 
 legacy_runtime_deps_symlink_target() {
   local plugin="$1"
-  printf '%s/dist/extensions/%s/node_modules\n' "$(package_root)" "$plugin"
+  printf '%s/@openclaw-upgrade-survivor/%s-runtime-dep\n' "$(dirname "$(package_root)")" "$plugin"
 }
 
 legacy_runtime_deps_symlink_source() {
@@ -287,60 +286,131 @@ configured_plugin_installs_enabled() {
   [ "$SCENARIO" = "configured-plugin-installs" ]
 }
 
-start_configured_plugin_installs_clawhub_fixture() {
-  configured_plugin_installs_enabled || return 0
-  configured_plugin_installs_clawhub_fixture_owned=""
-  if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ] || [ -n "${CLAWHUB_URL:-}" ]; then
-    return 0
-  fi
+source_only_plugin_shadow_enabled() {
+  [ "$SCENARIO" = "stale-source-plugin-shadow" ]
+}
 
-  local port_file="$ARTIFACT_ROOT/clawhub-not-found.port"
-  local requests_file="$ARTIFACT_ROOT/clawhub-not-found-requests.jsonl"
-  rm -f "$port_file" "$requests_file"
-  node - "$port_file" "$requests_file" <<'NODE' &
+seed_source_only_plugin_shadow() {
+  source_only_plugin_shadow_enabled || return 0
+
+  local shadow_root="$OPENCLAW_STATE_DIR/extensions/opik-openclaw"
+  mkdir -p "$shadow_root/src"
+  cat >"$shadow_root/package.json" <<'JSON'
+{
+  "name": "@opik/opik-openclaw",
+  "version": "0.0.0-upgrade-survivor",
+  "openclaw": {
+    "extensions": ["./src/index.ts"]
+  }
+}
+JSON
+  cat >"$shadow_root/openclaw.plugin.json" <<'JSON'
+{
+  "id": "opik-openclaw",
+  "activation": {
+    "onStartup": false
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+JSON
+  cat >"$shadow_root/src/index.ts" <<'TS'
+export default {
+  id: "opik-openclaw",
+  name: "Source-only Opik shadow",
+  register() {},
+};
+TS
+  echo "Seeded source-only plugin shadow: $shadow_root"
+}
+
+configure_configured_plugin_install_fixture_registry() {
+  configured_plugin_installs_enabled || return 0
+
+  local fixture_root="$ARTIFACT_ROOT/configured-plugin-installs-npm-fixture"
+  local package_dir="$fixture_root/package"
+  local tarball="$fixture_root/openclaw-brave-plugin-2026.5.2.tgz"
+  local port_file="$fixture_root/npm-registry-port"
+  local log_file="$fixture_root/npm-registry.log"
+  mkdir -p "$package_dir"
+  FIXTURE_PACKAGE_DIR="$package_dir" node <<'NODE'
 const fs = require("node:fs");
-const http = require("node:http");
-const portFile = process.argv[2];
-const requestsFile = process.argv[3];
-const server = http.createServer((request, response) => {
-  fs.appendFileSync(
-    requestsFile,
-    `${JSON.stringify({ method: request.method, url: request.url, at: new Date().toISOString() })}\n`,
-  );
-  response.writeHead(404, { "content-type": "application/json" });
-  response.end('{"error":"fixture package not found"}\n');
-});
-server.listen(0, "127.0.0.1", () => {
-  fs.writeFileSync(portFile, String(server.address().port));
-});
-process.on("SIGTERM", () => server.close(() => process.exit(0)));
-process.on("SIGINT", () => server.close(() => process.exit(0)));
+const path = require("node:path");
+const root = process.env.FIXTURE_PACKAGE_DIR;
+fs.mkdirSync(root, { recursive: true });
+fs.writeFileSync(
+  path.join(root, "package.json"),
+  `${JSON.stringify(
+    {
+      name: "@openclaw/brave-plugin",
+      version: "2026.5.2",
+      openclaw: { extensions: ["./index.js"] },
+    },
+    null,
+    2,
+  )}\n`,
+);
+fs.writeFileSync(
+  path.join(root, "openclaw.plugin.json"),
+  `${JSON.stringify(
+    {
+      id: "brave",
+      activation: { onStartup: false },
+      providerAuthEnvVars: { brave: ["BRAVE_API_KEY"] },
+      contracts: { webSearchProviders: ["brave"] },
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: { type: ["string", "object"] },
+              mode: { type: "string", enum: ["web", "llm-context"] },
+              baseUrl: { type: ["string", "object"] },
+            },
+          },
+        },
+      },
+    },
+    null,
+    2,
+  )}\n`,
+);
+fs.writeFileSync(
+  path.join(root, "index.js"),
+  `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
+);
 NODE
-  clawhub_fixture_pid="$!"
+  tar -czf "$tarball" -C "$fixture_root" package
+  node scripts/e2e/lib/plugins/npm-registry-server.mjs \
+    "$port_file" \
+    "@openclaw/brave-plugin" \
+    "2026.5.2" \
+    "$tarball" \
+    >"$log_file" 2>&1 &
+  plugin_registry_pid="$!"
+
   for _ in $(seq 1 100); do
     if [ -s "$port_file" ]; then
-      export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
-      configured_plugin_installs_clawhub_fixture_owned="1"
-      echo "Configured plugin install scenario using ClawHub 404 fixture: $OPENCLAW_CLAWHUB_URL"
+      export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"
+      export npm_config_registry="$NPM_CONFIG_REGISTRY"
       return 0
+    fi
+    if ! kill -0 "$plugin_registry_pid" 2>/dev/null; then
+      cat "$log_file" >&2 || true
+      return 1
     fi
     sleep 0.1
   done
-  echo "timed out starting ClawHub 404 fixture" >&2
-  return 1
-}
 
-assert_configured_plugin_installs_clawhub_attempted() {
-  configured_plugin_installs_enabled || return 0
-  if [ "${configured_plugin_installs_clawhub_fixture_owned:-}" != "1" ]; then
-    return 0
-  fi
-  local requests_file="$ARTIFACT_ROOT/clawhub-not-found-requests.jsonl"
-  if ! grep -q '/api/v1/packages/%40openclaw%2Fmatrix' "$requests_file" 2>/dev/null; then
-    echo "configured plugin install scenario did not attempt ClawHub for @openclaw/matrix" >&2
-    cat "$requests_file" >&2 2>/dev/null || true
-    return 1
-  fi
+  cat "$log_file" >&2 || true
+  echo "Timed out waiting for configured plugin install npm fixture registry." >&2
+  return 1
 }
 
 legacy_plugin_dependency_probe_paths() {
@@ -493,6 +563,7 @@ seed_legacy_runtime_deps_symlink() {
   source_dir="$(legacy_runtime_deps_symlink_source "$plugin")"
   target_dir="$(legacy_runtime_deps_symlink_target "$plugin")"
   mkdir -p "$source_dir"
+  mkdir -p "$(dirname "$target_dir")"
   printf '{"name":"openclaw-upgrade-survivor-legacy-runtime-deps","version":"0.0.0"}\n' \
     >"$source_dir/package.json"
   rm -rf "$target_dir"
@@ -755,14 +826,14 @@ phase validate-baseline-config validate_baseline_config
 phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
 phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
 phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
+phase seed-source-only-plugin-shadow seed_source_only_plugin_shadow
 phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
-phase configured-plugin-installs-clawhub-fixture start_configured_plugin_installs_clawhub_fixture
 phase update-candidate update_candidate
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
+phase configure-configured-plugin-install-fixture-registry configure_configured_plugin_install_fixture_registry
 phase doctor run_doctor
-phase configured-plugin-installs-clawhub-attempted assert_configured_plugin_installs_clawhub_attempted
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
 phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config

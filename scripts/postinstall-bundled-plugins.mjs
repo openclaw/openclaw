@@ -11,6 +11,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmdirSync,
@@ -18,15 +19,17 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, posix, relative } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
+const LEGACY_PLUGIN_RUNTIME_DEPS_DIR = "plugin-runtime-deps";
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
@@ -105,6 +108,30 @@ function hasEnvFlag(env, key) {
 
 function normalizeRelativePath(filePath) {
   return filePath.replace(/\\/g, "/");
+}
+
+function resolvePostinstallOsHomeDir(env, getHomedir = homedir) {
+  return env?.HOME?.trim() || env?.USERPROFILE?.trim() || getHomedir();
+}
+
+function resolvePostinstallTildePath(input, homeDir) {
+  if (input === "~") {
+    return homeDir;
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return join(homeDir, input.slice(2));
+  }
+  return input;
+}
+
+function resolvePostinstallOpenClawHomeDir(env, getHomedir = homedir) {
+  const osHome = resolvePostinstallOsHomeDir(env, getHomedir);
+  const override = env?.OPENCLAW_HOME?.trim();
+  return override ? pathResolve(resolvePostinstallTildePath(override, osHome)) : osHome;
+}
+
+function resolvePostinstallUserPath(input, openClawHome) {
+  return pathResolve(resolvePostinstallTildePath(input, openClawHome));
 }
 
 function readInstalledDistInventory(params = {}) {
@@ -298,143 +325,167 @@ function pruneLegacyInstalledPluginDependencyDirs(params) {
   return removed;
 }
 
-const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
-
-function stripSpecifierSuffix(value) {
-  return value.replace(/[?#].*$/u, "");
+function splitPostinstallPathList(value) {
+  return value
+    ? value
+        .split(pathDelimiter)
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : [];
 }
 
-function resolveDistImportPath(importerPath, specifier) {
-  if (!specifier.startsWith(".")) {
-    return null;
-  }
-  const stripped = stripSpecifierSuffix(specifier);
-  if (!stripped) {
-    return null;
-  }
-  return posix.normalize(posix.join(posix.dirname(importerPath), stripped));
-}
+const pathDelimiter = process.platform === "win32" ? ";" : ":";
 
-function findStatementStart(source, index) {
-  return (
-    Math.max(
-      source.lastIndexOf(";", index),
-      source.lastIndexOf("{", index),
-      source.lastIndexOf("}", index),
-      source.lastIndexOf("\n", index),
-      source.lastIndexOf("\r", index),
-    ) + 1
+export function collectLegacyPluginRuntimeDepsStateRoots(params = {}) {
+  const env = params.env ?? process.env;
+  const getHomedir = params.homedir ?? homedir;
+  const openClawHome = resolvePostinstallOpenClawHomeDir(env, getHomedir);
+  const stateRoots = [];
+  const addStateRoot = (root) => {
+    if (root) {
+      stateRoots.push(join(root, LEGACY_PLUGIN_RUNTIME_DEPS_DIR));
+    }
+  };
+
+  const stateOverride = env?.OPENCLAW_STATE_DIR?.trim();
+  if (stateOverride) {
+    addStateRoot(resolvePostinstallUserPath(stateOverride, openClawHome));
+  }
+  const configPath = env?.OPENCLAW_CONFIG_PATH?.trim();
+  if (configPath) {
+    addStateRoot(dirname(resolvePostinstallUserPath(configPath, openClawHome)));
+  }
+  addStateRoot(join(openClawHome, ".openclaw"));
+  addStateRoot(join(openClawHome, ".clawdbot"));
+
+  for (const entry of splitPostinstallPathList(env?.STATE_DIRECTORY)) {
+    addStateRoot(resolvePostinstallUserPath(entry, openClawHome));
+  }
+
+  return [...new Set(stateRoots.map((root) => pathResolve(root)))].toSorted((left, right) =>
+    left.localeCompare(right),
   );
 }
 
-function isImportSpecifierContext(source, index) {
-  const dynamicPrefix = source.slice(Math.max(0, index - 32), index);
-  if (/\bimport\s*\(\s*$/u.test(dynamicPrefix)) {
-    return true;
-  }
-  const statementPrefix = source.slice(findStatementStart(source, index), index).trimStart();
-  return (
-    /^(?:import|export)\b[\s\S]*\bfrom\s*$/u.test(statementPrefix) ||
-    /^import\s*$/u.test(statementPrefix)
-  );
+function isPathInsideRoot(candidate, root) {
+  const relativePath = relative(root, candidate);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
-function collectImportSpecifiers(source) {
-  const specifiers = [];
-  let inBlockComment = false;
-  let inLineComment = false;
-  for (let index = 0; index < source.length; index += 1) {
-    if (inBlockComment) {
-      if (source[index] === "*" && source[index + 1] === "/") {
-        inBlockComment = false;
-        index += 1;
-      }
-      continue;
-    }
-    if (inLineComment) {
-      if (source[index] === "\n" || source[index] === "\r") {
-        inLineComment = false;
-      }
-      continue;
-    }
-    if (source[index] === "/" && source[index + 1] === "*") {
-      inBlockComment = true;
-      index += 1;
-      continue;
-    }
-    if (source[index] === "/" && source[index + 1] === "/") {
-      inLineComment = true;
-      index += 1;
-      continue;
-    }
-
-    const quote = source[index];
-    if (quote !== '"' && quote !== "'") {
-      continue;
-    }
-
-    let cursor = index + 1;
-    let value = "";
-    while (cursor < source.length) {
-      const char = source[cursor];
-      if (char === "\\") {
-        value += source.slice(cursor, cursor + 2);
-        cursor += 2;
-        continue;
-      }
-      if (char === quote) {
-        break;
-      }
-      value += char;
-      cursor += 1;
-    }
-    if (cursor >= source.length) {
-      break;
-    }
-
-    if (value.startsWith(".") && isImportSpecifierContext(source, index)) {
-      specifiers.push(value);
-    }
-    index = cursor;
+function collectLegacyPluginRuntimeDepsSymlinkPaths(roots, params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const readDir = params.readdirSync ?? readdirSync;
+  const pathLstat = params.lstatSync ?? lstatSync;
+  const readLink = params.readlinkSync ?? readlinkSync;
+  const pathExists = params.existsSync ?? existsSync;
+  const containingNodeModules = dirname(packageRoot);
+  if (basename(containingNodeModules) !== "node_modules") {
+    return [];
   }
-  return specifiers;
-}
 
-function expandInstalledDistImportClosure(params) {
-  const files = [...new Set(params.files)];
-  const fileSet = new Set(files);
-  const expectedSet = new Set(params.seedFiles);
-  let changed = true;
+  const normalizedRoots = roots.map((root) => pathResolve(root));
+  const candidates = [];
+  function addCandidate(linkPath) {
+    let linkStat;
+    try {
+      linkStat = pathLstat(linkPath);
+    } catch {
+      return;
+    }
+    if (!linkStat.isSymbolicLink()) {
+      return;
+    }
+    let target;
+    try {
+      target = readLink(linkPath);
+    } catch {
+      return;
+    }
+    if (!target.includes(LEGACY_PLUGIN_RUNTIME_DEPS_DIR)) {
+      return;
+    }
+    const resolvedTarget = pathResolve(dirname(linkPath), target);
+    const pointsIntoPrunedRoot = normalizedRoots.some((root) =>
+      isPathInsideRoot(resolvedTarget, root),
+    );
+    if (pointsIntoPrunedRoot || !pathExists(resolvedTarget)) {
+      candidates.push(linkPath);
+    }
+  }
 
-  while (changed) {
-    changed = false;
-    for (const importerPath of [...expectedSet]
-      .filter((file) => fileSet.has(file))
-      .toSorted((left, right) => left.localeCompare(right))) {
-      if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
-        continue;
-      }
-      let source;
+  let entries;
+  try {
+    entries = readDir(containingNodeModules, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.startsWith("@")) {
+      const scopeDir = join(containingNodeModules, entry.name);
+      let scopeEntries;
       try {
-        source = params.readText(importerPath);
-      } catch (error) {
-        if (error?.code === "ENOENT") {
-          continue;
-        }
-        throw error;
+        scopeEntries = readDir(scopeDir, { withFileTypes: true });
+      } catch {
+        continue;
       }
-      for (const specifier of collectImportSpecifiers(source)) {
-        const importedPath = resolveDistImportPath(importerPath, specifier);
-        if (!importedPath || !fileSet.has(importedPath) || expectedSet.has(importedPath)) {
-          continue;
-        }
-        expectedSet.add(importedPath);
-        changed = true;
+      for (const scopeEntry of scopeEntries) {
+        addCandidate(join(scopeDir, scopeEntry.name));
       }
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      addCandidate(join(containingNodeModules, entry.name));
+    }
+  }
+  return [...new Set(candidates.map((entry) => pathResolve(entry)))].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
+export function pruneLegacyPluginRuntimeDepsState(params = {}) {
+  const pathExists = params.existsSync ?? existsSync;
+  const removePath = params.rmSync ?? rmSync;
+  const unlinkPath = params.unlinkSync ?? unlinkSync;
+  const log = params.log ?? console;
+  const removed = [];
+  const removedSymlinks = [];
+  const roots = collectLegacyPluginRuntimeDepsStateRoots(params);
+
+  for (const linkPath of collectLegacyPluginRuntimeDepsSymlinkPaths(roots, params)) {
+    try {
+      unlinkPath(linkPath);
+      removedSymlinks.push(linkPath);
+    } catch (error) {
+      log.warn?.(
+        `[postinstall] could not prune legacy plugin runtime deps symlink ${linkPath}: ${String(error)}`,
+      );
     }
   }
 
-  return [...expectedSet].toSorted((left, right) => left.localeCompare(right));
+  for (const root of roots) {
+    if (!pathExists(root)) {
+      continue;
+    }
+    try {
+      removePath(root, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+      removed.push(root);
+    } catch (error) {
+      log.warn?.(
+        `[postinstall] could not prune legacy plugin runtime deps ${root}: ${String(error)}`,
+      );
+    }
+  }
+
+  if (removed.length > 0) {
+    log.log?.(`[postinstall] pruned legacy plugin runtime deps: ${removed.join(", ")}`);
+  }
+  if (removedSymlinks.length > 0) {
+    log.log?.(
+      `[postinstall] pruned legacy plugin runtime deps symlinks: ${removedSymlinks.join(", ")}`,
+    );
+  }
+
+  return removed;
 }
 
 export function pruneInstalledPackageDist(params = {}) {
@@ -467,11 +518,18 @@ export function pruneInstalledPackageDist(params = {}) {
   const installedFiles = listInstalledDistFiles(params);
   const readFile = params.readFileSync ?? readFileSync;
   expectedFiles = new Set(
-    expandInstalledDistImportClosure({
+    expandPackageDistImportClosure({
       files: installedFiles,
       seedFiles: [...expectedFiles],
       readText(relativePath) {
-        return readFile(join(packageRoot, relativePath), "utf8");
+        try {
+          return readFile(join(packageRoot, relativePath), "utf8");
+        } catch (error) {
+          if (error?.code === "ENOENT") {
+            return "";
+          }
+          throw error;
+        }
       },
     }),
   );
@@ -828,6 +886,17 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
+  pruneLegacyPluginRuntimeDepsState({
+    env,
+    packageRoot,
+    existsSync: pathExists,
+    lstatSync: params.lstatSync,
+    readlinkSync: params.readlinkSync,
+    rmSync: params.rmSync,
+    unlinkSync: params.unlinkSync,
+    log,
+    homedir: params.homedir,
+  });
   pruneInstalledPackageDist({
     packageRoot,
     existsSync: pathExists,

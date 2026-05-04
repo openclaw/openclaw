@@ -74,6 +74,7 @@ Use focused lanes while iterating:
 
 ```bash
 pnpm test:docker:plugins
+pnpm test:docker:plugin-lifecycle-matrix
 pnpm test:docker:plugin-update
 pnpm test:docker:upgrade-survivor
 pnpm test:docker:published-upgrade-survivor
@@ -89,6 +90,10 @@ Important lanes:
   dependencies, npm update no-ops, local ClawHub fixture installs and update
   no-ops, marketplace update behavior, and Claude-bundle enable/inspect. Set
   `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to keep the ClawHub block hermetic/offline.
+- `test:docker:plugin-lifecycle-matrix` installs the candidate package in a bare
+  container, runs an npm plugin through install, inspect, disable, enable,
+  explicit upgrade, explicit downgrade, and uninstall after deleting the plugin
+  code. It logs RSS and CPU metrics for each phase.
 - `test:docker:plugin-update` validates that an unchanged installed plugin does
   not reinstall or lose install metadata during `openclaw plugins update`.
 - `test:docker:upgrade-survivor` installs the candidate tarball over a dirty
@@ -118,8 +123,8 @@ pnpm test:docker:published-upgrade-survivor
 ```
 
 Available scenarios are `base`, `feishu-channel`, `bootstrap-persona`,
-`plugin-deps-cleanup`, `configured-plugin-installs`, `tilde-log-path`, and
-`versioned-runtime-deps`. In aggregate runs,
+`plugin-deps-cleanup`, `configured-plugin-installs`,
+`stale-source-plugin-shadow`, `tilde-log-path`, and `versioned-runtime-deps`. In aggregate runs,
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` expands to all reported
 issue-shaped scenarios, including the configured-plugin install migration.
 

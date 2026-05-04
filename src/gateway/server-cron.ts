@@ -16,6 +16,7 @@ import {
   resolveCronRunLogPath,
   resolveCronRunLogPruneOptions,
 } from "../cron/run-log.js";
+import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
@@ -40,7 +41,7 @@ import {
 } from "./server-cron-notifications.js";
 
 export type GatewayCronState = {
-  cron: CronService;
+  cron: CronServiceContract;
   storePath: string;
   cronEnabled: boolean;
 };
@@ -371,6 +372,7 @@ export function buildGatewayCronService(params: {
           "deliveryError",
           "sessionId",
           "sessionKey",
+          "runId",
           "nextRunAtMs",
           "model",
           "provider",
@@ -404,12 +406,14 @@ export function buildGatewayCronService(params: {
             status: evt.status,
             error: evt.error,
             summary: evt.summary,
+            diagnostics: evt.diagnostics,
             delivered: evt.delivered,
             deliveryStatus: evt.deliveryStatus,
             deliveryError: evt.deliveryError,
             delivery: evt.delivery,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,
+            runId: evt.runId,
             runAtMs: evt.runAtMs,
             durationMs: evt.durationMs,
             nextRunAtMs: evt.nextRunAtMs,

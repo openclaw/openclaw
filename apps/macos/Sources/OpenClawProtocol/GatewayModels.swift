@@ -2804,6 +2804,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
     public let channels: [String: AnyCodable]
     public let channelaccounts: [String: AnyCodable]
     public let channeldefaultaccountid: [String: AnyCodable]
+    public let eventloop: [String: AnyCodable]?
 
     public init(
         ts: Int,
@@ -2814,7 +2815,8 @@ public struct ChannelsStatusResult: Codable, Sendable {
         channelmeta: [[String: AnyCodable]]?,
         channels: [String: AnyCodable],
         channelaccounts: [String: AnyCodable],
-        channeldefaultaccountid: [String: AnyCodable])
+        channeldefaultaccountid: [String: AnyCodable],
+        eventloop: [String: AnyCodable]?)
     {
         self.ts = ts
         self.channelorder = channelorder
@@ -2825,6 +2827,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
         self.channels = channels
         self.channelaccounts = channelaccounts
         self.channeldefaultaccountid = channeldefaultaccountid
+        self.eventloop = eventloop
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2837,6 +2840,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
         case channels
         case channelaccounts = "channelAccounts"
         case channeldefaultaccountid = "channelDefaultAccountId"
+        case eventloop = "eventLoop"
     }
 }
 
@@ -4319,11 +4323,13 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let status: AnyCodable?
     public let error: String?
     public let summary: String?
+    public let diagnostics: [String: AnyCodable]?
     public let delivered: Bool?
     public let deliverystatus: AnyCodable?
     public let deliveryerror: String?
     public let sessionid: String?
     public let sessionkey: String?
+    public let runid: String?
     public let runatms: Int?
     public let durationms: Int?
     public let nextrunatms: Int?
@@ -4339,11 +4345,13 @@ public struct CronRunLogEntry: Codable, Sendable {
         status: AnyCodable?,
         error: String?,
         summary: String?,
+        diagnostics: [String: AnyCodable]?,
         delivered: Bool?,
         deliverystatus: AnyCodable?,
         deliveryerror: String?,
         sessionid: String?,
         sessionkey: String?,
+        runid: String?,
         runatms: Int?,
         durationms: Int?,
         nextrunatms: Int?,
@@ -4358,11 +4366,13 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.status = status
         self.error = error
         self.summary = summary
+        self.diagnostics = diagnostics
         self.delivered = delivered
         self.deliverystatus = deliverystatus
         self.deliveryerror = deliveryerror
         self.sessionid = sessionid
         self.sessionkey = sessionkey
+        self.runid = runid
         self.runatms = runatms
         self.durationms = durationms
         self.nextrunatms = nextrunatms
@@ -4379,11 +4389,13 @@ public struct CronRunLogEntry: Codable, Sendable {
         case status
         case error
         case summary
+        case diagnostics
         case delivered
         case deliverystatus = "deliveryStatus"
         case deliveryerror = "deliveryError"
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
+        case runid = "runId"
         case runatms = "runAtMs"
         case durationms = "durationMs"
         case nextrunatms = "nextRunAtMs"
@@ -5168,6 +5180,7 @@ public struct UpdateRunParams: Codable, Sendable {
     public let sessionkey: String?
     public let deliverycontext: [String: AnyCodable]?
     public let note: String?
+    public let continuationmessage: String?
     public let restartdelayms: Int?
     public let timeoutms: Int?
 
@@ -5175,12 +5188,14 @@ public struct UpdateRunParams: Codable, Sendable {
         sessionkey: String?,
         deliverycontext: [String: AnyCodable]?,
         note: String?,
+        continuationmessage: String?,
         restartdelayms: Int?,
         timeoutms: Int?)
     {
         self.sessionkey = sessionkey
         self.deliverycontext = deliverycontext
         self.note = note
+        self.continuationmessage = continuationmessage
         self.restartdelayms = restartdelayms
         self.timeoutms = timeoutms
     }
@@ -5189,6 +5204,7 @@ public struct UpdateRunParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case deliverycontext = "deliveryContext"
         case note
+        case continuationmessage = "continuationMessage"
         case restartdelayms = "restartDelayMs"
         case timeoutms = "timeoutMs"
     }

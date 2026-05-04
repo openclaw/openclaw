@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LIVE_RETRIES,
@@ -8,6 +9,9 @@ import {
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mjs";
 
 const orderLanes = <T>(lanes: T[]) => lanes;
+const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+  scripts?: Record<string, string>;
+};
 
 function planFor(
   overrides: Partial<Parameters<typeof resolveDockerE2ePlan>[0]> = {},
@@ -146,6 +150,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
     expect(packageUpdateCore.lanes.map((lane) => lane.name)).toEqual([
       "npm-onboard-channel-agent",
+      "npm-onboard-discord-channel-agent",
       "doctor-switch",
       "update-channel-switch",
       "upgrade-survivor",
@@ -155,6 +160,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       expect.arrayContaining([
         expect.objectContaining({
           name: "npm-onboard-channel-agent",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "npm-onboard-discord-channel-agent",
           stateScenario: "empty",
         }),
         expect.objectContaining({
@@ -233,6 +242,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "bundled-plugin-install-uninstall-22",
       "bundled-plugin-install-uninstall-23",
     ]);
+  });
+
+  it("keeps planned pnpm docker lanes backed by package scripts", () => {
+    const plan = planFor({
+      includeOpenWebUI: true,
+      planReleaseAll: true,
+      profile: RELEASE_PATH_PROFILE,
+    });
+    const scripts = packageJson.scripts ?? {};
+    const missing = plan.lanes
+      .flatMap((lane) =>
+        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu), (match) => ({
+          lane: lane.name,
+          script: match[1],
+        })),
+      )
+      .filter(({ script }) => !scripts[script]);
+
+    expect(missing).toEqual([]);
   });
 
   it("keeps legacy release chunk names as aggregate aliases", () => {
@@ -354,6 +382,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
       "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
+      "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
     ]);
@@ -372,12 +401,14 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
       "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
+      "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
       "published-upgrade-survivor-2026.3.13",
       "published-upgrade-survivor-2026.3.13-feishu-channel",
       "published-upgrade-survivor-2026.3.13-bootstrap-persona",
       "published-upgrade-survivor-2026.3.13-configured-plugin-installs",
+      "published-upgrade-survivor-2026.3.13-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.3.13-tilde-log-path",
       "published-upgrade-survivor-2026.3.13-versioned-runtime-deps",
     ]);
@@ -444,7 +475,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
   });
 
-  it("plans Open WebUI as a functional-image lane with OpenAI credentials", () => {
+  it("plans Open WebUI as a live-auth functional image lane", () => {
     const plan = planFor({
       includeOpenWebUI: true,
       selectedLaneNames: ["openwebui"],
@@ -454,14 +485,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes).toEqual([
       expect.objectContaining({
         imageKind: "functional",
-        live: false,
+        live: true,
         name: "openwebui",
+        resources: expect.arrayContaining(["docker", "live", "live:openai", "service"]),
       }),
     ]);
     expect(plan.needs).toMatchObject({
+      e2eImage: true,
       functionalImage: true,
+      liveImage: false,
       package: true,
     });
+  });
+
+  it("excludes Open WebUI from skip-live Docker all plans", () => {
+    const plan = planFor({
+      liveMode: "skip",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).not.toContain("openwebui");
   });
 
   it("surfaces Docker lane test-state scenarios in plan JSON", () => {

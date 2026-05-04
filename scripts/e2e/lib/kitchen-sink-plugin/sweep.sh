@@ -112,11 +112,17 @@ run_failure_scenario() {
   assert_kitchen_sink_removed
 }
 
-if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]] &&
-  [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" != "1" ]] &&
-  [[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]; then
-  clawhub_fixture_dir="$(mktemp -d "/tmp/openclaw-kitchen-sink-clawhub.XXXXXX")"
-  start_kitchen_sink_clawhub_fixture_server "$clawhub_fixture_dir"
+if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]]; then
+  if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
+    export OPENCLAW_CLAWHUB_URL="${OPENCLAW_CLAWHUB_URL:-${CLAWHUB_URL:-https://clawhub.ai}}"
+  else
+    if [[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]; then
+      echo "Ignoring ambient ClawHub URL for fixture-mode kitchen-sink E2E; set OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB=1 for live ClawHub."
+    fi
+    unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
+    clawhub_fixture_dir="$(mktemp -d "/tmp/openclaw-kitchen-sink-clawhub.XXXXXX")"
+    start_kitchen_sink_clawhub_fixture_server "$clawhub_fixture_dir"
+  fi
 fi
 
 scenario_count=0

@@ -53,6 +53,19 @@ function getDescriptorCacheObjectId(value: object | null | undefined): number | 
   return next;
 }
 
+function stripDescriptorVolatileConfigFields(
+  value: NonNullable<PluginLoadOptions["config"]>,
+): NonNullable<PluginLoadOptions["config"]> {
+  if (typeof value !== "object") {
+    return value;
+  }
+  if (!("meta" in value) && !("wizard" in value)) {
+    return value;
+  }
+  const { meta: _meta, wizard: _wizard, ...stableConfig } = value as Record<string, unknown>;
+  return stableConfig as NonNullable<PluginLoadOptions["config"]>;
+}
+
 function getDescriptorConfigCacheKey(
   value: PluginLoadOptions["config"] | null | undefined,
   memo?: PluginToolDescriptorConfigCacheKeyMemo,
@@ -66,7 +79,7 @@ function getDescriptorConfigCacheKey(
   }
   let resolved: string | number | null;
   try {
-    resolved = resolveRuntimeConfigCacheKey(value);
+    resolved = resolveRuntimeConfigCacheKey(stripDescriptorVolatileConfigFields(value));
   } catch {
     resolved = getDescriptorCacheObjectId(value);
   }
@@ -91,8 +104,6 @@ function buildDescriptorContextCacheKey(params: {
     workspaceDir: ctx.workspaceDir ?? null,
     agentDir: ctx.agentDir ?? null,
     agentId: ctx.agentId ?? null,
-    sessionKey: ctx.sessionKey ?? null,
-    sessionId: ctx.sessionId ?? null,
     browser: ctx.browser ?? null,
     messageChannel: ctx.messageChannel ?? null,
     agentAccountId: ctx.agentAccountId ?? null,

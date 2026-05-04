@@ -119,6 +119,9 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
 export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
+export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 25 * 60;
+export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS =
+  (CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS + 5 * 60) * 1000;
 
 if (isMainModule()) {
   try {
@@ -737,6 +740,7 @@ async function runUpgradeLane(params) {
         env,
         packageSpec: params.baselineSpec,
         logPath: join(params.logsDir, "upgrade-install-baseline.log"),
+        ignoreScripts: true,
       });
     } else {
       await installTarballPackage({
@@ -744,6 +748,7 @@ async function runUpgradeLane(params) {
         env,
         tgzPath: params.baselineTgz,
         logPath: join(params.logsDir, "upgrade-install-baseline.log"),
+        ignoreScripts: true,
         restoreBundledPluginPostinstall: false,
       });
     }
@@ -760,35 +765,66 @@ async function runUpgradeLane(params) {
 
     logLanePhase(lane, "update");
     const updateEnv = buildRealUpdateEnv(env);
-    const updateArgs = [
-      "update",
-      "--tag",
-      params.candidateUrl,
-      "--yes",
-      "--json",
-      "--timeout",
-      String(updateStepTimeoutSeconds()),
-    ];
-    const updateResult = await runOpenClaw({
-      lane,
-      env: updateEnv,
-      args: updateArgs,
-      logPath: join(params.logsDir, "upgrade-update.log"),
-      timeoutMs: updateTimeoutMs(),
-      check: false,
-    });
-    verifyPackagedUpgradeUpdateResult(updateResult, {
-      candidateVersion: params.build.candidateVersion,
-    });
+    const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);
+    const updateLogPath = join(params.logsDir, "upgrade-update.log");
+    let updateResult;
+    let usedWindowsPackagedUpgradeTimeoutFallback = false;
+    try {
+      updateResult = await runOpenClaw({
+        lane,
+        env: updateEnv,
+        args: updateArgs,
+        logPath: updateLogPath,
+        timeoutMs: updateTimeoutMs(),
+        check: false,
+      });
+    } catch (error) {
+      if (!isRecoverableWindowsPackagedUpgradeTimeoutError(error, process.platform)) {
+        throw error;
+      }
+      usedWindowsPackagedUpgradeTimeoutFallback = true;
+      appendFileSync(
+        updateLogPath,
+        `\n[release-checks] Windows baseline updater timed out after fetching candidate; falling back to direct candidate install: ${formatError(error)}\n`,
+      );
+      updateResult = {
+        exitCode: 124,
+        stdout: "",
+        stderr: formatError(error),
+      };
+    }
+    const usedWindowsPackagedUpgradeFallback =
+      usedWindowsPackagedUpgradeTimeoutFallback ||
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform);
+    if (usedWindowsPackagedUpgradeFallback) {
+      logLanePhase(lane, "update-fallback-install");
+      await installPackageSpec({
+        lane,
+        env,
+        packageSpec: params.candidateUrl,
+        logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
+      });
+    } else {
+      verifyPackagedUpgradeUpdateResult(updateResult, {
+        candidateVersion: params.build.candidateVersion,
+      });
+    }
 
-    logLanePhase(lane, "update-status");
-    await runOpenClaw({
-      lane,
-      env: updateEnv,
-      args: ["update", "status", "--json"],
-      logPath: join(params.logsDir, "upgrade-update-status.log"),
-      timeoutMs: 2 * 60 * 1000,
-    });
+    if (
+      shouldRunPackagedUpgradeStatusProbe({
+        platform: process.platform,
+        usedWindowsPackagedUpgradeFallback,
+      })
+    ) {
+      logLanePhase(lane, "update-status");
+      await runOpenClaw({
+        lane,
+        env: updateEnv,
+        args: ["update", "status", "--json"],
+        logPath: join(params.logsDir, "upgrade-update-status.log"),
+        timeoutMs: 2 * 60 * 1000,
+      });
+    }
     logLanePhase(lane, "run-bundled-plugin-postinstall");
     await runBundledPluginPostinstall({
       lane,
@@ -1319,6 +1355,59 @@ export function verifyPackagedUpgradeUpdateResult(result, _options) {
       `${result.stdout}\n${result.stderr}`,
     )}`,
   );
+}
+
+export function buildPackagedUpgradeUpdateArgs(candidateUrl) {
+  return [
+    "update",
+    "--tag",
+    candidateUrl,
+    "--yes",
+    "--json",
+    "--no-restart",
+    "--timeout",
+    String(updateStepTimeoutSeconds()),
+  ];
+}
+
+export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+  result,
+  platform = process.platform,
+) {
+  if (platform !== "win32" || result.exitCode === 0) {
+    return false;
+  }
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  return (
+    /\bglobal install swap\b/iu.test(output) &&
+    /\bEPERM\b/iu.test(output) &&
+    /\bunlink\b/iu.test(output) &&
+    /[/\\]\.openclaw-\d+-\d+[/\\]/u.test(output) &&
+    /\.node['"]?/iu.test(output)
+  );
+}
+
+export function isRecoverableWindowsPackagedUpgradeTimeoutError(
+  error,
+  platform = process.platform,
+) {
+  if (platform !== "win32") {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /\bCommand timed out:/u.test(message) &&
+    /[/\\]openclaw\.mjs update --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz --yes --json(?: --no-restart)? --timeout \d+/u.test(
+      message,
+    )
+  );
+}
+
+export function shouldRunPackagedUpgradeStatusProbe({
+  platform = process.platform,
+  usedWindowsPackagedUpgradeFallback,
+} = {}) {
+  return !(platform === "win32" && usedWindowsPackagedUpgradeFallback);
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
@@ -2316,6 +2405,7 @@ async function installTarballPackage(params) {
     packageSpec: params.tgzPath,
     logPath: params.logPath,
     timeoutMs: params.timeoutMs,
+    ignoreScripts: params.ignoreScripts,
   });
   if (
     params.restoreBundledPluginPostinstall !== false &&
@@ -2339,15 +2429,7 @@ async function installPackageSpec(params) {
   rmSync(installedPackageRoot(params.lane.prefixDir), { force: true, recursive: true });
   await runCommand(
     npmCommand(),
-    [
-      "install",
-      "-g",
-      params.packageSpec,
-      "--omit=dev",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=notice",
-    ],
+    buildNpmGlobalInstallArgs(params.packageSpec, { ignoreScripts: params.ignoreScripts }),
     {
       cwd: params.lane.homeDir,
       env: installEnv,
@@ -2357,16 +2439,33 @@ async function installPackageSpec(params) {
   );
 }
 
+export function buildNpmGlobalInstallArgs(packageSpec, options = {}) {
+  return [
+    "install",
+    "-g",
+    packageSpec,
+    "--omit=dev",
+    "--no-fund",
+    "--no-audit",
+    ...(options.ignoreScripts ? ["--ignore-scripts"] : []),
+    "--loglevel=notice",
+  ];
+}
+
 function installTimeoutMs() {
   return process.platform === "win32" ? 45 * 60 * 1000 : 20 * 60 * 1000;
 }
 
 function updateTimeoutMs() {
-  return process.platform === "win32" ? 30 * 60 * 1000 : 20 * 60 * 1000;
+  return process.platform === "win32"
+    ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS
+    : 20 * 60 * 1000;
 }
 
 function updateStepTimeoutSeconds() {
-  return process.platform === "win32" ? 1800 : 1200;
+  return process.platform === "win32"
+    ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS
+    : 1200;
 }
 
 async function runBundledPluginPostinstall(params) {

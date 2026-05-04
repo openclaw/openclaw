@@ -284,7 +284,9 @@ describe("docker build helper", () => {
     expect(clawhub).toContain("OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB");
     expect(clawhub).toContain("OPENCLAW_PLUGINS_E2E_LIVE_NPM_REGISTRY");
     expect(clawhub).toContain("live ClawHub can rate-limit CI");
-    expect(clawhub).toContain('[[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]');
+    expect(clawhub).toContain('[[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]');
+    expect(clawhub).toContain("Ignoring ambient ClawHub URL for fixture-mode plugin E2E");
+    expect(clawhub).toContain("unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL");
   });
 
   it("covers plugin install/update sources in the Docker plugin sweep", () => {
@@ -301,7 +303,8 @@ describe("docker build helper", () => {
     expect(sweep).toContain('plugins install "npm:@openclaw/demo-plugin-npm@0.0.1"');
     expect(sweep).toContain("plugins update demo-plugin-npm");
     expect(assertions).toContain("demo-plugin-npm is up to date (0.0.1).");
-    expect(npmRegistry).toContain('"dist-tags": { latest: entry.version }');
+    expect(npmRegistry).toContain('"dist-tags": { latest: entry.latestVersion }');
+    expect(npmRegistry).toContain("existing.latestVersion = version");
     expect(npmRegistry).toContain("packageArgs.length % 3");
 
     expect(sweep).toContain('plugins install "git:$git_update_repo_url@main"');

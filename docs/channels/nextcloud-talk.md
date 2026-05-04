@@ -21,8 +21,8 @@ Install via CLI (npm registry):
 openclaw plugins install @openclaw/nextcloud-talk
 ```
 
-Use `@openclaw/nextcloud-talk@beta` when following the OpenClaw beta channel and
-npmjs shows `beta` ahead of `latest`.
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Local checkout (when running from a git repo):
 

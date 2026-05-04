@@ -29,8 +29,8 @@ If you are on an older build or a custom install that excludes Twitch, install t
   </Tab>
 </Tabs>
 
-Use `@openclaw/twitch@beta` when following the OpenClaw beta channel and npmjs
-shows `beta` ahead of `latest`.
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Details: [Plugins](/tools/plugin)
 
