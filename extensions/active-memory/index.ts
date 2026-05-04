@@ -41,6 +41,11 @@ const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+const ACTIVE_MEMORY_TOOL_ALLOWLIST = ["memory_recall", "memory_search", "memory_get"] as const;
+const MISSING_REGISTERED_MEMORY_TOOLS_ERROR_MESSAGE =
+  `No callable tools remain after resolving explicit tool allowlist (` +
+  `runtime toolsAllow: ${ACTIVE_MEMORY_TOOL_ALLOWLIST.join(", ")}` +
+  `); no registered tools matched. Fix the allowlist or enable the plugin that registers the requested tool.`;
 const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
@@ -492,6 +497,12 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isMissingRegisteredMemoryToolsError(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.trim() === MISSING_REGISTERED_MEMORY_TOOLS_ERROR_MESSAGE
+  );
 }
 
 function resolveRecallRunChannelContext(params: {
@@ -2394,7 +2405,7 @@ async function runRecallSubagent(params: {
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
-      toolsAllow: ["memory_recall", "memory_search", "memory_get"],
+      toolsAllow: [...ACTIVE_MEMORY_TOOL_ALLOWLIST],
       disableMessageTool: true,
       allowGatewaySubagentBinding: true,
       bootstrapContextMode: "lightweight",
@@ -2437,10 +2448,7 @@ async function runRecallSubagent(params: {
       const searchDebug = partialReply ? await readActiveMemorySearchDebug(sessionFile) : undefined;
       attachPartialTimeoutData(error, partialReply, searchDebug);
     }
-    if (
-      error instanceof Error &&
-      error.message.startsWith("No callable tools remain after resolving explicit tool allowlist")
-    ) {
+    if (!params.abortSignal?.aborted && isMissingRegisteredMemoryToolsError(error)) {
       params.api.logger.debug?.(
         `active-memory: no memory tools registered (memory-core or memory-lancedb required); skipping sub-agent`,
       );
@@ -2968,6 +2976,7 @@ const testing = {
   buildPromptPrefix,
   getCachedResult,
   isCircuitBreakerOpen,
+  isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
   readActiveMemorySearchDebug,
   readPartialAssistantText,
