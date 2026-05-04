@@ -42,13 +42,17 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenRouter: add opt-in response caching params that send OpenRouter's `X-OpenRouter-Cache`, `X-OpenRouter-Cache-TTL`, and cache-clear headers only on verified OpenRouter routes. Thanks @vincentkoc.
 - Providers/OpenRouter: expand app-attribution categories so OpenClaw advertises coding, programming, writing, chat, and personal-agent usage on verified OpenRouter routes. Thanks @vincentkoc.
 - Plugins/runtime state: add `registerIfAbsent` for atomic keyed-store dedupe claims that return whether a plugin successfully claimed a key without overwriting an existing live value. Thanks @amknight.
+- Plugin SDK: add plugin-owned `SessionEntry` slot projection and scoped trusted-policy session extension reads. (#75609; replaces part of #73384/#74483) Thanks @100yenadmin.
 
 ### Fixes
 
+- fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
+- Memory/wiki: preserve representation from both corpora in `corpus=all` searches while backfilling unused result capacity, so memory hits are not starved by numerically higher wiki integer scores. Fixes #77337. Thanks @hclsys.
 - Telegram: clean up tool-only draft previews after assistant message boundaries so transient `Surfacing...` tool-status bubbles do not linger when no matching final preview arrives. Thanks @BunsDev.
 - Cron: surface failed isolated-run diagnostics in `cron show`, status, and run history when requested tools are unavailable, so blocked cron runs report the actual tool-policy failure instead of a misleading green result. Fixes #75763. Thanks @RyanSandoval.
 - TUI/escape abort: track the in-flight runId after `chat.send` resolves so pressing Esc during the gap before the first gateway event aborts the run instead of repeatedly printing `no active run`. Fixes #1296. Thanks @Lukavyi and @romneyda.
 - TUI/render: stop the long-token sanitizer from injecting literal spaces inside inline code spans, fenced code blocks, table borders, and bare hyphenated/dotted identifiers, so copied package names, entity IDs, and shell line-continuations stay byte-for-byte intact while narrow-terminal protection still chunks unidentifiable long prose tokens. Fixes #48432, #39505. Thanks @DocOellerson, @xeusoc, @CCcassiusdjs, @akramcodez, @brokemac79, @romneyda.
+- Plugin skills: publish plugin-declared skills through the generated plugin skills directory (`~/.openclaw/plugin-skills/`) while keeping direct prompt loading intact, so agent file-based discovery paths find plugin skill `SKILL.md` files and inactive plugin links are cleaned up. Fixes #77296. (#77328) Thanks @zhangguiping-xydt.
 - Gateway/status: label Linux managed gateway services as `systemd user`, making status output explicit about the user-service scope instead of implying a system-level unit. Thanks @vincentkoc.
 - Plugins/install: remove the previous managed plugin directory when a reinstall switches sources, so stale ClawHub and npm copies no longer keep duplicate plugin ids in discovery after the new install wins. Thanks @vincentkoc.
 - Plugins/install: let official plugin reinstall recovery repair source-only installed runtime shadows, so `openclaw plugins install npm:@openclaw/discord --force` can replace the bad package instead of stopping at stale config validation. Thanks @vincentkoc.
@@ -196,6 +200,7 @@ Docs: https://docs.openclaw.ai
 - Direct APNs: route direct HTTP/2 delivery through the active managed proxy with redacted proxy diagnostics, so push requests honor configured egress controls and `openclaw proxy validate --apns-reachable` can prove APNs is reachable through the proxy before deployment. (#74905) Thanks @jesse-merhi.
 - Agents/subagents: detect prefix-only completion announce replies and fall back to the captured child result so requester chats no longer lose most of long sub-agent reports silently. Fixes #76412. Thanks @inxaos and @davemorin.
 - TUI: replace the stale-response watchdog notice with plain user-facing copy so stalled replies no longer surface backend or streaming internals. (#77120) Thanks @davemorin.
+- Security/Windows: validate `SystemRoot`/`WINDIR` env values through the Windows install-root validator and add them to the dangerous-host-env policy when resolving `icacls.exe`/`whoami.exe` for `openclaw security audit`, so workspace `.env` overrides and bare command names cannot redirect Windows ACL helpers to attacker-controlled binaries. (#74458) Thanks @mmaps.
 
 ## 2026.5.3-1
 
