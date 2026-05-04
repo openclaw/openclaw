@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Dependencies: refresh runtime and provider packages including Pi 0.73.0, ACPX adapters, OpenAI, Anthropic, Slack, and TypeScript native preview, while keeping the Bedrock runtime installer override pinned below the Windows ARM Node 24 npm resolver failure.
 - Plugins/active-memory: skip session-store channel entries that contain `:` when resolving the recall subagent's channel, so QQ c2c agent IDs (e.g. `c2c:10D4F7C2…`) and other scoped conversation IDs do not reach bundled-plugin `dirName` validation and crash the recall run. The same guard already applied to explicit `channelId` params (#76704); this extends it to store-derived channels. (#77396) Thanks @hclsys.
 - Secrets/external channel contracts: also look in `<rootDir>/dist/` when resolving the `secret-contract-api` sidecar, so npm-published externalized channel plugins (e.g. `@openclaw/discord` since 2026.5.2) whose compiled artifacts live under `dist/` actually contribute their channel SecretRef contracts to the runtime snapshot. Without this, env-backed `channels.discord.token` SecretRefs silently failed to resolve at gateway start on 2026.5.3, leaving the channel `not configured` even though #76449 had landed the generic external-contract loader. Thanks @mogglemoss.
 - Models/auth: add `openclaw models auth list [--provider <id>] [--json]` so users can inspect saved per-agent auth profiles without dumping secrets or hitting the old “too many arguments” path. Thanks @vincentkoc.
