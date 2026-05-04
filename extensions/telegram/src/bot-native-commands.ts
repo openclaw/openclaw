@@ -1382,6 +1382,11 @@ export const registerTelegramNativeCommands = ({
       fn: () => bot.api.setMyCommands([]),
     }).catch(() => {});
     withTelegramApiErrorLogging({
+      operation: "setMyCommands(all_private_chats)",
+      runtime,
+      fn: () => bot.api.setMyCommands([], { scope: { type: "all_private_chats" } }),
+    }).catch(() => {});
+    withTelegramApiErrorLogging({
       operation: "setMyCommands(all_group_chats)",
       runtime,
       fn: () => bot.api.setMyCommands([], { scope: { type: "all_group_chats" } }),

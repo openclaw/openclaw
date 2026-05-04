@@ -2264,6 +2264,9 @@ describe("createTelegramBot", () => {
 
     expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
     expect(setMyCommandsSpy).toHaveBeenCalledWith([], {
+      scope: { type: "all_private_chats" },
+    });
+    expect(setMyCommandsSpy).toHaveBeenCalledWith([], {
       scope: { type: "all_group_chats" },
     });
   });
