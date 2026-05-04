@@ -196,7 +196,12 @@ describe("loadWorkspaceSkillEntries", () => {
       managedSkillsDir: managedDir,
     });
 
-    expect(enabledEntries.map((entry) => entry.skill.name)).toContain("browser-automation");
+    const browserEntry = enabledEntries.find((entry) => entry.skill.name === "browser-automation");
+    const browserSkillDir = path.join(pluginRoot, "skills", "browser-automation");
+    expect(browserEntry?.skill.baseDir).toBe(browserSkillDir);
+    await expect(
+      fs.readlink(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
+    ).resolves.toBe(browserSkillDir);
 
     const blockedEntries = loadTestWorkspaceSkillEntries(workspaceDir, {
       config: {
@@ -208,6 +213,9 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("browser-automation");
+    await expect(
+      fs.lstat(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("loads frontmatter edge cases in one workspace", async () => {

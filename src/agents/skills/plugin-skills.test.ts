@@ -391,40 +391,33 @@ describe("publishPluginSkills", () => {
     expect(fsSync.readlinkSync(path.join(managedDir, "my-skill"))).toBe(dir);
   });
 
-  it("preserves existing managed skill symlinks when a plugin skill has the same name", async () => {
-    const skillParent = await tempDirs.make("plugin-skills-");
+  it("replaces owned generated symlinks when a plugin skill target moves", async () => {
+    const skillParent1 = await tempDirs.make("plugin-skills-1-");
+    const skillParent2 = await tempDirs.make("plugin-skills-2-");
     const managedDir = await tempDirs.make("managed-skills-");
 
-    const dir1 = await writeSkillDir(skillParent, "skill-v1", "old");
-    const dir2 = await writeSkillDir(skillParent, "my-skill", "new");
+    const dir1 = await writeSkillDir(skillParent1, "my-skill", "old");
+    const dir2 = await writeSkillDir(skillParent2, "my-skill", "new");
 
-    // Manually create a symlink to dir1 under the same name as dir2's basename.
     fsSync.symlinkSync(dir1, path.join(managedDir, "my-skill"), "dir");
 
-    // Now publish dir2 (basename "my-skill"); must NOT replace existing symlink.
     publishPluginSkills([dir2], { pluginSkillsDir: managedDir });
 
-    // Existing managed symlink is preserved.
-    expect(fsSync.readlinkSync(path.join(managedDir, "my-skill"))).toBe(dir1);
+    expect(fsSync.readlinkSync(path.join(managedDir, "my-skill"))).toBe(dir2);
   });
 
-  it("cleans up stale symlinks whose targets no longer exist", async () => {
+  it("cleans up stale symlinks whose targets still exist", async () => {
     const skillParent = await tempDirs.make("plugin-skills-");
     const managedDir = await tempDirs.make("managed-skills-");
 
     const dir = await writeSkillDir(skillParent, "current-skill");
-    const staleDir = path.join(skillParent, "stale-skill");
-    await fs.mkdir(staleDir, { recursive: true });
+    const staleDir = await writeSkillDir(skillParent, "stale-skill");
 
-    // Create a stale symlink pointing to a directory we'll delete.
     fsSync.symlinkSync(staleDir, path.join(managedDir, "stale-skill"), "dir");
-    await fs.rm(staleDir, { recursive: true, force: true });
 
-    // Publish only the current skill; stale should be cleaned up.
     publishPluginSkills([dir], { pluginSkillsDir: managedDir });
 
     expect(fsSync.existsSync(path.join(managedDir, "current-skill"))).toBe(true);
-    // Stale symlink pointing to nonexistent target should be removed.
     expect(fsSync.existsSync(path.join(managedDir, "stale-skill"))).toBe(false);
   });
 

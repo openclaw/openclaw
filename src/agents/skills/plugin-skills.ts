@@ -184,10 +184,7 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       if (existingTarget === target) {
         continue;
       }
-      log.warn(
-        `plugin skill symlink "${linkPath}" already exists, skipping plugin skill "${target}"`,
-      );
-      continue;
+      fs.unlinkSync(linkPath);
     } catch (err) {
       if (!isNotFoundError(err)) {
         log.warn(`failed to inspect plugin skill symlink "${linkPath}": ${String(err)}`);
@@ -219,18 +216,9 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
     }
     const linkPath = path.join(pluginSkillsDir, entry.name);
     try {
-      const target = fs.readlinkSync(linkPath);
-      // Only remove symlinks that point to directories that no longer exist.
-      if (!fs.existsSync(target)) {
-        fs.unlinkSync(linkPath);
-      }
+      fs.unlinkSync(linkPath);
     } catch {
-      // Broken symlink or other issue — best-effort cleanup.
-      try {
-        fs.unlinkSync(linkPath);
-      } catch {
-        // ignore
-      }
+      // best-effort cleanup
     }
   }
 }
