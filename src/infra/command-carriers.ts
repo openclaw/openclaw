@@ -35,7 +35,9 @@ const SUDO_OPTIONS_WITH_VALUE = new Set([
   "-U",
   "-u",
   "--chdir",
+  "--chroot",
   "--close-from",
+  "--command-timeout",
   "--group",
   "--host",
   "--other-user",
@@ -51,6 +53,7 @@ const SUDO_STANDALONE_OPTIONS = new Set([
   "-E",
   "-H",
   "-i",
+  "-k",
   "-N",
   "-n",
   "-P",
@@ -65,13 +68,13 @@ const SUDO_STANDALONE_OPTIONS = new Set([
   "--preserve-env",
   "--preserve-groups",
   "--reset-home",
+  "--reset-timestamp",
   "--set-home",
   "--shell",
   "--stdin",
 ]);
 const SUDO_NON_EXEC_OPTIONS = new Set([
   "-K",
-  "-k",
   "-l",
   "-V",
   "-v",
@@ -80,7 +83,6 @@ const SUDO_NON_EXEC_OPTIONS = new Set([
   "--help",
   "--list",
   "--remove-timestamp",
-  "--reset-timestamp",
   "--validate",
   "--version",
 ]);
@@ -167,6 +169,20 @@ function knownCarrierOptionConsumesNextValue(
     }
   }
   return consumesNextValue;
+}
+
+function stripSudoEnvAssignmentsFromCommandArgv(
+  executable: string,
+  argv: string[],
+): string[] | null {
+  if (executable !== "sudo") {
+    return argv.length > 0 ? argv : null;
+  }
+  let index = 0;
+  while (index < argv.length && isEnvAssignmentToken(argv[index] ?? "")) {
+    index += 1;
+  }
+  return index < argv.length ? argv.slice(index) : null;
 }
 
 function findParsedCarrierOption(
@@ -317,10 +333,10 @@ function resolveSudoLikeCarriedArgv(argv: string[]): string[] | null {
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index] ?? "";
     if (token === "--") {
-      return argv.slice(index + 1);
+      return stripSudoEnvAssignmentsFromCommandArgv(executable, argv.slice(index + 1));
     }
     if (!token.startsWith("-")) {
-      return argv.slice(index);
+      return stripSudoEnvAssignmentsFromCommandArgv(executable, argv.slice(index));
     }
     const option = parseCarrierOptionToken(
       token,
