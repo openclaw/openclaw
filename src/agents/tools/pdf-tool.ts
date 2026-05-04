@@ -249,6 +249,12 @@ export function createPdfTool(options?: {
   fsPolicy?: ToolFsPolicy;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
+  // If PDF is explicitly denied, do not initialize the tool at all.
+  // This avoids the ~2.5s pdfjs-dist loading overhead on every agent turn.
+  if (options?.config?.tools?.deny?.some((d) => d.trim().toLowerCase() === "pdf")) {
+    return null;
+  }
+
   if (!agentDir) {
     const explicit = coercePdfModelConfig(options?.config);
     if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
