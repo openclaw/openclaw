@@ -52,6 +52,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/sessions: memoize repeated thinking-option enrichment and skip unused cost fallback checks while listing sessions, reducing per-row work on large multi-agent stores. Fixes #76931.
 - Agents/tools: use config-only runtime snapshots for plugin tool registration and live runtime config getters, avoiding expensive full secrets snapshot clones on the core-plugin-tools prep path. Fixes #76295.
 - Agents/tools: honor the effective tool denylist before constructing optional PDF/media tool factories, so `tools.deny: ["pdf"]` skips PDF setup before later policy filtering. Fixes #76997.
+- MCP/plugin tools: apply global `tools.profile`, `tools.alsoAllow`, and `tools.deny` policy while exposing plugin tools over the standalone MCP bridge, so ACP clients do not see policy-hidden plugin tools or miss opt-in optional tools. Thanks @vincentkoc.
 - Plugin tools: honor explicit tool denylists while selecting plugin tool runtimes, so denied plugin tools are not materialized for direct command or gateway surfaces before later policy filtering. Thanks @vincentkoc.
 - Agents/bootstrap: keep pending `BOOTSTRAP.md` and bootstrap truncation notices in system-prompt Project Context instead of copying setup text or raw warning diagnostics into WebChat user/runtime context. Fixes #76946.
 - Channels/WhatsApp: allow `@whiskeysockets/libsignal-node` in `onlyBuiltDependencies` so pnpm v9+ `blockExoticSubdeps` no longer rejects the baileys git-tarball subdep and silences all inbound agent replies. Fixes #76539. Thanks @ottodeng and @vincentkoc.
