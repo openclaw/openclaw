@@ -2,7 +2,7 @@ import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type StaticModelRef = {
+type StaticModelRef = {
   provider: string;
   model: string;
 };
@@ -42,7 +42,7 @@ export function normalizeStaticProviderModelId(
   );
 }
 
-export function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {
+function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -69,4 +69,18 @@ export function resolveStaticAllowlistModelKey(
     return null;
   }
   return modelKey(parsed.provider, parsed.model);
+}
+
+export function formatLiteralProviderPrefixedModelRef(provider: string, modelRef: string): string {
+  const providerId = normalizeProviderId(provider);
+  const trimmedRef = modelRef.trim();
+  if (!providerId || !trimmedRef) {
+    return trimmedRef;
+  }
+  const normalizedRef = normalizeLowercaseStringOrEmpty(trimmedRef);
+  const literalPrefix = `${providerId}/${providerId}/`;
+  if (normalizedRef.startsWith(literalPrefix)) {
+    return trimmedRef;
+  }
+  return normalizedRef.startsWith(`${providerId}/`) ? `${providerId}/${trimmedRef}` : trimmedRef;
 }

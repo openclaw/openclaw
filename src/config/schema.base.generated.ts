@@ -147,9 +147,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
-            title: "Stuck Session Warning Threshold (ms)",
+            title: "Session Liveness Threshold (ms)",
             description:
-              "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+              "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
           },
           otel: {
             type: "object",
@@ -871,6 +871,45 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               type: "string",
             },
           },
+          tabCleanup: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+                title: "Browser Tab Cleanup Enabled",
+                description:
+                  "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+              },
+              idleMinutes: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Idle Minutes",
+                description:
+                  "Minutes of inactivity before a tracked primary-agent browser tab is eligible for closure. Set 0 to disable idle-time cleanup while keeping the per-session tab cap.",
+              },
+              maxTabsPerSession: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Max Tabs Per Session",
+                description:
+                  "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
+              },
+              sweepMinutes: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Sweep Minutes",
+                description:
+                  "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
+              },
+            },
+            additionalProperties: false,
+            title: "Browser Tab Cleanup",
+            description:
+              "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
+          },
         },
         additionalProperties: false,
         title: "Browser",
@@ -1240,6 +1279,65 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
       },
+      accessGroups: {
+        type: "object",
+        propertyNames: {
+          type: "string",
+          minLength: 1,
+        },
+        additionalProperties: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "discord.channelAudience",
+                },
+                guildId: {
+                  type: "string",
+                  minLength: 1,
+                },
+                channelId: {
+                  type: "string",
+                  minLength: 1,
+                },
+                membership: {
+                  type: "string",
+                  const: "canViewChannel",
+                },
+              },
+              required: ["type", "guildId", "channelId"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "message.senders",
+                },
+                members: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                    minLength: 1,
+                  },
+                  additionalProperties: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                  },
+                },
+              },
+              required: ["type", "members"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
       acp: {
         type: "object",
         properties: {
@@ -1589,6 +1687,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Model Provider Inject num_ctx (OpenAI Compat)",
                   description:
                     "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
+                },
+                params: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {},
+                  title: "Model Provider Runtime Parameters",
+                  description:
+                    "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
                 },
                 headers: {
                   type: "object",
@@ -3651,6 +3759,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               skipBootstrap: {
                 type: "boolean",
               },
+              skipOptionalBootstrapFiles: {
+                type: "array",
+                items: {
+                  type: "string",
+                  enum: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"],
+                },
+                title: "Skipped Optional Bootstrap Files",
+                description:
+                  "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.",
+              },
               contextInjection: {
                 anyOf: [
                   {
@@ -4095,6 +4213,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     reliability: {
                       type: "object",
                       properties: {
+                        outputLimits: {
+                          type: "object",
+                          properties: {
+                            maxTurnRawChars: {
+                              type: "integer",
+                              minimum: 1024,
+                              maximum: 67108864,
+                            },
+                            maxTurnLines: {
+                              type: "integer",
+                              minimum: 100,
+                              maximum: 100000,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
                         watchdog: {
                           type: "object",
                           properties: {
@@ -4986,6 +5120,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
                   },
+                  midTurnPrecheck: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                        title: "Compaction Mid-turn Precheck Enabled",
+                        description:
+                          "Enable structured mid-turn context pressure checks for Pi tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "Compaction Mid-turn Precheck",
+                    description:
+                      "Optional Pi tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
+                  },
                   postIndexSync: {
                     type: "string",
                     enum: ["off", "async", "await"],
@@ -5197,6 +5346,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   {
                     type: "string",
                     const: "full",
+                  },
+                ],
+              },
+              reasoningDefault: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "on",
+                  },
+                  {
+                    type: "string",
+                    const: "stream",
                   },
                 ],
               },
@@ -5463,6 +5628,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   isolatedSession: {
                     type: "boolean",
+                  },
+                  skipWhenBusy: {
+                    type: "boolean",
+                    title: "Heartbeat Skip When Busy",
+                    description:
+                      "When true, defer heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
                   },
                 },
                 additionalProperties: false,
@@ -7198,6 +7369,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     isolatedSession: {
                       type: "boolean",
                     },
+                    skipWhenBusy: {
+                      type: "boolean",
+                      title: "Heartbeat Skip When Busy",
+                      description:
+                        "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+                    },
                   },
                   additionalProperties: false,
                 },
@@ -8610,6 +8787,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
                       },
+                      allowIpv6UniqueLocalRange: {
+                        type: "boolean",
+                        title: "Web Fetch Allow IPv6 Unique Local Range",
+                        description:
+                          "Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility such as sing-box, Clash, or Surge.",
+                      },
                     },
                     additionalProperties: false,
                     title: "Web Fetch SSRF Policy",
@@ -10012,7 +10195,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "boolean",
                     title: "Async Media Completion Direct Send",
                     description:
-                      "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+                      "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
                   },
                 },
                 additionalProperties: false,
@@ -18861,6 +19044,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
           },
+          visibleReplies: {
+            type: "string",
+            enum: ["automatic", "message_tool"],
+            title: "Visible Replies",
+            description:
+              'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
+          },
           responsePrefix: {
             type: "string",
             title: "Outbound Response Prefix",
@@ -18892,7 +19082,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 enum: ["automatic", "message_tool"],
                 title: "Group Visible Replies",
                 description:
-                  'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+                  'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
               },
             },
             additionalProperties: false,
@@ -18936,7 +19126,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Queue Mode",
                 description:
-                  'Queue behavior mode: "steer", "followup", "collect", "steer-backlog", "steer+backlog", "queue", or "interrupt". Keep conservative modes unless you intentionally need aggressive interruption/backlog semantics.',
+                  'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
               },
               byChannel: {
                 type: "object",
@@ -19273,7 +19463,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Queue Debounce (ms)",
                 description:
-                  "Global queue debounce window in milliseconds before processing buffered inbound messages. Use higher values to coalesce rapid bursts, or lower values for reduced response latency.",
+                  "Global followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
               },
               debounceMsByChannel: {
                 type: "object",
@@ -19295,7 +19485,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Queue Capacity",
                 description:
-                  "Maximum number of queued inbound items retained before drop policy applies. Keep caps bounded in noisy channels so memory usage remains predictable.",
+                  "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
               },
               drop: {
                 anyOf: [
@@ -19314,13 +19504,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Queue Drop Strategy",
                 description:
-                  'Drop strategy when queue cap is exceeded: "old", "new", or "summarize". Use summarize when preserving intent matters, or old/new when deterministic dropping is preferred.',
+                  'Drop strategy when queue cap is exceeded. "summarize" drops oldest entries but preserves compact summaries; "old" drops oldest without summaries; "new" rejects the newest item. Use "summarize" for long-running chats where context matters.',
               },
             },
             additionalProperties: false,
             title: "Inbound Queue",
             description:
-              "Inbound message queue strategy used to buffer bursts before processing turns. Tune this for busy channels where sequential processing or batching behavior matters.",
+              "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is steer, with followup fallback when steering is unavailable.",
           },
           inbound: {
             type: "object",
@@ -20518,14 +20708,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
           },
-          parentForkMaxTokens: {
-            type: "integer",
-            minimum: 0,
-            maximum: 9007199254740991,
-            title: "Session Parent Fork Max Tokens",
-            description:
-              "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
-          },
           mainKey: {
             type: "string",
             title: "Session Main Key",
@@ -20634,6 +20816,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
           },
+          writeLock: {
+            type: "object",
+            properties: {
+              acquireTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Session Write Lock Acquire Timeout",
+                description:
+                  "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+              },
+            },
+            additionalProperties: false,
+            title: "Session Write Lock",
+            description:
+              "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+          },
           agentToAgent: {
             type: "object",
             properties: {
@@ -20673,6 +20872,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Thread Binding Max Age (hours)",
                 description:
                   "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
+              },
+              spawnSessions: {
+                type: "boolean",
+                title: "Thread-Bound Session Spawns",
+                description:
+                  "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+              },
+              defaultSpawnContext: {
+                type: "string",
+                enum: ["isolated", "fork"],
+                title: "Thread Spawn Context",
+                description:
+                  'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
               },
             },
             additionalProperties: false,
@@ -21024,6 +21236,29 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         title: "Cron",
         description:
           "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
+      },
+      commitments: {
+        type: "object",
+        properties: {
+          enabled: {
+            type: "boolean",
+            title: "Commitments Enabled",
+            description:
+              "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
+          },
+          maxPerDay: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Commitments per Day",
+            description:
+              "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
+          },
+        },
+        additionalProperties: false,
+        title: "Commitments",
+        description:
+          "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
       },
       hooks: {
         type: "object",
@@ -21520,6 +21755,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "string",
                           const: "clawhub",
                         },
+                        {
+                          type: "string",
+                          const: "git",
+                        },
                       ],
                     },
                     spec: {
@@ -21588,6 +21827,64 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           const: "private",
                         },
                       ],
+                    },
+                    artifactKind: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "legacy-zip",
+                        },
+                        {
+                          type: "string",
+                          const: "npm-pack",
+                        },
+                      ],
+                    },
+                    artifactFormat: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "zip",
+                        },
+                        {
+                          type: "string",
+                          const: "tgz",
+                        },
+                      ],
+                    },
+                    npmIntegrity: {
+                      type: "string",
+                    },
+                    npmShasum: {
+                      type: "string",
+                    },
+                    npmTarballName: {
+                      type: "string",
+                    },
+                    clawpackSha256: {
+                      type: "string",
+                    },
+                    clawpackSpecVersion: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    clawpackManifestSha256: {
+                      type: "string",
+                    },
+                    clawpackSize: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    gitUrl: {
+                      type: "string",
+                    },
+                    gitRef: {
+                      type: "string",
+                    },
+                    gitCommit: {
+                      type: "string",
                     },
                     hooks: {
                       type: "array",
@@ -22028,6 +22325,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Allow External Control UI Embed URLs",
                 description:
                   "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+              },
+              chatMessageMaxWidth: {
+                title: "Control UI Chat Message Max Width",
+                description:
+                  'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
               },
               allowedOrigins: {
                 type: "array",
@@ -22632,7 +22934,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Restart Deferral Timeout (ms)",
                 description:
-                  "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+                  "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
               },
             },
             additionalProperties: false,
@@ -23221,15 +23523,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   onBoot: {
                     type: "boolean",
-                    title: "QMD Update on Startup",
+                    title: "QMD Update on Manager Start",
                     description:
-                      "Runs an initial QMD update once during gateway startup (default: true). Keep enabled so recall starts from a fresh baseline; disable only when startup speed is more important than immediate freshness.",
+                      "Runs an initial QMD update when the long-lived QMD manager opens (default: true). Set false to disable manager-start updates and legacy/opt-in startup refreshes.",
+                  },
+                  startup: {
+                    type: "string",
+                    enum: ["off", "idle", "immediate"],
+                    title: "QMD Gateway Startup Refresh",
+                    description:
+                      "Controls whether Gateway startup schedules a QMD refresh before memory is first used (`off`, `idle`, or `immediate`; default: off). Keep off for fastest startup and lazy memory initialization.",
+                  },
+                  startupDelayMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                    title: "QMD Gateway Startup Delay (ms)",
+                    description:
+                      'Sets the idle delay before an opt-in `memory.qmd.update.startup: "idle"` refresh runs (default: 120000). Increase to keep cold-start CPU available for channels and providers.',
                   },
                   waitForBootSync: {
                     type: "boolean",
-                    title: "QMD Wait for Boot Sync",
+                    title: "QMD Wait for Manager-Start Sync",
                     description:
-                      "Blocks startup completion until the initial boot-time QMD sync finishes (default: false). Enable when you need fully up-to-date recall before serving traffic, and keep off for faster boot.",
+                      "Blocks QMD manager opening until its initial manager-start update finishes (default: false). Startup refreshes remain opt-in through `memory.qmd.update.startup`.",
                   },
                   embedInterval: {
                     type: "string",
@@ -24243,6 +24560,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "How often beta-channel checks run in hours (default: 1).",
       tags: ["performance"],
     },
+    commitments: {
+      label: "Commitments",
+      help: "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
+      tags: ["advanced"],
+    },
+    "commitments.enabled": {
+      label: "Commitments Enabled",
+      help: "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
+      tags: ["advanced"],
+    },
+    "commitments.maxPerDay": {
+      label: "Commitments per Day",
+      help: "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
+      tags: ["performance"],
+    },
     "diagnostics.enabled": {
       label: "Diagnostics Enabled",
       help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
@@ -24254,8 +24586,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["observability"],
     },
     "diagnostics.stuckSessionWarnMs": {
-      label: "Stuck Session Warning Threshold (ms)",
-      help: "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+      label: "Session Liveness Threshold (ms)",
+      help: "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
       tags: ["observability", "storage"],
     },
     "diagnostics.otel.enabled": {
@@ -24987,7 +25319,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.media.asyncCompletion.directSend": {
       label: "Async Media Completion Direct Send",
-      help: "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+      help: "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
       tags: ["storage", "media", "tools"],
     },
     "tools.media.audio.enabled": {
@@ -25667,6 +25999,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
       tags: ["access", "tools"],
     },
+    "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange": {
+      label: "Web Fetch Allow IPv6 Unique Local Range",
+      help: "Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility such as sing-box, Clash, or Surge.",
+      tags: ["access", "tools"],
+    },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
       help: "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
@@ -25688,6 +26025,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Allow External Control UI Embed URLs",
       help: "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
       tags: ["security", "access", "network", "advanced"],
+    },
+    "gateway.controlUi.chatMessageMaxWidth": {
+      label: "Control UI Chat Message Max Width",
+      help: 'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
+      tags: ["advanced"],
     },
     "gateway.controlUi.allowedOrigins": {
       label: "Control UI Allowed Origins",
@@ -25803,7 +26145,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "gateway.reload.deferralTimeoutMs": {
       label: "Restart Deferral Timeout (ms)",
-      help: "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+      help: "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
       tags: ["network", "reliability", "performance"],
     },
     "gateway.nodes.browser.mode": {
@@ -26030,6 +26372,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "GPT-5 Personality Overlay",
       help: 'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
       tags: ["advanced"],
+    },
+    "agents.defaults.skipOptionalBootstrapFiles": {
+      label: "Skipped Optional Bootstrap Files",
+      help: "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.",
+      tags: ["storage"],
     },
     "agents.defaults.contextInjection": {
       label: "Context Injection",
@@ -26498,13 +26845,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["performance", "storage"],
     },
     "memory.qmd.update.onBoot": {
-      label: "QMD Update on Startup",
-      help: "Runs an initial QMD update once during gateway startup (default: true). Keep enabled so recall starts from a fresh baseline; disable only when startup speed is more important than immediate freshness.",
+      label: "QMD Update on Manager Start",
+      help: "Runs an initial QMD update when the long-lived QMD manager opens (default: true). Set false to disable manager-start updates and legacy/opt-in startup refreshes.",
+      tags: ["storage"],
+    },
+    "memory.qmd.update.startup": {
+      label: "QMD Gateway Startup Refresh",
+      help: "Controls whether Gateway startup schedules a QMD refresh before memory is first used (`off`, `idle`, or `immediate`; default: off). Keep off for fastest startup and lazy memory initialization.",
+      tags: ["storage"],
+    },
+    "memory.qmd.update.startupDelayMs": {
+      label: "QMD Gateway Startup Delay (ms)",
+      help: 'Sets the idle delay before an opt-in `memory.qmd.update.startup: "idle"` refresh runs (default: 120000). Increase to keep cold-start CPU available for channels and providers.',
       tags: ["storage"],
     },
     "memory.qmd.update.waitForBootSync": {
-      label: "QMD Wait for Boot Sync",
-      help: "Blocks startup completion until the initial boot-time QMD sync finishes (default: false). Enable when you need fully up-to-date recall before serving traffic, and keep off for faster boot.",
+      label: "QMD Wait for Manager-Start Sync",
+      help: "Blocks QMD manager opening until its initial manager-start update finishes (default: false). Startup refreshes remain opt-in through `memory.qmd.update.startup`.",
       tags: ["storage"],
     },
     "memory.qmd.update.embedInterval": {
@@ -26726,6 +27083,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "models.providers.*.injectNumCtxForOpenAICompat": {
       label: "Model Provider Inject num_ctx (OpenAI Compat)",
       help: "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
+      tags: ["models"],
+    },
+    "models.providers.*.params": {
+      label: "Model Provider Runtime Parameters",
+      help: "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
       tags: ["models"],
     },
     "models.providers.*.headers": {
@@ -27103,6 +27465,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
       tags: ["performance"],
     },
+    "agents.defaults.compaction.midTurnPrecheck": {
+      label: "Compaction Mid-turn Precheck",
+      help: "Optional Pi tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.compaction.midTurnPrecheck.enabled": {
+      label: "Compaction Mid-turn Precheck Enabled",
+      help: "Enable structured mid-turn context pressure checks for Pi tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
+      tags: ["advanced"],
+    },
     "agents.defaults.compaction.postIndexSync": {
       label: "Compaction Post-Index Sync",
       help: 'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
@@ -27235,6 +27607,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list.*.heartbeat.timeoutSeconds": {
       label: "Heartbeat Timeout (Seconds)",
       tags: ["performance", "automation"],
+    },
+    "agents.defaults.heartbeat.skipWhenBusy": {
+      label: "Heartbeat Skip When Busy",
+      help: "When true, defer heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
+    },
+    "agents.list.*.heartbeat.skipWhenBusy": {
+      label: "Heartbeat Skip When Busy",
+      help: "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
     },
     "agents.defaults.sandbox.browser.network": {
       label: "Sandbox Browser Network",
@@ -27527,11 +27909,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
       tags: ["storage"],
     },
-    "session.parentForkMaxTokens": {
-      label: "Session Parent Fork Max Tokens",
-      help: "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
-      tags: ["security", "auth", "performance", "storage"],
-    },
     "session.mainKey": {
       label: "Session Main Key",
       help: 'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
@@ -27582,6 +27959,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
       tags: ["access", "storage"],
     },
+    "session.writeLock": {
+      label: "Session Write Lock",
+      help: "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+      tags: ["storage"],
+    },
+    "session.writeLock.acquireTimeoutMs": {
+      label: "Session Write Lock Acquire Timeout",
+      help: "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+      tags: ["performance", "storage"],
+    },
     "session.agentToAgent": {
       label: "Session Agent-to-Agent",
       help: "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
@@ -27611,6 +27998,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Thread Binding Max Age (hours)",
       help: "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
       tags: ["performance", "storage"],
+    },
+    "session.threadBindings.spawnSessions": {
+      label: "Thread-Bound Session Spawns",
+      help: "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+      tags: ["storage"],
+    },
+    "session.threadBindings.defaultSpawnContext": {
+      label: "Thread Spawn Context",
+      help: 'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+      tags: ["storage"],
     },
     "session.maintenance": {
       label: "Session Maintenance",
@@ -28151,6 +28548,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
       tags: ["advanced"],
     },
+    "messages.visibleReplies": {
+      label: "Visible Replies",
+      help: 'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
+      tags: ["advanced"],
+    },
     "messages.responsePrefix": {
       label: "Outbound Response Prefix",
       help: "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
@@ -28173,17 +28575,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.groupChat.visibleReplies": {
       label: "Group Visible Replies",
-      help: 'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+      help: 'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
       tags: ["advanced"],
     },
     "messages.queue": {
       label: "Inbound Queue",
-      help: "Inbound message queue strategy used to buffer bursts before processing turns. Tune this for busy channels where sequential processing or batching behavior matters.",
+      help: "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is steer, with followup fallback when steering is unavailable.",
       tags: ["advanced"],
     },
     "messages.queue.mode": {
       label: "Queue Mode",
-      help: 'Queue behavior mode: "steer", "followup", "collect", "steer-backlog", "steer+backlog", "queue", or "interrupt". Keep conservative modes unless you intentionally need aggressive interruption/backlog semantics.',
+      help: 'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
       tags: ["advanced"],
     },
     "messages.queue.byChannel": {
@@ -28193,7 +28595,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.queue.debounceMs": {
       label: "Queue Debounce (ms)",
-      help: "Global queue debounce window in milliseconds before processing buffered inbound messages. Use higher values to coalesce rapid bursts, or lower values for reduced response latency.",
+      help: "Global followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
       tags: ["performance"],
     },
     "messages.queue.debounceMsByChannel": {
@@ -28203,12 +28605,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.queue.cap": {
       label: "Queue Capacity",
-      help: "Maximum number of queued inbound items retained before drop policy applies. Keep caps bounded in noisy channels so memory usage remains predictable.",
+      help: "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
       tags: ["advanced"],
     },
     "messages.queue.drop": {
       label: "Queue Drop Strategy",
-      help: 'Drop strategy when queue cap is exceeded: "old", "new", or "summarize". Use summarize when preserving intent matters, or old/new when deterministic dropping is preferred.',
+      help: 'Drop strategy when queue cap is exceeded. "summarize" drops oldest entries but preserves compact summaries; "old" drops oldest without summaries; "new" rejects the newest item. Use "summarize" for long-running chats where context matters.',
       tags: ["advanced"],
     },
     "messages.inbound": {
@@ -28393,6 +28795,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Heartbeat Timeout (Seconds)",
       help: "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
       tags: ["performance", "automation"],
+    },
+    "agents.list[].heartbeat.skipWhenBusy": {
+      label: "Agent Heartbeat Skip When Busy",
+      help: "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
     },
     "agents.list[].sandbox.browser.network": {
       label: "Agent Sandbox Browser Network",
@@ -28934,6 +29341,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.27",
+  version: "2026.5.2",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

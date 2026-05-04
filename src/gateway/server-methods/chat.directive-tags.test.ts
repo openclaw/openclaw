@@ -715,6 +715,48 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("does not persist agent media supplements when no playable media resolves", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
+    const staleAudioPath = path.join(transcriptDir, "stale.mp3");
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
+          mediaUrl: staleAudioPath,
+          mediaUrls: [staleAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-stale-agent-media",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toEqual([]);
+  });
+
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
     const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-tts-final-");
     const audioPath = path.join(transcriptDir, "tts.mp3");
@@ -995,6 +1037,36 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         sessionKey: "agent:main:canon",
       }),
+    );
+  });
+
+  it("chat.send broadcasts final replies for telegram-shaped session keys", async () => {
+    createTranscriptFixture("openclaw-chat-send-telegram-final-");
+    mockState.finalText = "telegram ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+    const sessionKey = "agent:main:telegram:direct:123456";
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-telegram-final",
+      sessionKey,
+    });
+
+    expect(payload).toEqual(
+      expect.objectContaining({
+        runId: "idem-telegram-final",
+        sessionKey,
+        state: "final",
+        message: expect.any(Object),
+      }),
+    );
+    expect(extractFirstTextBlock(payload)).toBe("telegram ok");
+    expect(context.nodeSendToSession).toHaveBeenCalledWith(
+      sessionKey,
+      "chat",
+      expect.objectContaining({ sessionKey, state: "final" }),
     );
   });
 

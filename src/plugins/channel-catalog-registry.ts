@@ -10,6 +10,7 @@ export type PluginChannelCatalogEntry = {
   pluginId: string;
   origin: PluginOrigin;
   packageName?: string;
+  packageVersion?: string;
   workspaceDir?: string;
   rootDir: string;
   channel: PluginPackageChannel;
@@ -43,6 +44,7 @@ export function listChannelCatalogEntries(
         pluginId: manifest.manifest.id,
         origin: candidate.origin,
         packageName: candidate.packageName,
+        packageVersion: candidate.packageVersion,
         workspaceDir: candidate.workspaceDir,
         rootDir: candidate.rootDir,
         channel,

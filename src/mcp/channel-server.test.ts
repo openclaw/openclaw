@@ -323,7 +323,47 @@ describe("openclaw channel mcp server", () => {
       );
     });
 
-    test("lists routed sessions that only expose modern channel fields", async () => {
+    test("gets one conversation through sessions.describe without broad listing", async () => {
+      const bridge = new OpenClawChannelBridge({} as never, {
+        claudeChannelMode: "off",
+        verbose: false,
+      });
+      const gatewayRequest = vi.fn(async (method: string) => {
+        if (method === "sessions.describe") {
+          return {
+            session: {
+              key: "agent:main:main",
+              deliveryContext: {
+                channel: "telegram",
+                to: "-100123",
+                accountId: "acct-1",
+              },
+              lastMessagePreview: "latest message",
+            },
+          };
+        }
+        throw new Error(`unexpected gateway method ${method}`);
+      });
+
+      attachReadyGateway(bridge, gatewayRequest);
+
+      await expect(bridge.getConversation("agent:main:main")).resolves.toEqual(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          channel: "telegram",
+          to: "-100123",
+          accountId: "acct-1",
+          lastMessagePreview: "latest message",
+        }),
+      );
+      expect(gatewayRequest).toHaveBeenCalledWith("sessions.describe", {
+        key: "agent:main:main",
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      });
+    });
+
+    test("lists routed sessions from deliveryContext without mirrored route fields", async () => {
       const bridge = new OpenClawChannelBridge({} as never, {
         claudeChannelMode: "off",
         verbose: false,
@@ -332,20 +372,18 @@ describe("openclaw channel mcp server", () => {
         sessions: [
           {
             key: "agent:main:channel-field",
-            channel: "telegram",
             deliveryContext: {
+              channel: "telegram",
               to: "-100111",
             },
           },
           {
             key: "agent:main:origin-field",
-            origin: {
-              provider: "imessage",
+            deliveryContext: {
+              channel: "imessage",
+              to: "+15551230000",
               accountId: "imessage-default",
               threadId: "thread-7",
-            },
-            deliveryContext: {
-              to: "+15551230000",
             },
           },
         ],

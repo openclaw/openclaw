@@ -22,8 +22,10 @@ const hoisted = await vi.hoisted(async () => {
     resolveDefaultTrajectoryExportDirMock: vi.fn(
       () => "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
     ),
-    existsSyncMock: vi.fn((file: fs.PathLike, actualExistsSync: (path: fs.PathLike) => boolean) =>
-      actualExistsSync(file),
+    accessMock: vi.fn(
+      async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
+        await actualAccess(file);
+      },
     ),
   };
 });
@@ -45,9 +47,18 @@ vi.mock("../../trajectory/export.js", () => ({
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const mockedFs = { ...actual };
+  return {
+    ...mockedFs,
+    default: mockedFs,
+  };
+});
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   const mockedFs = {
     ...actual,
-    existsSync: (file: fs.PathLike) => hoisted.existsSyncMock(file, actual.existsSync),
+    access: (file: fs.PathLike) => hoisted.accessMock(file, actual.access),
   };
   return {
     ...mockedFs,
@@ -154,9 +165,13 @@ function readEncodedRequestFromCommand(command: string): Record<string, unknown>
 describe("buildExportTrajectoryReply", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hoisted.existsSyncMock.mockImplementation(
-      (file: fs.PathLike, actualExistsSync: (path: fs.PathLike) => boolean) =>
-        file.toString() === "/tmp/target-store/session.jsonl" || actualExistsSync(file),
+    hoisted.accessMock.mockImplementation(
+      async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
+        if (file.toString() === "/tmp/target-store/session.jsonl") {
+          return;
+        }
+        await actualAccess(file);
+      },
     );
   });
 
@@ -223,9 +238,13 @@ describe("buildExportTrajectoryReply", () => {
 
   it("does not echo absolute session paths when the transcript is missing", async () => {
     const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-    hoisted.existsSyncMock.mockImplementation(
-      (file: fs.PathLike, actualExistsSync: (path: fs.PathLike) => boolean) =>
-        file.toString() === "/tmp/target-store/session.jsonl" ? false : actualExistsSync(file),
+    hoisted.accessMock.mockImplementation(
+      async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
+        if (file.toString() === "/tmp/target-store/session.jsonl") {
+          throw Object.assign(new Error("missing"), { code: "ENOENT" });
+        }
+        await actualAccess(file);
+      },
     );
 
     const reply = await buildExportTrajectoryReply(makeParams());
@@ -401,7 +420,10 @@ describe("buildExportTrajectoryCommandReply", () => {
   it("routes group trajectory export approval privately", async () => {
     const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, privateReplies, deps } = createExecDeps({
-      privateTargets: [{ channel: "quietchat", to: "owner-dm", accountId: "account-1" }],
+      privateTargets: [
+        { channel: "telegram", to: "owner-dm", accountId: "account-1" },
+        { channel: "whatsapp", to: "backup-owner-dm", accountId: "account-2" },
+      ],
     });
     const params = makeParams();
     params.isGroup = true;
@@ -415,13 +437,14 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(reply.text).not.toContain("agent:target:session");
     expect(privateReplies).toHaveLength(1);
     expect(privateReplies[0]?.targets).toEqual([
-      { channel: "quietchat", to: "owner-dm", accountId: "account-1" },
+      { channel: "telegram", to: "owner-dm", accountId: "account-1" },
     ]);
     expect(privateReplies[0]?.text).toContain("Trajectory exports can include prompts");
     expect(privateReplies[0]?.text).toContain("openclaw sessions export-trajectory");
     expect(privateReplies[0]?.text).toContain("Session: agent:target:session");
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0]?.defaults).toMatchObject({
+      messageProvider: "telegram",
       currentChannelId: "owner-dm",
       accountId: "account-1",
     });

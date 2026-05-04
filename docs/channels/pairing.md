@@ -21,6 +21,11 @@ When a channel is configured with DM policy `pairing`, unknown senders get a sho
 
 Default DM policies are documented in: [Security](/gateway/security)
 
+`dmPolicy: "open"` is public only when the effective DM allowlist includes `"*"`.
+Setup and validation require that wildcard for public-open configs. If existing
+state contains `open` with concrete `allowFrom` entries, runtime still admits
+only those senders, and pairing-store approvals do not widen `open` access.
+
 Pairing codes:
 
 - 8 characters, uppercase, no ambiguous chars (`0O1I`).
@@ -41,6 +46,35 @@ approval prompts. After an owner exists, later pairing approvals only grant DM
 access; they do not add more owners.
 
 Supported channels: `bluebubbles`, `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `openclaw-weixin`, `signal`, `slack`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+
+### Reusable sender groups
+
+Use top-level `accessGroups` when the same trusted sender set should apply to
+multiple message channels or to both DM and group allowlists.
+
+Static groups use `type: "message.senders"` and are referenced with
+`accessGroup:<name>` from channel allowlists:
+
+```json5
+{
+  accessGroups: {
+    operators: {
+      type: "message.senders",
+      members: {
+        discord: ["discord:123456789012345678"],
+        telegram: ["987654321"],
+        whatsapp: ["+15551234567"],
+      },
+    },
+  },
+  channels: {
+    telegram: { dmPolicy: "allowlist", allowFrom: ["accessGroup:operators"] },
+    whatsapp: { groupPolicy: "allowlist", groupAllowFrom: ["accessGroup:operators"] },
+  },
+}
+```
+
+Access groups are documented in detail here: [Access groups](/channels/access-groups)
 
 ### Where the state lives
 

@@ -34,6 +34,7 @@ import {
   handleFirstUpdated,
   handleUpdated,
 } from "./app-lifecycle.ts";
+import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
@@ -204,9 +205,11 @@ export class OpenClawApp extends LitElement {
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;
+  @state() chatMessageMaxWidth: string | null = null;
   @state() serverVersion: string | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
+  currentSessionId: string | null = null;
   @state() chatLoading = false;
   @state() chatSending = false;
   @state() chatMessage = "";
@@ -228,6 +231,7 @@ export class OpenClawApp extends LitElement {
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatQueue: ChatQueueItem[] = [];
+  @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatAttachments: ChatAttachment[] = [];
   @state() realtimeTalkActive = false;
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
@@ -235,9 +239,11 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkTranscript: string | null = null;
   private realtimeTalkSession: RealtimeTalkSession | null = null;
   @state() chatManualRefreshInFlight = false;
+  @state() chatMobileControlsOpen = false;
+  private chatMobileControlsTrigger: HTMLElement | null = null;
   @state() navDrawerOpen = false;
 
-  onSlashAction?: (action: string) => void;
+  onSlashAction?: (action: string) => void | Promise<void>;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>> = {};
   chatInputHistorySessionKey: string | null = null;
   chatInputHistoryItems: string[] | null = null;
@@ -381,8 +387,8 @@ export class OpenClawApp extends LitElement {
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;
-  @state() sessionsFilterActive = "";
-  @state() sessionsFilterLimit = "120";
+  @state() sessionsFilterActive = "120";
+  @state() sessionsFilterLimit = "50";
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
   @state() sessionsHideCron = true;
@@ -608,6 +614,23 @@ export class OpenClawApp extends LitElement {
       }
     }
   };
+  private chatMobileControlsKeydownHandler = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || !this.chatMobileControlsOpen) {
+      return;
+    }
+    e.preventDefault();
+    this.setChatMobileControlsOpen(false, { restoreFocus: true });
+  };
+  private chatMobileControlsPointerdownHandler = (e: Event) => {
+    if (!this.chatMobileControlsOpen) {
+      return;
+    }
+    const wrapper = this.querySelector(".chat-mobile-controls-wrapper");
+    if (wrapper && e.composedPath().includes(wrapper)) {
+      return;
+    }
+    this.setChatMobileControlsOpen(false);
+  };
 
   createRenderRoot() {
     return this;
@@ -615,8 +638,11 @@ export class OpenClawApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    this.onSlashAction = (action: string) => {
+    this.onSlashAction = async (action: string) => {
       switch (action) {
+        case "new-session":
+          await createChatSessionInternal(this as unknown as AppViewState);
+          break;
         case "toggle-focus":
           this.applySettings({
             ...this.settings,
@@ -627,12 +653,14 @@ export class OpenClawApp extends LitElement {
           exportChatMarkdown(this.chatMessages, this.assistantName);
           break;
         case "refresh-tools-effective": {
-          void refreshVisibleToolsEffectiveForCurrentSessionInternal(this);
+          await refreshVisibleToolsEffectiveForCurrentSessionInternal(this);
           break;
         }
       }
     };
     document.addEventListener("keydown", this.globalKeydownHandler);
+    document.addEventListener("keydown", this.chatMobileControlsKeydownHandler);
+    document.addEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
     void this.initWebPushState();
   }
@@ -643,12 +671,19 @@ export class OpenClawApp extends LitElement {
 
   disconnectedCallback() {
     document.removeEventListener("keydown", this.globalKeydownHandler);
+    document.removeEventListener("keydown", this.chatMobileControlsKeydownHandler);
+    document.removeEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
+    this.chatMobileControlsTrigger = null;
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);
     super.disconnectedCallback();
   }
 
   protected updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    // Some render callbacks assign tab directly while preparing nested panel state.
+    if (changed.has("tab") && this.tab !== "chat" && this.chatMobileControlsOpen) {
+      this.setChatMobileControlsOpen(false);
+    }
     if (!changed.has("sessionKey") || this.agentsPanel !== "tools") {
       return;
     }
@@ -723,7 +758,33 @@ export class OpenClawApp extends LitElement {
 
   setTab(next: Tab) {
     setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
+    if (next !== "chat") {
+      this.setChatMobileControlsOpen(false);
+    }
     this.navDrawerOpen = false;
+  }
+
+  setChatMobileControlsOpen(
+    open: boolean,
+    options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
+  ) {
+    if (open) {
+      this.chatMobileControlsTrigger = options?.trigger ?? this.chatMobileControlsTrigger;
+      this.chatMobileControlsOpen = true;
+      return;
+    }
+
+    const focusTarget = options?.restoreFocus ? this.chatMobileControlsTrigger : null;
+    this.chatMobileControlsOpen = false;
+    this.chatMobileControlsTrigger = null;
+    if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (focusTarget.isConnected) {
+        focusTarget.focus();
+      }
+    });
   }
 
   setTheme(next: ThemeName, context?: Parameters<typeof setThemeInternal>[2]) {

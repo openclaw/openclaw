@@ -23,11 +23,11 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   };
 });
 
-let sendWebhookMessageDiscord: typeof import("./send.outbound.js").sendWebhookMessageDiscord;
+let sendWebhookMessageDiscord: typeof import("./send.webhook.js").sendWebhookMessageDiscord;
 
 describe("sendWebhookMessageDiscord activity", () => {
   beforeAll(async () => {
-    ({ sendWebhookMessageDiscord } = await import("./send.outbound.js"));
+    ({ sendWebhookMessageDiscord } = await import("./send.webhook.js"));
   });
 
   beforeEach(() => {
@@ -74,5 +74,32 @@ describe("sendWebhookMessageDiscord activity", () => {
       direction: "outbound",
     });
     expect(loadConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("rewrites configured mention aliases for webhook sends", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "resolved-token",
+          mentionAliases: {
+            opslead: "123456789012345678",
+          },
+        },
+      },
+    };
+    await sendWebhookMessageDiscord("hello @OpsLead", {
+      cfg,
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+      accountId: "runtime",
+      threadId: "thread-1",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: expect.stringContaining('"content":"hello <@123456789012345678>"'),
+      }),
+    );
   });
 });

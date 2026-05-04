@@ -60,7 +60,7 @@ async function writeWizardConfigFile(config: OpenClawConfig): Promise<OpenClawCo
     commit: async (nextConfig, writeOptions) => {
       await replaceConfigFile({
         nextConfig,
-        ...(writeOptions ? { writeOptions } : {}),
+        writeOptions: { ...writeOptions, allowConfigSizeDrop: true },
         afterWrite: { mode: "auto" },
       });
     },
@@ -740,6 +740,7 @@ export async function runSetupWizard(
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+    skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
 
   if (opts.skipSearch) {
