@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron/agent: rewrite the canonical execution provider to the configured CLI runtime alias before invoking the cron CLI agent path, so cron and hook lanes honor `agents.defaults.agentRuntime.id` (e.g. `claude-cli`) the same way the mention/Slack lane does. Without this rewrite, cron-triggered runs received the raw provider id (e.g. `anthropic`) and silently bypassed the configured CLI runtime.
 - Gateway: keep directly requested plugin tools invokable under restrictive tool profiles while preserving explicit deny lists and the HTTP safety deny list, preventing catalog/invoke mismatches that surface as "Tool not available". Thanks @BunsDev.
 - Gateway/update: allow beta binaries to refresh gateway services when the config was last written by the matching stable release version, avoiding false newer-config downgrade blocks during beta channel updates.
 - Channels: keep Matrix and Mattermost bundled in the core package instead of advertising external npm installs before those channels are cut over. Thanks @vincentkoc.
