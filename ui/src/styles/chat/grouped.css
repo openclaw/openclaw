@@ -238,7 +238,7 @@ img.chat-avatar {
   background: transparent;
 }
 
-.chat-bubble.has-copy {
+.chat-bubble.has-copy:hover {
   padding-right: 70px;
 }
 
@@ -279,10 +279,14 @@ img.chat-avatar {
   pointer-events: auto;
 }
 
-@media (hover: none) {
+@media (hover: none) and (pointer: coarse) {
   .chat-bubble-actions {
     opacity: 1;
     pointer-events: auto;
+  }
+
+  .chat-bubble.has-copy {
+    padding-right: 70px;
   }
 }
 
