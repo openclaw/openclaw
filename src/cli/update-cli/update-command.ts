@@ -1686,6 +1686,44 @@ function createUpdatedChannelSnapshot(
   };
 }
 
+async function maybeRepairLegacyConfigForUpdateChannel(params: {
+  configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  jsonMode: boolean;
+}): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
+  if (params.configSnapshot.valid || params.configSnapshot.legacyIssues.length === 0) {
+    return params.configSnapshot;
+  }
+
+  const { migrateLegacyConfig } =
+    await import("../../commands/doctor/shared/legacy-config-migrate.js");
+  const { stripUnknownConfigKeys } = await import("../../commands/doctor-config-analysis.js");
+  const { validateConfigObjectWithPlugins } = await import("../../config/validation.js");
+  const migrated = migrateLegacyConfig(params.configSnapshot.parsed);
+  if (!migrated.config) {
+    return params.configSnapshot;
+  }
+
+  const stripped = stripUnknownConfigKeys(migrated.config);
+  const validated = validateConfigObjectWithPlugins(stripped.config);
+  if (!validated.ok) {
+    return params.configSnapshot;
+  }
+  await replaceConfigFile({
+    nextConfig: validated.config,
+    baseHash: params.configSnapshot.hash,
+    writeOptions: {
+      allowConfigSizeDrop: true,
+      skipOutputLogs: params.jsonMode,
+    },
+  });
+
+  const refreshed = await readConfigFileSnapshot();
+  if (!params.jsonMode && refreshed.valid) {
+    defaultRuntime.log(theme.muted("Migrated legacy config before changing update channel."));
+  }
+  return refreshed;
+}
+
 async function writePostCorePluginUpdateResultFile(
   filePath: string | undefined,
   result: PostCorePluginUpdateResult,
@@ -1947,17 +1985,24 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     includeRegistry: false,
   });
 
-  const configSnapshot = await readConfigFileSnapshot();
-  const storedChannel = configSnapshot.valid
-    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-    : null;
-
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
     defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
     defaultRuntime.exit(1);
     return;
   }
+
+  let configSnapshot = await readConfigFileSnapshot();
+  if (opts.channel && !configSnapshot.valid) {
+    configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
+      configSnapshot,
+      jsonMode: Boolean(opts.json),
+    });
+  }
+  const storedChannel = configSnapshot.valid
+    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+    : null;
+
   if (opts.channel && !configSnapshot.valid) {
     const issues = formatConfigIssueLines(configSnapshot.issues, "-");
     defaultRuntime.error(["Config is invalid; cannot set update channel.", ...issues].join("\n"));
