@@ -10,6 +10,7 @@ export const DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY = "https://api.sandbox.push
 
 const DEFAULT_PROXY_VALIDATION_TIMEOUT_MS = 5000;
 const DENIED_CANARY_HEADER = "x-openclaw-proxy-validation-canary";
+const APNS_REACHABILITY_REASON = "InvalidProviderToken";
 
 export type ProxyValidationConfigSource = "override" | "config" | "env" | "missing" | "disabled";
 
@@ -62,6 +63,8 @@ export type ProxyValidationApnsCheckResult = {
   status: number;
   /** Present when the response originated from a real APNs server (Apple always returns this UUID). */
   apnsId?: string;
+  /** APNs JSON error reason. InvalidProviderToken proves the invalid-token probe reached APNs. */
+  apnsReason?: string;
 };
 
 export type ProxyValidationApnsCheck = (
@@ -203,7 +206,31 @@ async function defaultProxyValidationApnsCheck({
   timeoutMs,
 }: ProxyValidationApnsCheckParams): Promise<ProxyValidationApnsCheckResult> {
   const result = await probeApnsHttp2ReachabilityViaProxy({ proxyUrl, authority, timeoutMs });
-  return { status: result.status, apnsId: result.responseHeaders?.["apns-id"] };
+  return {
+    status: result.status,
+    apnsId: result.responseHeaders?.["apns-id"],
+    apnsReason: parseApnsErrorReason(result.body),
+  };
+}
+
+function parseApnsErrorReason(body: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (!parsed || typeof parsed !== "object") {
+      return undefined;
+    }
+    const reason = (parsed as { reason?: unknown }).reason;
+    return typeof reason === "string" && reason.trim() ? reason : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasApnsReachabilityProof(result: ProxyValidationApnsCheckResult): boolean {
+  if (result.apnsId) {
+    return true;
+  }
+  return result.status === 403 && result.apnsReason === APNS_REACHABILITY_REASON;
 }
 
 function normalizeTimeoutMs(value: number | undefined): number {
@@ -422,13 +449,13 @@ async function runApnsReachabilityCheck(params: {
       authority: params.authority,
       timeoutMs: params.timeoutMs,
     });
-    if (!result.apnsId && result.status !== 403) {
+    if (!hasApnsReachabilityProof(result)) {
       return {
         kind: "apns",
         url: params.authority,
         ok: false,
         error:
-          "APNs reachability check failed: response was not a 403 and did not include an apns-id header. " +
+          "APNs reachability check failed: response did not include an apns-id header or APNs InvalidProviderToken body. " +
           "The proxy may be intercepting the connection instead of tunneling it.",
       };
     }

@@ -467,7 +467,31 @@ describe("proxy validation", () => {
     });
   });
 
-  it("accepts APNs 403 reachability even when apns-id is unavailable", async () => {
+  it("accepts APNs 403 reachability with InvalidProviderToken when apns-id is unavailable", async () => {
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: [],
+      apnsReachability: true,
+      apnsCheck: vi.fn().mockResolvedValue({ status: 403, apnsReason: "InvalidProviderToken" }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks).toEqual([
+      {
+        kind: "apns",
+        url: "https://api.sandbox.push.apple.com",
+        ok: true,
+        status: 403,
+      },
+    ]);
+  });
+
+  it("fails APNs reachability when bare 403 has no APNs proof", async () => {
     const result = await runProxyValidation({
       config: {
         enabled: true,
@@ -480,13 +504,13 @@ describe("proxy validation", () => {
       apnsCheck: vi.fn().mockResolvedValue({ status: 403 }),
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.checks).toEqual([
       {
         kind: "apns",
         url: "https://api.sandbox.push.apple.com",
-        ok: true,
-        status: 403,
+        ok: false,
+        error: expect.stringContaining("InvalidProviderToken"),
       },
     ]);
   });
