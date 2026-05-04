@@ -812,6 +812,13 @@ async function runMatrixToolProgressScenario(
     mentionUserIds: [context.sutUserId],
     roomId: context.roomId,
   });
+  const matchesExpectedProgress = (body: string | undefined) =>
+    params.progressPattern.test(body ?? "") ||
+    (params.allowGenericProgressLine === true && hasMatrixQaToolProgressPreviewLine(body));
+  const getPreviewRootEventId = (event: MatrixQaObservedEvent) =>
+    event.relatesTo?.relType === "m.replace" && event.relatesTo.eventId
+      ? event.relatesTo.eventId
+      : event.eventId;
   const preview = await client
     .waitForRoomEvent({
       observedEvents: context.observedEvents,
@@ -819,7 +826,8 @@ async function runMatrixToolProgressScenario(
         event.roomId === context.roomId &&
         event.sender === context.sutUserId &&
         event.kind === params.expectedPreviewKind &&
-        event.relatesTo === undefined,
+        (event.relatesTo === undefined ||
+          (event.relatesTo.relType === "m.replace" && matchesExpectedProgress(event.body))),
       roomId: context.roomId,
       since: startSince,
       timeoutMs: context.timeoutMs,
@@ -837,9 +845,7 @@ async function runMatrixToolProgressScenario(
         }),
       );
     });
-  const matchesExpectedProgress = (body: string | undefined) =>
-    params.progressPattern.test(body ?? "") ||
-    (params.allowGenericProgressLine === true && hasMatrixQaToolProgressPreviewLine(body));
+  const previewRootEventId = getPreviewRootEventId(preview.event);
   const progress = matchesExpectedProgress(preview.event.body)
     ? preview
     : await client
@@ -850,7 +856,7 @@ async function runMatrixToolProgressScenario(
             event.sender === context.sutUserId &&
             event.kind === params.expectedPreviewKind &&
             event.relatesTo?.relType === "m.replace" &&
-            event.relatesTo.eventId === preview.event.eventId &&
+            event.relatesTo.eventId === previewRootEventId &&
             matchesExpectedProgress(event.body),
           roomId: context.roomId,
           since: preview.since,
@@ -862,7 +868,7 @@ async function runMatrixToolProgressScenario(
               cause: err,
               events: context.observedEvents,
               expectedPreviewKind: params.expectedPreviewKind,
-              previewEventId: preview.event.eventId,
+              previewEventId: previewRootEventId,
               roomId: context.roomId,
               startIndex: startObservedIndex,
               sutUserId: context.sutUserId,
@@ -882,7 +888,7 @@ async function runMatrixToolProgressScenario(
         event.sender === context.sutUserId &&
         isMatrixQaMessageLikeKind(event.kind) &&
         event.relatesTo?.relType === "m.replace" &&
-        event.relatesTo.eventId === preview.event.eventId &&
+        event.relatesTo.eventId === previewRootEventId &&
         doesMatrixQaReplyBodyMatchToken(event, params.finalText),
       roomId: context.roomId,
       since: progress.since,
@@ -893,7 +899,7 @@ async function runMatrixToolProgressScenario(
         buildMatrixQaToolProgressFinalTimeoutMessage({
           cause: err,
           events: context.observedEvents,
-          previewEventId: preview.event.eventId,
+          previewEventId: previewRootEventId,
           roomId: context.roomId,
           startIndex: startObservedIndex,
           sutUserId: context.sutUserId,
@@ -904,7 +910,7 @@ async function runMatrixToolProgressScenario(
   const unexpectedWorkingEvents = findMatrixQaUnexpectedWorkingEvents({
     events: context.observedEvents,
     finalEventId: finalized.event.eventId,
-    previewEventId: preview.event.eventId,
+    previewEventId: previewRootEventId,
     startIndex: startObservedIndex,
     sutUserId: context.sutUserId,
   });
@@ -924,7 +930,7 @@ async function runMatrixToolProgressScenario(
     artifacts: {
       driverEventId,
       previewBodyPreview: progress.event.body?.slice(0, 200),
-      previewEventId: preview.event.eventId,
+      previewEventId: previewRootEventId,
       previewFormattedBodyPreview: progress.event.formattedBody?.slice(0, 200),
       previewMentions: progress.event.mentions,
       reply: finalReply,

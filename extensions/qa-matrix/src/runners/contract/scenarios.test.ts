@@ -2858,15 +2858,20 @@ describe("matrix live qa scenarios", () => {
 
   it("finalizes Matrix tool progress previews after tool errors", async () => {
     const previewEventId = "$tool-progress-error-preview";
-    const { sendTextMessage } = mockMatrixQaRoomClient({
+    const progressEvent = matrixQaMessageEvent({
+      kind: "notice",
+      eventId: "$tool-progress-error-progress",
+      body: "Pearling...\n`📖 Read: from /tmp/qa/workspace/missing-matrix-tool-progress-target.txt`",
+      relatesTo: {
+        relType: "m.replace",
+        eventId: previewEventId,
+      },
+    });
+    const { sendTextMessage, waitForRoomEvent } = mockMatrixQaRoomClient({
       driverEventId: "$tool-progress-error-trigger",
       events: [
         {
-          event: matrixQaMessageEvent({
-            kind: "notice",
-            eventId: previewEventId,
-            body: "Pearling...\n`📖 Read: from /tmp/qa/workspace/missing-matrix-tool-progress-target.txt`",
-          }),
+          event: progressEvent,
           since: "driver-sync-preview",
         },
         {
@@ -2909,6 +2914,7 @@ describe("matrix live qa scenarios", () => {
       },
     });
 
+    expect(waitForRoomEvent.mock.calls[0]?.[0].predicate(progressEvent)).toBe(true);
     expect(sendTextMessage).toHaveBeenCalledWith({
       body: expect.stringContaining("Tool progress error QA check"),
       mentionUserIds: ["@sut:matrix-qa.test"],
