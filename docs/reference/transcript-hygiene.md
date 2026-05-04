@@ -57,6 +57,12 @@ Separate from transcript hygiene, session files are repaired (if needed) before 
 - `repairSessionFileIfNeeded` in `src/agents/session-file-repair.ts`
 - Called from `run/attempt.ts` and `compact.ts` (embedded runner)
 
+After a successful turn, the embedded runner also reconciles delivered final
+assistant text back into the durable transcript when streaming or tool-call
+sequencing produced `assistantTexts` without a matching stored assistant
+message. This keeps the next user turn anchored to the answer the user already
+saw without changing provider-specific outbound replay hygiene.
+
 ---
 
 ## Global rule: image sanitization

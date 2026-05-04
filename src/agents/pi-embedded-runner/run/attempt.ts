@@ -232,6 +232,7 @@ import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
+import { reconcileAssistantTextsWithTranscript } from "./assistant-text-persistence.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
@@ -3221,6 +3222,22 @@ export async function runEmbeddedAttempt(
           prePromptMessageCount,
         });
         attemptUsage = getUsageTotals();
+        if (
+          !promptError &&
+          !aborted &&
+          !yieldAborted &&
+          !timedOutDuringCompaction &&
+          !compactionOccurredThisAttempt
+        ) {
+          reconcileAssistantTextsWithTranscript({
+            sessionManager,
+            messagesSnapshot,
+            prePromptMessageCount,
+            assistantTexts,
+            provider: params.provider,
+            modelId: params.modelId,
+          });
+        }
         cacheBreak = cacheObservabilityEnabled
           ? completePromptCacheObservation({
               sessionId: params.sessionId,
