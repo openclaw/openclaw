@@ -251,7 +251,9 @@ export function createTelegramDraftStream(params: {
         params.warn?.(
           `telegram stream preview rate limited; backing off ${retryAfterSec}s`,
         );
-        if (backoffRetryTimer) clearTimeout(backoffRetryTimer);
+        if (backoffRetryTimer) {
+          clearTimeout(backoffRetryTimer);
+        }
         backoffRetryTimer = setTimeout(() => {
           backoffRetryTimer = undefined;
           deferredFlush?.();
@@ -271,7 +273,9 @@ export function createTelegramDraftStream(params: {
         params.warn?.(
           `telegram stream preview pre-connect error (will retry send): ${formatErrorMessage(err)}`,
         );
-        if (backoffRetryTimer) clearTimeout(backoffRetryTimer);
+        if (backoffRetryTimer) {
+          clearTimeout(backoffRetryTimer);
+        }
         backoffRetryTimer = setTimeout(() => {
           backoffRetryTimer = undefined;
           lastSentText = "";
