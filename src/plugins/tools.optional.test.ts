@@ -1214,6 +1214,62 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("does not materialize manifest-optional sibling tools from non-optional factories by default", async () => {
+    const config = createContext().config;
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "multi",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["other_tool", "optional_tool"],
+        },
+        toolMetadata: {
+          optional_tool: {
+            optional: true,
+          },
+        },
+      },
+    });
+    const factory = vi.fn(() => [makeTool("other_tool"), makeTool("optional_tool")]);
+    setActivePluginRegistry(
+      createToolRegistry([
+        {
+          pluginId: "multi",
+          optional: false,
+          source: "/tmp/multi.js",
+          names: ["other_tool", "optional_tool"],
+          declaredNames: ["other_tool", "optional_tool"],
+          factory,
+        },
+      ]) as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+    const { loadManifestContractSnapshot } = await import("./manifest-contract-eligibility.js");
+    const snapshot = loadManifestContractSnapshot({ config, workspaceDir: "/tmp" });
+    expect(
+      snapshot.plugins.find((plugin) => plugin.id === "multi")?.toolMetadata?.optional_tool,
+    ).toMatchObject({ optional: true });
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          config,
+        },
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["other_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("rejects plugin id collisions with core tool names", () => {
     const registry = setRegistry([
       {
