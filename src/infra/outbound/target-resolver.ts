@@ -316,6 +316,16 @@ function buildNormalizedResolveResult(params: {
   };
 }
 
+function resolveDirectoryEntryKind(
+  entry: ChannelDirectoryEntry,
+  fallbackKind: TargetResolveKind,
+): TargetResolveKind {
+  if (entry.kind === "user" || entry.kind === "group" || entry.kind === "channel") {
+    return entry.kind;
+  }
+  return fallbackKind;
+}
+
 function pickAmbiguousMatch(
   entries: ChannelDirectoryEntry[],
   mode: ResolveAmbiguousMode,
@@ -397,7 +407,7 @@ export async function resolveMessagingTarget(params: {
       ok: true,
       target: {
         to: normalizeDirectoryEntryId(params.channel, entry),
-        kind,
+        kind: resolveDirectoryEntryKind(entry, kind),
         display: entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id),
         source: "directory",
       },
@@ -412,7 +422,7 @@ export async function resolveMessagingTarget(params: {
           ok: true,
           target: {
             to: normalizeDirectoryEntryId(params.channel, best),
-            kind,
+            kind: resolveDirectoryEntryKind(best, kind),
             display: best.name ?? best.handle ?? stripTargetPrefixes(best.id),
             source: "directory",
           },
