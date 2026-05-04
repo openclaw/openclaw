@@ -8,13 +8,16 @@ export function createTavilyWebFetchProvider(): WebFetchProviderPlugin {
   return {
     ...TAVILY_WEB_FETCH_PROVIDER_SHARED,
     applySelectionConfig: (config) => enablePluginInConfig(config, "tavily").config,
-    createTool: ({ config }) => ({
+    createTool: ({ config, fetchConfig }) => ({
       description: "Fetch a page using Tavily Extract.",
       parameters: {},
       execute: async (args) => {
         const url = typeof args.url === "string" ? args.url : "";
         const format = args.extractMode === "text" ? "text" : "markdown";
-        const apiKey = resolveTavilyFetchApiKey(config);
+        const apiKey = resolveTavilyFetchApiKey(
+          config,
+          TAVILY_WEB_FETCH_PROVIDER_SHARED.getCredentialValue(fetchConfig),
+        );
         const baseUrl = resolveTavilyFetchBaseUrl(config);
         const payload = await runTavilyExtract({
           cfg: config,

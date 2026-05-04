@@ -79,10 +79,14 @@ export function resolveTavilyBaseUrl(cfg?: OpenClawConfig): string {
   return configured || DEFAULT_TAVILY_BASE_URL;
 }
 
-export function resolveTavilyFetchApiKey(cfg?: OpenClawConfig): string | undefined {
+export function resolveTavilyFetchApiKey(
+  cfg?: OpenClawConfig,
+  fetchApiKey?: unknown,
+): string | undefined {
   const fetch = resolveTavilyFetchConfig(cfg);
   return (
     normalizeConfiguredSecret(fetch?.apiKey, "plugins.entries.tavily.config.webFetch.apiKey") ||
+    normalizeConfiguredSecret(fetchApiKey, "tools.web.fetch.tavily.apiKey") ||
     resolveTavilyApiKey(cfg)
   );
 }

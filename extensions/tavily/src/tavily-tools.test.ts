@@ -420,6 +420,37 @@ describe("tavily tools", () => {
     expect(resolveTavilyFetchBaseUrl(cfg)).toBe("https://search.example");
   });
 
+  it("honors legacy tools.web.fetch.tavily.apiKey credentials at execution time", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          tavily: {
+            config: { webSearch: { apiKey: "search-key", baseUrl: "https://search.example" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const fetchConfig = {
+      tavily: { apiKey: "legacy-fetch-key" },
+    };
+    const tool = createTavilyWebFetchProvider().createTool({ config: cfg, fetchConfig });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    expect(resolveTavilyFetchApiKey(undefined, "legacy-fetch-key")).toBe("legacy-fetch-key");
+
+    await tool.execute({ url: "https://example.com" });
+    expect(runTavilyExtract).toHaveBeenLastCalledWith({
+      cfg,
+      urls: ["https://example.com"],
+      format: "markdown",
+      extractDepth: "advanced",
+      apiKey: "legacy-fetch-key",
+      baseUrl: "https://search.example",
+    });
+  });
+
   it("forwards the fetch-scoped apiKey/baseUrl override into runTavilyExtract", async () => {
     const cfg = {
       plugins: {
