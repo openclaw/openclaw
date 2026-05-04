@@ -121,6 +121,13 @@ describe("gateway-watch tmux wrapper", () => {
     expect(code).toBe(0);
     const command = spawnSync.mock.calls[1]?.[1]?.[6] as string;
     expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=1'");
+    expect(command).toContain(
+      "'OPENCLAW_RUN_NODE_OUTPUT_LOG=.artifacts/gateway-watch-profiles/gateway-watch-output.log'",
+    );
+    expect(command).toContain("'OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR=1'");
+    expect(stderr.chunks.join("")).toContain(
+      "gateway:watch benchmark trace output: .artifacts/gateway-watch-profiles/gateway-watch-output.log",
+    );
   });
 
   it("can remove --force from benchmarked watch runs", () => {

@@ -386,6 +386,7 @@ const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[s
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
 const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
+const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR";
 const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
 const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
 const RUN_NODE_BUILD_LOCK_STALE_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_STALE_MS";
@@ -585,14 +586,78 @@ const pipeSpawnedOutput = (childProcess, deps) => {
   if (!deps.outputTee) {
     return;
   }
+  const stderrFilter =
+    deps.env[RUN_NODE_FILTER_SYNC_IO_STDERR_ENV] === "1"
+      ? createSyncIoTraceStderrFilter(deps)
+      : null;
   childProcess.stdout?.on("data", (chunk) => {
     deps.stdout.write(chunk);
     deps.outputTee.write(chunk);
   });
   childProcess.stderr?.on("data", (chunk) => {
-    deps.stderr.write(chunk);
+    if (stderrFilter) {
+      stderrFilter.write(chunk);
+    } else {
+      deps.stderr.write(chunk);
+    }
     deps.outputTee.write(chunk);
   });
+  childProcess.stderr?.on("end", () => {
+    stderrFilter?.flush();
+  });
+};
+
+const createSyncIoTraceStderrFilter = (deps) => {
+  let buffer = "";
+  let inSyncIoTrace = false;
+
+  const shouldSuppressLine = (line) => {
+    const text = line.replace(/\r?\n$/, "");
+    if (/^\(node:\d+\) WARNING: Detected use of sync API/.test(text)) {
+      inSyncIoTrace = true;
+      return true;
+    }
+    if (!inSyncIoTrace) {
+      return false;
+    }
+    if (text.trim() === "") {
+      inSyncIoTrace = false;
+      return true;
+    }
+    if (/^\s+at\b/.test(text)) {
+      return true;
+    }
+    inSyncIoTrace = false;
+    return false;
+  };
+
+  const writeLine = (line) => {
+    if (!shouldSuppressLine(line)) {
+      deps.stderr.write(line);
+    }
+  };
+
+  return {
+    write(chunk) {
+      buffer += String(chunk);
+      while (true) {
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex === -1) {
+          break;
+        }
+        const line = buffer.slice(0, newlineIndex + 1);
+        buffer = buffer.slice(newlineIndex + 1);
+        writeLine(line);
+      }
+    },
+    flush() {
+      if (!buffer) {
+        return;
+      }
+      writeLine(buffer);
+      buffer = "";
+    },
+  };
 };
 
 const closeRunNodeOutputTee = async (deps, exitCode) => {
