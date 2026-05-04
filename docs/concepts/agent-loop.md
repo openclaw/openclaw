@@ -184,4 +184,3 @@ surfaces, while Codex native hooks remain a separate lower-level Codex mechanism
 - [Compaction](/concepts/compaction) — how long conversations are summarized
 - [Exec Approvals](/tools/exec-approvals) — approval gates for shell commands
 - [Thinking](/tools/thinking) — thinking/reasoning level configuration
-
