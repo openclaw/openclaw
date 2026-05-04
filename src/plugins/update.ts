@@ -11,6 +11,7 @@ import {
 } from "../infra/npm-registry-spec.js";
 import {
   expectedIntegrityForUpdate,
+  installedPackageNeedsOpenClawPeerLinkRepair,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
@@ -989,6 +990,7 @@ export async function updateNpmInstalledPlugins(params: {
             spec: effectiveSpec!,
             trustedSourceLinkedOfficialInstall,
           }) &&
+          !installedPackageNeedsOpenClawPeerLinkRepair(installPath) &&
           shouldSkipUnchangedNpmInstall({
             currentVersion,
             record,
