@@ -216,6 +216,7 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     const raw = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
     await fs.writeFile(configPath, raw, "utf-8");
     actual.resetConfigRuntimeState();
+    return { persistedConfig: composeTestConfig(cfg) };
   });
 
   const readConfigFileSnapshotForWrite =

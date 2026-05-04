@@ -155,7 +155,7 @@ function installConfigIoMockDefaults() {
     }
     return snapshot.valid ? { snapshot, pluginMetadataSnapshot } : { snapshot };
   });
-  writeConfig.mockResolvedValue(undefined);
+  writeConfig.mockResolvedValue({ persistedConfig: defaultSnapshot.config });
 }
 
 describe("gateway startup config validation", () => {
