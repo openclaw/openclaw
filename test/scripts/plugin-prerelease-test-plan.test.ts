@@ -37,6 +37,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
       "npm-onboard-discord-channel-agent",
+      "npm-onboard-slack-channel-agent",
       "doctor-switch",
       "update-channel-switch",
       "plugins-offline",
