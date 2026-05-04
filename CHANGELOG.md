@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Tools: enable `tools.loopDetection` by default with the existing conservative thresholds (warn=10, critical=20, global circuit breaker=30). `genericRepeat` remains warning-only — hard blocks fire only on stable no-progress evidence via `known_poll_no_progress`, `ping_pong`, and the global circuit breaker, so legitimate repeated reads or status checks that are making progress are never aborted. Set `tools.loopDetection.enabled: false` to opt out. Refs #77474; carries forward #21597, #52759, #56403, #62775, #76893. Thanks @efpiva.
 - fix(gateway): clamp unbound websocket auth scopes [AI]. (#77413) Thanks @pgondhi987.
 - Gate zalouser startup name matching [AI]. (#77411) Thanks @pgondhi987.
 - fix(device-pair): require pairing scope for pair command [AI]. (#76377) Thanks @pgondhi987.

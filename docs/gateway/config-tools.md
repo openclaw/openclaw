@@ -122,7 +122,7 @@ Controls elevated exec access outside the sandbox:
 
 ### `tools.loopDetection`
 
-Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.
+Tool-loop safety checks are **enabled by default**. The `genericRepeat` detector warns only; hard blocks fire on `known_poll_no_progress`, `ping_pong`, or `global_circuit_breaker` evidence (all require stable no-progress outcomes). Set `enabled: false` to opt out. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.
 
 ```json5
 {

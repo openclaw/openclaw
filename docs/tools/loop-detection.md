@@ -8,9 +8,10 @@ read_when:
 ---
 
 OpenClaw can keep agents from getting stuck in repeated tool-call patterns.
-The guard is **disabled by default**.
+Detection is **enabled by default** with conservative, progress-aware thresholds.
+Hard blocks are reserved for patterns with stable no-progress evidence (`known_poll_no_progress`, `ping_pong`, `global_circuit_breaker`). The `genericRepeat` detector emits a warning into the model's context but does not abort the tool call, so legitimate retried reads or status checks are never blocked just for repeating.
 
-Enable it only where needed, because it can block legitimate repeated calls with strict settings.
+Set `tools.loopDetection.enabled: false` to opt out entirely.
 
 ## Why this exists
 
@@ -26,7 +27,7 @@ Global defaults:
 {
   tools: {
     loopDetection: {
-      enabled: false,
+      enabled: true,
       historySize: 30,
       warningThreshold: 10,
       criticalThreshold: 20,
@@ -64,7 +65,7 @@ Per-agent override (optional):
 
 ### Field behavior
 
-- `enabled`: Master switch. `false` means no loop detection is performed.
+- `enabled`: Master switch (default: `true`). Set to `false` to disable all detection.
 - `historySize`: number of recent tool calls kept for analysis.
 - `warningThreshold`: threshold before classifying a pattern as warning-only.
 - `criticalThreshold`: threshold for blocking repetitive loop patterns.
@@ -78,13 +79,14 @@ When a run id is available, recent tool-call history is evaluated only within th
 
 ## Recommended setup
 
-- For smaller models, start with `enabled: true`, defaults unchanged. Flagship models rarely need loop detection and can leave it disabled.
+- Defaults are sane out of the box; no config is required.
 - Keep thresholds ordered as `warningThreshold < criticalThreshold < globalCircuitBreakerThreshold`.
 - If false positives occur:
   - raise `warningThreshold` and/or `criticalThreshold`
   - (optionally) raise `globalCircuitBreakerThreshold`
   - disable only the detector causing issues
   - reduce `historySize` for less strict historical context
+- Set `enabled: false` to opt out entirely (e.g., for diagnostic or backward-compatibility reasons).
 
 ## Logs and expected behavior
 
@@ -98,7 +100,7 @@ This protects users from runaway token spend and lockups while preserving normal
 
 - `tools.loopDetection` is merged with agent-level overrides.
 - Per-agent config fully overrides or extends global values.
-- If no config exists, guardrails stay off.
+- If no config exists, defaults take effect (detection enabled with progress-aware thresholds).
 
 ## Related
 

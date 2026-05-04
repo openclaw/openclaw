@@ -643,7 +643,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":
-    "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+    "Enable repetitive tool-call loop detection and backoff safety checks (default: true). Generic-repeat detection emits warnings only; hard blocks are reserved for known_poll_no_progress, ping_pong, and the global no-progress circuit breaker.",
   "tools.loopDetection.historySize": "Tool history window size for loop detection (default: 30).",
   "tools.loopDetection.warningThreshold":
     "Warning threshold for repetitive patterns when detector is enabled (default: 10).",

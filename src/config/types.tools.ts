@@ -168,7 +168,7 @@ export type ToolLoopDetectionDetectorConfig = {
 };
 
 export type ToolLoopDetectionConfig = {
-  /** Enable tool-loop protection (default: false). */
+  /** Enable tool-loop protection (default: true). Generic-repeat detection emits warnings only; hard blocks are reserved for known_poll_no_progress, ping_pong, and the global no-progress circuit breaker. */
   enabled?: boolean;
   /** Maximum tool call history entries retained for loop detection (default: 30). */
   historySize?: number;

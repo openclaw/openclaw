@@ -18192,7 +18192,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "boolean",
                 title: "Tool-loop Detection",
                 description:
-                  "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+                  "Enable repetitive tool-call loop detection and backoff safety checks (default: true). Generic-repeat detection emits warnings only; hard blocks are reserved for known_poll_no_progress, ping_pong, and the global no-progress circuit breaker.",
               },
               historySize: {
                 type: "integer",
@@ -25580,7 +25580,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.loopDetection.enabled": {
       label: "Tool-loop Detection",
-      help: "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+      help: "Enable repetitive tool-call loop detection and backoff safety checks (default: true). Generic-repeat detection emits warnings only; hard blocks are reserved for known_poll_no_progress, ping_pong, and the global no-progress circuit breaker.",
       tags: ["tools"],
     },
     "tools.loopDetection.historySize": {
