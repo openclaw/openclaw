@@ -94,6 +94,7 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   workspace: 1,
   global: 2,
   bundled: 3,
+  system: 4,
 };
 
 export type PluginManifestRecord = {

@@ -50,6 +50,7 @@ type ManifestProviderAuthChoiceParams = {
 };
 
 const PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
+  system: -1,
   config: 0,
   bundled: 1,
   global: 2,
