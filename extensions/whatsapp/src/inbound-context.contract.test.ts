@@ -22,6 +22,7 @@ describe("WhatsApp inbound context contract", () => {
       Provider: "whatsapp",
       Surface: "whatsapp",
       MessageSid: "msg1",
+      MessageParticipant: "alice@s.whatsapp.net",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "123@g.us",
       CommandAuthorized: true,

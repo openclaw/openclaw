@@ -11,6 +11,7 @@ import {
   getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
+  settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
@@ -701,6 +702,167 @@ describe("web monitor inbox", () => {
 
   it("captures reply context from quoted messages", async () => {
     await expectQuotedReplyContext({ conversation: "original" });
+  });
+
+  it("recovers reply context from cached quote metadata when quotedMessage is omitted", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const groupJid = "120363406331109499@g.us";
+    const participant = "919022233366@s.whatsapp.net";
+    const originalId = nextMessageId("inline-original");
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: originalId,
+            fromMe: false,
+            remoteJid: groupJid,
+            participant,
+          },
+          message: { conversation: "hey shoar" },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Kavish",
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 1);
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("inline-reply"),
+            fromMe: false,
+            remoteJid: groupJid,
+            participant,
+          },
+          message: {
+            extendedTextMessage: {
+              text: "can u see the message in my inline reply?",
+              contextInfo: {
+                stanzaId: originalId,
+                participant,
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_001,
+          pushName: "Kavish",
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 2);
+
+    expect(onMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        body: "can u see the message in my inline reply?",
+        replyToId: originalId,
+        replyToBody: "hey shoar",
+        replyToSender: "+919022233366",
+        replyToSenderJid: participant,
+        replyToSenderE164: "+919022233366",
+        replyTo: expect.objectContaining({
+          id: originalId,
+          body: "hey shoar",
+          sender: expect.objectContaining({
+            jid: participant,
+            e164: "+919022233366",
+          }),
+        }),
+      }),
+    );
+
+    await listener.close();
+  });
+
+  it("recovers reply context from cached outbound messages when quotedMessage is omitted", async () => {
+    const outboundId = nextMessageId("shoar-outbound");
+    const onMessage = vi.fn(async (msg) => {
+      if (msg.body === "trigger reply") {
+        await msg.reply("i was trying to be suppressed");
+      }
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const groupJid = "120363406331109499@g.us";
+    const participant = "919022233366@s.whatsapp.net";
+    sock.sendMessage.mockResolvedValueOnce({
+      key: {
+        id: outboundId,
+        remoteJid: groupJid,
+        fromMe: true,
+      },
+    });
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("inline-trigger"),
+            fromMe: false,
+            remoteJid: groupJid,
+            participant,
+          },
+          message: { conversation: "trigger reply" },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Kavish",
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 1);
+    await vi.waitFor(() => expect(sock.sendMessage).toHaveBeenCalledTimes(1));
+    await settleInboundWork();
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("inline-outbound-reply"),
+            fromMe: false,
+            remoteJid: groupJid,
+            participant,
+          },
+          message: {
+            extendedTextMessage: {
+              text: "what was it that you said?",
+              contextInfo: {
+                stanzaId: outboundId,
+                participant: "57711827927237@lid",
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_001,
+          pushName: "Kavish",
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 2);
+
+    expect(onMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        body: "what was it that you said?",
+        replyToId: outboundId,
+        replyToBody: "i was trying to be suppressed",
+        replyToSender: "+123",
+        replyToSenderJid: "57711827927237@lid",
+        replyToSenderE164: "+123",
+        replyTo: expect.objectContaining({
+          id: outboundId,
+          body: "i was trying to be suppressed",
+          sender: expect.objectContaining({
+            lid: "57711827927237@lid",
+            e164: "+123",
+          }),
+        }),
+      }),
+    );
+
+    await listener.close();
   });
 
   it("captures reply context from wrapped quoted messages", async () => {

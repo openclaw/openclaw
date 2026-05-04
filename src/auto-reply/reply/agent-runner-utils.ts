@@ -107,6 +107,7 @@ export function buildThreadingToolContext(params: {
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
   const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  const currentMessageParticipant = normalizeOptionalString(sessionCtx.MessageParticipant);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,
@@ -118,12 +119,14 @@ export function buildThreadingToolContext(params: {
   if (!config) {
     return {
       currentMessageId,
+      currentMessageParticipant,
     };
   }
   const rawProvider = normalizeOptionalLowercaseString(originProvider);
   if (!rawProvider) {
     return {
       currentMessageId,
+      currentMessageParticipant,
     };
   }
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
@@ -134,6 +137,7 @@ export function buildThreadingToolContext(params: {
       currentChannelId: normalizeOptionalString(originTo),
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
+      currentMessageParticipant,
       hasRepliedRef,
     };
   }
@@ -158,6 +162,7 @@ export function buildThreadingToolContext(params: {
     ...context,
     currentChannelProvider: provider!, // guaranteed non-null since threading exists
     currentMessageId: context.currentMessageId ?? currentMessageId,
+    currentMessageParticipant: context.currentMessageParticipant ?? currentMessageParticipant,
   };
 }
 
@@ -198,6 +203,8 @@ function buildEmbeddedContextFromTemplate(params: {
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
+    replyRunKey: params.run.replyRunKey,
+    sessionLaneKey: params.run.sessionLaneKey,
     sandboxSessionKey: params.run.runtimePolicySessionKey,
     agentId: params.run.agentId,
     messageProvider: resolveOriginMessageProvider({

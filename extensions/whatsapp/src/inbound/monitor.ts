@@ -2,7 +2,6 @@ import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
   proto,
-  GroupMetadata,
   WAMessage,
   WASocket,
 } from "@whiskeysockets/baileys";
@@ -13,8 +12,16 @@ import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
-import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
-import { cacheInboundMessageMeta } from "../quoted-message.js";
+import {
+  getMentionIdentities,
+  getPrimaryIdentityId,
+  getReplyContext,
+  getSelfIdentity,
+  identitiesOverlap,
+  resolveComparableIdentity,
+  type WhatsAppReplyContext,
+} from "../identity.js";
+import { cacheInboundMessageMeta, lookupInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
@@ -31,76 +38,27 @@ import {
 } from "./dedupe.js";
 import {
   describeReplyContext,
+  describeReplyContextKey,
   extractLocationData,
   extractContactContext,
   extractMediaPlaceholder,
   extractMentionedJids,
   extractText,
-  hasInboundUserContent,
 } from "./extract.js";
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
-import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
-import {
-  addWhatsAppOutboundMentionsToContent,
-  mayContainWhatsAppOutboundMention,
-  resolveWhatsAppOutboundMentions,
-  type WhatsAppOutboundMentionParticipant,
-} from "./outbound-mentions.js";
+import { downloadInboundMedia } from "./media.js";
 import { DisconnectReason, isJidGroup, saveMediaBuffer } from "./runtime-api.js";
 import { createWebSendApi } from "./send-api.js";
-import { normalizeWhatsAppSendResult } from "./send-result.js";
-import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
+import type {
+  WebInboundMessage,
+  WebListenerCloseReason,
+  WhatsAppPendingAmbientEntry,
+  WhatsAppQueueLaneDecision,
+  WhatsAppQueueLaneId,
+} from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
-const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
-export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
-
-type WhatsAppGroupMetadataCacheEntry = {
-  subject?: string;
-  expires: number;
-};
-export type WhatsAppGroupMetadataCache = Map<string, WhatsAppGroupMetadataCacheEntry>;
-type LocalGroupMetadataCacheEntry = WhatsAppGroupMetadataCacheEntry & {
-  participants?: string[];
-  mentionParticipants?: WhatsAppOutboundMentionParticipant[];
-};
-
-function rememberGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
-  cache: Map<string, T>,
-  jid: string,
-  entry: T,
-): void {
-  if (cache.has(jid)) {
-    cache.delete(jid);
-  }
-  cache.set(jid, entry);
-
-  while (cache.size > WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    cache.delete(oldest.value);
-  }
-}
-
-function readGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
-  cache: Map<string, T>,
-  jid: string,
-): T | null {
-  const entry = cache.get(jid);
-  if (!entry) {
-    return null;
-  }
-  if (entry.expires <= Date.now()) {
-    cache.delete(jid);
-    return null;
-  }
-  cache.delete(jid);
-  cache.set(jid, entry);
-  return entry;
-}
 
 function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   if (!enabled) {
@@ -125,7 +83,7 @@ function isNonEmptyString(value: string | undefined): value is string {
   return Boolean(value);
 }
 
-type MonitorWebInboxOptions = {
+export type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
   verbose: boolean;
   accountId: string;
@@ -154,9 +112,752 @@ type MonitorWebInboxOptions = {
   };
   /** Abort in-flight reconnect waits when shutdown becomes terminal. */
   disconnectRetryAbortSignal?: AbortSignal;
-  /** Shared group metadata cache used only for inbound metadata fallback after fetch failures. */
-  groupMetadataCache?: WhatsAppGroupMetadataCache;
 };
+
+type WhatsAppGroupDebounceScope = "sender" | "conversation";
+type WhatsAppGroupDebounceConfig = {
+  scope: WhatsAppGroupDebounceScope;
+  debounceMs?: number;
+  selfAddressedDebounceMs?: number;
+  debounceMaxWaitMs?: number;
+  debounceMaxBatchItems?: number;
+  lane?: WhatsAppQueueLaneDecision;
+};
+type WhatsAppPriorityLaneConfigLike = {
+  debounceMs?: unknown;
+  maxWaitMs?: unknown;
+  maxBatchItems?: unknown;
+  humanLatencyMs?: unknown;
+};
+type WhatsAppPriorityLanesConfigLike = {
+  enabled?: unknown;
+  directOwnerPull?: WhatsAppPriorityLaneConfigLike | null;
+  inlineReplyToSelf?: WhatsAppPriorityLaneConfigLike | null;
+  bothBotAsk?: WhatsAppPriorityLaneConfigLike | null;
+  ambientRoomBurst?: WhatsAppPriorityLaneConfigLike | null;
+  otherTargetAmbient?: WhatsAppPriorityLaneConfigLike | null;
+};
+type WhatsAppGroupConfigLike = {
+  debounceScope?: unknown;
+  debounceMs?: unknown;
+  selfAddressedDebounceMs?: unknown;
+  debounceMaxWaitMs?: unknown;
+  debounceMaxBatchItems?: unknown;
+  priorityLanes?: WhatsAppPriorityLanesConfigLike | null;
+};
+type WhatsAppGroupsConfigLike = Record<string, WhatsAppGroupConfigLike | null | undefined>;
+type AgentConfigLike = {
+  id?: unknown;
+  name?: unknown;
+  default?: unknown;
+  aliases?: unknown;
+  identity?: {
+    name?: unknown;
+    aliases?: unknown;
+  } | null;
+};
+
+function normalizeAccountId(value: string | undefined | null): string {
+  return value?.trim() || "default";
+}
+
+function normalizeDebounceMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
+function normalizePositiveInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.max(1, Math.trunc(value));
+}
+
+type ResolvedPriorityLaneConfig = {
+  enabled: boolean;
+  lanes: Record<WhatsAppQueueLaneId, WhatsAppPriorityLaneConfigLike>;
+};
+
+const DEFAULT_PRIORITY_LANES: Record<
+  WhatsAppQueueLaneId,
+  Required<WhatsAppPriorityLaneConfigLike>
+> = {
+  direct_owner_pull: {
+    debounceMs: 1200,
+    maxWaitMs: 3500,
+    maxBatchItems: 5,
+    humanLatencyMs: 600,
+  },
+  inline_reply_to_self: {
+    debounceMs: 2000,
+    maxWaitMs: 5000,
+    maxBatchItems: 5,
+    humanLatencyMs: 600,
+  },
+  both_bot_ask: {
+    debounceMs: 2500,
+    maxWaitMs: 6000,
+    maxBatchItems: 6,
+    humanLatencyMs: 600,
+  },
+  ambient_room_burst: {
+    debounceMs: 4500,
+    maxWaitMs: 9000,
+    maxBatchItems: 12,
+    humanLatencyMs: 0,
+  },
+  other_target_ambient: {
+    debounceMs: 4500,
+    maxWaitMs: 9000,
+    maxBatchItems: 12,
+    humanLatencyMs: 0,
+  },
+};
+
+function normalizePhoneDigits(value: string | number | null | undefined): string | null {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  return digits.length >= 6 ? digits : null;
+}
+
+function collectOwnerPhones(cfg: OpenClawConfig): Set<string> {
+  const owners = new Set<string>();
+  const whatsapp = cfg.channels?.whatsapp as
+    | {
+        allowFrom?: unknown;
+        ownerAllowFrom?: unknown;
+        accounts?: Record<string, { allowFrom?: unknown; ownerAllowFrom?: unknown } | null>;
+      }
+    | undefined;
+  const addPhones = (values: unknown) => {
+    if (!Array.isArray(values)) {
+      return;
+    }
+    for (const value of values) {
+      if (typeof value !== "string" && typeof value !== "number") {
+        continue;
+      }
+      const normalized = normalizePhoneDigits(value);
+      if (normalized) {
+        owners.add(normalized);
+      }
+    }
+  };
+  addPhones(whatsapp?.allowFrom);
+  addPhones(whatsapp?.ownerAllowFrom);
+  for (const account of Object.values(whatsapp?.accounts ?? {})) {
+    addPhones(account?.allowFrom);
+    addPhones(account?.ownerAllowFrom);
+  }
+  return owners;
+}
+
+function isOwnerSenderForQueueLane(params: { cfg: OpenClawConfig; msg: WebInboundMessage }) {
+  const senderPhone =
+    normalizePhoneDigits(params.msg.sender?.e164) ?? normalizePhoneDigits(params.msg.senderE164);
+  if (!senderPhone) {
+    return false;
+  }
+  return collectOwnerPhones(params.cfg).has(senderPhone);
+}
+
+function resolvePriorityLaneEntry(
+  lanes: WhatsAppPriorityLanesConfigLike | null | undefined,
+  laneId: WhatsAppQueueLaneId,
+): WhatsAppPriorityLaneConfigLike {
+  const configured =
+    laneId === "direct_owner_pull"
+      ? lanes?.directOwnerPull
+      : laneId === "inline_reply_to_self"
+        ? lanes?.inlineReplyToSelf
+        : laneId === "both_bot_ask"
+          ? lanes?.bothBotAsk
+          : laneId === "ambient_room_burst"
+            ? lanes?.ambientRoomBurst
+            : lanes?.otherTargetAmbient;
+  return {
+    ...DEFAULT_PRIORITY_LANES[laneId],
+    ...(configured ?? {}),
+  };
+}
+
+function resolvePriorityLanesConfig(entry?: WhatsAppGroupConfigLike): ResolvedPriorityLaneConfig {
+  const lanes = entry?.priorityLanes;
+  const enabled = lanes?.enabled === true;
+  return {
+    enabled,
+    lanes: {
+      direct_owner_pull: resolvePriorityLaneEntry(lanes, "direct_owner_pull"),
+      inline_reply_to_self: resolvePriorityLaneEntry(lanes, "inline_reply_to_self"),
+      both_bot_ask: resolvePriorityLaneEntry(lanes, "both_bot_ask"),
+      ambient_room_burst: resolvePriorityLaneEntry(lanes, "ambient_room_burst"),
+      other_target_ambient: resolvePriorityLaneEntry(lanes, "other_target_ambient"),
+    },
+  };
+}
+
+function lanePriority(id: WhatsAppQueueLaneId): number {
+  switch (id) {
+    case "direct_owner_pull":
+      return 1;
+    case "inline_reply_to_self":
+      return 2;
+    case "both_bot_ask":
+      return 3;
+    case "ambient_room_burst":
+      return 4;
+    case "other_target_ambient":
+      return 5;
+  }
+}
+
+function isInlineReplyToSelf(msg: WebInboundMessage): boolean {
+  return identitiesOverlap(getSelfIdentity(msg), getReplyContext(msg)?.sender);
+}
+
+function hasBothBotAskShape(text: string): boolean {
+  return /\b(?:you both|both of you|both bots|shoar\s+(?:and|&)\s+brodie|brodie\s+(?:and|&)\s+shoar|compare|comparison|your take|independent take)\b/i.test(
+    text,
+  );
+}
+
+function hasOwnerShoarBehaviorPullShape(text: string): boolean {
+  return /\b(?:no[_\s-]?reply|silenc(?:e|ed|ing)|su[p]?press(?:ion|ed|ing)?|disappear(?:ed|ing)?|typing|ambient\s+noise|not\s+respond(?:ing)?|stopped\s+responding|hold\s+convos?|visibility|can\s+(?:you|u)\s+(?:see|hear)|talking\s+to\s+(?:you|u)|inline(?:\s+reply)?|quoted?\s+(?:message|reply|text)|reply\s+(?:target|metadata|context)|thing\s+(?:isnt|isn't|is\s+not|not)\s+working)\b/i.test(
+    text,
+  );
+}
+
+function hasOwnerMultiAgentPullShape(text: string): boolean {
+  return /\b(?:why\s+(?:did\s+)?(?:none|nobody|no\s+one)|none\s+of\s+(?:you|u)|(?:you|u)\s+(?:both|all)|both\s+bots?|bots?\s+(?:can|should|need|gotta|simplif|explain|answer|respond|reply)|agents?\s+(?:can|should|need|gotta|simplif|explain|answer|respond|reply))\b/i.test(
+    text,
+  );
+}
+
+function hasOwnerSecondPersonPullShape(text: string): boolean {
+  return /\b(?:(?:do|did|are|were|was|can|could|would|will|should|have|has)\s+(?:you|u)|(?:you|u)\s+(?:still|pay|have|use|got|getting|want|think|mean|know|remember)|your|ur|you're|youre)\b/i.test(
+    text,
+  );
+}
+
+function hasOtherTargetAmbientShape(text: string): boolean {
+  return /\b(?:brodie|abhay's\s+bot|abhays\s+bot|abhay\s+bot|abhay's\s+agent|abhays\s+agent|abhay\s+agent|brocode)\b/i.test(
+    text,
+  );
+}
+
+function buildQueueLaneDecision(
+  id: WhatsAppQueueLaneId,
+  reason: string,
+  lanes: ResolvedPriorityLaneConfig,
+): WhatsAppQueueLaneDecision {
+  const lane = lanes.lanes[id];
+  return {
+    id,
+    priority: lanePriority(id),
+    reason,
+    ...(normalizeDebounceMs(lane.debounceMs) === undefined
+      ? {}
+      : { debounceMs: normalizeDebounceMs(lane.debounceMs) }),
+    ...(normalizeDebounceMs(lane.maxWaitMs) === undefined
+      ? {}
+      : { maxWaitMs: normalizeDebounceMs(lane.maxWaitMs) }),
+    ...(normalizePositiveInt(lane.maxBatchItems) === undefined
+      ? {}
+      : { maxBatchItems: normalizePositiveInt(lane.maxBatchItems) }),
+    ...(normalizeDebounceMs(lane.humanLatencyMs) === undefined
+      ? {}
+      : { humanLatencyMs: normalizeDebounceMs(lane.humanLatencyMs) }),
+  };
+}
+
+function cleanDebounceText(value: string | undefined | null): string {
+  return (value ?? "")
+    .normalize("NFKC")
+    .replace(/[\u2018\u2019\u201B\u2032]/g, "'")
+    .replace(/[\u200B-\u200F\u202A-\u202E]/g, "")
+    .trim();
+}
+
+function normalizeDebounceText(value: string | undefined | null): string {
+  return cleanDebounceText(value).toLowerCase();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function compactAlphaNumeric(value: string): string {
+  return normalizeDebounceText(value).replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function pushDebounceAlias(target: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = normalizeDebounceText(value);
+  if (normalized.length >= 2) {
+    target.add(normalized);
+  }
+}
+
+function pushDebounceAliases(target: Set<string>, values: unknown): void {
+  if (!Array.isArray(values)) {
+    return;
+  }
+  for (const value of values) {
+    pushDebounceAlias(target, value);
+  }
+}
+
+function resolveConfiguredAgentAliases(cfg: OpenClawConfig): string[] {
+  const aliases = new Set<string>();
+  const agents = (Array.isArray(cfg.agents?.list) ? cfg.agents.list : []) as AgentConfigLike[];
+  for (const agent of agents) {
+    if (!agent) {
+      continue;
+    }
+    if (agent.id !== "main") {
+      pushDebounceAlias(aliases, agent.id);
+    }
+    pushDebounceAlias(aliases, agent.name);
+    pushDebounceAlias(aliases, agent.identity?.name);
+    pushDebounceAliases(aliases, agent.aliases);
+    pushDebounceAliases(aliases, agent.identity?.aliases);
+  }
+  return Array.from(aliases);
+}
+
+function hasDirectAlias(text: string, alias: string): boolean {
+  const normalizedAlias = normalizeDebounceText(alias);
+  if (!normalizedAlias) {
+    return false;
+  }
+  const escaped = escapeRegExp(normalizedAlias).replace(/\s+/g, "\\s+");
+  return new RegExp(`(^|[^\\p{L}\\p{N}_])@?${escaped}(?=$|[^\\p{L}\\p{N}_])`, "iu").test(text);
+}
+
+function hasLooseSpelledAlias(text: string, alias: string): boolean {
+  const compact = compactAlphaNumeric(alias);
+  if (compact.length < 3 || compact.length > 16) {
+    return false;
+  }
+  const spelled = Array.from(compact)
+    .map((char) => escapeRegExp(char))
+    .join("[\\s._-]+");
+  return new RegExp(`(^|[^\\p{L}\\p{N}_])@?${spelled}(?=$|[^\\p{L}\\p{N}_])`, "iu").test(text);
+}
+
+function isOneSubstitutionOrAdjacentSwap(a: string, b: string): boolean {
+  if (a.length !== b.length || a.length < 4 || a === b) {
+    return false;
+  }
+  const diffs: number[] = [];
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      diffs.push(index);
+      if (diffs.length > 2) {
+        return false;
+      }
+    }
+  }
+  if (diffs.length === 1) {
+    return true;
+  }
+  return (
+    diffs.length === 2 &&
+    diffs[1] === diffs[0] + 1 &&
+    a[diffs[0]] === b[diffs[1]] &&
+    a[diffs[1]] === b[diffs[0]]
+  );
+}
+
+function hasNearSingleWordAlias(text: string, alias: string): boolean {
+  const compact = compactAlphaNumeric(alias);
+  if (compact.length < 4 || compact.length > 12 || compact !== normalizeDebounceText(alias)) {
+    return false;
+  }
+  const tokens = text.match(/[\p{L}\p{N}]+/gu) ?? [];
+  return tokens.some((token) =>
+    isOneSubstitutionOrAdjacentSwap(compactAlphaNumeric(token), compact),
+  );
+}
+
+function textMentionsSelfIdentityForDebounce(text: string, msg: WebInboundMessage): boolean {
+  const self = getSelfIdentity(msg);
+  const candidates = [
+    self.jid,
+    self.lid,
+    self.e164,
+    self.jid?.split("@")[0]?.split(":")[0],
+    self.lid?.split("@")[0]?.split(":")[0],
+    self.e164?.replace(/\D/g, ""),
+  ].filter((entry): entry is string => Boolean(entry));
+  for (const raw of candidates) {
+    const value = raw.toLowerCase().replace(/[^\dA-Za-z@.]/g, "");
+    if (!value) {
+      continue;
+    }
+    if (value.includes("@") && text.includes(value)) {
+      return true;
+    }
+    if (/^\d{5,}$/.test(value) && new RegExp(`(^|\\D)@?${escapeRegExp(value)}($|\\D)`).test(text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSelfAddressedForDebounce(params: {
+  cfg: OpenClawConfig;
+  msg: WebInboundMessage;
+}): boolean {
+  if (params.msg.chatType !== "group") {
+    return false;
+  }
+  const self = getSelfIdentity(params.msg);
+  if (getMentionIdentities(params.msg).some((mention) => identitiesOverlap(self, mention))) {
+    return true;
+  }
+  if (identitiesOverlap(self, getReplyContext(params.msg)?.sender)) {
+    return true;
+  }
+  const text = normalizeDebounceText(params.msg.body);
+  if (textMentionsSelfIdentityForDebounce(text, params.msg)) {
+    return true;
+  }
+  return resolveConfiguredAgentAliases(params.cfg).some(
+    (alias) =>
+      hasDirectAlias(text, alias) ||
+      hasLooseSpelledAlias(text, alias) ||
+      hasNearSingleWordAlias(text, alias),
+  );
+}
+
+function isOwnerDirectPullForDebounce(params: {
+  cfg: OpenClawConfig;
+  msg: WebInboundMessage;
+}): boolean {
+  if (!isOwnerSenderForQueueLane(params)) {
+    return false;
+  }
+  if (isSelfAddressedForDebounce(params) || isInlineReplyToSelf(params.msg)) {
+    return true;
+  }
+  const text = normalizeDebounceText(params.msg.body);
+  if (hasOtherTargetAmbientShape(text)) {
+    return false;
+  }
+  return hasOwnerShoarBehaviorPullShape(text) || hasOwnerSecondPersonPullShape(text);
+}
+
+function isOwnerMultiAgentPullForDebounce(params: {
+  cfg: OpenClawConfig;
+  msg: WebInboundMessage;
+}): boolean {
+  if (!isOwnerSenderForQueueLane(params)) {
+    return false;
+  }
+  const text = normalizeDebounceText(params.msg.body);
+  return hasBothBotAskShape(text) || hasOwnerMultiAgentPullShape(text);
+}
+
+function resolveConversationGroupId(
+  msg: Pick<WebInboundMessage, "chatId" | "conversationId" | "from">,
+) {
+  return msg.chatId || msg.conversationId || msg.from;
+}
+
+function resolveWhatsAppGroupConfigEntry(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  groupId: string;
+}): WhatsAppGroupConfigLike | undefined {
+  const whatsapp = params.cfg.channels?.whatsapp as
+    | {
+        groups?: WhatsAppGroupsConfigLike;
+        accounts?: Record<string, { groups?: WhatsAppGroupsConfigLike } | null | undefined>;
+      }
+    | undefined;
+  const accountId = normalizeAccountId(params.accountId);
+  const accountGroups = whatsapp?.accounts?.[accountId]?.groups;
+  const defaultAccountGroups =
+    accountId === "default" ? undefined : whatsapp?.accounts?.default?.groups;
+  for (const groups of [accountGroups, defaultAccountGroups, whatsapp?.groups]) {
+    const exact = groups?.[params.groupId];
+    if (exact) {
+      return exact;
+    }
+    const wildcard = groups?.["*"];
+    if (wildcard) {
+      return wildcard;
+    }
+  }
+  return undefined;
+}
+
+export function resolveWhatsAppGroupDebounceConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  msg: Pick<WebInboundMessage, "accountId" | "chatType" | "chatId" | "conversationId" | "from">;
+}): WhatsAppGroupDebounceConfig {
+  if (params.msg.chatType !== "group") {
+    return { scope: "sender" };
+  }
+  const groupId = resolveConversationGroupId(params.msg);
+  const entry = resolveWhatsAppGroupConfigEntry({
+    cfg: params.cfg,
+    accountId: params.msg.accountId || params.accountId,
+    groupId,
+  });
+  const scope = entry?.debounceScope === "conversation" ? "conversation" : "sender";
+  const debounceMs = normalizeDebounceMs(entry?.debounceMs);
+  return {
+    scope,
+    ...(debounceMs === undefined ? {} : { debounceMs }),
+    ...(normalizeDebounceMs(entry?.selfAddressedDebounceMs) === undefined
+      ? {}
+      : { selfAddressedDebounceMs: normalizeDebounceMs(entry?.selfAddressedDebounceMs) }),
+    ...(normalizeDebounceMs(entry?.debounceMaxWaitMs) === undefined
+      ? {}
+      : { debounceMaxWaitMs: normalizeDebounceMs(entry?.debounceMaxWaitMs) }),
+    ...(normalizePositiveInt(entry?.debounceMaxBatchItems) === undefined
+      ? {}
+      : { debounceMaxBatchItems: normalizePositiveInt(entry?.debounceMaxBatchItems) }),
+  };
+}
+
+export function resolveWhatsAppInboundQueueLaneDecision(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  msg: WebInboundMessage;
+}): WhatsAppQueueLaneDecision | undefined {
+  if (params.msg.chatType !== "group") {
+    return undefined;
+  }
+  const groupId = resolveConversationGroupId(params.msg);
+  const entry = resolveWhatsAppGroupConfigEntry({
+    cfg: params.cfg,
+    accountId: params.msg.accountId || params.accountId,
+    groupId,
+  });
+  const lanes = resolvePriorityLanesConfig(entry);
+  if (!lanes.enabled) {
+    return undefined;
+  }
+  const text = normalizeDebounceText(params.msg.body);
+  const selfAddressed = isSelfAddressedForDebounce({ cfg: params.cfg, msg: params.msg });
+  const replyToSelf = isInlineReplyToSelf(params.msg);
+  const ownerSender = isOwnerSenderForQueueLane(params);
+  const ownerDirectPull = isOwnerDirectPullForDebounce({ cfg: params.cfg, msg: params.msg });
+  const ownerMultiAgentPull = isOwnerMultiAgentPullForDebounce({
+    cfg: params.cfg,
+    msg: params.msg,
+  });
+  if ((ownerSender && hasBothBotAskShape(text)) || ownerMultiAgentPull) {
+    return buildQueueLaneDecision("both_bot_ask", "both_bot_or_comparison_pull", lanes);
+  }
+  if (ownerDirectPull) {
+    return buildQueueLaneDecision("direct_owner_pull", "owner_direct_pull", lanes);
+  }
+  if (replyToSelf) {
+    return buildQueueLaneDecision("inline_reply_to_self", "reply_to_self", lanes);
+  }
+  if (selfAddressed && hasBothBotAskShape(text)) {
+    return buildQueueLaneDecision("both_bot_ask", "both_bot_or_comparison_pull", lanes);
+  }
+  if (selfAddressed) {
+    return buildQueueLaneDecision("inline_reply_to_self", "self_addressed_non_owner", lanes);
+  }
+  if (hasOtherTargetAmbientShape(text)) {
+    return buildQueueLaneDecision("other_target_ambient", "other_target_group_burst", lanes);
+  }
+  return buildQueueLaneDecision("ambient_room_burst", "ambient_group_burst", lanes);
+}
+
+export function resolveWhatsAppInboundDebounceConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  msg: WebInboundMessage;
+}): WhatsAppGroupDebounceConfig {
+  const base = resolveWhatsAppGroupDebounceConfig(params);
+  const lane = resolveWhatsAppInboundQueueLaneDecision(params);
+  if (lane) {
+    return {
+      ...base,
+      lane,
+      debounceMs: lane.debounceMs ?? base.debounceMs,
+      debounceMaxWaitMs: lane.maxWaitMs ?? base.debounceMaxWaitMs,
+      debounceMaxBatchItems: lane.maxBatchItems ?? base.debounceMaxBatchItems,
+    };
+  }
+  if (params.msg.chatType !== "group") {
+    return base;
+  }
+  if (
+    base.selfAddressedDebounceMs !== undefined &&
+    isSelfAddressedForDebounce({ cfg: params.cfg, msg: params.msg })
+  ) {
+    return { ...base, debounceMs: base.selfAddressedDebounceMs };
+  }
+  return base;
+}
+
+function buildWhatsAppInboundDebounceKeyForLane(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  msg: WebInboundMessage;
+  laneId: WhatsAppQueueLaneId;
+}): string {
+  const accountId = normalizeAccountId(params.msg.accountId || params.accountId);
+  const conversationKey = resolveConversationGroupId(params.msg);
+  return `${accountId}:${conversationKey}:lane:${params.laneId}`;
+}
+
+export function buildWhatsAppInboundDebounceKey(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  msg: WebInboundMessage;
+}): string | null {
+  const accountId = normalizeAccountId(params.msg.accountId || params.accountId);
+  const conversationKey =
+    params.msg.chatType === "group" ? resolveConversationGroupId(params.msg) : params.msg.from;
+
+  if (params.msg.chatType === "group") {
+    const lane = resolveWhatsAppInboundQueueLaneDecision(params);
+    if (lane) {
+      return buildWhatsAppInboundDebounceKeyForLane({ ...params, laneId: lane.id });
+    }
+    const groupDebounce = resolveWhatsAppGroupDebounceConfig(params);
+    if (
+      groupDebounce.scope === "conversation" &&
+      !isSelfAddressedForDebounce({ cfg: params.cfg, msg: params.msg })
+    ) {
+      return `${accountId}:${conversationKey}:conversation`;
+    }
+  }
+
+  const sender = params.msg.sender;
+  const senderKey =
+    params.msg.chatType === "group"
+      ? (getPrimaryIdentityId(sender ?? null) ??
+        params.msg.senderJid ??
+        params.msg.senderE164 ??
+        params.msg.senderName ??
+        params.msg.from)
+      : params.msg.from;
+  if (!senderKey) {
+    return null;
+  }
+  return `${accountId}:${conversationKey}:${senderKey}`;
+}
+
+function resolveEntrySenderKey(entry: WebInboundMessage): string {
+  return (
+    getPrimaryIdentityId(entry.sender ?? null) ??
+    entry.senderJid ??
+    entry.senderE164 ??
+    entry.senderName ??
+    entry.from
+  );
+}
+
+function sanitizeSenderLabel(value: string | undefined | null): string {
+  const label = (value ?? "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return label ? label.slice(0, 80) : "Unknown";
+}
+
+function resolveEntrySenderLabel(entry: WebInboundMessage): string {
+  return sanitizeSenderLabel(
+    entry.senderName ?? entry.sender?.name ?? entry.senderE164 ?? entry.senderJid ?? entry.from,
+  );
+}
+
+function buildPendingAmbientEntry(entry: WebInboundMessage): WhatsAppPendingAmbientEntry {
+  return {
+    ...(entry.id ? { id: entry.id } : {}),
+    sender: resolveEntrySenderLabel(entry),
+    ...(entry.senderJid ? { senderJid: entry.senderJid } : {}),
+    ...(entry.senderE164 ? { senderE164: entry.senderE164 } : {}),
+    body: entry.body,
+    ...(entry.timestamp === undefined ? {} : { timestamp: entry.timestamp }),
+  };
+}
+
+function resolveQueueBurstWindowMs(entries: readonly WebInboundMessage[]): number | undefined {
+  const timestamps = entries
+    .map((entry) => entry.timestamp)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (timestamps.length < 2) {
+    return undefined;
+  }
+  return Math.max(...timestamps) - Math.min(...timestamps);
+}
+
+function buildQueueBurstMetadata(params: {
+  entries: readonly WebInboundMessage[];
+  key: string | null;
+  lane?: WhatsAppQueueLaneDecision;
+}): WebInboundMessage["queueBurst"] {
+  return {
+    size: params.entries.length,
+    ...(params.key ? { key: params.key } : {}),
+    ...(resolveQueueBurstWindowMs(params.entries) === undefined
+      ? {}
+      : { windowMs: resolveQueueBurstWindowMs(params.entries) }),
+    ...(params.lane?.debounceMs === undefined ? {} : { debounceMs: params.lane.debounceMs }),
+    ...(params.lane?.maxWaitMs === undefined ? {} : { maxWaitMs: params.lane.maxWaitMs }),
+    ...(params.lane?.maxBatchItems === undefined
+      ? {}
+      : { maxBatchItems: params.lane.maxBatchItems }),
+  };
+}
+
+export function formatBatchedWhatsAppInboundBody(entries: readonly WebInboundMessage[]): string {
+  const bodies = entries.map((entry) => entry.body).filter(Boolean);
+  const senderKeys = new Set(entries.map(resolveEntrySenderKey).filter(Boolean));
+  if (senderKeys.size <= 1) {
+    return bodies.join("\n");
+  }
+  return entries
+    .map((entry) => {
+      const body = entry.body?.trim();
+      return body ? `${resolveEntrySenderLabel(entry)}: ${body}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function selectBatchedWhatsAppInboundAnchor(params: {
+  cfg: OpenClawConfig;
+  entries: readonly WebInboundMessage[];
+}): WebInboundMessage | undefined {
+  let best: { entry: WebInboundMessage; index: number; priority: number } | undefined;
+  params.entries.forEach((entry, index) => {
+    const lane = resolveWhatsAppInboundQueueLaneDecision({
+      cfg: params.cfg,
+      accountId: entry.accountId,
+      msg: entry,
+    });
+    const priority =
+      lane?.priority ??
+      (isOwnerDirectPullForDebounce({ cfg: params.cfg, msg: entry }) ||
+      isOwnerMultiAgentPullForDebounce({ cfg: params.cfg, msg: entry }) ||
+      isSelfAddressedForDebounce({ cfg: params.cfg, msg: entry })
+        ? 3
+        : undefined);
+    if (priority === undefined) {
+      return;
+    }
+    if (!best || priority < best.priority || (priority === best.priority && index > best.index)) {
+      best = { entry, index, priority };
+    }
+  });
+  return best?.entry ?? params.entries.at(-1);
+}
 
 export async function attachWebInboxToSocket(
   options: MonitorWebInboxOptions & {
@@ -235,33 +936,69 @@ export async function attachWebInboxToSocket(
 
   const debouncer = createInboundDebouncer<QueuedInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
-    buildKey: (msg) => {
-      const sender = msg.sender;
-      const senderKey =
-        msg.chatType === "group"
-          ? (getPrimaryIdentityId(sender ?? null) ??
-            msg.senderJid ??
-            msg.senderE164 ??
-            msg.senderName ??
-            msg.from)
-          : msg.from;
-      if (!senderKey) {
-        return null;
-      }
-      const conversationKey = msg.chatType === "group" ? msg.chatId : msg.from;
-      return `${msg.accountId}:${conversationKey}:${senderKey}`;
-    },
+    buildKey: (msg) =>
+      buildWhatsAppInboundDebounceKey({
+        cfg: options.cfg,
+        accountId: options.accountId,
+        msg,
+      }),
     shouldDebounce: options.shouldDebounce,
+    resolveDebounceMs: (msg) =>
+      resolveWhatsAppInboundDebounceConfig({
+        cfg: options.cfg,
+        accountId: options.accountId,
+        msg,
+      }).debounceMs,
+    resolveMaxDebounceMs: (msg) =>
+      resolveWhatsAppInboundDebounceConfig({
+        cfg: options.cfg,
+        accountId: options.accountId,
+        msg,
+      }).debounceMaxWaitMs,
+    resolveMaxBatchItems: (msg) =>
+      resolveWhatsAppInboundDebounceConfig({
+        cfg: options.cfg,
+        accountId: options.accountId,
+        msg,
+      }).debounceMaxBatchItems,
     onFlush: async (entries) => {
       const last = entries.at(-1);
       if (!last) {
         return;
       }
+      let pendingAmbientEntries: QueuedInboundMessage[] = [];
       try {
-        if (entries.length === 1) {
-          await options.onMessage(last);
+        const anchor =
+          entries.length === 1
+            ? last
+            : selectBatchedWhatsAppInboundAnchor({
+                cfg: options.cfg,
+                entries,
+              });
+        if (!anchor) {
           await finalizeInboundDedupe(entries);
           return;
+        }
+        const queueLane = resolveWhatsAppInboundQueueLaneDecision({
+          cfg: options.cfg,
+          accountId: options.accountId,
+          msg: anchor,
+        });
+        const flushKey = buildWhatsAppInboundDebounceKey({
+          cfg: options.cfg,
+          accountId: options.accountId,
+          msg: anchor,
+        });
+        if (anchor.chatType === "group" && queueLane && queueLane.priority <= 3) {
+          const ambientKey = buildWhatsAppInboundDebounceKeyForLane({
+            cfg: options.cfg,
+            accountId: options.accountId,
+            msg: anchor,
+            laneId: "ambient_room_burst",
+          });
+          if (ambientKey !== flushKey) {
+            pendingAmbientEntries = debouncer.clearKey(ambientKey);
+          }
         }
         const mentioned = new Set<string>();
         for (const entry of entries) {
@@ -269,21 +1006,28 @@ export async function attachWebInboxToSocket(
             mentioned.add(jid);
           }
         }
-        const combinedBody = entries
-          .map((entry) => entry.body)
-          .filter(Boolean)
-          .join("\n");
+        const combinedBody =
+          entries.length === 1 ? anchor.body : formatBatchedWhatsAppInboundBody(entries);
         const combinedMessage: WebInboundMessage = {
-          ...last,
+          ...anchor,
           body: combinedBody,
           mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
           mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-          isBatched: true,
+          isBatched: entries.length > 1 ? true : anchor.isBatched,
+          ...(queueLane ? { queueLane } : {}),
+          queueBurst: buildQueueBurstMetadata({
+            entries,
+            key: flushKey,
+            lane: queueLane,
+          }),
+          ...(pendingAmbientEntries.length > 0
+            ? { pendingAmbientBurst: pendingAmbientEntries.map(buildPendingAmbientEntry) }
+            : {}),
         };
         await options.onMessage(combinedMessage);
-        await finalizeInboundDedupe(entries);
+        await finalizeInboundDedupe([...entries, ...pendingAmbientEntries]);
       } catch (error) {
-        await finalizeInboundDedupe(entries, error);
+        await finalizeInboundDedupe([...entries, ...pendingAmbientEntries], error);
         throw error;
       }
     },
@@ -292,14 +1036,31 @@ export async function attachWebInboxToSocket(
       inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
     },
   });
-  const groupMetadataCache = options.groupMetadataCache ?? new Map();
-  const groupMetaCache = new Map<string, LocalGroupMetadataCacheEntry>();
+  const groupMetaCache = new Map<
+    string,
+    { subject?: string; participants?: string[]; expires: number }
+  >();
+  const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
   const lidLookup = sock.signalRepository?.lidMapping;
 
   const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
     resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
 
-  const rememberOutboundMessage = (remoteJid: string, result: unknown) => {
+  const extractOutboundBody = (content: AnyMessageContent): string | undefined => {
+    const record = content as Record<string, unknown>;
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    if (text) {
+      return text;
+    }
+    const caption = typeof record.caption === "string" ? record.caption.trim() : "";
+    return caption || undefined;
+  };
+
+  const rememberOutboundMessage = (
+    remoteJid: string,
+    result: unknown,
+    content?: AnyMessageContent,
+  ) => {
     const messageId =
       typeof result === "object" && result && "key" in result
         ? ((result as { key?: { id?: string } }).key?.id ?? "")
@@ -312,6 +1073,15 @@ export async function attachWebInboxToSocket(
       remoteJid,
       messageId,
     });
+    const body = content ? extractOutboundBody(content) : undefined;
+    if (body) {
+      cacheInboundMessageMeta(options.accountId, remoteJid, messageId, {
+        participant: self.lid ?? self.jid ?? undefined,
+        participantE164: self.e164 ?? undefined,
+        body,
+        fromMe: true,
+      });
+    }
   };
 
   const sendTrackedMessage = async (
@@ -327,7 +1097,7 @@ export async function attachWebInboxToSocket(
           const result = sendOptions
             ? await currentSock.sendMessage(jid, content, sendOptions)
             : await currentSock.sendMessage(jid, content);
-          rememberOutboundMessage(jid, result);
+          rememberOutboundMessage(jid, result, content);
           return result;
         } catch (err) {
           if (!shouldRetryDisconnect() || !isRetryableSendDisconnectError(err)) {
@@ -361,105 +1131,36 @@ export async function attachWebInboxToSocket(
     }
   };
 
-  const summarizeGroupMeta = async (meta: GroupMetadata) => {
-    const participantEntries = await Promise.all(
-      meta.participants?.map(async (p) => {
-        const mapped = await resolveInboundJid(p.id);
-        return {
-          display: mapped ?? p.id,
-          mention: {
-            id: p.id,
-            lid: p.lid,
-            phoneNumber: p.phoneNumber,
-            e164: mapped,
-          } satisfies WhatsAppOutboundMentionParticipant,
-        };
-      }) ?? [],
-    );
-    const participants = participantEntries.map((entry) => entry.display).filter(Boolean);
-    const mentionParticipants = participantEntries.map((entry) => entry.mention);
-    return {
-      subject: meta.subject,
-      participants,
-      mentionParticipants,
-      expires: Date.now() + GROUP_META_TTL_MS,
-    };
-  };
-
-  const summarizeGroupMetaForReconnectCache = (
-    meta: GroupMetadata,
-  ): WhatsAppGroupMetadataCacheEntry => ({
-    subject: meta.subject,
-    expires: Date.now() + GROUP_META_TTL_MS,
-  });
-
   const getGroupMeta = async (jid: string) => {
-    const cached = readGroupMetadataCacheEntry(groupMetaCache, jid);
-    if (cached) {
+    const cached = groupMetaCache.get(jid);
+    if (cached && cached.expires > Date.now()) {
       return cached;
     }
     try {
-      const meta = await (getCurrentSock() ?? sock).groupMetadata(jid);
-      const entry = await summarizeGroupMeta(meta);
-      rememberGroupMetadataCacheEntry(groupMetadataCache, jid, {
-        subject: entry.subject,
-        expires: entry.expires,
-      });
-      rememberGroupMetadataCacheEntry(groupMetaCache, jid, entry);
+      const meta = await sock.groupMetadata(jid);
+      const participants =
+        (
+          await Promise.all(
+            meta.participants?.map(async (p) => {
+              const mapped = await resolveInboundJid(p.id);
+              return mapped ?? p.id;
+            }) ?? [],
+          )
+        ).filter(Boolean) ?? [];
+      const entry = {
+        subject: meta.subject,
+        participants,
+        expires: Date.now() + GROUP_META_TTL_MS,
+      };
+      groupMetaCache.set(jid, entry);
       return entry;
     } catch (err) {
-      const hydrated = readGroupMetadataCacheEntry(groupMetadataCache, jid);
-      if (hydrated) {
-        rememberGroupMetadataCacheEntry(groupMetaCache, jid, hydrated);
-        logWhatsAppVerbose(
-          options.verbose,
-          `Using cached group metadata for ${jid} after fetch failure: ${String(err)}`,
-        );
-        return hydrated;
-      }
       logWhatsAppVerbose(
         options.verbose,
         `Failed to fetch group metadata for ${jid}: ${String(err)}`,
       );
       return { expires: Date.now() + GROUP_META_TTL_MS };
     }
-  };
-
-  const resolveOutboundMentionsForGroup = async (
-    jid: string,
-    text: string,
-  ): Promise<{ text: string; mentionedJids: string[] }> => {
-    if (!isGroupJid(jid) || !mayContainWhatsAppOutboundMention(text)) {
-      return { text, mentionedJids: [] };
-    }
-    const meta = await getGroupMeta(jid);
-    return resolveWhatsAppOutboundMentions({
-      chatJid: jid,
-      text,
-      participants: meta.mentionParticipants,
-    });
-  };
-
-  const applyOutboundMentionsToContent = async (
-    jid: string,
-    content: AnyMessageContent,
-  ): Promise<AnyMessageContent> => {
-    if ("text" in content && typeof content.text === "string") {
-      const resolved = await resolveOutboundMentionsForGroup(jid, content.text);
-      return addWhatsAppOutboundMentionsToContent(
-        { ...content, text: resolved.text } as AnyMessageContent,
-        resolved.mentionedJids,
-      );
-    }
-    const caption = (content as { caption?: unknown }).caption;
-    if (typeof caption === "string") {
-      const resolved = await resolveOutboundMentionsForGroup(jid, caption);
-      return addWhatsAppOutboundMentionsToContent(
-        { ...content, caption: resolved.text } as AnyMessageContent,
-        resolved.mentionedJids,
-      );
-    }
-    return content;
   };
 
   type NormalizedInboundMessage = {
@@ -489,7 +1190,7 @@ export async function attachWebInboxToSocket(
 
     const group = isGroupJid(remoteJid);
     // Drop echoes of messages the gateway itself sent (tracked by sendTrackedMessage).
-    // Applies to both groups and DMs/self-chat — without this, self-chat mode
+    // Applies to both groups and DMs/self-chat. Without this, self-chat mode
     // re-processes the bot's own replies as new inbound user messages.
     if (
       Boolean(msg.key?.fromMe) &&
@@ -506,18 +1207,6 @@ export async function attachWebInboxToSocket(
       );
       return null;
     }
-    // Gate pairing access-control on extractable inbound user content. Baileys
-    // delivers receipts, typing indicators, presence updates, and protocol
-    // messages on the same `messages.upsert` stream as real messages; without
-    // this gate, `checkInboundAccessControl` can send an unsolicited pairing
-    // verification reply to a `dmPolicy: pairing` peer who never typed
-    // anything (e.g. when Master sends an outbound message to a new JID and
-    // the receipt round-trip arrives before the recipient ever replies).
-    // Echoes of our own outbound messages are already handled above.
-    if (!hasInboundUserContent(msg.message ?? undefined)) {
-      return null;
-    }
-
     const participantJid = msg.key?.participant ?? undefined;
     const from = group ? remoteJid : await resolveInboundJid(remoteJid);
     if (!from) {
@@ -623,33 +1312,24 @@ export async function attachWebInboxToSocket(
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
     let mediaFileName: string | undefined;
-    const saveInboundMedia = async (
-      inboundMedia: Awaited<ReturnType<typeof downloadInboundMedia>>,
-    ) => {
-      if (!inboundMedia) {
-        return;
-      }
-      const maxMb =
-        typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0 ? options.mediaMaxMb : 50;
-      const maxBytes = maxMb * 1024 * 1024;
-      const saved = await saveMediaBuffer(
-        inboundMedia.buffer,
-        inboundMedia.mimetype,
-        "inbound",
-        maxBytes,
-        inboundMedia.fileName,
-      );
-      mediaPath = saved.path;
-      mediaType = inboundMedia.mimetype;
-      mediaFileName = inboundMedia.fileName;
-    };
     try {
       const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock);
-      await saveInboundMedia(inboundMedia);
-      if (!mediaPath && replyContext) {
-        await saveInboundMedia(
-          await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock),
+      if (inboundMedia) {
+        const maxMb =
+          typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0
+            ? options.mediaMaxMb
+            : 50;
+        const maxBytes = maxMb * 1024 * 1024;
+        const saved = await saveMediaBuffer(
+          inboundMedia.buffer,
+          inboundMedia.mimetype,
+          "inbound",
+          maxBytes,
+          inboundMedia.fileName,
         );
+        mediaPath = saved.path;
+        mediaType = inboundMedia.mimetype;
+        mediaFileName = inboundMedia.fileName;
       }
     } catch (err) {
       logWhatsAppVerbose(options.verbose, `Inbound media download failed: ${String(err)}`);
@@ -663,6 +1343,47 @@ export async function attachWebInboxToSocket(
       mediaPath,
       mediaType,
       mediaFileName,
+    };
+  };
+
+  const resolveReplyContext = async (params: {
+    msg: WAMessage;
+    inbound: NormalizedInboundMessage;
+    existing?: WhatsAppReplyContext | null;
+  }): Promise<WhatsAppReplyContext | null> => {
+    if (params.existing?.body) {
+      return params.existing;
+    }
+    const replyKey = describeReplyContextKey(params.msg.message as proto.IMessage | undefined);
+    if (!replyKey?.id) {
+      return params.existing ?? null;
+    }
+    const cachedByResolvedAccount = lookupInboundMessageMeta(
+      params.inbound.access.resolvedAccountId,
+      params.inbound.remoteJid,
+      replyKey.id,
+    );
+    const cached =
+      cachedByResolvedAccount ??
+      (params.inbound.access.resolvedAccountId !== options.accountId
+        ? lookupInboundMessageMeta(options.accountId, params.inbound.remoteJid, replyKey.id)
+        : undefined);
+    const cachedBody = cached?.body?.trim();
+    const senderJid = replyKey.sender?.jid ?? replyKey.sender?.lid ?? cached?.participant;
+    const senderE164 =
+      cached?.participantE164 ??
+      (senderJid ? await resolveInboundJid(senderJid) : null) ??
+      replyKey.sender?.e164 ??
+      null;
+    const senderLabel = senderE164 ?? replyKey.sender?.label ?? senderJid ?? "unknown sender";
+    return {
+      id: replyKey.id,
+      body: cachedBody || "<quoted message unavailable>",
+      sender: resolveComparableIdentity({
+        jid: senderJid,
+        e164: senderE164 ?? undefined,
+        label: senderLabel,
+      }),
     };
   };
 
@@ -684,28 +1405,22 @@ export async function attachWebInboxToSocket(
       }
     };
     const reply = async (text: string, options?: MiscMessageGenerationOptions) => {
-      const resolved = await resolveOutboundMentionsForGroup(chatJid, text);
-      const result = await sendTrackedMessage(
-        chatJid,
-        addWhatsAppOutboundMentionsToContent({ text: resolved.text }, resolved.mentionedJids),
-        options,
-      );
-      return normalizeWhatsAppSendResult(result, "text");
+      await sendTrackedMessage(chatJid, { text }, options);
     };
     const sendMedia = async (
       payload: AnyMessageContent,
       options?: MiscMessageGenerationOptions,
     ) => {
-      const result = await sendTrackedMessage(
-        chatJid,
-        await applyOutboundMentionsToContent(chatJid, payload),
-        options,
-      );
-      return normalizeWhatsAppSendResult(result, "media");
+      await sendTrackedMessage(chatJid, payload, options);
     };
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
     const senderName = msg.pushName ?? undefined;
+    const replyContext = await resolveReplyContext({
+      msg,
+      inbound,
+      existing: enriched.replyContext,
+    });
 
     inboundLogger.info(
       {
@@ -739,12 +1454,12 @@ export async function attachWebInboxToSocket(
       senderJid: inbound.participantJid,
       senderE164: inbound.senderE164 ?? undefined,
       senderName,
-      replyTo: enriched.replyContext ?? undefined,
-      replyToId: enriched.replyContext?.id,
-      replyToBody: enriched.replyContext?.body,
-      replyToSender: enriched.replyContext?.sender?.label ?? undefined,
-      replyToSenderJid: enriched.replyContext?.sender?.jid ?? undefined,
-      replyToSenderE164: enriched.replyContext?.sender?.e164 ?? undefined,
+      replyTo: replyContext ?? undefined,
+      replyToId: replyContext?.id,
+      replyToBody: replyContext?.body,
+      replyToSender: replyContext?.sender?.label ?? undefined,
+      replyToSenderJid: replyContext?.sender?.jid ?? replyContext?.sender?.lid ?? undefined,
+      replyToSenderE164: replyContext?.sender?.e164 ?? undefined,
       groupSubject: inbound.groupSubject,
       groupParticipants: inbound.groupParticipants,
       mentions: mentionedJids ?? undefined,
@@ -877,15 +1592,6 @@ export async function attachWebInboxToSocket(
   void (async () => {
     try {
       const groups = await sock.groupFetchAllParticipating();
-      for (const [jid, meta] of Object.entries(groups ?? {})) {
-        if (meta) {
-          rememberGroupMetadataCacheEntry(
-            groupMetadataCache,
-            jid,
-            summarizeGroupMetaForReconnectCache(meta),
-          );
-        }
-      }
       logWhatsAppVerbose(
         options.verbose,
         `Hydrated ${Object.keys(groups ?? {}).length} participating groups on connect`,
@@ -917,7 +1623,6 @@ export async function attachWebInboxToSocket(
       },
     },
     defaultAccountId: options.accountId,
-    resolveOutboundMentions: ({ jid, text }) => resolveOutboundMentionsForGroup(jid, text),
   });
 
   return {

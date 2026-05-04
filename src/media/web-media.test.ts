@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import JSZip from "jszip";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -112,6 +113,13 @@ describe("loadWebMedia", () => {
       readFile: async (filePath) => await fs.readFile(filePath),
       hostReadCapability: true,
     });
+  }
+
+  async function makeZipBuffer(): Promise<Buffer> {
+    const zip = new JSZip();
+    zip.file("src/index.ts", "export const ok = true;\n");
+    zip.file("README.md", "# test bundle\n");
+    return await zip.generateAsync({ type: "nodebuffer" });
   }
 
   it.each([
@@ -318,9 +326,71 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/markdown");
   });
 
+  it("allows host-read ZIP documents from explicit local roots", async () => {
+    const zipFile = path.join(fixtureRoot, "source-bundle.zip");
+    await fs.writeFile(zipFile, await makeZipBuffer());
+
+    const result = await loadWebMedia(zipFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/zip");
+    expect(result.fileName).toBe("source-bundle.zip");
+  });
+
+  it("does not classify renamed ZIP payloads as Office documents", async () => {
+    const renamedZip = path.join(fixtureRoot, "source-bundle.docx");
+    await fs.writeFile(renamedZip, await makeZipBuffer());
+
+    const result = await loadWebMedia(renamedZip, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/zip");
+    expect(result.fileName).toBe("source-bundle.zip");
+  });
+
+  it("rejects executable text renamed as a ZIP document", async () => {
+    const fakeZip = path.join(fixtureRoot, "run-me.zip");
+    await fs.writeFile(fakeZip, "#!/bin/sh\necho unsafe\n", "utf8");
+
+    await expect(
+      loadWebMedia(fakeZip, {
+        maxBytes: 1024 * 1024,
+        localRoots: [fixtureRoot],
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it("keeps ZIP documents under local root guard", async () => {
+    const zipFile = path.join(fixtureRoot, "guarded-source-bundle.zip");
+    await fs.writeFile(zipFile, await makeZipBuffer());
+
+    await expect(
+      loadWebMedia(zipFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: [path.join(fixtureRoot, "other-root")],
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
   it("rejects binary data disguised as a CSV file", async () => {
     const fakeCsv = path.join(fixtureRoot, "evil.csv");
-    // Write ZIP magic bytes — file-type detects application/zip (not image, not CSV),
+    // Write ZIP magic bytes. file-type detects application/zip (not image, not CSV),
     // so it is rejected by the host-read policy rather than allowed as an image.
     await fs.writeFile(fakeCsv, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
     await expect(
@@ -430,7 +500,7 @@ describe("loadWebMedia", () => {
     { label: "Markdown", fileName: "nul-padded.md" },
   ])("rejects NUL-padded binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
-    // Alternating 0x00/0xFF — UTF-8 decode fails (0xFF is invalid UTF-8), then
+    // Alternating 0x00/0xFF. UTF-8 decode fails (0xFF is invalid UTF-8), then
     // hasSingleByteTextShape rejects because 0x00 bytes are control chars (< 0x20).
     const nulPadded = Buffer.alloc(9000);
     for (let i = 0; i < nulPadded.length; i += 1) {
@@ -478,7 +548,7 @@ describe("loadWebMedia", () => {
     { label: "Markdown", fileName: "alternating-high.md" },
   ])("rejects alternating ASCII/high-byte data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
-    // Alternating 0x41 ('A') and 0xFF — exactly 50% ASCII, 50% high bytes.
+    // Alternating 0x41 ('A') and 0xFF, exactly 50% ASCII and 50% high bytes.
     // With the old 50% threshold hasSingleByteTextShape would accept this;
     // the tightened 70%/30% thresholds must reject it.
     const mixed = Buffer.alloc(9000);

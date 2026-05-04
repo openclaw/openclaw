@@ -67,6 +67,10 @@ const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
   `\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
   "u",
 );
+const MUTATING_RECOVERY_PATTERN = new RegExp(
+  `\\b(?:recovered|fixed|completed|succeeded|successfully|verified|healthy|done|ok)\\b.{0,120}\\b(?:${MUTATING_FAILURE_ACTION_PATTERN}|health|restart|gateway|operation|task|work)\\b|\\b(?:${MUTATING_FAILURE_ACTION_PATTERN}|health|restart|gateway|operation|task|work)\\b.{0,120}\\b(?:recovered|fixed|completed|succeeded|successfully|verified|healthy|done|ok)\\b`,
+  "u",
+);
 const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
 
@@ -94,6 +98,21 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
     MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN.test(normalizedText) ||
     MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN.test(normalizedText)
   );
+}
+
+function hasExplicitMutatingToolRecoveryAcknowledgement(text: string): boolean {
+  const normalizedText = normalizeTextForComparison(text);
+  if (!normalizedText) {
+    return false;
+  }
+  if (
+    DID_NOT_FAIL_PATTERN.test(normalizedText) ||
+    NEGATED_FAILURE_PATTERN.test(normalizedText) ||
+    hasExplicitMutatingToolFailureAcknowledgement(text)
+  ) {
+    return false;
+  }
+  return MUTATING_RECOVERY_PATTERN.test(normalizedText);
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
@@ -133,6 +152,7 @@ function resolveToolErrorWarningPolicy(params: {
   hasUserFacingReply: boolean;
   hasUserFacingErrorReply: boolean;
   hasUserFacingFailureAcknowledgement: boolean;
+  hasUserFacingRecoveryAcknowledgement: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
   isCronTrigger?: boolean;
@@ -156,6 +176,13 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
+    if (
+      params.lastToolError.recoveredByLaterMutatingAction === true &&
+      params.hasUserFacingReply &&
+      params.hasUserFacingRecoveryAcknowledgement
+    ) {
+      return { showWarning: false, includeDetails };
+    }
     return {
       showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
       includeDetails,
@@ -376,6 +403,7 @@ export function buildEmbeddedRunPayloads(params: {
   let hasUserFacingAssistantReply = false;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
+  let hasUserFacingRecoveryAcknowledgement = false;
   for (const text of answerTexts) {
     const {
       text: cleanedText,
@@ -400,6 +428,9 @@ export function buildEmbeddedRunPayloads(params: {
     if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
       hasUserFacingFailureAcknowledgement = true;
     }
+    if (cleanedText && hasExplicitMutatingToolRecoveryAcknowledgement(cleanedText)) {
+      hasUserFacingRecoveryAcknowledgement = true;
+    }
   }
 
   if (params.lastToolError) {
@@ -408,6 +439,7 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply: hasUserFacingAssistantReply,
       hasUserFacingErrorReply,
       hasUserFacingFailureAcknowledgement,
+      hasUserFacingRecoveryAcknowledgement,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       isCronTrigger: params.isCronTrigger,

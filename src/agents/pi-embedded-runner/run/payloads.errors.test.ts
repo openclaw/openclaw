@@ -386,6 +386,42 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.text).not.toContain("missing");
   });
 
+  it("suppresses recovered mutating tool errors when final output reports recovery", () => {
+    const text = "Gateway restart recovered and health verified.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "gateway",
+        meta: "config.patch",
+        error: "protected config path",
+        mutatingAction: true,
+        recoveredByLaterMutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
+  it("keeps unrecovered gateway tool failures visible once", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I will check the gateway state next."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "gateway",
+        meta: "config.patch",
+        error: "protected config path",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("I will check the gateway state next.");
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Gateway");
+    expect(payloads[1]?.text).not.toContain("protected config path");
+  });
+
   it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {
     const payloads = buildPayloads({
       assistantTexts: ["No issues found. The update is complete."],

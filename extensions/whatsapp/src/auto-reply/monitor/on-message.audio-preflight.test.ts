@@ -102,6 +102,15 @@ function makeGroupAudioMsg(): WebInboundMsg {
   } as WebInboundMsg;
 }
 
+function makeGroupTextMsg(body = "same"): WebInboundMsg {
+  return {
+    ...makeGroupAudioMsg(),
+    body,
+    mediaPath: undefined,
+    mediaType: undefined,
+  } as WebInboundMsg;
+}
+
 function makeEchoTracker() {
   return {
     has: () => false,
@@ -350,5 +359,89 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(processMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("still skips direct text that exactly matches a recent outbound echo", async () => {
+    const echoTracker = {
+      ...makeEchoTracker(),
+      has: vi.fn(() => true),
+      forget: vi.fn(),
+    };
+    const handler = createWebOnMessageHandler({
+      cfg: {
+        channels: {
+          whatsapp: {
+            ackReaction: { enabled: true },
+          },
+        },
+      } as never,
+      verbose: false,
+      connectionId: "conn-1",
+      maxMediaBytes: 1024 * 1024,
+      groupHistoryLimit: 20,
+      groupHistories: new Map(),
+      groupMemberNames: new Map(),
+      echoTracker: echoTracker as never,
+      backgroundTasks: new Set(),
+      replyResolver: vi.fn() as never,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+      } as never,
+      baseMentionConfig: {} as never,
+      account: { authDir: "/tmp/auth", accountId: "default" },
+    });
+
+    await handler({ ...makeAudioMsg(), body: "same", mediaPath: undefined, mediaType: undefined });
+
+    expect(echoTracker.has).toHaveBeenCalledWith("same");
+    expect(echoTracker.forget).toHaveBeenCalledWith("same");
+    expect(processMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress third-party group repetition as an outbound echo", async () => {
+    const echoTracker = {
+      ...makeEchoTracker(),
+      has: vi.fn(() => true),
+      forget: vi.fn(),
+    };
+    const handler = createWebOnMessageHandler({
+      cfg: {
+        channels: {
+          whatsapp: {
+            ackReaction: { enabled: true },
+          },
+        },
+      } as never,
+      verbose: false,
+      connectionId: "conn-1",
+      maxMediaBytes: 1024 * 1024,
+      groupHistoryLimit: 20,
+      groupHistories: new Map(),
+      groupMemberNames: new Map(),
+      echoTracker: echoTracker as never,
+      backgroundTasks: new Set(),
+      replyResolver: vi.fn() as never,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+      } as never,
+      baseMentionConfig: {} as never,
+      account: { authDir: "/tmp/auth", accountId: "default" },
+    });
+
+    await handler(makeGroupTextMsg("same"));
+
+    expect(echoTracker.has).not.toHaveBeenCalled();
+    expect(echoTracker.forget).not.toHaveBeenCalled();
+    expect(processMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msg: expect.objectContaining({ body: "same", chatType: "group" }),
+      }),
+    );
   });
 });

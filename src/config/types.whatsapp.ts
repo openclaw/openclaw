@@ -22,10 +22,58 @@ export type WhatsAppActionConfig = {
 
 export type WhatsAppReactionLevel = ReactionLevel;
 
+export type WhatsAppGroupDebounceScope = "sender" | "conversation";
+
+export type WhatsAppPriorityLaneConfig = {
+  /** Optional inbound debounce window for this lane in milliseconds. */
+  debounceMs?: number;
+  /** Optional maximum age before this lane must flush, even during continued chatter. */
+  maxWaitMs?: number;
+  /** Optional maximum number of messages to batch before this lane flushes immediately. */
+  maxBatchItems?: number;
+  /** Optional minimum delivery latency hint for more human-feeling casual replies. */
+  humanLatencyMs?: number;
+};
+
+export type WhatsAppPriorityLanesConfig = {
+  /** Enables priority lane debounce keys for this group. Default: false. */
+  enabled?: boolean;
+  /** Owner explicitly pulling this bot by name/mention/reply. */
+  directOwnerPull?: WhatsAppPriorityLaneConfig;
+  /** Someone replying inline to this bot's previous message. */
+  inlineReplyToSelf?: WhatsAppPriorityLaneConfig;
+  /** A both-bots/comparison/independent-take prompt. */
+  bothBotAsk?: WhatsAppPriorityLaneConfig;
+  /** Ambient group chatter that should wait and become context. */
+  ambientRoomBurst?: WhatsAppPriorityLaneConfig;
+  /** Chatter clearly aimed away from this bot. Kept mostly for observability/context. */
+  otherTargetAmbient?: WhatsAppPriorityLaneConfig;
+};
+
 export type WhatsAppGroupConfig = {
   /** Friendly display name for target resolution (e.g. "Bot Bros"). */
   name?: string;
   requireMention?: boolean;
+  /** Per-group visible final reply delivery. Default: message_tool. */
+  visibleReplies?: "automatic" | "message_tool";
+  /** Force the runtime group activation mode, overriding session toggles. */
+  forceActivation?: "always" | "mention" | "mentions" | "never";
+  /**
+   * Inbound batching scope for this group.
+   * - "sender": batch only rapid messages from the same sender (default)
+   * - "conversation": batch rapid messages across the whole group conversation
+   */
+  debounceScope?: WhatsAppGroupDebounceScope;
+  /** Optional inbound debounce window override for this group in milliseconds. */
+  debounceMs?: number;
+  /** Optional shorter inbound debounce window when the message directly addresses this bot. */
+  selfAddressedDebounceMs?: number;
+  /** Optional maximum age before a debounced batch must flush, even during continued chatter. */
+  debounceMaxWaitMs?: number;
+  /** Optional maximum number of messages to batch before flushing immediately. */
+  debounceMaxBatchItems?: number;
+  /** Optional priority lanes for Bot Bros-style group turn-taking. */
+  priorityLanes?: WhatsAppPriorityLanesConfig;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Optional system prompt for this group. */

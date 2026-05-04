@@ -231,6 +231,7 @@ async function executeSend(params: {
         sandboxRoot?: string;
         requesterSenderId?: string;
         senderIsOwner?: boolean;
+        toolContext?: { currentMessageParticipant?: string };
       }
     | undefined;
 }
@@ -1253,6 +1254,27 @@ describe("message tool sandbox passthrough", () => {
     });
 
     expect(call?.requesterSenderId).toBe("1234567890");
+  });
+
+  it("forwards trusted currentMessageParticipant to runMessageAction", async () => {
+    mockSendResult({ to: "whatsapp:120363406331109499@g.us" });
+
+    const call = await executeSend({
+      toolOptions: {
+        currentChannelProvider: "whatsapp",
+        currentChannelId: "120363406331109499@g.us",
+        currentMessageId: "3EB03360313BC171647FB1",
+        currentMessageParticipant: "203873608286239:51@lid",
+      },
+      action: {
+        target: "whatsapp:120363406331109499@g.us",
+        message: "😭",
+      },
+    });
+
+    expect(call?.toolContext).toMatchObject({
+      currentMessageParticipant: "203873608286239:51@lid",
+    });
   });
 
   it("forwards senderIsOwner to runMessageAction", async () => {

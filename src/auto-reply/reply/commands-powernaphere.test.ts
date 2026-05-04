@@ -8,6 +8,7 @@ const hoisted = vi.hoisted(() => ({
   updateSessionStoreMock: vi.fn(),
   archiveSessionTranscriptsMock: vi.fn(),
   getGlobalHookRunnerMock: vi.fn(),
+  clearSessionResetRuntimeStateMock: vi.fn(),
   readFileMock: vi.fn(),
 }));
 
@@ -32,6 +33,10 @@ vi.mock("../../gateway/session-utils.fs.js", async (importOriginal) => {
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: hoisted.getGlobalHookRunnerMock,
+}));
+
+vi.mock("./session-reset-cleanup.js", () => ({
+  clearSessionResetRuntimeState: hoisted.clearSessionResetRuntimeStateMock,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -68,6 +73,12 @@ function setupDefaults() {
   );
   hoisted.archiveSessionTranscriptsMock.mockReturnValue([]);
   hoisted.getGlobalHookRunnerMock.mockReturnValue(null);
+  hoisted.clearSessionResetRuntimeStateMock.mockReturnValue({
+    followupCleared: 0,
+    laneCleared: 0,
+    systemEventsCleared: 0,
+    keys: [],
+  });
   hoisted.readFileMock.mockRejectedValue(new Error("no file"));
 }
 
@@ -136,6 +147,10 @@ describe("/powernaphere command", () => {
 
     expect(result!.reply?.text).toContain("Session reset");
     expect(result!.reply?.text).toContain("Everything else untouched");
+    expect(hoisted.clearSessionResetRuntimeStateMock).toHaveBeenCalledWith([
+      "agent:main:main",
+      "my-sess-id",
+    ]);
 
     const resetEntry = mutatedStore["agent:main:main"];
     expect(resetEntry).toBeDefined();

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { handleWhatsAppReactAction } from "./channel-react-action.js";
+import {
+  clearWhatsAppReactActionRateLimitForTests,
+  handleWhatsAppReactAction,
+} from "./channel-react-action.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -14,7 +17,10 @@ vi.mock("./channel-react-action.runtime.js", async () => {
       toolContext,
     }: {
       args: Record<string, unknown>;
-      toolContext?: { currentMessageId?: string | number | null };
+      toolContext?: {
+        currentMessageId?: string | number | null;
+        currentMessageParticipant?: string | null;
+      };
     }) => args.messageId ?? toolContext?.currentMessageId ?? null,
     readStringOrNumberParam: (params: Record<string, unknown>, key: string) => {
       const value = params[key];
@@ -72,6 +78,7 @@ describe("whatsapp react action messageId resolution", () => {
   } as OpenClawConfig;
 
   beforeEach(() => {
+    clearWhatsAppReactActionRateLimitForTests();
     hoisted.handleWhatsAppAction.mockClear();
   });
 
@@ -171,6 +178,92 @@ describe("whatsapp react action messageId resolution", () => {
       }),
       baseCfg,
     );
+  });
+
+  it("uses trusted current-message participant for current group reactions", async () => {
+    await handleWhatsAppReactAction({
+      action: "react",
+      params: { emoji: "👍", to: "12345@g.us" },
+      cfg: baseCfg,
+      accountId: "default",
+      requesterSenderId: "+15551234567",
+      toolContext: {
+        currentChannelId: "whatsapp:12345@g.us",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+        currentMessageParticipant: "203873608286239:51@lid",
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "ctx-msg-42",
+        participant: "203873608286239:51@lid",
+      }),
+      baseCfg,
+    );
+  });
+
+  it("snaps uncached explicit current-turn group reaction ids back to trusted current message", async () => {
+    await handleWhatsAppReactAction({
+      action: "react",
+      params: {
+        emoji: "😭",
+        to: "12345@g.us",
+        messageId: "hallucinated-msg-id",
+        participant: "+15551234567",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+      requesterSenderId: "+15551234567",
+      toolContext: {
+        currentChannelId: "whatsapp:12345@g.us",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "real-current-msg",
+        currentMessageParticipant: "203873608286239:51@lid",
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "real-current-msg",
+        participant: "203873608286239:51@lid",
+      }),
+      baseCfg,
+    );
+  });
+
+  it("throttles repeated current-message group reactions for the same participant", async () => {
+    const currentTurn = {
+      action: "react",
+      params: { emoji: "💓", to: "12345@g.us" },
+      cfg: baseCfg,
+      accountId: "default",
+      requesterSenderId: "+15551234567",
+      toolContext: {
+        currentChannelId: "whatsapp:12345@g.us",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+        currentMessageParticipant: "203873608286239:51@lid",
+      },
+    } as const;
+
+    await handleWhatsAppReactAction(currentTurn);
+    const skipped = await handleWhatsAppReactAction({
+      ...currentTurn,
+      toolContext: {
+        ...currentTurn.toolContext,
+        currentMessageId: "ctx-msg-43",
+      },
+    });
+
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledTimes(1);
+    const content = skipped.content[0];
+    expect(content?.type).toBe("text");
+    const text = content?.type === "text" ? content.text : "";
+    expect(JSON.parse(text)).toEqual({
+      ok: true,
+      skipped: true,
+      reason: "reaction_cooldown",
+    });
   });
 
   it("keeps direct-chat reactions without an inferred participant", async () => {

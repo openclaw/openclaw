@@ -113,7 +113,7 @@ export function createWebOnMessageHandler(params: {
     }
 
     // Skip if this is a message we just sent (echo detection)
-    if (params.echoTracker.has(msg.body)) {
+    if (msg.chatType !== "group" && params.echoTracker.has(msg.body)) {
       logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
       params.echoTracker.forget(msg.body);
       return;

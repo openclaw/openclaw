@@ -8,6 +8,9 @@ const hoisted = vi.hoisted(() => ({
   loadSessionStoreMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   loadSubagentRegistryFromDiskMock: vi.fn(),
+  saveSubagentRegistryToDiskMock: vi.fn(),
+  abortEmbeddedPiRunMock: vi.fn(),
+  waitForActiveEmbeddedRunsMock: vi.fn(),
   archiveSessionTranscriptsMock: vi.fn(),
   scheduleGatewaySigusr1RestartMock: vi.fn(),
   writeRestartSentinelMock: vi.fn(),
@@ -16,6 +19,7 @@ const hoisted = vi.hoisted(() => ({
   writeFileSyncMock: vi.fn(),
   getGlobalHookRunnerMock: vi.fn(),
   setPowernapDrainingMock: vi.fn(),
+  clearSessionResetRuntimeStateMock: vi.fn(),
   readFileMock: vi.fn(),
 }));
 
@@ -39,6 +43,12 @@ vi.mock("../../config/sessions.js", async (importOriginal) => {
 
 vi.mock("../../agents/subagent-registry.store.js", () => ({
   loadSubagentRegistryFromDisk: hoisted.loadSubagentRegistryFromDiskMock,
+  saveSubagentRegistryToDisk: hoisted.saveSubagentRegistryToDiskMock,
+}));
+
+vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
+  abortEmbeddedPiRun: hoisted.abortEmbeddedPiRunMock,
+  waitForActiveEmbeddedRuns: hoisted.waitForActiveEmbeddedRunsMock,
 }));
 
 vi.mock("../../gateway/session-utils.fs.js", async (importOriginal) => {
@@ -86,6 +96,10 @@ vi.mock("./powernap-drain.js", () => ({
   isPowernapDraining: vi.fn(() => false),
 }));
 
+vi.mock("./session-reset-cleanup.js", () => ({
+  clearSessionResetRuntimeState: hoisted.clearSessionResetRuntimeStateMock,
+}));
+
 const { buildCommandTestParams } = await import("./commands.test-harness.js");
 const { handlePowernapCommand } = await import("./commands-powernap.js");
 
@@ -117,11 +131,20 @@ function setupDefaultMocks(sessionStore?: Record<string, SessionEntry>) {
     },
   );
   hoisted.loadSubagentRegistryFromDiskMock.mockReturnValue(new Map());
+  hoisted.saveSubagentRegistryToDiskMock.mockReturnValue(undefined);
+  hoisted.abortEmbeddedPiRunMock.mockReturnValue(false);
+  hoisted.waitForActiveEmbeddedRunsMock.mockResolvedValue({ drained: true });
   hoisted.archiveSessionTranscriptsMock.mockReturnValue([]);
   hoisted.scheduleGatewaySigusr1RestartMock.mockReturnValue({ ok: true });
   hoisted.writeRestartSentinelMock.mockResolvedValue("/tmp/sentinel.json");
   hoisted.resolveStateDirMock.mockReturnValue("/tmp/openclaw-test");
   hoisted.getGlobalHookRunnerMock.mockReturnValue(null);
+  hoisted.clearSessionResetRuntimeStateMock.mockReturnValue({
+    followupCleared: 0,
+    laneCleared: 0,
+    systemEventsCleared: 0,
+    keys: [],
+  });
   hoisted.readFileMock.mockRejectedValue(new Error("no file"));
 }
 
@@ -293,6 +316,63 @@ describe("/powernap command", () => {
     expect(writtenContent.activeRuns[0].task).toBe("Research competitor pricing");
   });
 
+  it("aborts live runs, terminates active subagents on disk, and clears reset runtime state", async () => {
+    const activeRun = {
+      runId: "run-active",
+      childSessionKey: "agent:beta:subagent:abc",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Keep working after powernap",
+      cleanup: "keep" as const,
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      label: "worker",
+      model: "gpt-5.4",
+      spawnMode: "run" as const,
+    };
+    const registry = new Map([["run-active", activeRun]]);
+    hoisted.loadSubagentRegistryFromDiskMock.mockReturnValue(registry);
+    hoisted.abortEmbeddedPiRunMock.mockReturnValue(true);
+    hoisted.waitForActiveEmbeddedRunsMock.mockResolvedValue({ drained: true });
+
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": makeSessionEntry({ sessionId: "main-session" }),
+      "agent:beta:subagent:abc": makeSessionEntry({ sessionId: "child-session" }),
+    };
+    setupDefaultMocks(store);
+    hoisted.loadSubagentRegistryFromDiskMock.mockReturnValue(registry);
+    hoisted.abortEmbeddedPiRunMock.mockReturnValue(true);
+    hoisted.waitForActiveEmbeddedRunsMock.mockResolvedValue({ drained: true });
+
+    const params = buildCommandTestParams("/powernap", baseCfg);
+    await handlePowernapCommand(params, true);
+
+    expect(hoisted.abortEmbeddedPiRunMock).toHaveBeenCalledWith(undefined, { mode: "all" });
+    expect(hoisted.waitForActiveEmbeddedRunsMock).toHaveBeenCalledWith(5_000);
+    expect(hoisted.clearSessionResetRuntimeStateMock).toHaveBeenCalledWith([
+      "agent:main:main",
+      "main-session",
+      "agent:beta:subagent:abc",
+      "child-session",
+    ]);
+    expect(hoisted.saveSubagentRegistryToDiskMock).toHaveBeenCalledOnce();
+    const persistedRuns = hoisted.saveSubagentRegistryToDiskMock.mock.calls[0][0] as Map<
+      string,
+      typeof activeRun & {
+        endedAt?: number;
+        endedReason?: string;
+        suppressAnnounceReason?: string;
+        outcome?: { status?: string; error?: string };
+      }
+    >;
+    expect(persistedRuns.get("run-active")).toMatchObject({
+      endedAt: expect.any(Number),
+      endedReason: "subagent-killed",
+      suppressAnnounceReason: "killed",
+      outcome: expect.objectContaining({ status: "error", error: "powernap" }),
+    });
+  });
+
   it("handles empty store gracefully", async () => {
     setupDefaultMocks({});
     const params = buildCommandTestParams("/powernap", baseCfg);
@@ -452,6 +532,22 @@ describe("/powernap command", () => {
     const calls = hoisted.setPowernapDrainingMock.mock.calls.map((c: unknown[]) => c[0]);
     expect(calls).toContain(true);
     expect(calls).toContain(false);
+  });
+
+  it("clears drain when reset work throws before restart scheduling", async () => {
+    setupDefaultMocks({
+      "agent:main:main": makeSessionEntry({ sessionId: "throwing-session" }),
+    });
+    const params = buildCommandTestParams("/powernap", baseCfg);
+    hoisted.updateSessionStoreMock.mockRejectedValueOnce(new Error("store locked"));
+
+    await expect(handlePowernapCommand(params, true)).rejects.toThrow("store locked");
+
+    expect(hoisted.scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(hoisted.setPowernapDrainingMock.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+      true,
+      false,
+    ]);
   });
 
   it("skips restart and warns when config is invalid", async () => {

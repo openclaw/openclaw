@@ -412,6 +412,57 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       hadPotentialSideEffects: true,
     });
   });
+
+  it("marks unresolved mutating failure recovered when a later mutating tool succeeds", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "gateway",
+        toolCallId: "tool-gateway-patch",
+        args: { action: "config.patch", raw: "{}" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "gateway",
+        toolCallId: "tool-gateway-patch",
+        isError: true,
+        result: { error: "protected config path" },
+      } as never,
+    );
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-manual-recovery",
+        args: { command: "openclaw gateway restart" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-manual-recovery",
+        isError: false,
+        result: { details: { status: "completed", exitCode: 0 } },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "gateway",
+      recoveredByLaterMutatingAction: true,
+    });
+  });
 });
 
 describe("handleToolExecutionEnd timeout metadata", () => {

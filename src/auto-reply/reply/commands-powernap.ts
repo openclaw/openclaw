@@ -3,15 +3,24 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentEntries, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { loadSubagentRegistryFromDisk } from "../../agents/subagent-registry.store.js";
+import {
+  abortEmbeddedPiRun,
+  waitForActiveEmbeddedRuns,
+} from "../../agents/pi-embedded-runner/runs.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagent-lifecycle-events.js";
+import {
+  loadSubagentRegistryFromDisk,
+  saveSubagentRegistryToDisk,
+} from "../../agents/subagent-registry.store.js";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import { isRestartEnabled } from "../../config/commands.js";
-import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadSessionStore, updateSessionStore } from "../../config/sessions.js";
 import { snapshotSessionOrigin } from "../../config/sessions/metadata.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { writeRestartSentinel } from "../../infra/restart-sentinel.js";
@@ -20,6 +29,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { CommandHandler } from "./commands-types.js";
 import { setPowernapDraining } from "./powernap-drain.js";
+import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 type ResetSessionInfo = {
   sessionKey: string;
@@ -27,6 +37,8 @@ type ResetSessionInfo = {
   sessionFile?: string;
   agentId: string;
 };
+
+const ACTIVE_RUN_DRAIN_TIMEOUT_MS = 5_000;
 
 export const handlePowernapCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -46,59 +58,73 @@ export const handlePowernapCommand: CommandHandler = async (params, allowTextCom
   // --- Phase 1: Snapshot active subagents ---
   const activeSubagentRuns = snapshotActiveSubagents();
 
-  // --- Phase 2: Activate drain — reject new inbound messages during reset ---
+  // --- Phase 2: Activate drain: reject new inbound messages during reset ---
   setPowernapDraining(true);
 
-  // --- Phase 3: Bulk session reset across all agents ---
-  const cfg = loadConfig();
-  const { resetCount, resetSessions } = await resetAllSessions(cfg);
+  try {
+    // --- Phase 3: Stop live work and mark active subagents terminal before session reset ---
+    await terminateActiveWorkForPowernap(activeSubagentRuns);
 
-  // --- Phase 4: Fire before_reset hooks (memory extraction) before archiving ---
-  await fireBeforeResetHooks(resetSessions, params.workspaceDir);
+    // --- Phase 4: Bulk session reset across all agents ---
+    const cfg = params.cfg;
+    const { resetCount, resetSessions } = await resetAllSessions(cfg);
+    clearResetRuntimeState(resetSessions);
 
-  // --- Phase 5: Archive old transcripts (best-effort, after hooks read them) ---
-  archiveResetTranscripts(resetSessions);
+    // --- Phase 5: Fire before_reset hooks (memory extraction) before archiving ---
+    await fireBeforeResetHooks(resetSessions, params.workspaceDir);
 
-  // --- Phase 6: Pre-flight config validation before restart ---
-  const configIssues = await validateConfigBeforeRestart();
+    // --- Phase 6: Archive old transcripts (best-effort, after hooks read them) ---
+    archiveResetTranscripts(cfg, resetSessions);
 
-  // --- Phase 7: Write restart sentinel so post-restart confirmation routes back ---
-  const deliveryContext = {
-    channel: params.ctx.OriginatingChannel || params.command.channel,
-    to: params.ctx.OriginatingTo || params.command.from || params.command.to,
-    accountId: params.ctx.AccountId,
-  };
-  const postNapMessage = buildPostNapMessage({ resetCount, activeSubagentRuns });
-  await writeRestartSentinel({
-    kind: "restart",
-    status: "ok",
-    ts: Date.now(),
-    sessionKey: params.sessionKey,
-    deliveryContext,
-    message: postNapMessage,
-  });
+    // --- Phase 7: Pre-flight config validation before restart ---
+    const configIssues = await validateConfigBeforeRestart();
 
-  // --- Phase 8: Schedule gateway restart (skip if config is invalid) ---
-  let restartScheduled = false;
-  let restartReason: string | undefined;
-  if (configIssues) {
-    restartReason = `config invalid: ${configIssues}`;
+    // --- Phase 8: Write restart sentinel so post-restart confirmation routes back ---
+    const deliveryContext = {
+      channel: params.ctx.OriginatingChannel || params.command.channel,
+      to: params.ctx.OriginatingTo || params.command.from || params.command.to,
+      accountId: params.ctx.AccountId,
+    };
+    const postNapMessage = buildPostNapMessage({ resetCount, activeSubagentRuns });
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "ok",
+      ts: Date.now(),
+      sessionKey: params.sessionKey,
+      deliveryContext,
+      message: postNapMessage,
+    });
+
+    // --- Phase 9: Schedule gateway restart (skip if config is invalid) ---
+    let restartScheduled = false;
+    let restartReason: string | undefined;
+    if (configIssues) {
+      restartReason = `config invalid: ${configIssues}`;
+      setPowernapDraining(false);
+    } else if (isRestartEnabled(cfg)) {
+      scheduleGatewaySigusr1Restart({ delayMs: 3000, reason: "/powernap" });
+      restartScheduled = true;
+    } else {
+      restartReason = "restart disabled in config";
+      // No restart coming, so clear drain flag and let messages flow again.
+      setPowernapDraining(false);
+    }
+
+    return {
+      shouldContinue: false,
+      reply: {
+        text: buildPowernapReply({
+          resetCount,
+          activeSubagentRuns,
+          restartScheduled,
+          restartReason,
+        }),
+      },
+    };
+  } catch (err) {
     setPowernapDraining(false);
-  } else if (isRestartEnabled(cfg)) {
-    scheduleGatewaySigusr1Restart({ delayMs: 3000, reason: "/powernap" });
-    restartScheduled = true;
-  } else {
-    restartReason = "restart disabled in config";
-    // No restart coming — clear drain flag so messages can flow again.
-    setPowernapDraining(false);
+    throw err;
   }
-
-  return {
-    shouldContinue: false,
-    reply: {
-      text: buildPowernapReply({ resetCount, activeSubagentRuns, restartScheduled, restartReason }),
-    },
-  };
 };
 
 // ---------------------------------------------------------------------------
@@ -170,12 +196,92 @@ function snapshotActiveSubagents(): SubagentRunRecord[] {
   return active;
 }
 
+async function terminateActiveWorkForPowernap(activeSubagentRuns: SubagentRunRecord[]) {
+  const aborted = abortEmbeddedPiRun(undefined, { mode: "all" });
+  if (aborted) {
+    const drained = await waitForActiveEmbeddedRuns(ACTIVE_RUN_DRAIN_TIMEOUT_MS);
+    if (!drained.drained) {
+      logVerbose(
+        `/powernap: active runs did not fully drain within ${ACTIVE_RUN_DRAIN_TIMEOUT_MS}ms; restart will finish cleanup`,
+      );
+    }
+  }
+  terminateActiveSubagentsOnDisk(activeSubagentRuns);
+}
+
+function terminateActiveSubagentsOnDisk(activeSubagentRuns: SubagentRunRecord[]): number {
+  const activeRunIds = new Set(
+    activeSubagentRuns.map((run) => run.runId.trim()).filter((runId) => runId.length > 0),
+  );
+  if (activeRunIds.size === 0) {
+    return 0;
+  }
+
+  let runs: Map<string, SubagentRunRecord>;
+  try {
+    runs = loadSubagentRegistryFromDisk();
+  } catch {
+    logVerbose("/powernap: failed to load subagent registry from disk for termination");
+    return 0;
+  }
+
+  const now = Date.now();
+  let updated = 0;
+  for (const runId of activeRunIds) {
+    const entry = runs.get(runId);
+    if (!entry || typeof entry.endedAt === "number") {
+      continue;
+    }
+    entry.endedAt = now;
+    entry.outcome = {
+      status: "error",
+      error: "powernap",
+      ...(typeof entry.startedAt === "number" ? { startedAt: entry.startedAt } : {}),
+      endedAt: now,
+      ...(typeof entry.startedAt === "number"
+        ? { elapsedMs: Math.max(0, now - entry.startedAt) }
+        : {}),
+    };
+    entry.endedReason = SUBAGENT_ENDED_REASON_KILLED;
+    entry.cleanupHandled = true;
+    entry.cleanupCompletedAt = now;
+    entry.suppressAnnounceReason = "killed";
+    runs.set(runId, entry);
+    updated++;
+  }
+
+  if (updated > 0) {
+    try {
+      saveSubagentRegistryToDisk(runs);
+    } catch (err) {
+      logVerbose(`/powernap: failed to persist terminated subagent registry: ${String(err)}`);
+    }
+  }
+  return updated;
+}
+
+function clearResetRuntimeState(resetSessions: ResetSessionInfo[]): void {
+  const keys: Array<string | undefined> = [];
+  for (const info of resetSessions) {
+    keys.push(info.sessionKey, info.sessionId);
+  }
+  if (keys.length === 0) {
+    return;
+  }
+  const cleared = clearSessionResetRuntimeState(keys);
+  if (cleared.followupCleared > 0 || cleared.laneCleared > 0 || cleared.systemEventsCleared > 0) {
+    logVerbose(
+      `/powernap: cleared reset runtime state followups=${cleared.followupCleared} lane=${cleared.laneCleared} systemEvents=${cleared.systemEventsCleared}`,
+    );
+  }
+}
+
 type ResetAllResult = {
   resetCount: number;
   resetSessions: ResetSessionInfo[];
 };
 
-async function resetAllSessions(cfg: ReturnType<typeof loadConfig>): Promise<ResetAllResult> {
+async function resetAllSessions(cfg: OpenClawConfig): Promise<ResetAllResult> {
   const agentIds = new Set<string>();
   agentIds.add(normalizeAgentId(resolveDefaultAgentId(cfg)));
   for (const agent of listAgentEntries(cfg)) {
@@ -311,7 +417,7 @@ async function fireBeforeResetHooks(
 /**
  * Archive old transcripts after hooks have had a chance to read them.
  */
-function archiveResetTranscripts(sessions: ResetSessionInfo[]): void {
+function archiveResetTranscripts(cfg: OpenClawConfig, sessions: ResetSessionInfo[]): void {
   // Group by agentId to resolve store paths once per agent
   const byAgent = new Map<string, ResetSessionInfo[]>();
   for (const info of sessions) {
@@ -320,7 +426,6 @@ function archiveResetTranscripts(sessions: ResetSessionInfo[]): void {
     byAgent.set(info.agentId, list);
   }
 
-  const cfg = loadConfig();
   for (const [agentId, infos] of byAgent) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     for (const info of infos) {

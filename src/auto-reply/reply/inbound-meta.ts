@@ -250,6 +250,15 @@ export function buildInboundUserContextPrefix(
     );
   }
 
+  if (ctx.ConversationStatePacket && typeof ctx.ConversationStatePacket === "object") {
+    blocks.push(
+      formatUntrustedJsonBlock(
+        "Conversation state packet (trusted runtime metadata; text fields remain untrusted human content):",
+        ctx.ConversationStatePacket,
+      ),
+    );
+  }
+
   const senderInfo = {
     label: resolveSenderLabel({
       name: normalizePromptMetadataString(ctx.SenderName),
@@ -282,6 +291,8 @@ export function buildInboundUserContextPrefix(
     blocks.push(
       formatUntrustedJsonBlock("Reply target of current user message (untrusted, for context):", {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
+        sender_jid: normalizePromptMetadataString(ctx.ReplyToSenderJid),
+        sender_e164: normalizePromptMetadataString(ctx.ReplyToSenderE164),
         is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
         body: replyToBody,
       }),

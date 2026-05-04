@@ -51,6 +51,14 @@ const DEFAULT_WORK_INTAKE_KEYWORDS = [
   "gateway",
 ];
 
+const WORK_INTAKE_REQUEST_PATTERN =
+  /\b(can you|could you|please|pls|need you to|i want you to|okay go|go)\b[\s\S]{0,160}\b(fix|patch|change|update|build|make|write|create|run|check|investigate|read|deploy|restart|edit|implement|generate|look into)\b/;
+
+const SELF_ADDRESS_PATTERN = /\b(shoar|s\s*h\s*o\s*a\s*r|kavish's agent|my agent)\b/;
+
+const TASK_VERB_PATTERN =
+  /\b(fix|patch|change|update|build|make|write|create|run|check|investigate|read|deploy|restart|edit|implement|generate|look into|summarize|analyse|analyze)\b/;
+
 export function normalizeWhatsAppReactionEmojiList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -151,7 +159,30 @@ export function bodyLooksLikeWhatsAppWorkIntake(params: {
   if (keywords.some((entry) => body.includes(entry.trim().toLowerCase()))) {
     return true;
   }
-  return /\b(can you|could you|please|pls|need you to|i want you to|okay go|go)\b[\s\S]{0,160}\b(fix|patch|change|update|build|make|write|create|run|check|investigate|read|deploy|restart|edit|implement|generate|look into)\b/.test(
-    body,
-  );
+  return WORK_INTAKE_REQUEST_PATTERN.test(body);
+}
+
+export function bodyLooksLikeWhatsAppGroupWorkIntake(params: {
+  body: string;
+  mediaType?: string;
+  config?: WhatsAppWorkIntakeReactionConfig;
+  selfAddressed?: boolean;
+}): boolean {
+  const body = params.body.trim().toLowerCase();
+  if (!body) {
+    return false;
+  }
+  if (/^\/[a-z0-9_-]+/.test(body)) {
+    return true;
+  }
+  if (WORK_INTAKE_REQUEST_PATTERN.test(body)) {
+    return true;
+  }
+  if (
+    (params.selfAddressed === true || SELF_ADDRESS_PATTERN.test(body)) &&
+    TASK_VERB_PATTERN.test(body)
+  ) {
+    return true;
+  }
+  return false;
 }

@@ -855,6 +855,11 @@ export async function handleToolExecutionEnd(
         })
       ) {
         ctx.state.lastToolError = undefined;
+      } else if (completedMutatingAction) {
+        ctx.state.lastToolError = {
+          ...ctx.state.lastToolError,
+          recoveredByLaterMutatingAction: true,
+        };
       }
     } else {
       ctx.state.lastToolError = undefined;

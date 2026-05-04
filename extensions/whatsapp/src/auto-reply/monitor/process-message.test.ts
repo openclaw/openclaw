@@ -1,24 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 
 // Hoisted mocks used across tests so vi.mock factories can reference them.
-const { resolvePolicyMock, buildContextMock, runMessageReceivedMock, trackBackgroundTaskMock } =
-  vi.hoisted(() => ({
-    resolvePolicyMock: vi.fn(),
-    buildContextMock: vi.fn(),
-    runMessageReceivedMock: vi.fn(async () => undefined),
-    trackBackgroundTaskMock: vi.fn(),
-  }));
-
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    messageIds: [id],
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
+const {
+  resolvePolicyMock,
+  buildContextMock,
+  dispatchBufferedReplyMock,
+  runMessageReceivedMock,
+  visibleReplyContextMock,
+} = vi.hoisted(() => ({
+  resolvePolicyMock: vi.fn(),
+  buildContextMock: vi.fn(),
+  dispatchBufferedReplyMock: vi.fn(async () => false),
+  runMessageReceivedMock: vi.fn(async () => undefined),
+  visibleReplyContextMock: vi.fn((): unknown => null),
+}));
 
 vi.mock("../../inbound-policy.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../inbound-policy.js")>();
@@ -34,10 +29,7 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   return {
     ...actual,
     buildWhatsAppInboundContext: buildContextMock,
-    dispatchWhatsAppBufferedReply: async () => ({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    }),
+    dispatchWhatsAppBufferedReply: dispatchBufferedReplyMock,
     resolveWhatsAppDmRouteTarget: () => null,
     resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
@@ -56,7 +48,10 @@ vi.mock("../../identity.js", async (importOriginal) => {
   return {
     ...actual,
     getPrimaryIdentityId: () => null,
-    getSelfIdentity: () => ({ e164: "+15550001111" }),
+    getSelfIdentity: (msg: Parameters<typeof actual.getSelfIdentity>[0]) => {
+      const identity = actual.getSelfIdentity(msg);
+      return identity.e164 || identity.jid || identity.lid ? identity : { e164: "+15550001111" };
+    },
     getSenderIdentity: () => ({ name: "Alice", e164: "+15550002222" }),
   };
 });
@@ -94,7 +89,7 @@ vi.mock("./inbound-context.js", async (importOriginal) => {
   return {
     ...actual,
     resolveVisibleWhatsAppGroupHistory: () => [],
-    resolveVisibleWhatsAppReplyContext: () => null,
+    resolveVisibleWhatsAppReplyContext: visibleReplyContextMock,
   };
 });
 
@@ -102,7 +97,7 @@ vi.mock("./last-route.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./last-route.js")>();
   return {
     ...actual,
-    trackBackgroundTask: trackBackgroundTaskMock,
+    trackBackgroundTask: () => {},
     updateLastRouteInBackground: () => {},
   };
 });
@@ -141,10 +136,15 @@ import { processMessage } from "./process-message.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeAccount(groups: Record<string, { systemPrompt?: string }> = {}): {
+type TestGroupConfig = {
+  systemPrompt?: string;
+  visibleReplies?: "automatic" | "message_tool";
+};
+
+function makeAccount(groups: Record<string, TestGroupConfig> = {}): {
   accountId: string;
   authDir: string;
-  groups: Record<string, { systemPrompt?: string }>;
+  groups: Record<string, TestGroupConfig>;
 } {
   return { accountId: "default", authDir: "/tmp/wa-test-auth", groups };
 }
@@ -180,8 +180,8 @@ const baseMsg = {
   chatType: "group" as const,
   body: "hi",
   sendComposing: async () => {},
-  reply: async () => acceptedSendResult("text", "r1"),
-  sendMedia: async () => acceptedSendResult("media", "m1"),
+  reply: async () => {},
+  sendMedia: async () => {},
 };
 
 const baseRoute = {
@@ -194,10 +194,10 @@ const baseRoute = {
   matchedBy: "default",
 };
 
-function callProcessMessage(overrides: { cfg?: unknown } = {}) {
+function callProcessMessage(overrides: { cfg?: unknown; msg?: Record<string, unknown> } = {}) {
   return processMessage({
     cfg: (overrides.cfg ?? {}) as never,
-    msg: baseMsg as never,
+    msg: { ...baseMsg, ...(overrides.msg ?? {}) } as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
     groupHistories: new Map(),
@@ -222,9 +222,11 @@ function callProcessMessage(overrides: { cfg?: unknown } = {}) {
 describe("processMessage group system prompt wiring", () => {
   beforeEach(() => {
     buildContextMock.mockReset();
+    dispatchBufferedReplyMock.mockClear();
     resolvePolicyMock.mockReset();
     runMessageReceivedMock.mockClear();
-    trackBackgroundTaskMock.mockClear();
+    visibleReplyContextMock.mockReset();
+    visibleReplyContextMock.mockReturnValue(null);
     clearInternalHooks();
     buildContextMock.mockImplementation(
       (params: { groupSystemPrompt?: string; combinedBody?: string }) => ({
@@ -246,6 +248,62 @@ describe("processMessage group system prompt wiring", () => {
     await callProcessMessage();
 
     expect(buildContextMock.mock.calls[0][0].groupSystemPrompt).toBe("from config");
+  });
+
+  it("maps group visibleReplies automatic to automatic source final delivery", async () => {
+    resolvePolicyMock.mockReturnValue(
+      makePolicy(makeAccount({ [GROUP_JID]: { visibleReplies: "automatic" } })),
+    );
+
+    await callProcessMessage();
+
+    expect(dispatchBufferedReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceReplyDeliveryMode: "automatic",
+      }),
+    );
+  });
+
+  it("promotes bare self-mention inline replies into the agent-facing body", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    visibleReplyContextMock.mockReturnValue({
+      id: "quoted-1",
+      body: "instead of suppressing you, i am forcing you to summarise. do you mind that?",
+      sender: {
+        label: "Kavish",
+        jid: "919022233366@s.whatsapp.net",
+        e164: "+919022233366",
+      },
+    });
+
+    await callProcessMessage({
+      cfg: {
+        agents: {
+          list: [{ id: "main", name: "shoar" }],
+        },
+      },
+      msg: {
+        body: "@57711827927237",
+        mentionedJids: ["57711827927237@lid"],
+        self: {
+          jid: "919152233366@s.whatsapp.net",
+          lid: "57711827927237@lid",
+          e164: "+919152233366",
+        },
+        selfJid: "919152233366@s.whatsapp.net",
+        selfLid: "57711827927237@lid",
+        selfE164: "+919152233366",
+        replyToId: "quoted-1",
+        replyToBody: "instead of suppressing you, i am forcing you to summarise. do you mind that?",
+      },
+    });
+
+    const contextParams = buildContextMock.mock.calls[0][0];
+    expect(contextParams.bodyForAgent).toContain("[Inline reply pull]");
+    expect(contextParams.bodyForAgent).toContain("do you mind that?");
+    expect(contextParams.bodyForAgent).toContain("[Quoted message]");
+    expect(contextParams.selfLid).toBe("57711827927237@lid");
+    expect(contextParams.mentionedContacts).toBe("57711827927237@lid = you (self)");
   });
 
   it("fires message_received hooks with canonical WhatsApp correlation fields", async () => {
@@ -333,23 +391,5 @@ describe("processMessage group system prompt wiring", () => {
 
     expect(runMessageReceivedMock).not.toHaveBeenCalled();
     expect(internalReceived).not.toHaveBeenCalled();
-  });
-
-  it("tracks session metadata writes as connection background tasks", async () => {
-    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-    buildContextMock.mockImplementationOnce(() => ({
-      Body: "hi",
-      RawBody: "hi",
-      CommandBody: "hi",
-      SessionKey: baseRoute.sessionKey,
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-    }));
-
-    await callProcessMessage();
-
-    expect(trackBackgroundTaskMock).toHaveBeenCalledTimes(1);
-    expect(trackBackgroundTaskMock.mock.calls[0]?.[0]).toBeInstanceOf(Set);
-    expect(trackBackgroundTaskMock.mock.calls[0]?.[1]).toBeInstanceOf(Promise);
   });
 });

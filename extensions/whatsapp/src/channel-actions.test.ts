@@ -111,10 +111,17 @@ describe("whatsapp channel action helpers", () => {
     const guidance = resolveWhatsAppAgentReactionExtraGuidance({ cfg, accountId: "default" });
 
     expect(level).toBe("extensive");
-    expect(guidance.join("\n")).toContain("Allowed WhatsApp reaction emojis: 👨🏻‍💻 💯");
+    expect(guidance.join("\n")).toContain("Allowed WhatsApp selected emojis: 👨🏻‍💻 💯");
     expect(guidance.join("\n")).toContain("default acknowledgment reaction is 👨🏻‍💻");
-    expect(guidance.join("\n")).toContain("Reactions apply in every WhatsApp session");
-    expect(guidance.join("\n")).toContain("formal working groups");
+    expect(guidance.join("\n")).toContain("Reactions are available in every WhatsApp session");
+    expect(guidance.join("\n")).toContain("Do not react to every owner message");
+    expect(guidance.join("\n")).toContain("an emoji can also be the entire text reply");
+    expect(guidance.join("\n")).toContain(
+      "pass participant from trusted conversation info sender_id",
+    );
+    expect(guidance.join("\n")).toContain("WhatsApp Emotion Pulse");
+    expect(guidance.join("\n")).toContain("emoji_burst is 5-7 selected emojis with no text");
+    expect(guidance.join("\n")).toContain("Brodie-finesse lesson");
   });
 
   it("always emits the cross-session reaction reminder when WhatsApp is configured", () => {
@@ -127,7 +134,7 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
 
     const guidance = resolveWhatsAppAgentReactionExtraGuidance({ cfg, accountId: "default" });
-    expect(guidance.join("\n")).toContain("Reactions apply in every WhatsApp session");
+    expect(guidance.join("\n")).toContain("Reactions are available in every WhatsApp session");
   });
 
   it("emits no guidance strings when WhatsApp is not configured", () => {

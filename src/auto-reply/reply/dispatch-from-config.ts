@@ -5,18 +5,6 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { selectAgentHarness } from "../../agents/harness/selection.js";
-import {
-  isToolAllowedByPolicies,
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveSubagentToolPolicyForSession,
-} from "../../agents/pi-tools.policy.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../../agents/subagent-capabilities.js";
-import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -24,7 +12,6 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -45,7 +32,6 @@ import {
   logMessageProcessed,
   logMessageQueued,
   logSessionStateChange,
-  markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
 import {
   buildPluginBindingDeclinedText,
@@ -59,7 +45,6 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -92,45 +77,49 @@ import type {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
-import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { isPowernapDraining } from "./powernap-drain.js";
+import { isPowernapDraining, recordDrainedMessage } from "./powernap-drain.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
-const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
-const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
-  () => import("./get-reply-from-config.runtime.js"),
-);
-const abortRuntimeLoader = createLazyImportLoader(() => import("./abort.runtime.js"));
-const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
-const runtimePluginsLoader = createLazyImportLoader(() => import("./runtime-plugins.runtime.js"));
-const replyMediaPathsRuntimeLoader = createLazyImportLoader(
-  () => import("./reply-media-paths.runtime.js"),
-);
+let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
+let getReplyFromConfigRuntimePromise: Promise<
+  typeof import("./get-reply-from-config.runtime.js")
+> | null = null;
+let abortRuntimePromise: Promise<typeof import("./abort.runtime.js")> | null = null;
+let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
+let runtimePluginsPromise: Promise<typeof import("./runtime-plugins.runtime.js")> | null = null;
+let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
+  null;
 
 function loadRouteReplyRuntime() {
-  return routeReplyRuntimeLoader.load();
+  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
+  return routeReplyRuntimePromise;
 }
 
 function loadGetReplyFromConfigRuntime() {
-  return getReplyFromConfigRuntimeLoader.load();
+  getReplyFromConfigRuntimePromise ??= import("./get-reply-from-config.runtime.js");
+  return getReplyFromConfigRuntimePromise;
 }
 
 function loadAbortRuntime() {
-  return abortRuntimeLoader.load();
+  abortRuntimePromise ??= import("./abort.runtime.js");
+  return abortRuntimePromise;
 }
 
 function loadTtsRuntime() {
-  return ttsRuntimeLoader.load();
+  ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
+  return ttsRuntimePromise;
 }
 
 function loadRuntimePlugins() {
-  return runtimePluginsLoader.load();
+  runtimePluginsPromise ??= import("./runtime-plugins.runtime.js");
+  return runtimePluginsPromise;
 }
 
 function loadReplyMediaPathsRuntime() {
-  return replyMediaPathsRuntimeLoader.load();
+  replyMediaPathsRuntimePromise ??= import("./reply-media-paths.runtime.js");
+  return replyMediaPathsRuntimePromise;
 }
 
 async function maybeApplyTtsToReplyPayload(
@@ -291,42 +280,6 @@ const createShouldEmitVerboseProgress = (params: {
     return params.fallbackLevel !== "off";
   };
 };
-
-const resolveHarnessSourceVisibleRepliesDefault = (params: {
-  cfg: OpenClawConfig;
-  ctx: FinalizedMsgContext;
-  entry?: SessionEntry;
-  sessionAgentId: string;
-  sessionKey?: string;
-}): "automatic" | "message_tool" | undefined => {
-  if (params.ctx.CommandSource === "native") {
-    return undefined;
-  }
-  try {
-    const provider =
-      normalizeOptionalString(params.entry?.modelProvider) ??
-      normalizeOptionalString(params.ctx.Provider) ??
-      normalizeOptionalString(params.ctx.Surface) ??
-      "";
-    const harness = selectAgentHarness({
-      provider,
-      modelId: normalizeOptionalString(params.entry?.model),
-      config: params.cfg,
-      agentId: params.sessionAgentId,
-      sessionKey: params.sessionKey,
-      agentHarnessId:
-        normalizeOptionalString(params.entry?.agentHarnessId) ??
-        normalizeOptionalString(params.entry?.agentRuntimeOverride),
-    });
-    return harness.deliveryDefaults?.sourceVisibleReplies;
-  } catch (error) {
-    logVerbose(
-      `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,
-    );
-    return undefined;
-  }
-};
-
 export type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
@@ -390,6 +343,16 @@ export async function dispatchReplyFromConfig(
     });
   };
 
+  if (isPowernapDraining()) {
+    logVerbose("Skipping inbound message: powernap in progress");
+    recordDrainedMessage(
+      ctx.From ?? ctx.MessageParticipant ?? "<unknown>",
+      ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface ?? "<unknown>",
+    );
+    recordProcessed("skipped", { reason: "powernap_drain" });
+    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+  }
+
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });
@@ -405,25 +368,10 @@ export async function dispatchReplyFromConfig(
     }
   };
 
-  if (isPowernapDraining()) {
-    logVerbose("Skipping inbound message: powernap in progress");
-    recordProcessed("skipped", { reason: "powernap_drain" });
-    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
-  }
-
   const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
-  const markProgress = () => {
-    if (!canTrackSession || !sessionKey) {
-      return;
-    }
-    markDiagnosticSessionProgress({ sessionKey });
-    if (acpDispatchSessionKey && acpDispatchSessionKey !== sessionKey) {
-      markDiagnosticSessionProgress({ sessionKey: acpDispatchSessionKey });
-    }
-  };
   const sessionStoreEntry = boundAcpDispatchSessionKey
     ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
@@ -656,92 +604,6 @@ export async function dispatchReplyFromConfig(
       undefined,
     chatType: sessionStoreEntry.entry?.chatType,
   });
-  const {
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({
-    config: cfg,
-    sessionKey: acpDispatchSessionKey,
-    agentId: sessionAgentId,
-  });
-  const chatType = normalizeChatType(ctx.ChatType);
-  const configuredVisibleReplies =
-    chatType === "group" || chatType === "channel"
-      ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
-      : cfg.messages?.visibleReplies;
-  const harnessDefaultVisibleReplies =
-    configuredVisibleReplies === undefined && chatType !== "group" && chatType !== "channel"
-      ? resolveHarnessSourceVisibleRepliesDefault({
-          cfg,
-          ctx,
-          entry: sessionStoreEntry.entry,
-          sessionAgentId,
-          sessionKey: acpDispatchSessionKey,
-        })
-      : undefined;
-  const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
-  const prefersMessageToolDelivery =
-    params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
-    (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
-      ctx.CommandSource !== "native" &&
-      (chatType === "group" || chatType === "channel"
-        ? effectiveVisibleReplies !== "automatic"
-        : effectiveVisibleReplies === "message_tool"));
-  const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
-    ...(profileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
-  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
-    ...(providerProfileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
-  const groupResolution = resolveGroupSessionKey(ctx);
-  const messageProvider = resolveOriginMessageProvider({
-    originatingChannel: ctx.OriginatingChannel,
-    provider: ctx.Provider ?? ctx.Surface,
-  });
-  const groupPolicy = resolveGroupToolPolicy({
-    config: cfg,
-    sessionKey: acpDispatchSessionKey,
-    messageProvider,
-    groupId: groupResolution?.id,
-    groupChannel:
-      normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
-    groupSpace: normalizeOptionalString(ctx.GroupSpace),
-    accountId: ctx.AccountId,
-    senderId: normalizeOptionalString(ctx.SenderId),
-    senderName: normalizeOptionalString(ctx.SenderName),
-    senderUsername: normalizeOptionalString(ctx.SenderUsername),
-    senderE164: normalizeOptionalString(ctx.SenderE164),
-  });
-  const subagentStore = resolveSubagentCapabilityStore(acpDispatchSessionKey, { cfg });
-  const subagentPolicy =
-    acpDispatchSessionKey &&
-    isSubagentEnvelopeSession(acpDispatchSessionKey, {
-      cfg,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(cfg, acpDispatchSessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  const messageToolAvailable = isToolAllowedByPolicies("message", [
-    profilePolicy,
-    providerProfilePolicy,
-    globalProviderPolicy,
-    agentProviderPolicy,
-    globalPolicy,
-    agentPolicy,
-    groupPolicy,
-    subagentPolicy,
-  ]);
   const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
     cfg,
     ctx,
@@ -750,8 +612,6 @@ export async function dispatchReplyFromConfig(
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
     shouldSuppressTyping,
-    messageToolAvailable,
-    defaultVisibleReplies: harnessDefaultVisibleReplies,
   });
   const {
     sourceReplyDeliveryMode,
@@ -761,12 +621,6 @@ export async function dispatchReplyFromConfig(
     suppressHookUserDelivery,
     suppressHookReplyLifecycle,
   } = sourceReplyPolicy;
-  const attachSourceReplyDeliveryMode = (
-    result: DispatchFromConfigResult,
-  ): DispatchFromConfigResult =>
-    sourceReplyDeliveryMode === "message_tool_only"
-      ? { ...result, sourceReplyDeliveryMode }
-      : result;
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -810,10 +664,7 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           commitInboundDedupeIfClaimed();
-          return attachSourceReplyDeliveryMode({
-            queuedFinal: false,
-            counts: dispatcher.getQueuedCounts(),
-          });
+          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
         case "missing_plugin":
         case "no_handler": {
@@ -840,10 +691,7 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_declined");
           recordProcessed("completed", { reason: "plugin-bound-declined" });
           commitInboundDedupeIfClaimed();
-          return attachSourceReplyDeliveryMode({
-            queuedFinal: false,
-            counts: dispatcher.getQueuedCounts(),
-          });
+          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
         case "error": {
           logVerbose(
@@ -856,10 +704,7 @@ export async function dispatchReplyFromConfig(
           markIdle("plugin_binding_error");
           recordProcessed("completed", { reason: "plugin-bound-error" });
           commitInboundDedupeIfClaimed();
-          return attachSourceReplyDeliveryMode({
-            queuedFinal: false,
-            counts: dispatcher.getQueuedCounts(),
-          });
+          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
       }
     }
@@ -932,7 +777,7 @@ export async function dispatchReplyFromConfig(
       recordProcessed("completed", { reason: "fast_abort" });
       markIdle("message_completed");
       commitInboundDedupeIfClaimed();
-      return attachSourceReplyDeliveryMode({ queuedFinal, counts });
+      return { queuedFinal, counts };
     }
 
     const isSlackNonDirectSurface =
@@ -1011,7 +856,7 @@ export async function dispatchReplyFromConfig(
         recordProcessed("completed", { reason: "before_dispatch_handled" });
         markIdle("message_completed");
         commitInboundDedupeIfClaimed();
-        return attachSourceReplyDeliveryMode({ queuedFinal, counts });
+        return { queuedFinal, counts };
       }
     }
 
@@ -1045,10 +890,10 @@ export async function dispatchReplyFromConfig(
       );
       if (replyDispatchResult?.handled) {
         commitInboundDedupeIfClaimed();
-        return attachSourceReplyDeliveryMode({
+        return {
           queuedFinal: replyDispatchResult.queuedFinal,
           counts: replyDispatchResult.counts,
-        });
+        };
       }
     }
 
@@ -1214,25 +1059,10 @@ export async function dispatchReplyFromConfig(
     });
     const suppressDefaultToolProgressMessages =
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
-    const shouldSuppressDefaultToolProgressMessages = () =>
-      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
-    const wrapProgressCallback = <Args extends unknown[]>(
-      callback: ((...args: Args) => Promise<void> | void) | undefined,
-    ): ((...args: Args) => Promise<void>) | undefined => {
-      if (!callback && (!suppressAutomaticSourceDelivery || !canTrackSession)) {
-        return undefined;
-      }
-      return async (...args: Args) => {
-        markProgress();
-        if (!suppressAutomaticSourceDelivery) {
-          await callback?.(...args);
-        }
-      };
-    };
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
@@ -1246,18 +1076,33 @@ export async function dispatchReplyFromConfig(
         sourceReplyDeliveryMode,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
-        onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
-        onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
-        onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
-        onAssistantMessageStart: wrapProgressCallback(params.replyOptions?.onAssistantMessageStart),
-        onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
-        onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart),
-        onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent),
-        onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput),
-        onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart),
-        onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd),
+        onPartialReply: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onPartialReply,
+        onReasoningStream: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onReasoningStream,
+        onReasoningEnd: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onReasoningEnd,
+        onAssistantMessageStart: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onAssistantMessageStart,
+        onBlockReplyQueued: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onBlockReplyQueued,
+        onToolStart: suppressAutomaticSourceDelivery ? undefined : params.replyOptions?.onToolStart,
+        onItemEvent: suppressAutomaticSourceDelivery ? undefined : params.replyOptions?.onItemEvent,
+        onCommandOutput: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onCommandOutput,
+        onCompactionStart: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onCompactionStart,
+        onCompactionEnd: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onCompactionEnd,
         onToolResult: (payload: ReplyPayload) => {
-          markProgress();
           const run = async () => {
             markInboundDedupeReplayUnsafe();
             if (!suppressAutomaticSourceDelivery) {
@@ -1281,7 +1126,7 @@ export async function dispatchReplyFromConfig(
             if (!deliveryPayload) {
               return;
             }
-            if (shouldSuppressDefaultToolProgressMessages()) {
+            if (suppressDefaultToolProgressMessages) {
               const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
               const execApproval =
                 deliveryPayload.channelData &&
@@ -1305,23 +1150,21 @@ export async function dispatchReplyFromConfig(
           return run();
         },
         onPlanUpdate: async (payload) => {
-          markProgress();
           markInboundDedupeReplayUnsafe();
           if (!suppressAutomaticSourceDelivery) {
             await onPlanUpdateFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "update" || shouldSuppressDefaultToolProgressMessages()) {
+          if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
             return;
           }
           await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
         },
         onApprovalEvent: async (payload) => {
-          markProgress();
           markInboundDedupeReplayUnsafe();
           if (!suppressAutomaticSourceDelivery) {
             await onApprovalEventFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "requested" || shouldSuppressDefaultToolProgressMessages()) {
+          if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
             return;
           }
           const label = summarizeApprovalLabel({
@@ -1335,12 +1178,11 @@ export async function dispatchReplyFromConfig(
           await maybeSendWorkingStatus(label);
         },
         onPatchSummary: async (payload) => {
-          markProgress();
           markInboundDedupeReplayUnsafe();
           if (!suppressAutomaticSourceDelivery) {
             await onPatchSummaryFromReplyOptions?.(payload);
           }
-          if (payload.phase !== "end" || shouldSuppressDefaultToolProgressMessages()) {
+          if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
             return;
           }
           const label = summarizePatchLabel({ summary: payload.summary, title: payload.title });
@@ -1350,7 +1192,6 @@ export async function dispatchReplyFromConfig(
           await maybeSendWorkingStatus(label);
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
-          markProgress();
           const run = async () => {
             if (
               payload.isReasoning !== true &&
@@ -1465,10 +1306,10 @@ export async function dispatchReplyFromConfig(
           },
         );
         if (tailDispatchResult?.handled) {
-          return attachSourceReplyDeliveryMode({
+          return {
             queuedFinal: tailDispatchResult.queuedFinal,
             counts: tailDispatchResult.counts,
-          });
+          };
         }
       }
     }
@@ -1557,7 +1398,7 @@ export async function dispatchReplyFromConfig(
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
-    return attachSourceReplyDeliveryMode({ queuedFinal, counts });
+    return { queuedFinal, counts };
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
       if (inboundDedupeReplayUnsafe) {

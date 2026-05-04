@@ -8,6 +8,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSenderIdentity } from "../../identity.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import {
+  bodyLooksLikeWhatsAppGroupWorkIntake,
   bodyLooksLikeWhatsAppWorkIntake,
   resolveWhatsAppWorkIntakeReaction,
 } from "../../reaction-policy.js";
@@ -17,6 +18,17 @@ import type { WebInboundMsg } from "../types.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
 const workIntakeReactionLastSentAt = new Map<string, number>();
+
+function resolveGroupReactionParticipant(msg: WebInboundMsg, senderJid?: string | null) {
+  if (msg.chatType !== "group") {
+    return undefined;
+  }
+  return msg.senderJid ?? senderJid ?? undefined;
+}
+
+function isBareSessionResetCommand(body: string): boolean {
+  return /^\/(?:new|reset)$/i.test(body.trim());
+}
 
 function shouldSendWorkIntakeReaction(params: {
   msg: WebInboundMsg;
@@ -37,6 +49,25 @@ function shouldSendWorkIntakeReaction(params: {
     return true;
   }
   return params.msg.wasMentioned === true || params.activation === "always";
+}
+
+function bodyLooksLikeAutomaticWorkIntake(params: {
+  msg: WebInboundMsg;
+  config: NonNullable<ReturnType<typeof resolveWhatsAppWorkIntakeReaction>>;
+}) {
+  if (params.msg.chatType !== "group") {
+    return bodyLooksLikeWhatsAppWorkIntake({
+      body: params.msg.body,
+      mediaType: params.msg.mediaType,
+      config: params.config,
+    });
+  }
+  return bodyLooksLikeWhatsAppGroupWorkIntake({
+    body: params.msg.body,
+    mediaType: params.msg.mediaType,
+    config: params.config,
+    selfAddressed: params.msg.wasMentioned === true,
+  });
 }
 
 function markWorkIntakeReactionSent(params: {
@@ -73,6 +104,7 @@ export async function maybeSendAckReaction(params: {
   conversationId: string;
   verbose: boolean;
   accountId?: string;
+  commandAuthorized?: boolean;
   info: (obj: unknown, msg: string) => void;
   warn: (obj: unknown, msg: string) => void;
 }): Promise<AckReactionHandle | null> {
@@ -95,6 +127,36 @@ export async function maybeSendAckReaction(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
+  const sender = getSenderIdentity(params.msg);
+  if (isBareSessionResetCommand(params.msg.body)) {
+    if (params.msg.chatType !== "group" || params.commandAuthorized !== true) {
+      return null;
+    }
+    const emoji = workIntakeConfig?.emoji ?? "👨🏻‍💻";
+    params.info({ chatId: params.msg.chatId, messageId, emoji }, "sending session-reset reaction");
+    const participant = resolveGroupReactionParticipant(params.msg, sender.jid ?? sender.lid);
+    sendReactionWhatsApp(params.msg.chatId, messageId, emoji, {
+      verbose: params.verbose,
+      fromMe: false,
+      participant,
+      accountId: params.accountId,
+      cfg: params.cfg,
+    }).catch((err) => {
+      params.warn(
+        {
+          error: formatError(err),
+          chatId: params.msg.chatId,
+          messageId,
+        },
+        "failed to send session-reset reaction",
+      );
+      logVerbose(
+        `WhatsApp session-reset reaction failed for chat ${params.msg.chatId}: ${formatError(err)}`,
+      );
+    });
+    return null;
+  }
+
   const ackConfig = params.cfg.channels?.whatsapp?.ackReaction;
   const emoji = (ackConfig?.emoji ?? "").trim();
   const directEnabled = ackConfig?.direct ?? true;
@@ -111,7 +173,6 @@ export async function maybeSendAckReaction(params: {
           conversationId: conversationIdForCheck,
         })
       : null;
-  const sender = getSenderIdentity(params.msg);
   if (
     workIntakeConfig &&
     shouldSendWorkIntakeReaction({
@@ -120,11 +181,7 @@ export async function maybeSendAckReaction(params: {
       directEnabled: workIntakeConfig.direct ?? true,
       groupMode: workIntakeConfig.group ?? "mentions",
     }) &&
-    bodyLooksLikeWhatsAppWorkIntake({
-      body: params.msg.body,
-      mediaType: params.msg.mediaType,
-      config: workIntakeConfig,
-    }) &&
+    bodyLooksLikeAutomaticWorkIntake({ msg: params.msg, config: workIntakeConfig }) &&
     markWorkIntakeReactionSent({
       accountId: params.accountId,
       chatId: params.msg.chatId,
@@ -137,10 +194,11 @@ export async function maybeSendAckReaction(params: {
       { chatId: params.msg.chatId, messageId, emoji: workIntakeConfig.emoji },
       "sending work-intake reaction",
     );
+    const participant = resolveGroupReactionParticipant(params.msg, sender.jid ?? sender.lid);
     sendReactionWhatsApp(params.msg.chatId, messageId, workIntakeConfig.emoji, {
       verbose: params.verbose,
       fromMe: false,
-      participant: sender.jid ?? undefined,
+      participant,
       accountId: params.accountId,
       cfg: params.cfg,
     }).catch((err) => {
@@ -175,10 +233,11 @@ export async function maybeSendAckReaction(params: {
   }
 
   params.info({ chatId: params.msg.chatId, messageId, emoji }, "sending ack reaction");
+  const participant = resolveGroupReactionParticipant(params.msg, sender.jid ?? sender.lid);
   const reactionOptions = {
     verbose: params.verbose,
     fromMe: false,
-    ...(sender.jid ? { participant: sender.jid } : {}),
+    ...(participant ? { participant } : {}),
     ...(params.accountId ? { accountId: params.accountId } : {}),
     cfg: params.cfg,
   };

@@ -466,6 +466,24 @@ describe("handleCommands reset hooks", () => {
     );
   });
 
+  it("leaves WhatsApp group bare /new acknowledgement to the reaction path", async () => {
+    const params = buildResetParams(
+      "/new",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      { ChatType: "group" },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "new" }),
+    );
+  });
+
   it("keeps reset tails falling through so the model receives the user input", async () => {
     const params = buildResetParams("/new take notes", {
       commands: { text: true },

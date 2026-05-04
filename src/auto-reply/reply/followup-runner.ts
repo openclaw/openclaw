@@ -209,6 +209,7 @@ export function createFollowupRunner(params: {
       agentAccountId: queued.run.agentAccountId,
     });
     const replySessionKey = queued.run.sessionKey ?? sessionKey;
+    const operationKey = queued.run.replyRunKey ?? replySessionKey;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
     const effectiveQueued =
       runtimeConfig === queued.run.config
@@ -217,7 +218,7 @@ export function createFollowupRunner(params: {
     const run = effectiveQueued.run;
     const replyOperation = createReplyOperation({
       sessionId: run.sessionId,
-      sessionKey: replySessionKey ?? "",
+      sessionKey: operationKey ?? "",
       resetTriggered: false,
       upstreamAbortSignal: opts?.abortSignal,
     });

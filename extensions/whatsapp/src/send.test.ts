@@ -458,6 +458,27 @@ describe("web outbound", () => {
     });
   });
 
+  it("sends ZIP media as a WhatsApp document with filename", async () => {
+    const buf = Buffer.from("zip");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/zip",
+      kind: "document",
+      fileName: "source-bundle.zip",
+    });
+
+    await sendMessageWhatsApp("+1555", "bundle", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/source-bundle.zip",
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "bundle", buf, "application/zip", {
+      fileName: "source-bundle.zip",
+    });
+    expect(hoisted.maybeShoarchiveOutboundPdf).not.toHaveBeenCalled();
+  });
+
   it("shoarchives pdf documents even when mime falls back to octet-stream", async () => {
     const buf = Buffer.from("pdf");
     loadWebMediaMock.mockResolvedValueOnce({

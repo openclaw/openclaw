@@ -22,6 +22,7 @@ import { logVerbose } from "../../globals.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { CommandHandler } from "./commands-types.js";
+import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const HOOK_TIMEOUT_MS = 5_000;
 
@@ -64,6 +65,7 @@ export const handlePowernapHereCommand: CommandHandler = async (params, allowTex
 
   const oldSessionId = currentEntry.sessionId;
   const oldSessionFile = currentEntry.sessionFile;
+  clearSessionResetRuntimeState([sessionKey, oldSessionId]);
 
   // Fire before_reset hook for this session (5s timeout per hook)
   await fireHookForSession({

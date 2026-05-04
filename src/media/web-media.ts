@@ -100,6 +100,8 @@ const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/msword",
   "application/pdf",
+  "application/zip",
+  "application/x-zip-compressed",
   "application/vnd.ms-excel",
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -107,6 +109,10 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "text/csv",
   "text/markdown",
+]);
+const HOST_READ_ARCHIVE_DOCUMENT_MIMES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
 ]);
 // file-type returns undefined (no magic bytes) for plain-text formats like CSV and
 // Markdown, so host-read needs an explicit "this really decodes as text" fallback.
@@ -163,10 +169,10 @@ function decodeHostReadText(buffer: Buffer): string | undefined {
     return "";
   }
   // UTF-16 decoding is intentionally omitted: TextDecoder("utf-16le/be") never throws on
-  // arbitrary byte pairs, so every byte pair is a valid (if meaningless) Unicode scalar —
-  // an attacker can prepend a BOM and pass getTextStats with printableRatio≈1.0 on pure
+  // arbitrary byte pairs, so every byte pair is a valid but meaningless Unicode scalar.
+  // An attacker can prepend a BOM and pass getTextStats with printableRatio near 1.0 on
   // binary garbage. The Latin-1 path below already covers the most common non-UTF-8
-  // real-world case (Excel CSV exports with accented chars like é, ñ) while remaining
+  // real-world case, like Excel CSV exports with accented chars, while remaining
   // safe because hasSingleByteTextShape gates on byte shape *before* any decode.
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
@@ -299,8 +305,51 @@ function assertHostReadMediaAllowed(params: {
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, and Office documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, ZIP archives, CSV, and Markdown (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
+}
+
+function resolveHostReadContentType(params: {
+  sniffedContentType?: string;
+  contentType?: string;
+}): string | undefined {
+  const sniffedMime = normalizeMimeType(params.sniffedContentType);
+  if (sniffedMime && HOST_READ_ARCHIVE_DOCUMENT_MIMES.has(sniffedMime)) {
+    return sniffedMime;
+  }
+  return normalizeMimeType(params.contentType);
+}
+
+function alignFileNameExtensionToContentType(params: {
+  fileName?: string;
+  contentType?: string;
+}): string | undefined {
+  const fileName = params.fileName;
+  const contentType = normalizeMimeType(params.contentType);
+  if (!fileName || !contentType) {
+    return fileName;
+  }
+  const ext = extensionForMime(contentType);
+  if (!ext) {
+    return fileName;
+  }
+  const declaredMime = normalizeMimeType(mimeTypeFromFilePath(fileName));
+  if (!path.extname(fileName)) {
+    return `${fileName}${ext}`;
+  }
+  if (
+    declaredMime &&
+    declaredMime !== contentType &&
+    HOST_READ_ARCHIVE_DOCUMENT_MIMES.has(contentType)
+  ) {
+    const parsed = path.parse(fileName);
+    return path.format({
+      dir: parsed.dir,
+      name: parsed.name || "attachment",
+      ext,
+    });
+  }
+  return fileName;
 }
 
 function toJpegFileName(fileName?: string): string | undefined {
@@ -582,7 +631,7 @@ async function loadWebMediaInternal(
     }
   }
   const sniffedMime = await detectMime({ buffer: data });
-  const mime = await detectMime({ buffer: data, filePath: mediaUrl });
+  let mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = kindFromMime(mime);
   if (hostReadCapability) {
     assertHostReadMediaAllowed({
@@ -592,15 +641,14 @@ async function loadWebMediaInternal(
       kind,
       buffer: data,
     });
+    mime = resolveHostReadContentType({
+      sniffedContentType: sniffedMime,
+      contentType: mime,
+    });
   }
   const rawBasename = path.basename(mediaUrl) || undefined;
   let fileName = rawBasename ? extractOriginalFilename(rawBasename) : undefined;
-  if (fileName && !path.extname(fileName) && mime) {
-    const ext = extensionForMime(mime);
-    if (ext) {
-      fileName = `${fileName}${ext}`;
-    }
-  }
+  fileName = alignFileNameExtensionToContentType({ fileName, contentType: mime });
   return await clampAndFinalize({
     buffer: data,
     contentType: mime,
