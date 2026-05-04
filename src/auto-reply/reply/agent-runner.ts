@@ -26,6 +26,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   estimateUsageCost,
@@ -82,6 +83,7 @@ import {
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -802,6 +804,14 @@ function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
     .filter((text): text is string => Boolean(text))
     .join("\n")
     .trim();
+}
+
+function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
+  return payloads
+    .filter((payload) => payload.isReasoning !== true)
+    .map((payload) => payload.text)
+    .filter((text): text is string => Boolean(text))
+    .join("\n\n");
 }
 
 function enqueueCommitmentExtractionForTurn(params: {
@@ -1817,11 +1827,51 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
-    return finalizeWithFollowup(
+    // Capture only policy-visible final payloads in session store to support
+    // durable delivery retries. Hidden reasoning, message-tool-only replies,
+    // and sendPolicy-denied replies must not become heartbeat-replayable text.
+    if (sessionKey && storePath && finalPayloads.length > 0) {
+      const sendPolicy = resolveSendPolicy({
+        cfg,
+        entry: activeSessionEntry,
+        sessionKey: params.runtimePolicySessionKey ?? sessionKey,
+        channel:
+          sessionCtx.OriginatingChannel ??
+          sessionCtx.Surface ??
+          sessionCtx.Provider ??
+          activeSessionEntry?.channel,
+        chatType: activeSessionEntry?.chatType,
+      });
+      const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
+        cfg,
+        ctx: sessionCtx,
+        requested: opts?.sourceReplyDeliveryMode,
+        sendPolicy,
+      });
+      const pendingText = sourceReplyPolicy.suppressDelivery
+        ? ""
+        : buildPendingFinalDeliveryText(finalPayloads);
+      if (pendingText) {
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: pendingText,
+            pendingFinalDeliveryCreatedAt: Date.now(),
+            updatedAt: Date.now(),
+          }),
+        });
+      }
+    }
+
+    const result = finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,
       runFollowupTurn,
     );
+
+    return result;
   } catch (error) {
     if (
       replyOperation.result?.kind === "aborted" &&
