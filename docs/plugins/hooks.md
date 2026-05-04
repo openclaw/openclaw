@@ -59,7 +59,9 @@ keep registration order.
   handler after the budget elapses and continues with the next one, instead of
   letting slow setup or recall work consume the caller's configured model
   timeout. Omit it to use the default observation/decision timeout that the
-  hook runner applies generically.
+  hook runner applies generically. Decision hooks `before_prompt_build` and
+  `before_model_call` default to 15 seconds; observation hook `agent_end`
+  defaults to 30 seconds.
 
 Operators can also set hook budgets without patching plugin code:
 

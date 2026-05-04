@@ -187,11 +187,11 @@ export async function runPreparedCliAgent(
     throw error;
   };
 
-  const resolvePromptForCliAttempt = (cliSessionIdToUse?: string) =>
-    cliSessionIdToUse ? params.prompt : (context.openClawHistoryPrompt ?? params.prompt);
-
-  const runPreflightForCliAttempt = async (cliSessionIdToUse?: string) => {
-    const prompt = resolvePromptForCliAttempt(cliSessionIdToUse);
+  const runPreflightForCliSubmission = async (submission: {
+    prompt: string;
+    systemPrompt: string;
+    imagesCount: number;
+  }) => {
     const beforeModelCall = await runAgentHarnessBeforeModelCallHook({
       event: {
         runId: params.runId,
@@ -202,10 +202,10 @@ export async function runPreparedCliAgent(
         resolvedRef: `${params.provider}/${context.modelId}`,
         harnessId: "cli",
         workspaceDir: params.workspaceDir,
-        systemPrompt: context.systemPrompt,
-        prompt,
+        systemPrompt: submission.systemPrompt,
+        prompt: submission.prompt,
         historyMessages,
-        imagesCount: params.images?.length ?? 0,
+        imagesCount: submission.imagesCount,
       },
       ctx: hookContext,
       hookRunner,
@@ -220,10 +220,10 @@ export async function runPreparedCliAgent(
         sessionId: params.sessionId,
         provider: params.provider,
         model: context.modelId,
-        systemPrompt: context.systemPrompt,
-        prompt,
+        systemPrompt: submission.systemPrompt,
+        prompt: submission.prompt,
         historyMessages,
-        imagesCount: params.images?.length ?? 0,
+        imagesCount: submission.imagesCount,
       },
       ctx: hookContext,
       hookRunner,
@@ -231,8 +231,9 @@ export async function runPreparedCliAgent(
   };
 
   const executeCliAttempt = async (cliSessionIdToUse?: string) => {
-    await runPreflightForCliAttempt(cliSessionIdToUse);
-    const output = await executePreparedCliRun(context, cliSessionIdToUse);
+    const output = await executePreparedCliRun(context, cliSessionIdToUse, {
+      beforeModelSubmission: runPreflightForCliSubmission,
+    });
     const assistantText = output.text.trim();
     const assistantTexts = assistantText ? [assistantText] : [];
     const lastAssistant =

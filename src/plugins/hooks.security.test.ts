@@ -322,6 +322,49 @@ describe("before_model_call terminal block semantics", () => {
       runner.runBeforeModelCall(beforeModelCallEvent, beforeModelCallCtx),
     ).rejects.toThrow("before_model_call handler from failing failed: boom");
   });
+
+  it("times out unconfigured before_model_call hooks under fail-closed policy", async () => {
+    vi.useFakeTimers();
+    try {
+      const hanging = vi.fn(() => new Promise<PluginHookBeforeModelCallResult>(() => {}));
+      const lowerPriority = vi.fn().mockReturnValue({ block: false });
+      addStaticTestHooks(registry, {
+        hookName: "before_model_call",
+        hooks: [
+          {
+            pluginId: "hanging",
+            result: {},
+            priority: 100,
+            handler: hanging,
+          },
+          {
+            pluginId: "lower",
+            result: { block: false },
+            priority: 10,
+            handler: lowerPriority,
+          },
+        ],
+      });
+      const runner = createHookRunner(registry, {
+        catchErrors: true,
+        failurePolicyByHook: {
+          before_model_call: "fail-closed",
+        },
+      });
+
+      const run = runner.runBeforeModelCall(beforeModelCallEvent, beforeModelCallCtx);
+      const rejection = expect(run).rejects.toThrow(
+        "before_model_call handler from hanging failed: timed out after 15000ms",
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await rejection;
+      expect(hanging).toHaveBeenCalledTimes(1);
+      expect(lowerPriority).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("message_sending terminal cancel semantics", () => {

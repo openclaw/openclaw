@@ -45,6 +45,16 @@ const executeDeps = {
   requestHeartbeat: requestHeartbeatImpl,
 };
 
+export type PreparedCliModelSubmission = {
+  prompt: string;
+  systemPrompt: string;
+  imagesCount: number;
+};
+
+export type ExecutePreparedCliRunOptions = {
+  beforeModelSubmission?: (submission: PreparedCliModelSubmission) => Promise<void>;
+};
+
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
   Object.assign(executeDeps, overrides);
 }
@@ -218,6 +228,7 @@ export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
 export async function executePreparedCliRun(
   context: PreparedCliRunContext,
   cliSessionIdToUse?: string,
+  options: ExecutePreparedCliRunOptions = {},
 ): Promise<CliOutput> {
   const params = context.params;
   if (params.abortSignal?.aborted) {
@@ -390,6 +401,11 @@ export async function executePreparedCliRun(
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
           }
+          await options.beforeModelSubmission?.({
+            prompt,
+            systemPrompt: context.systemPrompt,
+            imagesCount: imagePaths?.length ?? 0,
+          });
           claudeSkillsPluginCleanupOwned = true;
           const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
           context.preparedBackend.cleanup = undefined;
@@ -465,6 +481,11 @@ export async function executePreparedCliRun(
           cliSessionId: useResume ? resolvedSessionId : undefined,
         });
 
+        await options.beforeModelSubmission?.({
+          prompt,
+          systemPrompt: context.systemPrompt,
+          imagesCount: imagePaths?.length ?? 0,
+        });
         const managedRun = await supervisor.spawn({
           sessionId: params.sessionId,
           backendId: context.backendResolved.id,

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -614,6 +615,177 @@ describe("runCliAgent reliability", () => {
           ],
         }),
         expect.any(Object),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs before_model_call and llm_input with transformed final CLI prompt", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["before_model_call", "llm_input", "agent_end"].includes(hookName),
+      ),
+      runBeforeModelCall: vi.fn(async () => ({ block: false })),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile();
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      const baseContext = buildPreparedContext();
+      const result = await runPreparedCliAgent({
+        ...baseContext,
+        backendResolved: {
+          ...baseContext.backendResolved,
+          textTransforms: {
+            input: [{ from: "hi", to: "transformed prompt" }],
+          },
+        },
+        params: {
+          ...baseContext.params,
+          sessionFile,
+          workspaceDir: dir,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        },
+        workspaceDir: dir,
+      });
+
+      await vi.waitFor(() => {
+        expect(hookRunner.runBeforeModelCall).toHaveBeenCalledTimes(1);
+        expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
+      });
+      expect(hookRunner.runBeforeModelCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: "transformed prompt",
+          systemPrompt: "You are a helpful assistant.",
+          imagesCount: 0,
+        }),
+        expect.any(Object),
+      );
+      expect(hookRunner.runLlmInput).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: "transformed prompt",
+          systemPrompt: "You are a helpful assistant.",
+          imagesCount: 0,
+        }),
+        expect.any(Object),
+      );
+      expect(result.meta.finalPromptText).toBe("transformed prompt");
+      expect(supervisorSpawnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          argv: expect.arrayContaining(["transformed prompt"]),
+        }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs before_model_call with the image-shaped final CLI prompt", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["before_model_call", "llm_input", "agent_end"].includes(hookName),
+      ),
+      runBeforeModelCall: vi.fn(async () => ({ block: false })),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile();
+    const image: ImageContent = {
+      type: "image",
+      mimeType: "image/png",
+      data: Buffer.from("image-bytes").toString("base64"),
+    };
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "saw image",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      const baseContext = buildPreparedContext();
+      const backend = {
+        ...baseContext.preparedBackend.backend,
+        imagePathScope: "workspace" as const,
+      };
+      const result = await runPreparedCliAgent({
+        ...baseContext,
+        backendResolved: {
+          ...baseContext.backendResolved,
+          config: backend,
+        },
+        preparedBackend: {
+          ...baseContext.preparedBackend,
+          backend,
+        },
+        params: {
+          ...baseContext.params,
+          sessionFile,
+          workspaceDir: dir,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          images: [image],
+        },
+        workspaceDir: dir,
+      });
+
+      const expectedImagePathPrefix = path.join(dir, ".openclaw-cli-images");
+      await vi.waitFor(() => {
+        expect(hookRunner.runBeforeModelCall).toHaveBeenCalledTimes(1);
+        expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
+      });
+      const beforeModelCallCalls = hookRunner.runBeforeModelCall.mock.calls as unknown as Array<
+        [{ prompt?: string }, unknown]
+      >;
+      const beforeModelCallPrompt = beforeModelCallCalls[0]?.[0].prompt;
+      expect(beforeModelCallPrompt).toContain("hi\n\n");
+      expect(beforeModelCallPrompt).toContain(expectedImagePathPrefix);
+      expect(hookRunner.runBeforeModelCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: beforeModelCallPrompt,
+          imagesCount: 1,
+        }),
+        expect.any(Object),
+      );
+      expect(hookRunner.runLlmInput).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: beforeModelCallPrompt,
+          imagesCount: 1,
+        }),
+        expect.any(Object),
+      );
+      expect(result.meta.finalPromptText).toBe(beforeModelCallPrompt);
+      expect(supervisorSpawnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          argv: expect.arrayContaining([beforeModelCallPrompt]),
+        }),
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
