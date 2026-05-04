@@ -580,6 +580,55 @@ Behavior notes:
 
   </Accordion>
 
+  <Accordion title="Disconnected with status=408 Request Time-out">
+    Symptom: `openclaw channels status --probe` or gateway logs show repeated
+    disconnect/reconnect loops with `error:status=408 Request Time-out Connection was lost`.
+
+    For WhatsApp Web/Baileys, `408` usually means the socket lost connectivity and the
+    reconnect attempt timed out. Common causes are transient network loss, DNS/proxy or
+    firewall routing, stale Baileys auth state, host clock/certificate problems, or a
+    runtime dependency mismatch.
+
+    Run the checks in this order:
+
+    ```bash
+    openclaw channels status --probe
+    openclaw logs --follow
+    openclaw doctor
+    openclaw gateway status
+    ```
+
+    How to decide what to do:
+
+    - If the probe alternates between `running` and `disconnected` but quickly recovers,
+      wait for the built-in reconnect unless messages are being dropped.
+    - If logs repeat `status=408` with auth or logout hints, rebuild auth state for that
+      account.
+    - If logs show DNS, proxy, TLS, or timeout errors across other networked channels,
+      fix host connectivity before re-linking.
+    - If startup also reports missing bundled runtime dependencies, run `openclaw doctor`
+      and restart the gateway after repair.
+
+    A healthy credentials directory for a configured account should contain a current
+    `~/.openclaw/credentials/whatsapp/<accountId>/creds.json` plus the Baileys key files
+    created during login. Before destructive recovery, back up that account directory if
+    you may need to inspect or restore the old auth state.
+
+    Safe recovery path:
+
+    ```bash
+    cp -a ~/.openclaw/credentials/whatsapp/<accountId> \
+      ~/.openclaw/credentials/whatsapp/<accountId>.bak
+    openclaw channels logout --channel whatsapp --account <id>
+    openclaw channels login --channel whatsapp --account <id>
+    ```
+
+    Use the matching account id from `channels.whatsapp.accounts`. For the default
+    account, omit `--account` only when you are sure the default account is the one that is
+    failing.
+
+  </Accordion>
+
   <Accordion title="No active listener when sending">
     Outbound sends fail fast when no active gateway listener exists for the target account.
 
