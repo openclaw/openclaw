@@ -143,9 +143,12 @@ export function resolveMessageId(entry: Record<string, unknown>): string | undef
 export function summarizeResult(
   label: string,
   count: number,
+  data?: unknown,
 ): { content: Array<{ type: "text"; text: string }> } {
+  const summary = `${label}: ${count}`;
+  const text = data !== undefined ? `${summary}\n${JSON.stringify(data, null, 2)}` : summary;
   return {
-    content: [{ type: "text", text: `${label}: ${count}` }],
+    content: [{ type: "text", text }],
   };
 }
 
