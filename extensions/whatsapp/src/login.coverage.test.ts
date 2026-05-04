@@ -111,6 +111,9 @@ describe("loginWeb coverage", () => {
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
     const firstSock = await createWaSocketMock.mock.results[0]?.value;
     expect(firstSock.ws.close).toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Linked after restart; web session ready."),
+    );
     vi.runAllTimers();
     const secondSock = await createWaSocketMock.mock.results[1]?.value;
     expect(secondSock.ws.close).toHaveBeenCalled();
@@ -150,9 +153,11 @@ describe("loginWeb coverage", () => {
       output: { statusCode: 401 },
     });
 
-    await expect(loginWeb(false, waitForWaConnectionMock as never)).rejects.toThrow(
+    const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await expect(loginWeb(false, waitForWaConnectionMock as never, runtime)).rejects.toThrow(
       /cache cleared/i,
     );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("session is logged out"));
     expect(rmMock).toHaveBeenCalledWith(testState.authDir, {
       recursive: true,
       force: true,
@@ -161,8 +166,12 @@ describe("loginWeb coverage", () => {
 
   it("formats and rethrows generic errors", async () => {
     waitForWaConnectionMock.mockRejectedValueOnce(new Error("boom"));
-    await expect(loginWeb(false, waitForWaConnectionMock as never)).rejects.toThrow(
+    const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await expect(loginWeb(false, waitForWaConnectionMock as never, runtime)).rejects.toThrow(
       "formatted:Error: boom",
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("WhatsApp Web connection ended before fully opening."),
     );
     expect(formatErrorMock).toHaveBeenCalled();
   });

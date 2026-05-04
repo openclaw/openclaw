@@ -51,7 +51,7 @@ export async function loginWeb(
       },
     });
     if (result.outcome === "connected") {
-      console.log(
+      runtime.log(
         success(
           result.restarted
             ? "✅ Linked after restart; web session ready."
@@ -64,7 +64,7 @@ export async function loginWeb(
     }
 
     if (result.outcome === "logged-out") {
-      console.error(
+      runtime.error(
         danger(
           `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("openclaw channels login")} and scan the QR again.`,
         ),
@@ -74,7 +74,7 @@ export async function loginWeb(
       });
     }
 
-    console.error(danger(`WhatsApp Web connection ended before fully opening. ${result.message}`));
+    runtime.error(danger(`WhatsApp Web connection ended before fully opening. ${result.message}`));
     throw new Error(result.message, { cause: result.error });
   } finally {
     // Let Baileys flush any final events before closing the socket.
