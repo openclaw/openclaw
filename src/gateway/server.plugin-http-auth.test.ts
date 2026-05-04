@@ -684,7 +684,7 @@ describe("gateway plugin HTTP auth boundary", () => {
 
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
         expect(response.res.statusCode).toBe(503);
-        expect(response.getBody()).toContain("Control UI assets not found");
+        expect(response.getBody()).toContain("Control UI assets are missing");
       },
     });
   });

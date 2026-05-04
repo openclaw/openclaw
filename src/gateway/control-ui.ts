@@ -37,7 +37,6 @@ import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
-  respondPlainText,
 } from "./control-ui-http-utils.js";
 import { classifyControlUiRequest } from "./control-ui-routing.js";
 import {
@@ -59,8 +58,6 @@ const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
 const CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE = "assistant-media";
 const CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS = 5 * 60 * 1000;
-const CONTROL_UI_ASSETS_MISSING_MESSAGE =
-  "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
@@ -180,19 +177,96 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+function escapeHtml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function renderControlUiAssetsMissingHtml(options?: { configuredRootPath?: string }): string {
+  const configuredRoot = options?.configuredRootPath?.trim();
+  const rootDetails = configuredRoot
+    ? `<p class="detail">Configured root: <code>${escapeHtml(configuredRoot)}</code></p>`
+    : "";
+  const rootFix = configuredRoot
+    ? `<li>Update <code>gateway.controlUi.root</code> if it points at the wrong build output.</li>`
+    : "";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Control UI Assets Missing</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f7f7f5;
+      color: #1f2933;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    main {
+      width: min(680px, 100%);
+      border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, Canvas 92%, transparent);
+      padding: 28px;
+      box-shadow: 0 18px 44px color-mix(in srgb, #0f172a 12%, transparent);
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 24px;
+      line-height: 1.2;
+    }
+    p, li {
+      line-height: 1.55;
+    }
+    .detail {
+      color: color-mix(in srgb, currentColor 72%, transparent);
+    }
+    code {
+      border-radius: 6px;
+      padding: 2px 6px;
+      background: color-mix(in srgb, currentColor 10%, transparent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        background: #111827;
+        color: #f3f4f6;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Control UI assets are missing</h1>
+    <p>The Gateway is running, but the static Control UI bundle is not available yet.</p>
+    ${rootDetails}
+    <ol>
+      <li>From the OpenClaw repo, run <code>pnpm ui:build</code>.</li>
+      <li>During Control UI development, run <code>pnpm ui:dev</code> instead.</li>
+      ${rootFix}
+      <li>Refresh this page after the build finishes.</li>
+    </ol>
+  </main>
+</body>
+</html>`;
+}
+
 function respondControlUiAssetsUnavailable(
   res: ServerResponse,
   options?: { configuredRootPath?: string },
 ) {
-  if (options?.configuredRootPath) {
-    respondPlainText(
-      res,
-      503,
-      `Control UI assets not found at ${options.configuredRootPath}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`,
-    );
-    return;
-  }
-  respondPlainText(res, 503, CONTROL_UI_ASSETS_MISSING_MESSAGE);
+  res.statusCode = 503;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.end(renderControlUiAssetsMissingHtml(options));
 }
 
 function respondHeadForFile(req: IncomingMessage, res: ServerResponse, filePath: string): boolean {

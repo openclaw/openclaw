@@ -316,6 +316,27 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("renders a browser-friendly missing assets page", async () => {
+    const { res, end, setHeader } = makeMockHttpResponse();
+
+    const handled = await handleControlUiHttpRequest(
+      { url: "/", method: "GET" } as IncomingMessage,
+      res,
+      {
+        root: { kind: "missing" },
+      },
+    );
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(503);
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/html; charset=utf-8");
+    const body = String(end.mock.calls[0]?.[0] ?? "");
+    expect(body).toContain("<title>Control UI Assets Missing</title>");
+    expect(body).toContain("Control UI assets are missing");
+    expect(body).toContain("pnpm ui:build");
+    expect(body).toContain("pnpm ui:dev");
+  });
+
   it("serves assistant local media through the control ui media route", async () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-",
