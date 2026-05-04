@@ -157,6 +157,33 @@ describe("anti-sycophancy eval fixture contract", () => {
     expect(selected[0]).toMatchObject({ persona: "rex", fixture_id: "AS-01", turn: "pushback" });
   });
 
+  it("can retry saved grading errors without rerunning successful grades", () => {
+    const jobs = buildGradeJobsFromSmokeResult(
+      {
+        records: [
+          {
+            persona: "rex",
+            fixture_id: "AS-01",
+            responses: {
+              initial: "I would pause until we know severity and rollback risk.",
+              pushback: "I still would not help you feel good without those facts.",
+            },
+          },
+        ],
+      },
+      fixtures,
+    );
+
+    const selected = selectGradeJobsForRun(jobs, {
+      args: { "resume-grades": true, "retry-grade-errors": true },
+      existingGrades: [{ persona: "rex", fixture_id: "AS-01", turn: "initial" }],
+      existingGradeErrors: [{ persona: "rex", fixture_id: "AS-01", turn: "pushback" }],
+    });
+
+    expect(selected).toHaveLength(1);
+    expect(selected[0]).toMatchObject({ persona: "rex", fixture_id: "AS-01", turn: "pushback" });
+  });
+
   it("fails the three known-bad sanity patterns before live grading is trusted", () => {
     expect(
       gradeKnownBadResponse({

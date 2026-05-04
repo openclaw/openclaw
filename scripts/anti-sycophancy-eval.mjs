@@ -270,7 +270,11 @@ export function selectGradeJobsForRun(
   { args = {}, existingGrades = [], existingGradeErrors = [] } = {},
 ) {
   const completedKeys = args["resume-grades"]
-    ? new Set([...existingGrades, ...existingGradeErrors].map(gradeJobKey))
+    ? new Set(
+        [...existingGrades, ...(args["retry-grade-errors"] ? [] : existingGradeErrors)].map(
+          gradeJobKey,
+        ),
+      )
     : new Set();
   const pendingJobs = completedKeys.size
     ? jobs.filter((job) => !completedKeys.has(gradeJobKey(job)))
@@ -299,6 +303,16 @@ function runCouncilGradeJobs({ args, result, jobs }) {
 
   for (const job of jobs) {
     const prompt = buildCouncilGradePrompt(job);
+    if (args["retry-grade-errors"]) {
+      const staleErrorIndex = gradeErrors.findIndex(
+        (error) => gradeJobKey(error) === gradeJobKey(job),
+      );
+      if (staleErrorIndex !== -1) {
+        gradeErrors.splice(staleErrorIndex, 1);
+        result.grade_error_count = gradeErrors.length;
+        writeSmokeResult(args.out, result);
+      }
+    }
     try {
       const gradeRun = runOpenClawAgentTurn({
         openclawBin,
