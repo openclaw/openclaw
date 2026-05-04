@@ -157,10 +157,9 @@ export const mainLanes = [
       weight: 3,
     },
   ),
-  lane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
-    e2eImageKind: "functional",
-    live: true,
-    resources: ["live", "live:openai", "service"],
+  liveLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+    provider: "openai",
+    resources: ["service"],
     timeoutMs: OPENWEBUI_TIMEOUT_MS,
     weight: 5,
   }),
@@ -583,10 +582,9 @@ const legacyReleasePathChunks = {
 };
 
 function openWebUILane() {
-  return lane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
-    e2eImageKind: "functional",
-    live: true,
-    resources: ["live", "live:openai", "service"],
+  return liveLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+    provider: "openai",
+    resources: ["service"],
     timeoutMs: OPENWEBUI_TIMEOUT_MS,
     weight: 5,
   });
