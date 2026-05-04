@@ -83,6 +83,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/update: treat OpenClaw CalVer correction versions like `2026.5.3-1` as satisfying base plugin API ranges, so correction builds can install plugins that require the base runtime API. Fixes #77293. (#77450) Thanks @p3nchan.
 - Discord/Gateway startup: retry Discord READY waits with backoff, defer startup `sessions.list` and native approval readiness failures until sidecars recover, and preserve component-only Discord payloads when final reply scrubbing removes all text. (#77478) Thanks @NikolaFC.
 - CLI/launcher: forward termination signals to compile-cache respawn children, so killing a wrapper process no longer leaves the security audit worker orphaned. Fixes #77458. Thanks @jaikharbanda.
+- Plugins/registry: recover managed-npm external plugins from the owned npm root when a stale persisted registry would otherwise hide them after package-manager upgrades. Fixes #77266. Thanks @p3nchan.
 - fix(gateway): clamp unbound websocket auth scopes [AI]. (#77413) Thanks @pgondhi987.
 - Gate zalouser startup name matching [AI]. (#77411) Thanks @pgondhi987.
 - Active Memory: send a bounded latest-message search query to the recall worker so channel/runtime metadata does not become the memory search string. Fixes #65309. Thanks @joeykrug, @westley3601, @pimenov, and @tasi333.
