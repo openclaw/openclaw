@@ -33,7 +33,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
 
 export function tryNativeRequireJavaScriptModule(
   modulePath: string,
-  options: { allowWindows?: boolean } = {},
+  options: { allowWindows?: boolean; fallbackOnMissingDependency?: boolean } = {},
 ): { ok: true; moduleExport: unknown } | { ok: false } {
   if (process.platform === "win32" && options.allowWindows !== true) {
     return { ok: false };
@@ -44,7 +44,15 @@ export function tryNativeRequireJavaScriptModule(
   try {
     return { ok: true, moduleExport: nodeRequire(modulePath) };
   } catch (error) {
-    if (!isSourceTransformFallbackError(error, modulePath)) {
+    const code =
+      error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+    if (
+      !isSourceTransformFallbackError(error, modulePath) &&
+      !(
+        options.fallbackOnMissingDependency === true &&
+        (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND")
+      )
+    ) {
       throw error;
     }
     return { ok: false };

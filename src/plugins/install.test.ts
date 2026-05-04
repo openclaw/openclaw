@@ -985,6 +985,37 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it("rejects package installs when runtimeExtensions contains a blank entry", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-blank-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["./src/index.ts"],
+          runtimeExtensions: [" "],
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export {};\n");
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("openclaw.runtimeExtensions[0]");
+      expect(result.error).toContain("non-empty string");
+    }
+  });
+
   it("rejects package installs when runtimeSetupEntry is missing", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
