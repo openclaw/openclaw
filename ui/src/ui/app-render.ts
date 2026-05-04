@@ -15,6 +15,7 @@ import {
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
   createChatSession,
+  dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
@@ -2364,6 +2365,7 @@ export function renderApp(state: AppViewState) {
               canSend: state.connected,
               disabledReason: chatDisabledReason,
               error: state.lastError,
+              onDismissError: () => dismissChatError(state),
               sessions: state.sessionsResult,
               focusMode: chatFocus,
               autoExpandToolCalls: false,

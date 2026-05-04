@@ -348,6 +348,9 @@ describe("googlechat google auth runtime", () => {
       expect(transport.interceptors.request.add).toHaveBeenCalledWith({
         resolved: expect.any(Function),
       });
+      expect(transport.interceptors.response.add).toHaveBeenCalledWith({
+        resolved: expect.any(Function),
+      });
       expect("window" in globalThis).toBe(false);
     } finally {
       if (originalWindowDescriptor) {
@@ -367,6 +370,20 @@ describe("googlechat google auth runtime", () => {
     expect(normalized.headers).toBeInstanceOf(Headers);
     expect(normalized.headers.has("x-test")).toBe(true);
     expect(normalized.headers.get("x-test")).toBe("1");
+  });
+
+  it("normalizes Google auth response headers before upstream cache-control reads", () => {
+    const response = {
+      data: {},
+      headers: {
+        "cache-control": "public, max-age=3600",
+      },
+    };
+
+    const normalized = __testing.normalizeGoogleAuthResponseHeaders(response);
+
+    expect(normalized.headers).toBeInstanceOf(Headers);
+    expect(normalized.headers.get("cache-control")).toBe("public, max-age=3600");
   });
 
   it("rejects service-account credentials that override Google auth endpoints", async () => {

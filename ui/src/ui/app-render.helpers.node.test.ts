@@ -36,6 +36,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 
 import {
   createChatSession,
+  dismissChatError,
   isCronSessionKey,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
@@ -769,6 +770,7 @@ describe("switchChatSession", () => {
       chatQueue: [{ id: "queued", text: "message B", createdAt: 1 }],
       chatQueueBySession: {},
       chatRunId: "run-1",
+      sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set(["btw-run-1"]),
       chatStreamStartedAt: 1,
       settings,
@@ -833,6 +835,7 @@ describe("switchChatSession", () => {
       chatQueue: [{ id: "queued-1", text: "message B", createdAt: 1 }],
       chatQueueBySession: {},
       chatRunId: "run-1",
+      sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set<string>(),
       chatStreamStartedAt: 1,
       settings,
@@ -877,6 +880,7 @@ describe("switchChatSession", () => {
       chatQueue: [],
       chatQueueBySession: {},
       chatRunId: null,
+      sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set<string>(),
       chatStreamStartedAt: null,
       settings,
@@ -902,5 +906,27 @@ describe("switchChatSession", () => {
       client: state.client,
       agentId: undefined,
     });
+  });
+});
+
+describe("dismissChatError", () => {
+  it("clears persistent Talk error state", () => {
+    const state = {
+      lastError: 'Realtime voice provider "openai" is not configured',
+      lastErrorCode: "UNAVAILABLE",
+      realtimeTalkActive: false,
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
+      realtimeTalkTranscript: "partial transcript",
+    } as AppViewState;
+
+    dismissChatError(state);
+
+    expect(state.lastError).toBeNull();
+    expect(state.lastErrorCode).toBeNull();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalkTranscript).toBeNull();
   });
 });
