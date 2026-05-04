@@ -1059,6 +1059,48 @@ describe("runCodexAppServerAttempt", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
+  it("keeps native hook relays alive across startup and long Codex turn timeouts", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const abortController = new AbortController();
+    params.timeoutMs = 45 * 60_000;
+    params.abortSignal = abortController.signal;
+
+    const startedAtMs = Date.now();
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    let completed = false;
+    let relayId: string | undefined;
+    try {
+      await harness.waitForMethod("turn/start");
+
+      const startRequest = harness.requests.find((request) => request.method === "thread/start");
+      relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+      const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+      expect(registration).toBeDefined();
+      expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(140 * 60_000);
+
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      completed = true;
+      await run;
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
+      ).toBeUndefined();
+    } finally {
+      if (!completed) {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" }).catch(() => {});
+        abortController.abort(new Error("test cleanup"));
+        await run.catch(() => {});
+      }
+    }
+  });
+
   it("reuses the Codex native hook relay id across runs for the same session", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
