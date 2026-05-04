@@ -4,6 +4,7 @@ import {
   createChannelProgressDraftGate,
   DEFAULT_PROGRESS_DRAFT_LABELS,
   formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
@@ -15,6 +16,7 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
   resolveChannelStreamingNativeTransport,
+  resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   resolveChannelStreamingPreviewToolProgress,
@@ -37,6 +39,7 @@ describe("channel-streaming", () => {
         preview: {
           chunk: { minChars: 10, maxChars: 20, breakPreference: "sentence" },
           toolProgress: false,
+          commandText: "status",
         },
       },
       chunkMode: "length",
@@ -61,6 +64,7 @@ describe("channel-streaming", () => {
       breakPreference: "sentence",
     });
     expect(resolveChannelStreamingPreviewToolProgress(entry)).toBe(false);
+    expect(resolveChannelStreamingPreviewCommandText(entry)).toBe("status");
   });
 
   it("keeps progress-only tool progress config out of normal preview modes", () => {
@@ -293,6 +297,46 @@ describe("channel-streaming", () => {
         { detailMode: "raw" },
       ),
     ).toBe("🛠️ Exec: run tests, `pnpm test -- --watch=false`");
+    expect(
+      formatChannelProgressDraftLine({
+        event: "item",
+        itemKind: "command",
+        name: "exec",
+        progressText: "raw command output",
+      }),
+    ).toBe("🛠️ Exec: raw command output");
+    expect(
+      formatChannelProgressDraftLine(
+        {
+          event: "item",
+          itemKind: "command",
+          name: "exec",
+          progressText: "raw command output",
+        },
+        { commandText: "status" },
+      ),
+    ).toBe("🛠️ Exec");
+    expect(
+      formatChannelProgressDraftLine(
+        {
+          event: "tool",
+          name: "exec",
+          args: { command: "pnpm test" },
+        },
+        { detailMode: "raw", commandText: "status" },
+      ),
+    ).toBe("🛠️ Exec");
+    expect(
+      formatChannelProgressDraftLineForEntry(
+        { streaming: { preview: { commandText: "status" } } },
+        {
+          event: "item",
+          itemKind: "command",
+          name: "exec",
+          progressText: "raw command output",
+        },
+      ),
+    ).toBe("🛠️ Exec");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

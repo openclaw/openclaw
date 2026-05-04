@@ -92,6 +92,9 @@ Docs: https://docs.openclaw.ai
 - Media: treat `EPERM` from the post-write media fsync step as best-effort, allowing WebChat and channel uploads to finish on Windows filesystems that reject `fsync` after a successful write. Fixes #76844.
 - Media/Telegram: send in-limit original images when optional image optimization is unavailable, so Telegram MEDIA replies and message-tool image sends do not fail just because `sharp` is missing. Fixes #77081. (#77117) Thanks @pfrederiksen.
 - Diagnostics: include last progress, cron job/run ids, stopped cron job name, and the last assistant transcript snippet in stalled-session and stuck-session recovery logs so cron stalls show what was stopped.
+- Streaming channels: add `streaming.preview.commandText: "status"` / `streaming.progress.commandText: "status"` to hide command/exec text in preview progress lines while keeping the released raw command text default. Fixes #77072.
+- Agents/cron: let explicit cron `timeoutSeconds` drive both CLI no-output and embedded LLM idle watchdogs instead of being capped by resume defaults. Fixes #76289.
+- Plugins/catalog: suppress missing `channelConfigs` compatibility diagnostics for external channel plugins that are disabled, denied, or outside a restrictive allowlist. Fixes #76095.
 - Diagnostics: keep webhook/message OTEL attributes and Prometheus delivery labels low-cardinality and omit raw chat/message IDs from spans, so progress-draft and message-tool modes do not leak high-cardinality messaging identifiers.
 - Google Meet: stop advertising legacy `mode: "realtime"` to agents and config UIs, while keeping it as a hidden compatibility alias for `mode: "agent"`, so new joins use the STT -> OpenClaw agent -> TTS path instead of selecting the direct realtime voice fallback.
 - Google Meet: add `chrome.audioBufferBytes` for generated command-pair SoX audio commands and lower the default buffer from SoX's 8192 bytes to 4096 bytes to reduce Chrome talk-back latency.

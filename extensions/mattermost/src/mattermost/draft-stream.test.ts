@@ -256,4 +256,15 @@ describe("buildMattermostToolStatusText", () => {
       }),
     ).toBe("🛠️ Exec: run tests, `pnpm test -- --watch=false`");
   });
+
+  it("can hide raw exec detail from status text", () => {
+    expect(
+      buildMattermostToolStatusText({
+        name: "exec",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+        config: { streaming: { preview: { commandText: "status" } } },
+      }),
+    ).toBe("🛠️ Exec");
+  });
 });

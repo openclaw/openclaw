@@ -9,6 +9,7 @@ import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pi
 import {
   createChannelProgressDraftGate,
   formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
@@ -1173,7 +1174,8 @@ export const dispatchTelegramMessage = async ({
                       await statusReactionController.setTool(toolName);
                     }
                     await pushPreviewToolProgress(
-                      formatChannelProgressDraftLine(
+                      formatChannelProgressDraftLineForEntry(
+                        telegramCfg,
                         {
                           event: "tool",
                           name: toolName,
@@ -1187,7 +1189,7 @@ export const dispatchTelegramMessage = async ({
                   },
                   onItemEvent: async (payload) => {
                     await pushPreviewToolProgress(
-                      formatChannelProgressDraftLine({
+                      formatChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "item",
                         itemKind: payload.kind,
                         title: payload.title,

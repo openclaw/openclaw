@@ -1,5 +1,5 @@
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
-import { formatChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-streaming";
+import { formatChannelProgressDraftLineForEntry } from "openclaw/plugin-sdk/channel-streaming";
 import {
   createMattermostPost,
   deleteMattermostPost,
@@ -37,9 +37,11 @@ export function buildMattermostToolStatusText(params: {
   phase?: string;
   args?: Record<string, unknown>;
   detailMode?: "explain" | "raw";
+  config?: Parameters<typeof formatChannelProgressDraftLineForEntry>[0];
 }): string {
   return (
-    formatChannelProgressDraftLine(
+    formatChannelProgressDraftLineForEntry(
+      params.config,
       {
         event: "tool",
         name: params.name,
