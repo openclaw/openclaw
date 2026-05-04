@@ -1712,6 +1712,7 @@
     "playwright-core": "1.59.1",
     "proxy-agent": "^8.0.1",
     "qrcode": "1.5.4",
+    "sharp": "^0.34.5",
     "tar": "7.5.13",
     "tokenjuice": "0.7.0",
     "tree-sitter-bash": "^0.25.1",
