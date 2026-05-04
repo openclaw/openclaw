@@ -88,9 +88,9 @@ export function createWebSendApi(params: {
           };
         } else {
           // eslint-disable-next-line no-control-regex
+          const controlCharactersPattern = new RegExp("[\\x00-\\x1f\\x7f]", "g");
           const fileName =
-            sendOptions?.fileName?.replace(new RegExp("[\\x00-\\x1f\\x7f]", "g"), "").trim() ||
-            "file";
+            sendOptions?.fileName?.replace(controlCharactersPattern, "").trim() || "file";
           payload = {
             document: mediaBuffer,
             fileName,
