@@ -466,6 +466,30 @@ describe("voice-call plugin", () => {
     expect(respond.mock.calls[0]).toEqual([true, { success: true }]);
   });
 
+  it("does not fall back to one-shot TwiML speak when realtime-only speech is requested", async () => {
+    runtimeStub.config.realtime.enabled = true;
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.speak") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({
+      params: { allowTwimlFallback: false, callId: "call-1", message: "hello" },
+      respond,
+    });
+
+    expect(runtimeStub.webhookServer.speakRealtime).toHaveBeenCalledWith("call-1", "hello");
+    expect(runtimeStub.manager.speak).not.toHaveBeenCalled();
+    expect(respond.mock.calls[0]).toEqual([
+      true,
+      { success: false, error: "No active realtime bridge for call" },
+    ]);
+  });
+
   it("reports ended call history when speaking to a stale call", async () => {
     runtimeStub.manager.getCall = vi.fn(() => undefined);
     runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
