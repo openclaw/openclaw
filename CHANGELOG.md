@@ -75,6 +75,7 @@ Docs: https://docs.openclaw.ai
 - Web fetch: scope provider fallback cache entries by the selected fetch provider so config reloads cannot reuse another provider's cached fallback payload. Thanks @vincentkoc.
 - Web search: honor late-bound `tools.web.search.enabled: false` during tool execution so config reloads cannot leave an already-created `web_search` tool runnable. Thanks @vincentkoc.
 - Plugins/packages: reject inferred built runtime entries that exist but fail package-boundary checks instead of falling back to TypeScript source for installed packages. Thanks @vincentkoc.
+- ACP/server: omit the host's persisted CLI device identity when the ACP bridge connects to a trusted loopback Gateway with a preauth token or password, so a stale paired baseline no longer wedges ACP initialization in a repeated scope-upgrade approval loop. Remote URLs and unauthenticated loopback launches keep normal device identity behavior. Fixes #74650.
 - Plugins/loader: do not retry native-loaded JavaScript plugin modules through the source transformer after native evaluation has already reached a missing dependency, avoiding duplicate top-level side effects. Thanks @vincentkoc.
 - Plugins/security: stop the install scanner from blocking official bundled plugin packages when `process.env` access and normal API sends only appear in distant parts of the same compiled bundle.
 - Plugins/packages: reject blank `openclaw.runtimeExtensions` entries instead of silently ignoring them and falling back to inferred TypeScript runtime entries. Thanks @vincentkoc.

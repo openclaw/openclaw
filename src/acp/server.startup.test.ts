@@ -19,6 +19,7 @@ type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
 const mockState = vi.hoisted(() => ({
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
+  gatewayDeviceIdentity: [] as Array<null | undefined>,
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
   routeLogsToStderr: vi.fn(),
@@ -37,9 +38,12 @@ const mockState = vi.hoisted(() => ({
 class MockGatewayClient {
   private callbacks: GatewayClientCallbacks;
 
-  constructor(opts: GatewayClientCallbacks & GatewayClientAuth) {
+  constructor(
+    opts: GatewayClientCallbacks & GatewayClientAuth & { deviceIdentity?: null | undefined },
+  ) {
     this.callbacks = opts;
     mockState.gatewayAuth.push({ token: opts.token, password: opts.password });
+    mockState.gatewayDeviceIdentity.push(opts.deviceIdentity);
     mockState.gateways.push(this);
   }
 
@@ -196,6 +200,7 @@ describe("serveAcpGateway startup", () => {
   beforeEach(async () => {
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
+    mockState.gatewayDeviceIdentity.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentStart.mockReset();
     mockState.routeLogsToStderr.mockReset();
@@ -337,6 +342,83 @@ describe("serveAcpGateway startup", () => {
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
       expect(mockState.stopProxy).not.toHaveBeenCalled();
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("omits device identity for loopback shared-auth ACP launches (#74650)", async () => {
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      auth: {
+        token: "secret",
+        password: undefined,
+      },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await vi.waitFor(() => {
+        expect(mockState.gateways).toHaveLength(1);
+      });
+      expect(mockState.gatewayDeviceIdentity[0]).toBeNull();
+
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("keeps device identity for remote shared-auth ACP launches", async () => {
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "wss://gateway.example/ws",
+      urlSource: "cli --url",
+      auth: {
+        token: "secret",
+        password: undefined,
+      },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({
+        gatewayUrl: "wss://gateway.example/ws",
+      });
+      await vi.waitFor(() => {
+        expect(mockState.gateways).toHaveLength(1);
+      });
+      expect(mockState.gatewayDeviceIdentity[0]).toBeUndefined();
+
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("keeps device identity for loopback ACP launches without shared auth", async () => {
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await vi.waitFor(() => {
+        expect(mockState.gateways).toHaveLength(1);
+      });
+      expect(mockState.gatewayDeviceIdentity[0]).toBeUndefined();
+
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
     } finally {
       onceSpy.mockRestore();
     }
