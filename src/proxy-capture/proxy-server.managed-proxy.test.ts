@@ -1,25 +1,29 @@
-import { rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { assertDebugProxyDirectConnectAllowed, startDebugProxyServer } from "./proxy-server.js";
 
-const testBlobDir = ".tmp-debug-proxy-test-blobs";
-const testCertDir = ".tmp-debug-proxy-test-certs";
+let testRoot: string | undefined;
 
 async function cleanupTestDirs(): Promise<void> {
-  await Promise.all([
-    rm(testBlobDir, { recursive: true, force: true }),
-    rm(testCertDir, { recursive: true, force: true }),
-  ]);
+  if (!testRoot) {
+    return;
+  }
+  const root = testRoot;
+  testRoot = undefined;
+  await rm(root, { recursive: true, force: true });
 }
 
-function makeSettings() {
+async function makeSettings() {
+  testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-managed-proxy-"));
   return {
     enabled: true,
     required: false,
     dbPath: ":memory:",
-    blobDir: testBlobDir,
-    certDir: testCertDir,
+    blobDir: join(testRoot, "blobs"),
+    certDir: join(testRoot, "certs"),
     sessionId: "debug-proxy-managed-proxy-test",
     sourceProcess: "test",
   };
@@ -90,7 +94,7 @@ describe("debug proxy managed-proxy CONNECT policy", () => {
 
   it("rejects CONNECT upstreams before opening direct sockets while managed proxy mode is active", async () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
-    const server = await startDebugProxyServer({ settings: makeSettings() });
+    const server = await startDebugProxyServer({ settings: await makeSettings() });
     try {
       const response = await connectThroughProxy(server.proxyUrl);
 
