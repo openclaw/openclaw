@@ -127,14 +127,6 @@ export function buildRuntimeContextSystemContext(runtimeContext: string): string
   return buildRuntimeContextMessageContent({ runtimeContext, kind: "next-turn" });
 }
 
-export function buildRuntimeContextPromptSuffix(runtimeContext?: string): string {
-  const trimmed = runtimeContext?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return `\n\n${buildRuntimeContextMessageContent({ runtimeContext: trimmed, kind: "next-turn" })}`;
-}
-
 export function buildRuntimeEventSystemContext(runtimeContext: string): string {
   return buildRuntimeContextMessageContent({ runtimeContext, kind: "runtime-event" });
 }
