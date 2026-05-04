@@ -85,6 +85,18 @@ export type SessionMcpRuntime = {
   dispose: () => Promise<void>;
 };
 
+/**
+ * Caller identity fields injected as HTTP headers onto opted-in remote MCP
+ * servers when the embedded agent connects to them. Mirrors the env vars
+ * used by the CLI bundle MCP path but supplies real values directly instead
+ * of `${OPENCLAW_MCP_*}` placeholder strings.
+ */
+export type EmbeddedMcpCallerContext = {
+  agentId?: string;
+  accountId?: string;
+  messageChannel?: string;
+};
+
 /** Manager for session-scoped MCP runtimes and their idle lifecycle. */
 export type SessionMcpRuntimeManager = {
   getOrCreate: (params: {
@@ -92,6 +104,7 @@ export type SessionMcpRuntimeManager = {
     sessionKey?: string;
     workspaceDir: string;
     cfg?: OpenClawConfig;
+    callerContext?: EmbeddedMcpCallerContext;
   }) => Promise<SessionMcpRuntime>;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;

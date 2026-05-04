@@ -1542,6 +1542,11 @@ export async function runEmbeddedAttempt(
           sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
+          callerContext: {
+            agentId: params.agentId,
+            accountId: params.agentAccountId ?? undefined,
+            messageChannel: params.messageChannel,
+          },
         })
       : undefined;
     bundleMcpRuntime = bundleMcpSessionRuntime

@@ -1600,6 +1600,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Exact MCP tool names or simple '*' globs to expose from this server. When omitted, all server tools remain eligible unless excluded.",
   "mcp.servers.*.toolFilter.exclude":
     "Exact MCP tool names or simple '*' globs to hide from this server.",
+  "mcp.servers.*.injectCallerContext":
+    "When true, OpenClaw merges caller identity HTTP headers (x-openclaw-agent-id, x-openclaw-account-id, x-openclaw-message-channel, x-session-key) onto outbound requests to this server's remote URL. Requires a non-empty url on the same owner-managed entry. Default false. Only set this for MCP servers you own and trust with caller identity.",
   "mcp.servers.*.codex.agents":
     "Optional non-empty OpenClaw agent ids that should receive this MCP server in Codex app-server thread config. Empty, blank, or invalid lists fail closed; when omitted, the server is projected for all Codex app-server agents.",
   "mcp.servers.*.codex.defaultToolsApprovalMode":

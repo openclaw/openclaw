@@ -772,6 +772,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.servers.*.connectTimeout": "MCP Connect Timeout",
   "mcp.servers.*.connect_timeout": "MCP Connect Timeout",
   "mcp.servers.*.connectionTimeoutMs": "MCP Connect Timeout (ms)",
+  "mcp.servers.*.injectCallerContext": "MCP Inject Caller Context",
   "mcp.servers.*.supportsParallelToolCalls": "MCP Parallel Tool Calls",
   "mcp.servers.*.supports_parallel_tool_calls": "MCP Parallel Tool Calls",
   "mcp.servers.*.sslVerify": "MCP TLS Verification",
