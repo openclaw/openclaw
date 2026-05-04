@@ -7,6 +7,7 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   alias?: string;
+  catalogSource?: "provider-supplemental";
   contextWindow?: number;
   reasoning?: boolean;
   input?: ModelInputType[];

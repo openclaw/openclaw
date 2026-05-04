@@ -605,6 +605,7 @@ describe("loadModelCatalog", () => {
         provider: "kilocode",
         id: "google/gemini-3-pro-preview",
         name: "Gemini 3 Pro Preview",
+        catalogSource: "provider-supplemental",
       }),
     );
   });

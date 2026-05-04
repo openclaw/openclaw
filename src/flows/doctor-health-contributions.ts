@@ -432,6 +432,71 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   }
 }
 
+async function runModelAllowlistCatalogHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const rawAllowlist = Object.keys(ctx.cfg.agents?.defaults?.models ?? {}).filter((key) =>
+    key.trim(),
+  );
+  if (rawAllowlist.length === 0) {
+    return;
+  }
+
+  const { formatCliCommand } = await import("../cli/command-format.js");
+  const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
+  const { loadModelCatalog } = await import("../agents/model-catalog.js");
+  const { getModelRefStatus, resolveConfiguredModelRef } =
+    await import("../agents/model-selection.js");
+  const { note } = await import("../terminal/note.js");
+  const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
+    cfg: ctx.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const catalog = await loadModelCatalog({ config: ctx.cfg });
+  const hiddenProviderModels = catalog.filter((entry) => {
+    if (entry.catalogSource !== "provider-supplemental") {
+      return false;
+    }
+    const status = getModelRefStatus({
+      cfg: ctx.cfg,
+      catalog,
+      ref: { provider: entry.provider, model: entry.id },
+      defaultProvider,
+      defaultModel,
+    });
+    return !status.allowed;
+  });
+
+  if (hiddenProviderModels.length === 0) {
+    return;
+  }
+
+  const shownModels = hiddenProviderModels.slice(0, 10);
+  const remainingCount = hiddenProviderModels.length - shownModels.length;
+  const firstModel = shownModels[0];
+  const firstModelConfigJson = firstModel
+    ? JSON.stringify({ [`${firstModel.provider}/${firstModel.id}`]: {} })
+    : null;
+  note(
+    [
+      `${hiddenProviderModels.length} provider-supplied catalog ${hiddenProviderModels.length === 1 ? "model is" : "models are"} available but not in agents.defaults.models.`,
+      "Agents with an explicit allowlist cannot select these models until you opt in.",
+      "",
+      ...shownModels.map((entry) => `- ${entry.provider}/${entry.id}`),
+      remainingCount > 0 ? `- ... ${remainingCount} more` : null,
+      "",
+      firstModel
+        ? `To add one: ${formatCliCommand(
+            `openclaw config set agents.defaults.models '${firstModelConfigJson}' --strict-json --merge`,
+          )}`
+        : null,
+      "Review provider/cost boundaries before adding new provider-supplied models.",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    "Models",
+  );
+}
+
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
@@ -712,6 +777,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:hooks-model",
       label: "Hooks model",
       run: runHooksModelHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:model-allowlist-catalog",
+      label: "Model allowlist catalog",
+      run: runModelAllowlistCatalogHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
