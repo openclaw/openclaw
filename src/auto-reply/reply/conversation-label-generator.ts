@@ -17,6 +17,8 @@ export type ConversationLabelParams = {
   agentId?: string;
   agentDir?: string;
   maxLength?: number;
+  provider?: string;
+  model?: string;
 };
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
@@ -33,7 +35,12 @@ export async function generateConversationLabel(
     params.maxLength > 0
       ? Math.floor(params.maxLength)
       : DEFAULT_MAX_LABEL_LENGTH;
-  const modelRef = resolveDefaultModelForAgent({ cfg, agentId });
+  const effectiveProvider = params.provider;
+  const effectiveModel = params.model;
+  const modelRef =
+    effectiveProvider && effectiveModel
+      ? { provider: effectiveProvider, model: effectiveModel }
+      : resolveDefaultModelForAgent({ cfg, agentId });
   const resolved = await resolveModelAsync(modelRef.provider, modelRef.model, agentDir, cfg);
   if (!resolved.model) {
     logVerbose(

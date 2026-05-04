@@ -33,6 +33,7 @@ import type { ModelsConfig } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
+import type { SessionTitleConfig } from "./types.session-title.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
@@ -129,6 +130,7 @@ export type OpenClawConfig = {
   commands?: CommandsConfig;
   approvals?: ApprovalsConfig;
   session?: SessionConfig;
+  sessionTitle?: SessionTitleConfig;
   web?: WebConfig;
   channels?: ChannelsConfig;
   cron?: CronConfig;

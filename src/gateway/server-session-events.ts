@@ -48,6 +48,7 @@ function buildGatewaySessionSnapshot(params: {
     subagentControlScope: sessionRow.subagentControlScope,
     label: params.label ?? sessionRow.label,
     displayName: params.displayName ?? sessionRow.displayName,
+    derivedTitle: sessionRow.derivedTitle,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
