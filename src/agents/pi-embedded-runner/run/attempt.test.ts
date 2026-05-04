@@ -1,4 +1,6 @@
-import { streamSimple } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { streamSimple, type AssistantMessage } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../context-engine-capabilities.js", () => ({
@@ -128,6 +130,48 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.jobId).toBe("job-1");
     expect(context.memoryFlushWritePath).toBe("memory/log.md");
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
+  });
+});
+
+describe("reconcileAssistantTranscriptAndPreserveLastAssistant", () => {
+  it("keeps real assistant usage while appending a zero-usage transcript mirror", () => {
+    const sessionManager = SessionManager.inMemory();
+    const realLastAssistant = {
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      usage: { input: 100, output: 25, totalTokens: 125 },
+      stopReason: "toolUse",
+      timestamp: 2,
+    } as AssistantMessage;
+
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    sessionManager.appendMessage(realLastAssistant);
+    const messagesSnapshot = sessionManager
+      .getEntries()
+      .filter((entry) => entry.type === "message")
+      .map((entry) => (entry as { message: AgentMessage }).message);
+
+    const preserved = attemptTesting.reconcileAssistantTranscriptAndPreserveLastAssistant({
+      sessionManager,
+      mutableMessagesSnapshot: messagesSnapshot,
+      prePromptMessageCount: 0,
+      assistantTexts: ["Final answer delivered after the tool call."],
+      api: "openai-responses",
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      lastAssistant: realLastAssistant,
+    });
+
+    const mirror = messagesSnapshot.at(-1) as AssistantMessage;
+    expect(preserved).toBe(realLastAssistant);
+    expect(preserved?.usage).toEqual(realLastAssistant.usage);
+    expect((preserved?.usage as { totalTokens?: number }).totalTokens).toBe(125);
+    expect(mirror).not.toBe(realLastAssistant);
+    expect(JSON.stringify(mirror.content)).toContain("Final answer delivered");
+    expect((mirror.usage as { totalTokens?: number }).totalTokens).toBe(0);
   });
 });
 

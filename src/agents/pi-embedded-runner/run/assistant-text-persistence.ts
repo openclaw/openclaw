@@ -30,7 +30,7 @@ function persistedTextCoversAssistantText(persisted: string, candidate: string):
   if (candidateNormalized.length <= SHORT_SUBSTRING_COVERAGE_MAX_LENGTH) {
     return normalizedTextSegments(persisted).includes(candidateNormalized);
   }
-  return candidateNormalized.length >= 20 && persistedNormalized.includes(candidateNormalized);
+  return persistedNormalized.includes(candidateNormalized);
 }
 
 function toPersistableAssistantText(text: string): string | undefined {

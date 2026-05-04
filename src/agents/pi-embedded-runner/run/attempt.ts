@@ -784,9 +784,32 @@ async function cancelQueuedSteeringMessage(
 
 export const testing = {
   cancelQueuedSteeringMessage,
+  reconcileAssistantTranscriptAndPreserveLastAssistant,
   resolveAttemptStreamAuthProfileId,
   steerAndWaitForTranscriptCommit,
 };
+
+function reconcileAssistantTranscriptAndPreserveLastAssistant(params: {
+  sessionManager: Pick<SessionManager, "appendMessage">;
+  mutableMessagesSnapshot: AgentMessage[];
+  prePromptMessageCount: number;
+  assistantTexts: readonly string[];
+  api: AssistantMessage["api"];
+  provider: string;
+  modelId: string;
+  lastAssistant: AssistantMessage | undefined;
+}): AssistantMessage | undefined {
+  reconcileAssistantTextsWithTranscript({
+    sessionManager: params.sessionManager,
+    mutableMessagesSnapshot: params.mutableMessagesSnapshot,
+    prePromptMessageCount: params.prePromptMessageCount,
+    assistantTexts: params.assistantTexts,
+    api: params.api,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+  return params.lastAssistant;
+}
 
 function resolveAttemptStreamAuthProfileId(
   params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">,
@@ -3190,9 +3213,8 @@ export async function runEmbeddedAttempt(
         prompt: string,
         options?: Parameters<typeof activeSession.prompt>[1],
       ): Promise<void> =>
-        withOwnedSessionTranscriptWrites(
-          ownedTranscriptWriteContext,
-          async () => abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
+        withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
+          abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
         );
       const onBlockReply = params.onBlockReply
         ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReply)
@@ -4322,18 +4344,16 @@ export async function runEmbeddedAttempt(
             !timedOutDuringCompaction &&
             !compactionOccurredThisAttempt
           ) {
-            const reconciledAssistant = reconcileAssistantTextsWithTranscript({
-              sessionManager,
+            lastAssistant = reconcileAssistantTranscriptAndPreserveLastAssistant({
+              sessionManager: activeSessionManager,
               mutableMessagesSnapshot: messagesSnapshot,
               prePromptMessageCount,
               assistantTexts,
               api: params.model.api,
               provider: params.provider,
               modelId: params.modelId,
+              lastAssistant,
             });
-            if (reconciledAssistant) {
-              lastAssistant = reconciledAssistant;
-            }
           }
           cacheBreak = cacheObservabilityEnabled
             ? completePromptCacheObservation({
