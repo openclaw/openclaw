@@ -884,13 +884,15 @@ export async function runPreparedReply(
     };
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
-  const shouldSteer = !effectiveResetTriggered && resolvedQueue.mode !== "interrupt";
+  const isHeartbeatRun = opts?.isHeartbeat === true;
+  const shouldSteer =
+    !isHeartbeatRun && !effectiveResetTriggered && resolvedQueue.mode !== "interrupt";
   const shouldFollowup =
     !effectiveResetTriggered &&
     (resolvedQueue.mode === "followup" || resolvedQueue.mode === "collect");
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
-    isHeartbeat: opts?.isHeartbeat === true,
+    isHeartbeat: isHeartbeatRun,
     shouldFollowup,
     queueMode: activeRunQueueMode,
     resetTriggered: effectiveResetTriggered,

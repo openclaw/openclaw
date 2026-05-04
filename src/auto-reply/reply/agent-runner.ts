@@ -961,10 +961,10 @@ export async function runReplyAgent(params: {
   let activeIsNewSession = isNewSession;
   const effectiveResetTriggered = resetTriggered === true;
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
-  const effectiveShouldSteer = !effectiveResetTriggered && shouldSteer;
-  const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
+  const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
