@@ -32,6 +32,7 @@ type GuardedCurrentTabRouteCase = {
     | "getNetworkRequestsViaPlaywright"
     | "responseBodyViaPlaywright"
     | "storageGetViaPlaywright"
+    | "takeScreenshotViaPlaywright"
     | "traceStartViaPlaywright"
     | "traceStopViaPlaywright";
 };
@@ -57,6 +58,12 @@ const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
     path: "/pdf",
     body: { targetId: "abcd1234" },
     mockName: "pdfViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/screenshot",
+    body: { targetId: "abcd1234" },
+    mockName: "takeScreenshotViaPlaywright",
   },
   {
     method: "POST",
