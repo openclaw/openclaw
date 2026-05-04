@@ -1090,6 +1090,7 @@ Docs: https://docs.openclaw.ai
 - Active Memory docs: document the `cacheTtlMs` 1000-120000 ms range and 15000 ms default so setup snippets do not lead users past the schema limit. Fixes #65708. (#65737) Thanks @WuKongAI-CMU.
 - fix(agents): canonicalize provider aliases in byProvider tool policy lookup [AI]. (#72917) Thanks @pgondhi987.
 - fix(security): block npm_execpath injection from workspace .env [AI-assisted]. (#73262) Thanks @pgondhi987.
+- Gateway/Control UI: match custom-scheme browser origins such as `tauri://localhost` against explicit `gateway.controlUi.allowedOrigins` entries, so desktop wrappers do not need wildcard origins. Fixes #46520. Thanks @mosidevv.
 - Tools/web_fetch: decode response bodies from raw bytes using declared HTTP, XML, or HTML meta charsets before extraction, so Shift_JIS and other legacy-charset pages no longer return mojibake. Fixes #72916. Thanks @amknight.
 - Active Memory: skip payload-less `memory_search` transcript tool results when building debug telemetry, so newer empty entries no longer hide the latest useful debug payload. (#68773) Thanks @SimbaKingjoe.
 - Active Memory: keep recall setup time from consuming the configured model timeout while giving the hook runner an explicit bounded budget for the plugin, so slow embedded-run setup no longer causes immediate recall timeouts. Fixes #72606. (#72620) Thanks @hyspacex.
