@@ -248,6 +248,62 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("keeps low timeoutSeconds above the outbound request guard", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 10 },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 60 }),
+      }),
+    );
+  });
+
+  it("keeps polling client timeout above the outbound request guard", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 10 },
+      },
+    });
+    createTelegramBot({ token: "tok", minimumClientTimeoutSeconds: 45 });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 60 }),
+      }),
+    );
+  });
+
+  it("passes startup probe botInfo to grammY", () => {
+    const botInfo = {
+      id: 123456,
+      is_bot: true,
+      first_name: "OpenClaw",
+      username: "openclaw_bot",
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      can_manage_bots: false,
+      supports_inline_queries: false,
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+    } as const;
+
+    createTelegramBot({ token: "tok", botInfo });
+
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        botInfo,
+      }),
+    );
+  });
+
   it("normalizes full Telegram bot endpoint apiRoot before passing it to grammY", () => {
     loadConfig.mockReturnValue({
       channels: {
@@ -2207,6 +2263,9 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
 
     expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
+    expect(setMyCommandsSpy).toHaveBeenCalledWith([], {
+      scope: { type: "all_group_chats" },
+    });
   });
   it("handles requireMention when mentions do and do not resolve", async () => {
     const cases = [
@@ -3709,7 +3768,7 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(String(editMessageTextSpy.mock.calls.at(-1)?.[2] ?? "")).toContain(
-      "This model will be used for your next message.",
+      "Session-only selection. The agent default in openclaw.json is unchanged",
     );
     expect(
       editMessageTextSpy.mock.calls.some((call) =>

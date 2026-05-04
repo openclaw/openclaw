@@ -162,8 +162,18 @@ export const tr: TranslationMap = {
     store: "Depo: {path}",
     active: "Etkin",
     limit: "Sınır",
+    filters: "Filtreler",
+    showFilters: "Filtreleri göster",
+    hideFilters: "Filtreleri gizle",
+    sourceFilters: "Oturum kaynağı filtreleri",
     global: "Genel",
     unknown: "Bilinmiyor",
+    showArchived: "Arşivlenmişleri göster",
+    activeTooltip: "Son {count} dakika içinde güncellendi.",
+    limitTooltip: "Yüklenecek maksimum oturum sayısı.",
+    globalTooltip: "Genel oturumları dahil et.",
+    unknownTooltip: "Bilinmeyen oturumları dahil et.",
+    showArchivedTooltip: "Arşivlenmiş oturumları dahil et.",
     minutesPlaceholder: "dk",
     searchPlaceholder: "Anahtara, ajana, etikete, türe göre filtrele…",
     selected: "{count} seçildi",
@@ -182,6 +192,8 @@ export const tr: TranslationMap = {
     verbose: "Ayrıntılı",
     reasoning: "Akıl yürütme",
     noSessions: "Oturum bulunamadı.",
+    noSessionsMatchFilters: "Filtrelerinizle eşleşen oturum yok.",
+    showAll: "Tümünü göster",
     inherit: "devral",
     defaultOption: "Varsayılan ({value})",
     offExplicit: "kapalı (açıkça)",
@@ -729,6 +741,16 @@ export const tr: TranslationMap = {
       dailyCsv: "Günlük CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Kullanım önbelleği arka planda yeniden oluşturuluyor. Görüntülenen toplamlar güncel olmayabilir.",
+      title: "{status}: {pending} beklemede, {stale} güncel değil, {cached} önbellekte",
+      status: {
+        refreshing: "yenileniyor",
+        stale: "güncel değil",
+        partial: "kısmi",
+      },
+    },
     empty: {
       title: "Bir tarih aralığıyla başlayın",
       subtitle:
@@ -918,6 +940,7 @@ export const tr: TranslationMap = {
     updating: "Güncelleniyor…",
     updateNow: "Şimdi güncelle",
     dismissUpdateBanner: "Güncelleme başlığını kapat",
+    switchedSession: "{session} oturumuna geçildi",
   },
   languages: {
     en: "İngilizce",

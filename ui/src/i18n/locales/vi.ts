@@ -160,8 +160,18 @@ export const vi: TranslationMap = {
     store: "Kho lưu trữ: {path}",
     active: "Đang hoạt động",
     limit: "Giới hạn",
+    filters: "Bộ lọc",
+    showFilters: "Hiển thị bộ lọc",
+    hideFilters: "Ẩn bộ lọc",
+    sourceFilters: "Bộ lọc nguồn phiên",
     global: "Toàn cục",
     unknown: "Không rõ",
+    showArchived: "Hiển thị đã lưu trữ",
+    activeTooltip: "Đã cập nhật trong {count} phút gần đây.",
+    limitTooltip: "Số phiên tối đa cần tải.",
+    globalTooltip: "Bao gồm các phiên toàn cục.",
+    unknownTooltip: "Bao gồm các phiên không xác định.",
+    showArchivedTooltip: "Bao gồm các phiên đã lưu trữ.",
     minutesPlaceholder: "phút",
     searchPlaceholder: "Lọc theo khóa, agent, nhãn, loại…",
     selected: "Đã chọn {count}",
@@ -180,6 +190,8 @@ export const vi: TranslationMap = {
     verbose: "Chi tiết",
     reasoning: "Suy luận",
     noSessions: "Không tìm thấy phiên nào.",
+    noSessionsMatchFilters: "Không có phiên nào khớp với bộ lọc của bạn.",
+    showAll: "Hiển thị tất cả",
     inherit: "kế thừa",
     defaultOption: "Mặc định ({value})",
     offExplicit: "tắt (rõ ràng)",
@@ -721,6 +733,16 @@ export const vi: TranslationMap = {
       dailyCsv: "CSV hằng ngày",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Bộ nhớ đệm mức sử dụng đang được xây dựng lại trong nền. Tổng số hiển thị có thể đã lỗi thời.",
+      title: "{status}: {pending} đang chờ, {stale} lỗi thời, {cached} đã lưu vào bộ nhớ đệm",
+      status: {
+        refreshing: "đang làm mới",
+        stale: "lỗi thời",
+        partial: "một phần",
+      },
+    },
     empty: {
       title: "Bắt đầu bằng một khoảng ngày",
       subtitle:
@@ -910,6 +932,7 @@ export const vi: TranslationMap = {
     updating: "Đang cập nhật…",
     updateNow: "Cập nhật ngay",
     dismissUpdateBanner: "Bỏ qua banner cập nhật",
+    switchedSession: "Đã chuyển sang {session}",
   },
   languages: {
     en: "English (Tiếng Anh)",

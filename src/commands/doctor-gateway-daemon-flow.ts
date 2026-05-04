@@ -199,9 +199,16 @@ export async function maybeRepairGatewayDaemon(params: {
         {
           message: "Install gateway service now?",
           initialValue: true,
+          requiresInteractiveConfirmation: true,
         },
         serviceRepairPolicy,
       );
+      if (!install) {
+        note(
+          `Run ${formatCliCommand("openclaw gateway install")} when you want to install the gateway service.`,
+          "Gateway",
+        );
+      }
       if (install) {
         const daemonRuntime = await params.prompter.select<GatewayDaemonRuntime>(
           {
@@ -230,13 +237,14 @@ export async function maybeRepairGatewayDaemon(params: {
           return;
         }
         const port = resolveGatewayPort(params.cfg, process.env);
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port,
-          runtime: daemonRuntime,
-          warn: (message, title) => note(message, title),
-          config: params.cfg,
-        });
+        const { programArguments, workingDirectory, environment, environmentValueSources } =
+          await buildGatewayInstallPlan({
+            env: process.env,
+            port,
+            runtime: daemonRuntime,
+            warn: (message, title) => note(message, title),
+            config: params.cfg,
+          });
         try {
           await service.install({
             env: process.env,
@@ -244,6 +252,7 @@ export async function maybeRepairGatewayDaemon(params: {
             programArguments,
             workingDirectory,
             environment,
+            environmentValueSources,
           });
         } catch (err) {
           note(`Gateway service install failed: ${String(err)}`, "Gateway");

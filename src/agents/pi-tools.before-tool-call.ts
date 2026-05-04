@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import {
   diagnosticErrorCategory,
@@ -31,6 +32,7 @@ import { callGatewayTool } from "./tools/gateway.js";
 
 export type HookContext = {
   agentId?: string;
+  config?: OpenClawConfig;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
@@ -399,6 +401,7 @@ export async function runBeforeToolCallHook(args: {
   toolCallId?: string;
   ctx?: HookContext;
   signal?: AbortSignal;
+  approvalMode?: "request" | "report";
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
@@ -436,7 +439,7 @@ export async function runBeforeToolCallHook(args: {
         });
         return {
           blocked: true,
-          kind: "failure",
+          kind: "veto",
           deniedReason: "tool-loop",
           reason: loopResult.message,
           params,
@@ -490,6 +493,7 @@ export async function runBeforeToolCallHook(args: {
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
       },
       toolContext,
+      args.ctx?.config ? { config: args.ctx.config } : undefined,
     );
     if (trustedPolicyResult?.block) {
       return {
@@ -501,6 +505,18 @@ export async function runBeforeToolCallHook(args: {
       };
     }
     if (trustedPolicyResult?.requireApproval) {
+      if (args.approvalMode === "report") {
+        return {
+          blocked: true,
+          kind: "failure",
+          deniedReason: "plugin-approval",
+          reason:
+            trustedPolicyResult.requireApproval.description ||
+            trustedPolicyResult.requireApproval.title ||
+            "Plugin approval required",
+          params,
+        };
+      }
       return await requestPluginToolApproval({
         approval: trustedPolicyResult.requireApproval,
         toolName,
@@ -537,6 +553,18 @@ export async function runBeforeToolCallHook(args: {
     }
 
     if (hookResult?.requireApproval) {
+      if (args.approvalMode === "report") {
+        return {
+          blocked: true,
+          kind: "failure",
+          deniedReason: "plugin-approval",
+          reason:
+            hookResult.requireApproval.description ||
+            hookResult.requireApproval.title ||
+            "Plugin approval required",
+          params: policyAdjustedParams,
+        };
+      }
       return await requestPluginToolApproval({
         approval: hookResult.requireApproval,
         toolName,

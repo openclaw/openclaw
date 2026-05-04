@@ -145,7 +145,8 @@ export type MediaToolsConfig = {
   concurrency?: number;
   asyncCompletion?: {
     /**
-     * Enable direct channel sends for completed async media generation tasks.
+     * Enable direct channel sends for async media generation tasks that support
+     * direct completion delivery. Music generation stays requester-session mediated.
      * Default: false.
      */
     directSend?: boolean;
@@ -575,6 +576,8 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy enforces outbound policy. */
+      useTrustedEnvProxy?: boolean;
       /** SSRF policy configuration for web_fetch. */
       ssrfPolicy?: {
         /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */

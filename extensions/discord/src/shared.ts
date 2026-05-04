@@ -31,7 +31,7 @@ import {
 import { discordSecurityAdapter } from "./security.js";
 import { deriveLegacySessionChatType } from "./session-contract.js";
 
-export const DISCORD_CHANNEL = "discord" as const;
+const DISCORD_CHANNEL = "discord" as const;
 
 type DiscordDoctorModule = typeof import("./doctor.js");
 type DiscordConfigAccessorAccount = {
@@ -156,6 +156,7 @@ export function createDiscordPluginBase(params: {
           configured: Boolean(account.token?.trim()),
           extra: {
             tokenSource: account.tokenSource,
+            tokenStatus: account.tokenStatus,
           },
         }),
     },

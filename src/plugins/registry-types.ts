@@ -30,6 +30,7 @@ import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { PluginDependencyStatus } from "./status-dependencies.js";
 import type {
   CliBackendPlugin,
   ImageGenerationProviderPlugin,
@@ -68,6 +69,7 @@ export type PluginToolRegistration = {
   pluginName?: string;
   factory: OpenClawPluginToolFactory;
   names: string[];
+  declaredNames?: string[];
   optional: boolean;
   source: string;
   rootDir?: string;
@@ -325,6 +327,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  packageName?: string;
   description?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
@@ -376,6 +379,7 @@ export type PluginRecord = {
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
   memorySlotSelected?: boolean;
+  dependencyStatus?: PluginDependencyStatus;
 };
 
 export type PluginRegistry = {
@@ -403,6 +407,7 @@ export type PluginRegistry = {
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
+  coreGatewayMethodNames?: string[];
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
   cliRegistrars: PluginCliRegistration[];

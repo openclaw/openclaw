@@ -191,6 +191,7 @@ export type {
 export type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
+  CliBackendNativeToolMode,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
   CliBackendPlugin,
@@ -260,6 +261,7 @@ export type {
   WebSearchProviderPlugin,
   WebSearchProviderSetupContext,
   WebSearchProviderToolDefinition,
+  WebSearchProviderToolExecutionContext,
   WebSearchRuntimeMetadataContext,
 } from "./web-provider-types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -1170,6 +1172,7 @@ export type ProviderSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
+  trigger?: "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 };
 
 export type ProviderTransformSystemPromptContext = ProviderSystemPromptContributionContext & {
@@ -1810,6 +1813,7 @@ export type RealtimeTranscriptionProviderPlugin = {
   id: RealtimeTranscriptionProviderId;
   label: string;
   aliases?: string[];
+  defaultModel?: string;
   autoSelectOrder?: number;
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
@@ -1827,6 +1831,7 @@ export type RealtimeVoiceProviderPlugin = {
   id: RealtimeVoiceProviderId;
   label: string;
   aliases?: string[];
+  defaultModel?: string;
   autoSelectOrder?: number;
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
@@ -1962,13 +1967,20 @@ export type OpenClawPluginCommandDefinition = {
   };
   /** Description shown in /help and command menus */
   description: string;
+  /** Localized descriptions for native command surfaces that support them. */
+  descriptionLocalizations?: Record<string, string>;
+  /**
+   * Optional channel ids this command belongs to.
+   * Omit to keep the command available on every channel surface.
+   */
+  channels?: readonly string[];
   /** Optional system-prompt guidance for agents when this command is registered. */
   agentPromptGuidance?: readonly string[];
   /** Whether this command accepts arguments */
   acceptsArgs?: boolean;
   /** Whether only authorized senders can use this command (default: true) */
   requireAuth?: boolean;
-  /** Gateway operator scopes required when invoked through an internal gateway client. */
+  /** Operator scopes required by gateway clients; command owners may satisfy this on chat surfaces. */
   requiredScopes?: OperatorScope[];
   /**
    * Allows a bundled plugin to claim a command name that is otherwise reserved
@@ -2216,6 +2228,7 @@ export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPlu
  *
  * - `full`: live runtime activation; long-lived side effects may start.
  * - `discovery`: read-only capability discovery; skip sockets/workers/clients.
+ * - `tool-discovery`: capability discovery for executable tools; skip channel runtime hydration.
  * - `setup-only`: lightweight channel setup entry only.
  * - `setup-runtime`: setup flow that also needs the runtime channel entry.
  * - `cli-metadata`: CLI command metadata collection.
@@ -2223,6 +2236,7 @@ export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPlu
 export type PluginRegistrationMode =
   | "full"
   | "discovery"
+  | "tool-discovery"
   | "setup-only"
   | "setup-runtime"
   | "cli-metadata";

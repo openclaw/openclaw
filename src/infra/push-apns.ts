@@ -1,6 +1,5 @@
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
 import fs from "node:fs/promises";
-import http2 from "node:http2";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -10,19 +9,19 @@ import {
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import { APNS_HTTP2_CANCEL_CODE, connectApnsHttp2Session } from "./push-apns-http2.js";
 import {
   type ApnsRelayConfig,
-  type ApnsRelayConfigResolution,
   type ApnsRelayPushResponse,
   type ApnsRelayRequestSender,
   resolveApnsRelayConfigFromEnv,
   sendApnsRelayPush,
 } from "./push-apns.relay.js";
 
-export type ApnsEnvironment = "sandbox" | "production";
-export type ApnsTransport = "direct" | "relay";
+type ApnsEnvironment = "sandbox" | "production";
+type ApnsTransport = "direct" | "relay";
 
-export type DirectApnsRegistration = {
+type DirectApnsRegistration = {
   nodeId: string;
   transport: "direct";
   token: string;
@@ -31,7 +30,7 @@ export type DirectApnsRegistration = {
   updatedAtMs: number;
 };
 
-export type RelayApnsRegistration = {
+type RelayApnsRegistration = {
   nodeId: string;
   transport: "relay";
   relayHandle: string;
@@ -52,9 +51,7 @@ export type ApnsAuthConfig = {
   privateKey: string;
 };
 
-export type ApnsAuthConfigResolution =
-  | { ok: true; value: ApnsAuthConfig }
-  | { ok: false; error: string };
+type ApnsAuthConfigResolution = { ok: true; value: ApnsAuthConfig } | { ok: false; error: string };
 
 export type ApnsPushResult = {
   ok: boolean;
@@ -67,8 +64,8 @@ export type ApnsPushResult = {
   transport: ApnsTransport;
 };
 
-export type ApnsPushAlertResult = ApnsPushResult;
-export type ApnsPushWakeResult = ApnsPushResult;
+type ApnsPushAlertResult = ApnsPushResult;
+type ApnsPushWakeResult = ApnsPushResult;
 
 const EXEC_APPROVAL_GENERIC_ALERT_BODY = "Open OpenClaw to review this request.";
 const EXEC_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.exec-approval";
@@ -661,8 +658,12 @@ async function sendApnsRequest(params: {
   const body = JSON.stringify(params.payload);
   const requestPath = `/3/device/${params.token}`;
 
+  const client = await connectApnsHttp2Session({
+    authority,
+    timeoutMs: params.timeoutMs,
+  });
+
   return await new Promise((resolve, reject) => {
-    const client = http2.connect(authority);
     let settled = false;
     const fail = (err: unknown) => {
       if (settled) {
@@ -701,7 +702,7 @@ async function sendApnsRequest(params: {
 
     req.setEncoding("utf8");
     req.setTimeout(params.timeoutMs, () => {
-      req.close(http2.constants.NGHTTP2_CANCEL);
+      req.close(APNS_HTTP2_CANCEL_CODE);
       fail(new Error(`APNs request timed out after ${params.timeoutMs}ms`));
     });
     req.on("response", (headers) => {
@@ -1155,4 +1156,4 @@ export async function sendApnsExecApprovalResolvedWake(
   });
 }
 
-export { type ApnsRelayConfig, type ApnsRelayConfigResolution, resolveApnsRelayConfigFromEnv };
+export { type ApnsRelayConfig, resolveApnsRelayConfigFromEnv };

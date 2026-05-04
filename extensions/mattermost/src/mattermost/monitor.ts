@@ -1,13 +1,19 @@
 import { deliverFinalizableDraftPreview } from "openclaw/plugin-sdk/channel-lifecycle";
+import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-streaming";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
+import {
+  resolveMattermostAccount,
+  resolveMattermostReplyToMode,
+  type ResolvedMattermostAccount,
+} from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostMe,
@@ -36,6 +42,7 @@ import {
 import {
   authorizeMattermostCommandInvocation,
   isMattermostSenderAllowed,
+  normalizeMattermostAllowEntry,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import {
@@ -111,6 +118,20 @@ export type MonitorMattermostOpts = {
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
   webSocketFactory?: MattermostWebSocketFactory;
 };
+
+export function shouldUpdateMattermostDraftToolProgress(
+  account: Pick<ResolvedMattermostAccount, "config" | "streamingMode">,
+): boolean {
+  return (
+    account.streamingMode !== "off" && resolveChannelStreamingPreviewToolProgress(account.config)
+  );
+}
+
+export function shouldSuppressMattermostDefaultToolProgressMessages(
+  account: Pick<ResolvedMattermostAccount, "streamingMode">,
+): boolean {
+  return account.streamingMode !== "off";
+}
 
 type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
@@ -278,6 +299,20 @@ export function shouldFinalizeMattermostPreviewAfterDispatch(params: {
 type MattermostDraftPreviewState = {
   finalizedViaPreviewPost: boolean;
 };
+
+function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermostDraftStream> {
+  const noopAsync = async () => {};
+  return {
+    update: () => {},
+    flush: noopAsync,
+    postId: () => undefined,
+    clear: noopAsync,
+    discardPending: noopAsync,
+    seal: noopAsync,
+    stop: noopAsync,
+    forceNewMessage: () => {},
+  };
+}
 
 type MattermostDraftPreviewDeliverParams = {
   payload: ReplyPayload;
@@ -1568,6 +1603,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           OriginatingTo: to,
           ...mediaPayload,
         });
+        const pinnedMainDmOwner =
+          kind === "direct"
+            ? resolvePinnedMainDmOwnerFromAllowlist({
+                dmScope: cfg.session?.dmScope,
+                allowFrom: account.config.allowFrom,
+                normalizeEntry: normalizeMattermostAllowEntry,
+              })
+            : null;
 
         const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
           agentId: route.agentId,
@@ -1609,14 +1652,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           },
         });
-        const draftStream = createMattermostDraftStream({
-          client,
-          channelId,
-          rootId: effectiveReplyToId,
-          throttleMs: 1200,
-          log: logVerboseMessage,
-          warn: logVerboseMessage,
-        });
+        const draftPreviewEnabled = account.streamingMode !== "off";
+        const draftToolProgressEnabled = shouldUpdateMattermostDraftToolProgress(account);
+        const suppressDefaultToolProgressMessages =
+          shouldSuppressMattermostDefaultToolProgressMessages(account);
+        const draftStream = draftPreviewEnabled
+          ? createMattermostDraftStream({
+              client,
+              channelId,
+              rootId: effectiveReplyToId,
+              throttleMs: 1200,
+              log: logVerboseMessage,
+              warn: logVerboseMessage,
+            })
+          : createDisabledMattermostDraftStream();
         let lastPartialText = "";
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
@@ -1748,6 +1797,23 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           channel: "mattermost",
                           to,
                           accountId: route.accountId,
+                          mainDmOwnerPin: pinnedMainDmOwner
+                            ? {
+                                ownerRecipient: pinnedMainDmOwner,
+                                senderRecipient: normalizeMattermostAllowEntry(senderId),
+                                onSkip: ({
+                                  ownerRecipient,
+                                  senderRecipient,
+                                }: {
+                                  ownerRecipient: string;
+                                  senderRecipient: string;
+                                }) => {
+                                  logVerboseMessage(
+                                    `mattermost: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                                  );
+                                },
+                              }
+                            : undefined,
                         }
                       : undefined,
                   onRecordError: (err) => {
@@ -1786,9 +1852,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                         replyOptions: {
                           ...replyOptions,
                           disableBlockStreaming: true,
+                          ...(suppressDefaultToolProgressMessages
+                            ? { suppressDefaultToolProgressMessages: true }
+                            : {}),
                           onModelSelected,
                           onPartialReply: (payload) => {
-                            updateDraftFromPartial(payload.text);
+                            if (account.streamingMode !== "progress") {
+                              updateDraftFromPartial(payload.text);
+                            }
                           },
                           onAssistantMessageStart: () => {
                             lastPartialText = "";
@@ -1802,7 +1873,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             }
                           },
                           onToolStart: async (payload) => {
-                            draftStream.update(buildMattermostToolStatusText(payload));
+                            if (!draftToolProgressEnabled) {
+                              return;
+                            }
+                            draftStream.update(
+                              buildMattermostToolStatusText({
+                                ...payload,
+                                config: account.config,
+                              }),
+                            );
                           },
                         },
                       }),

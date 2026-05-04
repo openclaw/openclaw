@@ -60,7 +60,7 @@ async function writeWizardConfigFile(config: OpenClawConfig): Promise<OpenClawCo
     commit: async (nextConfig, writeOptions) => {
       await replaceConfigFile({
         nextConfig,
-        ...(writeOptions ? { writeOptions } : {}),
+        writeOptions: { ...writeOptions, allowConfigSizeDrop: true },
         afterWrite: { mode: "auto" },
       });
     },
@@ -740,6 +740,7 @@ export async function runSetupWizard(
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+    skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
 
   if (opts.skipSearch) {
@@ -761,6 +762,13 @@ export async function runSetupWizard(
 
   // Plugin configuration (sandbox backends, tool plugins, etc.)
   if (flow !== "quickstart") {
+    const { setupOfficialPluginInstalls } = await import("./setup.official-plugins.js");
+    nextConfig = await setupOfficialPluginInstalls({
+      config: nextConfig,
+      prompter,
+      runtime,
+      workspaceDir,
+    });
     const { setupPluginConfig } = await import("./setup.plugin-config.js");
     nextConfig = await setupPluginConfig({
       config: nextConfig,

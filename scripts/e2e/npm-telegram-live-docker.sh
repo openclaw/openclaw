@@ -41,10 +41,10 @@ resolve_credential_role() {
 
 validate_openclaw_package_spec() {
   local spec="$1"
-  if [[ "$spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
+  if [[ "$spec" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
     return 0
   fi
-  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $spec" >&2
+  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $spec" >&2
   exit 1
 }
 
@@ -88,17 +88,70 @@ if [ -z "$PACKAGE_LABEL" ]; then
   fi
 fi
 
+credential_source="$(resolve_credential_source)"
+credential_role="$(resolve_credential_role)"
+if [ -z "$credential_role" ] && [ -n "${CI:-}" ] && [ "$credential_source" = "convex" ]; then
+  credential_role="ci"
+fi
+
+validate_credential_preflight() {
+  if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_CREDENTIAL_PREFLIGHT:-0}" = "1" ]; then
+    return 0
+  fi
+  if [ "$credential_source" = "convex" ]; then
+    if [ -z "${OPENCLAW_QA_CONVEX_SITE_URL:-}" ]; then
+      echo "Missing required env for Convex credential mode: OPENCLAW_QA_CONVEX_SITE_URL" >&2
+      exit 1
+    fi
+    if [ "$credential_role" = "ci" ]; then
+      if [ -z "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ]; then
+        echo "Missing required env for Convex ci credential mode: OPENCLAW_QA_CONVEX_SECRET_CI" >&2
+        exit 1
+      fi
+      return 0
+    fi
+    if [ "$credential_role" = "maintainer" ]; then
+      if [ -z "${OPENCLAW_QA_CONVEX_SECRET_MAINTAINER:-}" ]; then
+        echo "Missing required env for Convex maintainer credential mode: OPENCLAW_QA_CONVEX_SECRET_MAINTAINER" >&2
+        exit 1
+      fi
+      return 0
+    fi
+    if [ -z "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ] && [ -z "${OPENCLAW_QA_CONVEX_SECRET_MAINTAINER:-}" ]; then
+      echo "Missing required env for Convex credential mode: OPENCLAW_QA_CONVEX_SECRET_CI or OPENCLAW_QA_CONVEX_SECRET_MAINTAINER" >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  local missing=()
+  for key in \
+    OPENCLAW_QA_TELEGRAM_GROUP_ID \
+    OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN \
+    OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN; do
+    if [ -z "${!key:-}" ]; then
+      missing+=("$key")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    {
+      echo "Missing required Telegram QA credential env before Docker work: ${missing[*]}"
+      echo "Use one of:"
+      echo "  direct Telegram env: OPENCLAW_QA_TELEGRAM_GROUP_ID, OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN, OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"
+      echo "  Convex env: OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex plus OPENCLAW_QA_CONVEX_SITE_URL and a role secret"
+    } >&2
+    exit 1
+  fi
+}
+
+validate_credential_preflight
+
 docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-telegram-live.XXXXXX")"
 npm_prefix_host="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-prefix.XXXXXX")"
 trap 'rm -f "$run_log"; rm -rf "$npm_prefix_host"' EXIT
-credential_source="$(resolve_credential_source)"
-credential_role="$(resolve_credential_role)"
-if [ -z "$credential_role" ] && [ -n "${CI:-}" ] && [ "$credential_source" = "convex" ]; then
-  credential_role="ci"
-fi
 
 docker_env=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -145,11 +198,14 @@ for key in \
   OPENCLAW_QA_ALLOW_INSECURE_HTTP \
   OPENCLAW_QA_REDACT_PUBLIC_METADATA \
   OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT \
+  OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS \
+  OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS \
   OPENCLAW_QA_SUITE_PROGRESS \
   OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE \
   OPENCLAW_NPM_TELEGRAM_MODEL \
   OPENCLAW_NPM_TELEGRAM_ALT_MODEL \
   OPENCLAW_NPM_TELEGRAM_SCENARIOS \
+  OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH \
   OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT \
   OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES; do
   forward_env_if_set "$key"
@@ -169,7 +225,7 @@ run_logged docker run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source" \
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL" \
-  "${package_mount_args[@]}" \
+  ${package_mount_args[@]+"${package_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
@@ -284,27 +340,23 @@ for dependency in \
   link_installed_package_dependency "$dependency"
 done
 
-echo "Running installed-package onboarding recovery hot path..."
-OPENAI_API_KEY="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}" openclaw onboard --non-interactive --accept-risk \
-  --mode local \
-  --auth-choice openai-api-key \
-  --secret-input-mode ref \
-  --gateway-port 18789 \
-  --gateway-bind loopback \
-  --skip-daemon \
-  --skip-ui \
-  --skip-skills \
-  --skip-health \
-  --json >/tmp/openclaw-npm-telegram-onboard.json </dev/null
+if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
+  echo "Running installed-package onboarding recovery hot path..."
+  OPENAI_API_KEY="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}" openclaw onboard --non-interactive --accept-risk \
+    --mode local \
+    --auth-choice openai-api-key \
+    --secret-input-mode ref \
+    --gateway-port 18789 \
+    --gateway-bind loopback \
+    --skip-daemon \
+    --skip-ui \
+    --skip-skills \
+    --skip-health \
+    --json >/tmp/openclaw-npm-telegram-onboard.json </dev/null
 
-openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
-openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
-openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
-if grep -F -q "Bundled plugin runtime deps are missing." /tmp/openclaw-npm-telegram-doctor-check.log; then
-  exit 1
-fi
-if grep -F -q "Failed to install bundled plugin runtime deps" /tmp/openclaw-npm-telegram-doctor-fix.log; then
-  exit 1
+  openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
+  openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
+  openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
 fi
 
 export OPENCLAW_NPM_TELEGRAM_SUT_COMMAND="$(command -v openclaw)"

@@ -42,28 +42,14 @@ export interface PluginApprovalRequest {
   };
 }
 
-export interface ExecApprovalResolved {
-  id: string;
-  decision: string;
-  resolvedBy?: string;
-  [key: string]: unknown;
-}
+type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 
-export interface PluginApprovalResolved {
-  id: string;
-  decision: string;
-  resolvedBy?: string;
-  [key: string]: unknown;
-}
-
-export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
-
-export interface ApprovalTarget {
+interface ApprovalTarget {
   type: ChatScope;
   id: string;
 }
 
-export interface ParsedApprovalAction {
+interface ParsedApprovalAction {
   approvalId: string;
   decision: ApprovalDecision;
 }

@@ -10,6 +10,8 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
 } from "./auth-profiles/store.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
+import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
   getApiKeyForModel,
   hasAvailableAuthForProvider,
@@ -40,6 +42,21 @@ async function expectVertexAdcEnvApiKey(params: {
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+}
+
+function testModelDefinition(id: string): Model<Api> {
+  return {
+    id,
+    name: id,
+    provider: "test",
+    api: "responses",
+    baseUrl: "https://example.test/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  };
 }
 
 vi.mock("../plugins/setup-registry.js", async () => {
@@ -206,14 +223,21 @@ vi.mock("../plugins/providers.js", () => ({
     provider === "openai" ? ["openai"] : [],
 }));
 
-vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
-  readCodexCliCredentialsCached: () => null,
-  readMiniMaxCliCredentialsCached: () => null,
+const cliCredentialMocks = vi.hoisted(() => ({
+  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => ClaudeCliCredential | null>(
+    () => null,
+  ),
+  readCodexCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
+  readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
+
+vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  cliCredentialMocks.readClaudeCliCredentialsCached.mockReset().mockReturnValue(null);
+  cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
+  cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -386,6 +410,67 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("does not read unrelated external CLI credentials when resolving provider auth", async () => {
+    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+      expires: createUsableOAuthExpiry(),
+    });
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-scope-",
+        agentEnv: "main",
+        env: {
+          OPENAI_API_KEY: undefined,
+        },
+      },
+      async () => {
+        await expect(resolveApiKeyForProvider({ provider: "openai" })).rejects.toThrow(
+          'No API key found for provider "openai".',
+        );
+      },
+    );
+
+    expect(cliCredentialMocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
+    expect(cliCredentialMocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+    expect(cliCredentialMocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
+  it("reads Claude CLI credentials when the Claude CLI provider is resolved", async () => {
+    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+      expires: createUsableOAuthExpiry(),
+    });
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-claude-cli-",
+        agentEnv: "main",
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({ provider: "claude-cli" });
+        expect(resolved).toMatchObject({
+          apiKey: "claude-cli-access",
+          profileId: "anthropic:claude-cli",
+          source: "profile:anthropic:claude-cli",
+          mode: "oauth",
+        });
+      },
+    );
+
+    expect(cliCredentialMocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith(
+      expect.objectContaining({ allowKeychainPrompt: false }),
+    );
+  });
+
   it("throws when ZAI API key is missing", async () => {
     await withEnvAsync(
       {
@@ -555,6 +640,51 @@ describe("getApiKeyForModel", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("reuses runtime auth availability for provider auth checks", () => {
+    const store = { version: 1 as const, profiles: {} };
+    const localNoKeyConfig = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [testModelDefinition("meta-llama/Meta-Llama-3-8B-Instruct")],
+          },
+          remote: {
+            api: "openai-completions",
+            baseUrl: "https://remote.example.com/v1",
+            models: [testModelDefinition("remote-model")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      hasAuthForModelProvider({
+        provider: "amazon-bedrock",
+        cfg: {} as OpenClawConfig,
+        env: {},
+        store,
+      }),
+    ).toBe(true);
+    expect(
+      hasAuthForModelProvider({
+        provider: "vllm",
+        cfg: localNoKeyConfig,
+        env: {},
+        store,
+      }),
+    ).toBe(true);
+    expect(
+      hasAuthForModelProvider({
+        provider: "remote",
+        cfg: localNoKeyConfig,
+        env: {},
+        store,
+      }),
+    ).toBe(false);
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {

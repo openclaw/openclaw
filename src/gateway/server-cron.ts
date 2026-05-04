@@ -16,13 +16,14 @@ import {
   resolveCronRunLogPath,
   resolveCronRunLogPruneOptions,
 } from "../cron/run-log.js";
+import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -40,7 +41,7 @@ import {
 } from "./server-cron-notifications.js";
 
 export type GatewayCronState = {
-  cron: CronService;
+  cron: CronServiceContract;
   storePath: string;
   cronEnabled: boolean;
 };
@@ -247,9 +248,11 @@ export function buildGatewayCronService(params: {
         trusted: opts?.trusted,
       });
     },
-    requestHeartbeatNow: (opts) => {
+    requestHeartbeat: (opts) => {
       const { agentId, sessionKey } = resolveCronWakeTarget(opts);
-      requestHeartbeatNow({
+      requestHeartbeat({
+        source: opts?.source ?? "cron",
+        intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
         sessionKey,
@@ -279,6 +282,8 @@ export function buildGatewayCronService(params: {
         : undefined;
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
+        source: opts?.source ?? "cron",
+        intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
         sessionKey,
@@ -367,6 +372,7 @@ export function buildGatewayCronService(params: {
           "deliveryError",
           "sessionId",
           "sessionKey",
+          "runId",
           "nextRunAtMs",
           "model",
           "provider",
@@ -400,12 +406,14 @@ export function buildGatewayCronService(params: {
             status: evt.status,
             error: evt.error,
             summary: evt.summary,
+            diagnostics: evt.diagnostics,
             delivered: evt.delivered,
             deliveryStatus: evt.deliveryStatus,
             deliveryError: evt.deliveryError,
             delivery: evt.delivery,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,
+            runId: evt.runId,
             runAtMs: evt.runAtMs,
             durationMs: evt.durationMs,
             nextRunAtMs: evt.nextRunAtMs,
