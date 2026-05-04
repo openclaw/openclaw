@@ -131,6 +131,7 @@ vi.mock("./sticker-cache.js", () => ({
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
 let getTelegramReplyFenceSizeForTests: typeof import("./bot-message-dispatch.js").getTelegramReplyFenceSizeForTests;
 let resetTelegramReplyFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramReplyFenceForTests;
+let sanitizeItemEventForPreviewForTests: typeof import("./bot-message-dispatch.js").sanitizeItemEventForPreviewForTests;
 
 const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
@@ -165,6 +166,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       dispatchTelegramMessage,
       getTelegramReplyFenceSizeForTests,
       resetTelegramReplyFenceForTests,
+      sanitizeItemEventForPreviewForTests,
     } = await import("./bot-message-dispatch.js"));
   });
 
@@ -951,6 +953,181 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(lastPreviewText).toContain(`• \`'''''''''' [label](tg://user?id=123)\``);
     expect(renderTelegramHtmlText(lastPreviewText)).not.toContain("<a ");
+  });
+
+  describe("Telegram preview progress sanitization for command items (#77072)", () => {
+    it("drops raw progressText and uses meta for command-kind items", () => {
+      const sanitized = sanitizeItemEventForPreviewForTests({
+        kind: "command",
+        title: "command ls ~/Desktop",
+        name: "exec",
+        meta: "ls ~/Desktop",
+        progressText:
+          '/private/var/folders/abc/T/node-compile-cache/openclaw\n[context-engine] Context engine "lossless-claw" is not registered; falling back to default engine "legacy"',
+      });
+      expect(sanitized.progressText).toBeUndefined();
+      expect(sanitized.meta).toBe("ls ~/Desktop");
+      expect(sanitized.itemKind).toBe("command");
+      expect(sanitized.title).toBe("command ls ~/Desktop");
+    });
+
+    it("derives clean meta from the command title when meta is missing", () => {
+      const sanitized = sanitizeItemEventForPreviewForTests({
+        kind: "command",
+        title: "command ls ~/Desktop",
+        name: "exec",
+        progressText: "raw output",
+      });
+      expect(sanitized.progressText).toBeUndefined();
+      expect(sanitized.meta).toBe("ls ~/Desktop");
+    });
+
+    it("falls back to undefined meta when neither meta nor a parseable title is present", () => {
+      const sanitized = sanitizeItemEventForPreviewForTests({
+        kind: "command",
+        name: "exec",
+        progressText: "raw output that should never surface",
+      });
+      expect(sanitized.progressText).toBeUndefined();
+      expect(sanitized.meta).toBeUndefined();
+    });
+
+    it("passes non-command item events through unchanged", () => {
+      const sanitized = sanitizeItemEventForPreviewForTests({
+        kind: "tool",
+        title: "Tool",
+        name: "exec",
+        progressText: "exec ls ~/Desktop",
+        meta: undefined,
+      });
+      expect(sanitized.progressText).toBe("exec ls ~/Desktop");
+      expect(sanitized.itemKind).toBe("tool");
+      expect(sanitized.meta).toBeUndefined();
+    });
+
+    it("suppresses raw exec command output from the partial preview when a command item event fires", async () => {
+      const draftStream = createDraftStream();
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      const rawCommandOutput =
+        '/private/var/folders/abc/T/node-compile-cache/openclaw\n[context-engine] Context engine "lossless-claw" is not registered; falling back to default engine "legacy"';
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onItemEvent?.({
+          kind: "command",
+          title: "command ls ~/Desktop",
+          name: "exec",
+          meta: "ls ~/Desktop",
+          progressText: rawCommandOutput,
+        });
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+      const lastPreviewText = draftStream.update.mock.calls.at(-1)?.[0] ?? "";
+      expect(lastPreviewText).not.toContain("context-engine");
+      expect(lastPreviewText).not.toContain("/private/var/folders");
+      expect(lastPreviewText).not.toContain("lossless-claw");
+    });
+
+    it("renders the redacted command summary in the partial preview for a command item event", async () => {
+      const draftStream = createDraftStream();
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onItemEvent?.({
+          kind: "command",
+          title: "command ls ~/Desktop",
+          name: "exec",
+          meta: "ls ~/Desktop",
+          progressText: "ignored raw output that should not surface",
+        });
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+      const lastPreviewText = draftStream.update.mock.calls.at(-1)?.[0] ?? "";
+      expect(lastPreviewText).toContain("ls ~/Desktop");
+      expect(lastPreviewText).not.toContain("ignored raw output");
+    });
+
+    it("leaves non-command tool item events on the existing progressText path", async () => {
+      const draftStream = createDraftStream();
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onItemEvent?.({
+          kind: "tool",
+          title: "Tool",
+          progressText: "exec ls ~/Desktop",
+        });
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+      const lastPreviewText = draftStream.update.mock.calls.at(-1)?.[0] ?? "";
+      expect(lastPreviewText).toContain("exec ls ~/Desktop");
+    });
+
+    it("still routes the final assistant reply through unchanged when a command item event fires first", async () => {
+      const draftStream = createDraftStream();
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onItemEvent?.({
+            kind: "command",
+            title: "command ls ~/Desktop",
+            name: "exec",
+            meta: "ls ~/Desktop",
+            progressText: "raw output should not surface",
+          });
+          await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [expect.objectContaining({ text: "Final answer" })],
+        }),
+      );
+    });
+
+    it("keeps preview.toolProgress=false suppressing the preview entirely for command items", async () => {
+      const draftStream = createDraftStream();
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onItemEvent?.({
+          kind: "command",
+          title: "command ls ~/Desktop",
+          name: "exec",
+          meta: "ls ~/Desktop",
+          progressText: "raw output that should not surface",
+        });
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "partial",
+        telegramCfg: { streaming: { preview: { toolProgress: false } } },
+      });
+
+      expect(draftStream.update).not.toHaveBeenCalled();
+      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replyOptions: expect.objectContaining({
+            suppressDefaultToolProgressMessages: true,
+          }),
+        }),
+      );
+    });
   });
 
   it("keeps block streaming enabled when account config enables it", async () => {

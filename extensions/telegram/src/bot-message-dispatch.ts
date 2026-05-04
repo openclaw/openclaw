@@ -244,6 +244,68 @@ function formatProgressAsMarkdownCode(text: string): string {
   return `\`${safe}\``;
 }
 
+// For preview progress lines, exec command items carry the raw command output in
+// progressText (e.g. multi-line stdout, embedded paths, log fragments) while the
+// short, redacted command summary lives in meta or, failing that, the prefixed
+// title. Forwarding progressText to formatChannelProgressDraftLine on a command
+// item makes that raw output the meta detail of the rendered line, which floods
+// Telegram DM with transient bubbles full of internal output during tool-heavy
+// work, see #77072. We keep the formatter call shape, but for command items we
+// suppress progressText and provide a clean meta fallback derived from the title
+// so the existing meta -> progressText -> summary precedence in the formatter
+// resolves to the redacted command summary instead of raw output. Other item
+// kinds keep the existing payload pass-through so structured tool/search/patch
+// progress still renders.
+export type SanitizedItemEventForTests = {
+  itemKind?: string;
+  title?: string;
+  name?: string;
+  phase?: string;
+  status?: string;
+  summary?: string;
+  progressText?: string;
+  meta?: string;
+};
+
+export function sanitizeItemEventForPreviewForTests(payload: {
+  kind?: string;
+  title?: string;
+  name?: string;
+  phase?: string;
+  status?: string;
+  summary?: string;
+  progressText?: string;
+  meta?: string;
+}): SanitizedItemEventForTests {
+  if (payload.kind === "command") {
+    const cleanCommandMeta =
+      payload.meta?.trim() || payload.title?.replace(/^\s*command\s+/i, "").trim() || undefined;
+    return {
+      itemKind: payload.kind,
+      title: payload.title,
+      name: payload.name,
+      phase: payload.phase,
+      status: payload.status,
+      summary: payload.summary,
+      // progressText intentionally dropped, it is the raw exec output on command items.
+      progressText: undefined,
+      meta: cleanCommandMeta,
+    };
+  }
+  return {
+    itemKind: payload.kind,
+    title: payload.title,
+    name: payload.name,
+    phase: payload.phase,
+    status: payload.status,
+    summary: payload.summary,
+    progressText: payload.progressText,
+    meta: payload.meta,
+  };
+}
+
+const sanitizeItemEventForPreview = sanitizeItemEventForPreviewForTests;
+
 export const dispatchTelegramMessage = async ({
   context,
   bot,
@@ -1187,17 +1249,18 @@ export const dispatchTelegramMessage = async ({
                     );
                   },
                   onItemEvent: async (payload) => {
+                    const sanitized = sanitizeItemEventForPreview(payload);
                     await pushPreviewToolProgress(
                       formatChannelProgressDraftLine({
                         event: "item",
-                        itemKind: payload.kind,
-                        title: payload.title,
-                        name: payload.name,
-                        phase: payload.phase,
-                        status: payload.status,
-                        summary: payload.summary,
-                        progressText: payload.progressText,
-                        meta: payload.meta,
+                        itemKind: sanitized.itemKind,
+                        title: sanitized.title,
+                        name: sanitized.name,
+                        phase: sanitized.phase,
+                        status: sanitized.status,
+                        summary: sanitized.summary,
+                        progressText: sanitized.progressText,
+                        meta: sanitized.meta,
                       }),
                     );
                   },
