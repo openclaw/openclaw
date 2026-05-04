@@ -55,8 +55,12 @@ export function createFinalizableDraftStreamControls(params: {
     const startedAt = Date.now();
     while (true) {
       await loop.flush();
-      if (!loop.hasPending() || params.isStopped()) break;
-      if (Date.now() - startedAt > 120_000) break;
+      if (!loop.hasPending() || params.isStopped()) {
+        break;
+      }
+      if (Date.now() - startedAt > 120_000) {
+        break;
+      }
       await new Promise<void>((r) => setTimeout(r, params.throttleMs));
     }
   };

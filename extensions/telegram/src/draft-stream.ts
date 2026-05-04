@@ -40,7 +40,9 @@ const _adaptiveThrottleState = ((globalThis as Record<PropertyKey, unknown>)[
 
 export function getAdaptiveThrottleMs(): number {
   const pauseRemaining = _adaptiveThrottleState.pausedUntil - Date.now();
-  if (pauseRemaining > 0) return Math.max(_adaptiveThrottleState.currentMs, pauseRemaining);
+  if (pauseRemaining > 0) {
+    return Math.max(_adaptiveThrottleState.currentMs, pauseRemaining);
+  }
   return _adaptiveThrottleState.currentMs;
 }
 
@@ -53,7 +55,9 @@ function onTelegramRateLimit(retryAfterSec: number): void {
   _adaptiveThrottleState.pausedUntil = Date.now() + retryMs;
   if (!_adaptiveThrottleState.decayInterval) {
     _adaptiveThrottleState.decayInterval = setInterval(() => {
-      if (Date.now() < _adaptiveThrottleState.pausedUntil) return;
+      if (Date.now() < _adaptiveThrottleState.pausedUntil) {
+        return;
+      }
       _adaptiveThrottleState.currentMs = Math.max(
         _adaptiveThrottleState.currentMs * 0.5,
         _adaptiveThrottleState.minMs,
