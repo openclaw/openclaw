@@ -1,0 +1,65 @@
+{
+  "description": "Two 200 batches, then 401 (token revoked). Supervisor should halt the loop, mark the account unauthorized, and emit max-messenger.polling.fatal. No further requests after the 401.",
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747620000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747620000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747620000,
+              "body": {
+                "mid": "msg-pre-401-1",
+                "seq": 8,
+                "text": "before revoke 1",
+                "attachments": null
+              }
+            }
+          }
+        ],
+        "marker": 3000
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747680000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747680000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747680000,
+              "body": {
+                "mid": "msg-pre-401-2",
+                "seq": 9,
+                "text": "before revoke 2",
+                "attachments": null
+              }
+            }
+          }
+        ],
+        "marker": 3001
+      }
+    },
+    {
+      "status": 401,
+      "body": { "code": "verify.token", "message": "Invalid access_token" }
+    }
+  ]
+}

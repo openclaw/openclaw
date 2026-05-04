@@ -1,0 +1,43 @@
+{
+  "description": "Two consecutive 429s with Retry-After: 2 seconds (sec-int form), then a 200 batch. Supervisor should honor Retry-After exactly and not double-back-off.",
+  "responses": [
+    {
+      "status": 429,
+      "headers": { "Retry-After": "2" },
+      "body": { "code": "rate_limit", "message": "Too Many Requests" }
+    },
+    {
+      "status": 429,
+      "headers": { "Retry-After": "2" },
+      "body": { "code": "rate_limit", "message": "Too Many Requests" }
+    },
+    {
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747260000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747260000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747260000,
+              "body": {
+                "mid": "msg-after-429",
+                "seq": 2,
+                "text": "after rate limit",
+                "attachments": null
+              }
+            }
+          }
+        ],
+        "marker": 1002
+      }
+    }
+  ]
+}

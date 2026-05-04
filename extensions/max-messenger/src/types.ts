@@ -15,6 +15,24 @@ import type {
 export type MaxTransport = "polling" | "webhook";
 
 /**
+ * Polling tunables. Mirrors `MaxPollingConfigSchema` in `config-schema.ts`
+ * (per plan §6.1.2). Locked defaults live in `lifecycle.adapter.ts` and are
+ * documented per row in §8 #11–#15.
+ */
+export type MaxPollingConfig = {
+  /** Long-poll request hold (seconds). Locked default: 30. */
+  timeoutSec?: number;
+  /** Initial transient backoff (ms). Locked default: 1000. */
+  retryBackoffMs?: number;
+  /** Backoff cap (ms). Locked default: 30000. */
+  maxBackoffMs?: number;
+  /** SIGTERM grace window (ms). Locked default: 5000. */
+  gracefulShutdownTimeoutMs?: number;
+  /** Persist marker across restarts. Default true (per §8 #15). */
+  resumeFromLastEvent?: boolean;
+};
+
+/**
  * User-facing per-account configuration shape for `channels.max-messenger`.
  *
  * See docs/max-plugin/plan.md §5.1 for field-by-field rationale.
@@ -43,6 +61,9 @@ export type MaxAccountConfig = {
   webhookHost?: string;
   /** Webhook endpoint path. */
   webhookPath?: string;
+
+  /** Polling transport tunables (per plan §6.1.2). All fields optional. */
+  polling?: MaxPollingConfig;
 
   /** DM policy: "allowlist" | "open" | "pairing". Default: "pairing". */
   dmPolicy?: DmPolicy;

@@ -1,0 +1,38 @@
+{
+  "description": "Long-poll response delayed past the supervisor's request timeout (timeoutSec + 10s). The supervisor's per-request AbortSignal.timeout fires before the server replies; the loop classifies it as transient and retries.",
+  "responses": [
+    {
+      "delayMs": 60000,
+      "status": 200,
+      "body": { "updates": [], "marker": 0 }
+    },
+    {
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747440000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747440000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747440000,
+              "body": {
+                "mid": "msg-after-slow",
+                "seq": 5,
+                "text": "after slow timeout",
+                "attachments": null
+              }
+            }
+          }
+        ],
+        "marker": 1005
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "description": "Single 200 batch with one message_created update; supervisor's marker should advance to 1001 and the dedup cache should retain mid msg-happy-1.",
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747200000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747200000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747200000,
+              "body": { "mid": "msg-happy-1", "seq": 1, "text": "hello", "attachments": null }
+            }
+          }
+        ],
+        "marker": 1001
+      }
+    }
+  ]
+}

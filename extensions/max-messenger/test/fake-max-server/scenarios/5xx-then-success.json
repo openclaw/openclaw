@@ -1,0 +1,45 @@
+{
+  "description": "Three consecutive 5xx responses, then a 200 batch. Supervisor's exponential backoff should double up to maxBackoffMs and reset on success.",
+  "responses": [
+    {
+      "status": 500,
+      "body": { "code": "server_error", "message": "Internal Server Error" }
+    },
+    {
+      "status": 502,
+      "body": { "code": "bad_gateway", "message": "Bad Gateway" }
+    },
+    {
+      "status": 503,
+      "body": { "code": "service_unavailable", "message": "Service Unavailable" }
+    },
+    {
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747320000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747320000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747320000,
+              "body": {
+                "mid": "msg-after-5xx",
+                "seq": 3,
+                "text": "after server errors",
+                "attachments": null
+              }
+            }
+          }
+        ],
+        "marker": 1003
+      }
+    }
+  ]
+}

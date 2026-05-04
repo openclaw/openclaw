@@ -1,0 +1,35 @@
+{
+  "description": "TCP connection dropped without sending headers, then a 200 batch. Supervisor should classify the dropped connection as a transient NetworkError (undici TypeError with cause AbortError/SocketError) and retry.",
+  "responses": [
+    { "closeConnection": true },
+    { "closeConnection": true },
+    {
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747380000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747380000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747380000,
+              "body": {
+                "mid": "msg-after-drop",
+                "seq": 4,
+                "text": "after connection drop",
+                "attachments": null
+              }
+            }
+          }
+        ],
+        "marker": 1004
+      }
+    }
+  ]
+}

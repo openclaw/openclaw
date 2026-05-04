@@ -12,6 +12,38 @@ import { MAX_BOT_TOKEN_ENV, MAX_TEXT_CHUNK_LIMIT } from "./constants.js";
 
 const MaxTransportSchema = z.enum(["polling", "webhook"]);
 
+/**
+ * Polling transport tunables (per docs/max-plugin/plan.md §6.1.2 / §8 rows
+ * 11-15). Each field has a sane locked default; users only need to set them
+ * when overriding for a specific deployment (slow-link long-poll, tighter
+ * shutdown SLA, etc.). Mirrors the Telegram plugin's polling sub-config in
+ * shape and lock-table cross-references.
+ */
+const MaxPollingConfigSchema = z
+  .object({
+    /** Long-poll request hold (seconds) — passed straight to MAX `?timeout=`. */
+    timeoutSec: z.number().int().min(1).max(120).default(30),
+    /** Initial transient-error backoff (ms). Doubles on each consecutive failure. */
+    retryBackoffMs: z.number().int().min(100).max(60_000).default(1_000),
+    /** Cap for exponential backoff growth (ms). */
+    maxBackoffMs: z.number().int().min(1_000).max(300_000).default(30_000),
+    /** SIGTERM grace window (ms) before force-exit on shutdown. */
+    gracefulShutdownTimeoutMs: z.number().int().min(500).max(30_000).default(5_000),
+    /**
+     * Persist `marker` across restarts so polling resumes from the last
+     * ack'd event. Default `true` per §8 row 15. Set `false` only for
+     * diagnostics or to opt out of state writes.
+     */
+    resumeFromLastEvent: z.boolean().default(true),
+  })
+  .default(() => ({
+    timeoutSec: 30,
+    retryBackoffMs: 1_000,
+    maxBackoffMs: 30_000,
+    gracefulShutdownTimeoutMs: 5_000,
+    resumeFromLastEvent: true,
+  }));
+
 const MaxAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -32,6 +64,7 @@ const MaxAccountSchemaBase = z
     webhookPort: z.number().int().positive().optional(),
     webhookHost: z.string().optional(),
     webhookPath: z.string().optional(),
+    polling: MaxPollingConfigSchema,
 
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.string()).optional(),

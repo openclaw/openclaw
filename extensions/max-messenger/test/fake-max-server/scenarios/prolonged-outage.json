@@ -1,0 +1,38 @@
+{
+  "description": "Long partition: 12 consecutive 503s (>60s of outage at the supervisor's exponential backoff cap of 30s) followed by a 200. Verifies that the supervisor stays alive across an extended outage, hits maxBackoffMs, and resumes cleanly without crashing or double-dispatching once the server returns.",
+  "responses": [
+    {
+      "repeat": 12,
+      "status": 503,
+      "body": { "code": "service_unavailable", "message": "Service Unavailable" }
+    },
+    {
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747800000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747800000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747800000,
+              "body": {
+                "mid": "msg-after-outage",
+                "seq": 10,
+                "text": "after prolonged outage",
+                "attachments": null
+              }
+            }
+          }
+        ],
+        "marker": 4000
+      }
+    }
+  ]
+}

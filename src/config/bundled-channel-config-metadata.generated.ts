@@ -8638,6 +8638,54 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         webhookPath: {
           type: "string",
         },
+        polling: {
+          default: {
+            timeoutSec: 30,
+            retryBackoffMs: 1000,
+            maxBackoffMs: 30000,
+            gracefulShutdownTimeoutMs: 5000,
+            resumeFromLastEvent: true,
+          },
+          type: "object",
+          properties: {
+            timeoutSec: {
+              default: 30,
+              type: "integer",
+              minimum: 1,
+              maximum: 120,
+            },
+            retryBackoffMs: {
+              default: 1000,
+              type: "integer",
+              minimum: 100,
+              maximum: 60000,
+            },
+            maxBackoffMs: {
+              default: 30000,
+              type: "integer",
+              minimum: 1000,
+              maximum: 300000,
+            },
+            gracefulShutdownTimeoutMs: {
+              default: 5000,
+              type: "integer",
+              minimum: 500,
+              maximum: 30000,
+            },
+            resumeFromLastEvent: {
+              default: true,
+              type: "boolean",
+            },
+          },
+          required: [
+            "timeoutSec",
+            "retryBackoffMs",
+            "maxBackoffMs",
+            "gracefulShutdownTimeoutMs",
+            "resumeFromLastEvent",
+          ],
+          additionalProperties: false,
+        },
         dmPolicy: {
           default: "pairing",
           type: "string",
@@ -8849,6 +8897,54 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               webhookPath: {
                 type: "string",
               },
+              polling: {
+                default: {
+                  timeoutSec: 30,
+                  retryBackoffMs: 1000,
+                  maxBackoffMs: 30000,
+                  gracefulShutdownTimeoutMs: 5000,
+                  resumeFromLastEvent: true,
+                },
+                type: "object",
+                properties: {
+                  timeoutSec: {
+                    default: 30,
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 120,
+                  },
+                  retryBackoffMs: {
+                    default: 1000,
+                    type: "integer",
+                    minimum: 100,
+                    maximum: 60000,
+                  },
+                  maxBackoffMs: {
+                    default: 30000,
+                    type: "integer",
+                    minimum: 1000,
+                    maximum: 300000,
+                  },
+                  gracefulShutdownTimeoutMs: {
+                    default: 5000,
+                    type: "integer",
+                    minimum: 500,
+                    maximum: 30000,
+                  },
+                  resumeFromLastEvent: {
+                    default: true,
+                    type: "boolean",
+                  },
+                },
+                required: [
+                  "timeoutSec",
+                  "retryBackoffMs",
+                  "maxBackoffMs",
+                  "gracefulShutdownTimeoutMs",
+                  "resumeFromLastEvent",
+                ],
+                additionalProperties: false,
+              },
               dmPolicy: {
                 default: "pairing",
                 type: "string",
@@ -8944,7 +9040,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 exclusiveMinimum: 0,
               },
             },
-            required: ["transport", "dmPolicy", "groupPolicy", "textChunkLimit"],
+            required: ["transport", "polling", "dmPolicy", "groupPolicy", "textChunkLimit"],
             additionalProperties: false,
           },
         },
@@ -8952,7 +9048,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
         },
       },
-      required: ["transport", "dmPolicy", "groupPolicy", "textChunkLimit"],
+      required: ["transport", "polling", "dmPolicy", "groupPolicy", "textChunkLimit"],
       additionalProperties: false,
     },
   },

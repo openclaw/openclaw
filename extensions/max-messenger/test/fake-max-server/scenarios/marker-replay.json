@@ -1,0 +1,92 @@
+{
+  "description": "Same mid (msg-replay-1) returned in two consecutive batches with the same marker, then a fresh batch. Supervisor's dedup cache must drop the second occurrence (no double-dispatch) while still advancing the marker on the third batch.",
+  "responses": [
+    {
+      "expectMarker": null,
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747500000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747500000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747500000,
+              "body": {
+                "mid": "msg-replay-1",
+                "seq": 6,
+                "text": "first occurrence",
+                "attachments": null
+              }
+            }
+          }
+        ],
+        "marker": 2000
+      }
+    },
+    {
+      "expectMarker": 2000,
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747500000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747500000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747500000,
+              "body": {
+                "mid": "msg-replay-1",
+                "seq": 6,
+                "text": "first occurrence",
+                "attachments": null
+              }
+            }
+          }
+        ],
+        "marker": 2000
+      }
+    },
+    {
+      "expectMarker": 2000,
+      "status": 200,
+      "body": {
+        "updates": [
+          {
+            "update_type": "message_created",
+            "timestamp": 1714747560000,
+            "message": {
+              "sender": {
+                "user_id": 1001,
+                "first_name": "Alice",
+                "is_bot": false,
+                "last_activity_time": 1714747560000
+              },
+              "recipient": { "chat_id": 200, "chat_type": "dialog" },
+              "timestamp": 1714747560000,
+              "body": {
+                "mid": "msg-replay-fresh",
+                "seq": 7,
+                "text": "fresh after replay",
+                "attachments": null
+              }
+            }
+          }
+        ],
+        "marker": 2001
+      }
+    }
+  ]
+}
