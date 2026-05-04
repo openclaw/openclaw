@@ -339,6 +339,47 @@ describe("googlechat google auth runtime", () => {
     }
   });
 
+  it("normalizes Google auth request headers before upstream interceptors run", async () => {
+    const config = {
+      headers: { "x-test": "1" },
+      url: new URL("https://www.googleapis.com/oauth2/v1/certs"),
+    };
+
+    const normalized = __testing.normalizeGoogleAuthPreparedRequestHeaders(config);
+
+    expect(normalized.headers).toBeInstanceOf(Headers);
+    expect(normalized.headers.has("x-test")).toBe(true);
+    expect(normalized.headers.get("x-test")).toBe("1");
+  });
+
+  it("normalizes plain-object response headers to a Headers instance", () => {
+    const response = {
+      headers: { "cache-control": "max-age=3600", "content-type": "application/json" },
+      config: {},
+      data: {},
+    };
+
+    const normalized = __testing.normalizeGoogleAuthResponseHeaders(response);
+
+    expect(normalized.headers).toBeInstanceOf(Headers);
+    expect((normalized.headers as Headers).get("cache-control")).toBe("max-age=3600");
+    expect((normalized.headers as Headers).get("content-type")).toBe("application/json");
+  });
+
+  it("leaves native Headers on response untouched", () => {
+    const nativeHeaders = new Headers({ "cache-control": "no-cache" });
+    const response = {
+      headers: nativeHeaders,
+      config: {},
+      data: {},
+    };
+
+    const normalized = __testing.normalizeGoogleAuthResponseHeaders(response);
+
+    expect(normalized.headers).toBe(nativeHeaders);
+    expect((normalized.headers as Headers).get("cache-control")).toBe("no-cache");
+  });
+
   it("rejects service-account credentials that override Google auth endpoints", async () => {
     await expect(
       resolveValidatedGoogleChatCredentials({

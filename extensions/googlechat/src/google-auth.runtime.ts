@@ -20,6 +20,9 @@ type GoogleAuthRuntime = {
   OAuth2Client: GoogleAuthModule["OAuth2Client"];
 };
 type GoogleAuthTransport = InstanceType<GaxiosModule["Gaxios"]>;
+type GoogleAuthRequestWithUnknownHeaders = RequestInit & {
+  headers?: unknown;
+};
 type GuardedGoogleAuthRequestInit = RequestInit & {
   agent?: unknown;
   cert?: unknown;
@@ -66,6 +69,47 @@ const MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES = 64 * 1024;
 
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 let googleAuthTransportPromise: Promise<GoogleAuthTransport> | null = null;
+
+function normalizeGoogleAuthPreparedRequestHeaders<T extends GoogleAuthRequestWithUnknownHeaders>(
+  config: T,
+): T & { headers: Headers } {
+  if (!(config.headers instanceof Headers)) {
+    config.headers = new Headers(config.headers as HeadersInit | undefined);
+  }
+  return config as T & { headers: Headers };
+}
+
+/**
+ * Ensure response headers support the `.get()` method expected by
+ * `google-auth-library` (e.g. `getFederatedSignonCertsAsync` reads
+ * `res?.headers.get('cache-control')`).
+ *
+ * When the bundled build's deep-clone utility (`extend`) from gaxios
+ * serialises a `GaxiosResponse`, the native `Headers` instance can be
+ * downgraded to a plain `Record<string, string>` whose `.get()` method is
+ * lost.  This helper converts such objects back to a proper `Headers`.
+ */
+function normalizeGoogleAuthResponseHeaders<
+  T extends { headers?: unknown; config?: unknown; data?: unknown },
+>(response: T): T {
+  const h = response.headers;
+  if (h && typeof h === "object" && !(h instanceof Headers) && typeof (h as Headers).get !== "function") {
+    (response as Record<string, unknown>).headers = new Headers(h as Record<string, string>);
+  }
+  return response;
+}
+
+function installGoogleAuthHeaderCompatibilityInterceptor(
+  transport: GoogleAuthTransport,
+): GoogleAuthTransport {
+  transport.interceptors.request.add({
+    resolved: async (config) => normalizeGoogleAuthPreparedRequestHeaders(config),
+  });
+  transport.interceptors.response.add({
+    resolved: async (response) => normalizeGoogleAuthResponseHeaders(response),
+  });
+  return transport;
+}
 
 function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -507,23 +551,7 @@ export async function getGoogleAuthTransport(): Promise<GoogleAuthTransport> {
         const transport = new Gaxios({
           fetchImplementation: createGoogleAuthFetch(),
         });
-        // google-auth-library's AuthClient registers a request interceptor
-        // that calls `config.headers.has()` / `.set()` expecting a native
-        // `Headers` instance.  When the bundled build's deep-clone utility
-        // (`extend`) copies the prepared config, `Headers` can be downgraded
-        // to a plain object whose prototype methods are lost.  Normalizing
-        // headers here — before the AuthClient interceptor fires — prevents
-        // the "config.headers.has is not a function" regression (#76742).
-        transport.interceptors.request.add({
-          resolved: async (config) => {
-            if (config.headers != null && !(config.headers instanceof Headers)) {
-              config.headers = new Headers(
-                config.headers as unknown as HeadersInit,
-              );
-            }
-            return config;
-          },
-        });
+        installGoogleAuthHeaderCompatibilityInterceptor(transport);
         return transport;
       } catch (error) {
         googleAuthTransportPromise = null;
@@ -552,6 +580,8 @@ export const __testing = {
     googleAuthRuntimePromise = null;
     googleAuthTransportPromise = null;
   },
+  normalizeGoogleAuthPreparedRequestHeaders,
+  normalizeGoogleAuthResponseHeaders,
   resolveGoogleAuthEnvProxyUrl,
   validateGoogleChatServiceAccountCredentials,
 };
