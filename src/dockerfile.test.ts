@@ -111,6 +111,9 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("pnpm-workspace.runtime.yaml");
     expect(dockerfile).toContain("  - ui\\n");
     expect(dockerfile).toContain("CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod");
+    expect(dockerfile).toContain(
+      'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs',
+    );
     expect(dockerfile).toContain("prune must not rediscover unrelated workspaces");
     expect(dockerfile).not.toContain(
       `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,
