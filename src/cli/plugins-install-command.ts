@@ -64,7 +64,7 @@ function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): Insta
   };
 }
 
-function findTrustedOfficialExternalPackageInstall(packageName: string):
+function findTrustedCatalogPackageInstall(packageName: string):
   | {
       pluginId: string;
       npmSpec?: string;
@@ -72,7 +72,7 @@ function findTrustedOfficialExternalPackageInstall(packageName: string):
     }
   | undefined {
   const entry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (entry?.source !== "official") {
+  if (!entry) {
     return undefined;
   }
   const pluginId = resolveOfficialExternalPluginId(entry);
@@ -723,7 +723,7 @@ export async function runPluginInstallCommand(params: {
     }
     const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
       npmSpec: npmPrefixSpec,
-      findOfficialExternalPackage: findTrustedOfficialExternalPackageInstall,
+      findOfficialExternalPackage: findTrustedCatalogPackageInstall,
     });
     const npmPrefixResult = await tryInstallPluginOrHookPackFromNpmSpec({
       snapshot,
@@ -870,7 +870,7 @@ export async function runPluginInstallCommand(params: {
 
   const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
     npmSpec: raw,
-    findOfficialExternalPackage: findTrustedOfficialExternalPackageInstall,
+    findOfficialExternalPackage: findTrustedCatalogPackageInstall,
   });
   const npmResult = await tryInstallPluginOrHookPackFromNpmSpec({
     snapshot,

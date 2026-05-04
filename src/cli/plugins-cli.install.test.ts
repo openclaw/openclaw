@@ -734,7 +734,7 @@ describe("plugins cli install", () => {
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
   });
 
-  it("passes official external catalog integrity to npm installs", async () => {
+  it("passes third-party external catalog integrity with catalog install trust", async () => {
     const cfg = createEmptyPluginConfig();
     const enabledCfg = createEnabledPluginConfig("wecom-openclaw-plugin");
     loadConfig.mockReturnValue(cfg);
@@ -796,7 +796,7 @@ describe("plugins cli install", () => {
     },
   );
 
-  it("passes official external catalog integrity to hook-pack fallback", async () => {
+  it("passes third-party external catalog integrity to hook-pack fallback", async () => {
     loadConfig.mockReturnValue(createEmptyPluginConfig());
     findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpec.mockResolvedValue({
@@ -987,6 +987,38 @@ describe("plugins cli install", () => {
         spec: "@openclaw/discord",
         expectedPluginId: "discord",
         trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+  });
+
+  it("marks catalog npm package installs with alternate selectors as trusted", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("wecom-openclaw-plugin");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmSpec.mockResolvedValue(
+      createNpmPluginInstallResult("wecom-openclaw-plugin"),
+    );
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "@wecom/wecom-openclaw-plugin@latest"]);
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@wecom/wecom-openclaw-plugin@latest",
+        expectedPluginId: "wecom-openclaw-plugin",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        expectedIntegrity: expect.any(String),
       }),
     );
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
