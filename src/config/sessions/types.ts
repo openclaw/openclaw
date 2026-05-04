@@ -300,6 +300,10 @@ export type SessionEntry = {
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
+  /** AI-generated session title. Set after enough turns have passed. */
+  autoTitle?: string;
+  /** Number of completed user-assistant exchanges in this session. */
+  turnCount?: number;
   channel?: string;
   groupId?: string;
   subject?: string;

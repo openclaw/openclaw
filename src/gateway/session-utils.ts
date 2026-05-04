@@ -229,6 +229,10 @@ export function deriveSessionTitle(
     return normalizeOptionalString(entry.subject);
   }
 
+  if (normalizeOptionalString(entry.autoTitle)) {
+    return truncateTitle(entry.autoTitle!, DERIVED_TITLE_MAX_LEN);
+  }
+
   if (firstUserMessage?.trim()) {
     const normalized = firstUserMessage.replace(/\s+/g, " ").trim();
     return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
@@ -1644,6 +1648,12 @@ export function buildGatewaySessionRow(params: {
 
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
+
+  // Include autoTitle-based derived title without transcript read.
+  if (entry && normalizeOptionalString(entry.autoTitle)) {
+    derivedTitle = deriveSessionTitle(entry);
+  }
+
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
     const fields = readSessionTitleFieldsFromTranscript(
       entry.sessionId,
@@ -1651,7 +1661,7 @@ export function buildGatewaySessionRow(params: {
       entry.sessionFile,
       sessionAgentId,
     );
-    if (params.includeDerivedTitles) {
+    if (params.includeDerivedTitles && derivedTitle === undefined) {
       derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
     }
     if (params.includeLastMessage && fields.lastMessagePreview) {

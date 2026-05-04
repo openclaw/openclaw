@@ -1045,7 +1045,7 @@ export async function runPreparedReply(
         }
       : undefined;
 
-  return runReplyAgent({
+  const reply = await runReplyAgent({
     commandBody: prefixedCommandBody,
     transcriptCommandBody,
     followupRun,
@@ -1084,4 +1084,22 @@ export async function runPreparedReply(
     resetTriggered: effectiveResetTriggered,
     replyThreadingOverride,
   });
+
+  // Trigger async AI title generation after a successful reply.
+  if (!isHeartbeat && reply) {
+    import("./session-title-generator.js")
+      .then(({ maybeGenerateSessionTitle }) =>
+        maybeGenerateSessionTitle({
+          cfg,
+          sessionKey,
+          sessionEntry: preparedSessionState.sessionEntry,
+          storePath,
+          agentId,
+          agentDir,
+        }),
+      )
+      .catch(() => undefined);
+  }
+
+  return reply;
 }
