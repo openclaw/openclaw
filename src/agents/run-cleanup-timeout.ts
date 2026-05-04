@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 
-export const AGENT_CLEANUP_STEP_TIMEOUT_MS = 10_000;
+export const AGENT_CLEANUP_STEP_TIMEOUT_MS = 30_000;
 
 type AgentCleanupLogger = {
   warn: (message: string) => void;
