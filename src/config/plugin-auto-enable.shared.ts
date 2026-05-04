@@ -280,12 +280,18 @@ function collectPluginIdsForConfiguredChannel(
   }
 
   if (claims.length === 0) {
-    // Only return a built-in channel id as a plugin candidate when the channel is
-    // actually a known built-in. This prevents non-built-in channel ids (like
-    // "feishu") from being incorrectly added to plugins.allow as plugin ids.
-    // For non-built-in channels with no claims, return [] since a channel id
-    // is not a plugin id.
-    return builtInId ? [builtInId] : [];
+    // Only return a built-in channel id as a plugin candidate when a bundled plugin
+    // for it exists in the registry. This prevents non-built-in channel ids
+    // (like "feishu") from being incorrectly added to plugins.allow.
+    if (builtInId) {
+      const bundledPlugin = registry.plugins.find(
+        (p) => p.origin === "bundled" && normalizeChatChannelId(p.id) === builtInId,
+      );
+      if (bundledPlugin) {
+        return [builtInId];
+      }
+    }
+    return [];
   }
 
   const claimIds = new Set(claims.map((claim) => claim.plugin.id));
