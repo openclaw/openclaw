@@ -29,6 +29,7 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
 }));
 
 vi.mock("./session-utils.js", () => ({
+  bumpGatewaySessionMutationVersion: vi.fn(),
   loadSessionEntry: vi.fn(() => ({
     cfg: {},
     storePath: "/tmp/sessions.json",

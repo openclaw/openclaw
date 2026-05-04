@@ -20,7 +20,7 @@ import type {
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { bumpGatewaySessionMutationVersion, loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export {
@@ -355,6 +355,7 @@ export function createAgentEventHandler({
 
     if (sessionKey) {
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
+      bumpGatewaySessionMutationVersion();
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
         broadcastToConnIds(
@@ -726,6 +727,7 @@ export function createAgentEventHandler({
 
     if (sessionKey && lifecyclePhase === "start") {
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
+      bumpGatewaySessionMutationVersion();
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
         broadcastToConnIds(

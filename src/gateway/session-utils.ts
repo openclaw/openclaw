@@ -134,6 +134,16 @@ export type {
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
+let gatewaySessionMutationVersion = 0;
+
+export function bumpGatewaySessionMutationVersion(): number {
+  gatewaySessionMutationVersion += 1;
+  return gatewaySessionMutationVersion;
+}
+
+export function getGatewaySessionMutationVersion(): number {
+  return gatewaySessionMutationVersion;
+}
 
 function tryResolveExistingPath(value: string): string | null {
   try {

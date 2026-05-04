@@ -9,6 +9,7 @@ import type {
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
+  bumpGatewaySessionMutationVersion,
   loadGatewaySessionRow,
   loadSessionEntry,
   readSessionMessageCountAsync,
@@ -108,6 +109,7 @@ async function handleTranscriptUpdateBroadcast(
   if (!sessionKey || update.message === undefined) {
     return;
   }
+  bumpGatewaySessionMutationVersion();
   const connIds = new Set<string>();
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
@@ -170,6 +172,7 @@ export function createLifecycleEventBroadcastHandler(params: {
   sessionEventSubscribers: SessionEventSubscribers;
 }) {
   return (event: SessionLifecycleEvent): void => {
+    bumpGatewaySessionMutationVersion();
     const connIds = params.sessionEventSubscribers.getAll();
     if (connIds.size === 0) {
       return;

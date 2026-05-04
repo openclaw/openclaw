@@ -110,6 +110,7 @@ import {
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
+  bumpGatewaySessionMutationVersion,
   canonicalizeSpawnedByForAgent,
   loadGatewaySessionRow,
   loadSessionEntry,
@@ -304,6 +305,7 @@ function emitSessionsChanged(
   >,
   payload: { sessionKey?: string; reason: string },
 ) {
+  bumpGatewaySessionMutationVersion();
   const connIds = context.getSessionEventSubscriberConnIds();
   if (connIds.size === 0) {
     return;

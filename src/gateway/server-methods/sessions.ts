@@ -78,6 +78,8 @@ import {
 } from "../session-compaction-checkpoints.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
+  bumpGatewaySessionMutationVersion,
+  getGatewaySessionMutationVersion,
   archiveFileOnDisk,
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
@@ -149,6 +151,7 @@ function buildSessionsListCacheKey(params: {
   return JSON.stringify({
     config: resolveRuntimeConfigCacheKey(params.cfg),
     storePath: params.storePath,
+    storeVersion: getGatewaySessionMutationVersion(),
     agentId: normalizeSessionsListCacheValue(p.agentId),
     activeMinutes: normalizeSessionsListCacheValue(p.activeMinutes),
     limit: normalizeSessionsListCacheValue(p.limit),
@@ -325,6 +328,7 @@ function emitSessionsChanged(
   >,
   payload: { sessionKey?: string; reason: string; compacted?: boolean },
 ) {
+  bumpGatewaySessionMutationVersion();
   clearSessionsListResultCache();
   const connIds = context.getSessionEventSubscriberConnIds();
   if (connIds.size === 0) {
