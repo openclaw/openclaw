@@ -1000,6 +1000,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       canonicalParentSessionKey = parent.canonicalKey;
     }
     const loweredRequestedKey = normalizeOptionalLowercaseString(requestedKey);
+    const isDashboardAutoKey = !requestedKey;
     const key = requestedKey
       ? loweredRequestedKey === "global" || loweredRequestedKey === "unknown"
         ? loweredRequestedKey
@@ -1018,7 +1019,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         storeKey: target.canonicalKey,
         patch: {
           key: target.canonicalKey,
-          label: normalizeOptionalString(p.label),
+          label:
+            normalizeOptionalString(p.label) ?? (isDashboardAutoKey ? "WebUI chat" : undefined),
           model: normalizeOptionalString(p.model),
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,

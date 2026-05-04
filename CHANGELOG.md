@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Channels/streaming: add unified `streaming.mode: "progress"` drafts with auto single-word status labels and shared progress configuration across Discord, Telegram, Matrix, Slack, and Microsoft Teams.
+- Sessions/WebUI: auto-label dashboard sessions created by `/new` with `"WebUI chat"` so `openclaw sessions` shows a readable entry instead of a bare UUID-keyed row; explicit `label` params still take precedence. Fixes #76848. (#77022) Thanks @hclsys.
 - Agents/commands: add `/steer <message>` for queue-independent steering of the active current-session run without starting a new turn when the session is idle. (#76934)
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
 - Doctor/config: `doctor --fix` now commits safe legacy migrations even when unrelated validation issues (e.g. a missing plugin) prevent full validation from passing, so `agents.defaults.llm` and other known-legacy keys are always cleaned up by `doctor --fix` regardless of other config problems. Fixes #76798. (#76800) Thanks @hclsys.

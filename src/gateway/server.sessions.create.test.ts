@@ -187,6 +187,36 @@ test("sessions.create rejects unknown parentSessionKey", async () => {
   );
 });
 
+test("sessions.create auto-labels dashboard sessions when no label is provided (#76848)", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { label?: string };
+  }>("sessions.create", {
+    agentId: "ops",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+  expect(created.payload?.entry?.label).toBe("WebUI chat");
+});
+
+test("sessions.create preserves explicit label over auto-label (#76848)", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { label?: string };
+  }>("sessions.create", {
+    agentId: "ops",
+    label: "My custom label",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.label).toBe("My custom label");
+});
+
 test("sessions.create can start the first agent turn from an initial task", async () => {
   await createSessionStoreDir();
   // Register "ops" so the deleted-agent guard added in #65986 does not
