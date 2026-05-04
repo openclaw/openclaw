@@ -1822,7 +1822,13 @@ export function resolvePackageExtensionEntries(
   if (!Array.isArray(raw)) {
     return { status: "missing", entries: [] };
   }
-  const entries = raw.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+  const entries: string[] = [];
+  for (const entry of raw) {
+    const normalized = normalizeOptionalString(entry);
+    if (normalized) {
+      entries.push(normalized);
+    }
+  }
   if (entries.length === 0) {
     return { status: "empty", entries: [] };
   }

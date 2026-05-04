@@ -222,10 +222,13 @@ function formatKeyValueTraceBlock(
   title: string,
   fields: Array<[string, string | number | boolean | undefined]>,
 ): string | undefined {
-  const lines = fields.flatMap(([key, rawValue]) => {
+  const lines: string[] = [];
+  for (const [key, rawValue] of fields) {
     const value = formatTraceScalar(rawValue);
-    return value ? [`${key}=${value}`] : [];
-  });
+    if (value) {
+      lines.push(`${key}=${value}`);
+    }
+  }
   if (lines.length === 0) {
     return undefined;
   }
@@ -796,12 +799,17 @@ function buildInlineRawTracePayload(params: {
 }
 
 function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
-  return payloads
-    .filter((payload) => !payload.isError && !payload.isReasoning && !payload.isCompactionNotice)
-    .map((payload) => payload.text?.trim())
-    .filter((text): text is string => Boolean(text))
-    .join("\n")
-    .trim();
+  let text = "";
+  for (const payload of payloads) {
+    if (payload.isError || payload.isReasoning || payload.isCompactionNotice) {
+      continue;
+    }
+    const trimmed = payload.text?.trim();
+    if (trimmed) {
+      text = text ? `${text}\n${trimmed}` : trimmed;
+    }
+  }
+  return text.trim();
 }
 
 function enqueueCommitmentExtractionForTurn(params: {

@@ -308,14 +308,15 @@ function parseQaModelSpecs(label: string, entries: readonly string[] | undefined
   const optionsByModel: Record<string, QaCharacterModelOptions> = {};
 
   for (const entry of entries ?? []) {
-    const parts = entry.split(",").map((part) => part.trim());
-    const model = parts[0];
+    const parts = entry.split(",");
+    const model = parts[0]?.trim();
     if (!model) {
       throw new Error(`${label} must start with provider/model, got "${entry}"`);
     }
     models.push(model);
     const options: QaCharacterModelOptions = {};
-    for (const part of parts.slice(1)) {
+    for (let index = 1; index < parts.length; index++) {
+      const part = parts[index]?.trim() ?? "";
       if (!part) {
         throw new Error(`${label} option cannot be empty in "${entry}"`);
       }

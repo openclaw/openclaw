@@ -338,7 +338,13 @@ export function appendBootstrapPromptWarning(
     preserveExactPrompt?: string;
   },
 ): string {
-  const normalizedLines = (warningLines ?? []).map((line) => line.trim()).filter(Boolean);
+  const normalizedLines: string[] = [];
+  for (const line of warningLines ?? []) {
+    const normalized = line.trim();
+    if (normalized) {
+      normalizedLines.push(normalized);
+    }
+  }
   if (normalizedLines.length === 0) {
     return prompt;
   }

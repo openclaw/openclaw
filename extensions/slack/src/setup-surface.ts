@@ -130,11 +130,21 @@ async function resolveSlackGroupAllowlist(params: {
             entries,
           }),
       });
-      const resolvedKeys = resolved
-        .filter((entry) => entry.resolved && entry.id)
-        .map((entry) => entry.id as string);
-      const unresolved = resolved.filter((entry) => !entry.resolved).map((entry) => entry.input);
-      keys = [...resolvedKeys, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
+      const resolvedKeys: string[] = [];
+      const unresolved: string[] = [];
+      keys = [];
+      for (const entry of resolved) {
+        if (entry.resolved && entry.id) {
+          resolvedKeys.push(entry.id);
+          keys.push(entry.id);
+          continue;
+        }
+        unresolved.push(entry.input);
+        const trimmed = entry.input.trim();
+        if (trimmed) {
+          keys.push(trimmed);
+        }
+      }
       await noteChannelLookupSummary({
         prompter: params.prompter,
         label: "Slack channels",

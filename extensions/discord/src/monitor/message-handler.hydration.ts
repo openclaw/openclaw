@@ -98,18 +98,30 @@ function readString(value: unknown): string | undefined {
 }
 
 function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.flatMap((entry) => (typeof entry === "string" ? [entry] : []))
-    : [];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const strings: string[] = [];
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      strings.push(entry);
+    }
+  }
+  return strings;
 }
 
 function normalizeApiUsers(value: unknown): APIUser[] {
-  return Array.isArray(value)
-    ? value.flatMap((entry) => {
-        const user = normalizeApiUser(entry);
-        return user.id ? [user] : [];
-      })
-    : [];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const users: APIUser[] = [];
+  for (const entry of value) {
+    const user = normalizeApiUser(entry);
+    if (user.id) {
+      users.push(user);
+    }
+  }
+  return users;
 }
 
 function normalizeApiUser(value: unknown): APIUser {

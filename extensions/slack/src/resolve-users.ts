@@ -75,32 +75,32 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
         limit: 200,
         cursor,
       })) as SlackListUsersResponse,
-    collectPageItems: (res) =>
-      (res.members ?? [])
-        .map((member) => {
-          const id = normalizeOptionalString(member.id);
-          const name = normalizeOptionalString(member.name);
-          if (!id || !name) {
-            return null;
-          }
-          const profile = member.profile ?? {};
-          return {
-            id,
-            name,
-            displayName: normalizeOptionalString(profile.display_name),
-            realName:
-              normalizeOptionalString(profile.real_name) ??
-              normalizeOptionalString(member.real_name),
-            email:
-              normalizeOptionalString(profile.email) == null
-                ? undefined
-                : normalizeLowercaseStringOrEmpty(profile.email),
-            deleted: Boolean(member.deleted),
-            isBot: Boolean(member.is_bot),
-            isAppUser: Boolean(member.is_app_user),
-          } satisfies SlackUserLookup;
-        })
-        .filter(Boolean) as SlackUserLookup[],
+    collectPageItems: (res) => {
+      const items: SlackUserLookup[] = [];
+      for (const member of res.members ?? []) {
+        const id = normalizeOptionalString(member.id);
+        const name = normalizeOptionalString(member.name);
+        if (!id || !name) {
+          continue;
+        }
+        const profile = member.profile ?? {};
+        items.push({
+          id,
+          name,
+          displayName: normalizeOptionalString(profile.display_name),
+          realName:
+            normalizeOptionalString(profile.real_name) ?? normalizeOptionalString(member.real_name),
+          email:
+            normalizeOptionalString(profile.email) == null
+              ? undefined
+              : normalizeLowercaseStringOrEmpty(profile.email),
+          deleted: Boolean(member.deleted),
+          isBot: Boolean(member.is_bot),
+          isAppUser: Boolean(member.is_app_user),
+        });
+      }
+      return items;
+    },
   });
 }
 
@@ -117,10 +117,11 @@ function scoreSlackUser(user: SlackUserLookup, match: { name?: string; email?: s
   }
   if (match.name) {
     const target = normalizeLowercaseStringOrEmpty(match.name);
-    const candidates = [user.name, user.displayName, user.realName]
-      .map((value) => normalizeLowercaseStringOrEmpty(value))
-      .filter(Boolean);
-    if (candidates.some((value) => value === target)) {
+    if (
+      normalizeLowercaseStringOrEmpty(user.name) === target ||
+      normalizeLowercaseStringOrEmpty(user.displayName) === target ||
+      normalizeLowercaseStringOrEmpty(user.realName) === target
+    ) {
       score += 2;
     }
   }
@@ -182,12 +183,16 @@ export async function resolveSlackUserAllowlist(params: {
       }
       if (parsed.name) {
         const target = normalizeLowercaseStringOrEmpty(parsed.name);
-        const matches = lookup.filter((user) => {
-          const candidates = [user.name, user.displayName, user.realName]
-            .map((value) => normalizeLowercaseStringOrEmpty(value))
-            .filter(Boolean);
-          return candidates.includes(target);
-        });
+        const matches: SlackUserLookup[] = [];
+        for (const user of lookup) {
+          if (
+            normalizeLowercaseStringOrEmpty(user.name) === target ||
+            normalizeLowercaseStringOrEmpty(user.displayName) === target ||
+            normalizeLowercaseStringOrEmpty(user.realName) === target
+          ) {
+            matches.push(user);
+          }
+        }
         if (matches.length > 0) {
           return resolveSlackUserFromMatches(input, matches, parsed);
         }

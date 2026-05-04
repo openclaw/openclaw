@@ -34,16 +34,42 @@ export type BuildChannelTurnContextParams = {
   extra?: Record<string, unknown>;
 };
 
-function compactStrings(values: Array<string | undefined>): string[] | undefined {
-  const compacted = values.filter((value): value is string => Boolean(value));
-  return compacted.length > 0 ? compacted : undefined;
-}
-
-function mediaTranscribedIndexes(media: InboundMediaFacts[]): number[] | undefined {
-  const indexes = media
-    .map((item, index) => (item.transcribed ? index : undefined))
-    .filter((index): index is number => index !== undefined);
-  return indexes.length > 0 ? indexes : undefined;
+function compactMediaFacts(media: InboundMediaFacts[]): {
+  paths?: string[];
+  urls?: string[];
+  types?: string[];
+  transcribedIndexes?: number[];
+} {
+  const paths: string[] = [];
+  const urls: string[] = [];
+  const types: string[] = [];
+  const transcribedIndexes: number[] = [];
+  for (let index = 0; index < media.length; index += 1) {
+    const item = media[index];
+    if (!item) {
+      continue;
+    }
+    if (item.path) {
+      paths.push(item.path);
+    }
+    const url = item.url ?? item.path;
+    if (url) {
+      urls.push(url);
+    }
+    const type = item.contentType ?? item.kind;
+    if (type) {
+      types.push(type);
+    }
+    if (item.transcribed) {
+      transcribedIndexes.push(index);
+    }
+  }
+  return {
+    paths: paths.length > 0 ? paths : undefined,
+    urls: urls.length > 0 ? urls : undefined,
+    types: types.length > 0 ? types : undefined,
+    transcribedIndexes: transcribedIndexes.length > 0 ? transcribedIndexes : undefined,
+  };
 }
 
 function commandAuthorized(access: AccessFacts | undefined): boolean | undefined {
@@ -119,6 +145,7 @@ export function buildChannelTurnContext(
     contextVisibility: params.contextVisibility,
   });
   const body = params.message.body ?? params.message.rawBody;
+  const mediaFacts = compactMediaFacts(media);
 
   return finalizeInboundContext({
     Body: body,
@@ -150,10 +177,10 @@ export function buildChannelTurnContext(
     MediaPath: media[0]?.path,
     MediaUrl: media[0]?.url ?? media[0]?.path,
     MediaType: media[0]?.contentType ?? media[0]?.kind,
-    MediaPaths: compactStrings(media.map((item) => item.path)),
-    MediaUrls: compactStrings(media.map((item) => item.url ?? item.path)),
-    MediaTypes: compactStrings(media.map((item) => item.contentType ?? item.kind)),
-    MediaTranscribedIndexes: mediaTranscribedIndexes(media),
+    MediaPaths: mediaFacts.paths,
+    MediaUrls: mediaFacts.urls,
+    MediaTypes: mediaFacts.types,
+    MediaTranscribedIndexes: mediaFacts.transcribedIndexes,
     ChatType: params.conversation.kind,
     ConversationLabel: params.conversation.label,
     GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,

@@ -73,15 +73,20 @@ function describeMattermostMessageTool({
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const enabledAccounts = (
-    accountId
-      ? [resolveMattermostAccount({ cfg, accountId })]
-      : listMattermostAccountIds(cfg).map((listedAccountId) =>
-          resolveMattermostAccount({ cfg, accountId: listedAccountId }),
-        )
-  )
-    .filter((account) => account.enabled)
-    .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
+  const enabledAccounts: ResolvedMattermostAccount[] = [];
+  if (accountId) {
+    const account = resolveMattermostAccount({ cfg, accountId });
+    if (account.enabled && account.botToken?.trim() && account.baseUrl?.trim()) {
+      enabledAccounts.push(account);
+    }
+  } else {
+    for (const listedAccountId of listMattermostAccountIds(cfg)) {
+      const account = resolveMattermostAccount({ cfg, accountId: listedAccountId });
+      if (account.enabled && account.botToken?.trim() && account.baseUrl?.trim()) {
+        enabledAccounts.push(account);
+      }
+    }
+  }
 
   const actions: ChannelMessageActionName[] = [];
 
@@ -192,6 +197,29 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
 
     const mediaUrl =
       typeof params.media === "string" ? params.media.trim() || undefined : undefined;
+    let buttons: Array<unknown> | undefined;
+    if (presentation) {
+      const interactive = presentationToInteractiveReply(presentation);
+      if (interactive) {
+        buttons = [];
+        for (const block of interactive.blocks) {
+          if (block.type !== "buttons") {
+            continue;
+          }
+          const row = [];
+          for (const button of block.buttons) {
+            if (button.value) {
+              row.push({
+                text: button.label,
+                callback_data: button.value,
+                style: button.style,
+              });
+            }
+          }
+          buttons.push(row);
+        }
+      }
+    }
 
     const result = await (
       await loadMattermostChannelRuntime()
@@ -199,23 +227,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId: resolvedAccountId,
       replyToId,
-      buttons: presentation
-        ? presentationToInteractiveReply(presentation)
-            ?.blocks.filter((block) => block.type === "buttons")
-            .map((block) =>
-              block.buttons.flatMap((button) =>
-                button.value
-                  ? [
-                      {
-                        text: button.label,
-                        callback_data: button.value,
-                        style: button.style,
-                      },
-                    ]
-                  : [],
-              ),
-            )
-        : undefined,
+      buttons,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl,
     });

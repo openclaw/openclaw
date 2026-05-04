@@ -115,7 +115,14 @@ const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
 ];
 
 function toUniqueNonEmpty(values: string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+  const unique = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      unique.add(trimmed);
+    }
+  }
+  return Array.from(unique);
 }
 
 export function resolveTelegramStatusReactionEmojis(params: {

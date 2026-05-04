@@ -316,9 +316,13 @@ const CORE_TOOL_BY_ID = new Map<string, CoreToolDefinition>(
 );
 
 function listCoreToolIdsForProfile(profile: ToolProfileId): string[] {
-  return CORE_TOOL_DEFINITIONS.filter((tool) => tool.profiles.includes(profile)).map(
-    (tool) => tool.id,
-  );
+  const ids: string[] = [];
+  for (const tool of CORE_TOOL_DEFINITIONS) {
+    if (tool.profiles.includes(profile)) {
+      ids.push(tool.id);
+    }
+  }
+  return ids;
 }
 
 const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
@@ -338,15 +342,16 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
 
 function buildCoreToolGroupMap() {
   const sectionToolMap = new Map<string, string[]>();
+  const openclawTools: string[] = [];
   for (const tool of CORE_TOOL_DEFINITIONS) {
     const groupId = `group:${tool.sectionId}`;
     const list = sectionToolMap.get(groupId) ?? [];
     list.push(tool.id);
     sectionToolMap.set(groupId, list);
+    if (tool.includeInOpenClawGroup) {
+      openclawTools.push(tool.id);
+    }
   }
-  const openclawTools = CORE_TOOL_DEFINITIONS.filter((tool) => tool.includeInOpenClawGroup).map(
-    (tool) => tool.id,
-  );
   return {
     "group:openclaw": openclawTools,
     ...Object.fromEntries(sectionToolMap.entries()),
@@ -380,15 +385,28 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
 }
 
 export function listCoreToolSections(): CoreToolSection[] {
-  return CORE_TOOL_SECTION_ORDER.map((section) => ({
-    id: section.id,
-    label: section.label,
-    tools: CORE_TOOL_DEFINITIONS.filter((tool) => tool.sectionId === section.id).map((tool) => ({
+  const toolsBySection = new Map<string, CoreToolSection["tools"]>();
+  for (const tool of CORE_TOOL_DEFINITIONS) {
+    const list = toolsBySection.get(tool.sectionId) ?? [];
+    list.push({
       id: tool.id,
       label: tool.label,
       description: tool.description,
-    })),
-  })).filter((section) => section.tools.length > 0);
+    });
+    toolsBySection.set(tool.sectionId, list);
+  }
+  const sections: CoreToolSection[] = [];
+  for (const section of CORE_TOOL_SECTION_ORDER) {
+    const tools = toolsBySection.get(section.id);
+    if (tools?.length) {
+      sections.push({
+        id: section.id,
+        label: section.label,
+        tools,
+      });
+    }
+  }
+  return sections;
 }
 
 export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {

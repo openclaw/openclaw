@@ -10,8 +10,15 @@ function extractConversationId(from?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const parts = trimmed.split(":").filter(Boolean);
-  return parts.length > 0 ? parts[parts.length - 1] : trimmed;
+  let end = trimmed.length;
+  while (end > 0 && trimmed[end - 1] === ":") {
+    end--;
+  }
+  if (end === 0) {
+    return trimmed;
+  }
+  const start = trimmed.lastIndexOf(":", end - 1) + 1;
+  return trimmed.slice(start, end) || trimmed;
 }
 
 function shouldAppendId(id: string): boolean {

@@ -20,8 +20,13 @@ function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
   const name = normalizeOptionalString(identity?.name);
   if (name) {
-    const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
-    const re = parts.length ? parts.join(String.raw`\s+`) : escapeRegExp(name);
+    const parts: string[] = [];
+    for (const part of name.split(/\s+/)) {
+      if (part) {
+        parts.push(escapeRegExp(part));
+      }
+    }
+    const re = parts.length > 0 ? parts.join(String.raw`\s+`) : escapeRegExp(name);
     patterns.push(String.raw`\b@?${re}\b`);
   }
   const emoji = normalizeOptionalString(identity?.emoji);

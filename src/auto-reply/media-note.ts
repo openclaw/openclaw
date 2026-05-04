@@ -128,33 +128,26 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   // when there is a single attachment to avoid stripping unrelated audio files.
   const canStripSingleAttachmentByTranscript = hasTranscript && paths.length === 1;
 
-  const entries = paths
-    .map((entry, index) => ({
-      path: entry ?? "",
-      type: types?.[index] ?? ctx.MediaType,
-      url: urls?.[index] ?? ctx.MediaUrl,
-      index,
-    }))
-    .filter((entry) => {
-      // Strip audio attachments when transcription succeeded - the transcript is already
-      // available in the context, raw audio binary would only waste tokens (issue #4197)
-      // Note: Only trust MIME type from per-entry types array, not fallback ctx.MediaType
-      // which could misclassify non-audio attachments (greptile review feedback)
-      const hasPerEntryType = types !== undefined;
-      const isAudioByMime =
-        hasPerEntryType && normalizeLowercaseStringOrEmpty(entry.type).startsWith("audio/");
-      const isAudioEntry = isAudioPath(entry.path) || isAudioByMime;
-      if (!isAudioEntry) {
-        return true;
-      }
-      if (
-        transcribedAudioIndices.has(entry.index) ||
-        (canStripSingleAttachmentByTranscript && entry.index === 0)
-      ) {
-        return false;
-      }
-      return true;
-    });
+  const entries: Array<{ path: string; type?: string; url?: string }> = [];
+  for (const [index, entry] of paths.entries()) {
+    const path = entry ?? "";
+    const type = types?.[index] ?? ctx.MediaType;
+    const url = urls?.[index] ?? ctx.MediaUrl;
+    // Strip audio attachments when transcription succeeded - the transcript is already
+    // available in the context, raw audio binary would only waste tokens (issue #4197)
+    // Note: Only trust MIME type from per-entry types array, not fallback ctx.MediaType
+    // which could misclassify non-audio attachments (greptile review feedback)
+    const isAudioByMime =
+      types !== undefined && normalizeLowercaseStringOrEmpty(type).startsWith("audio/");
+    const isAudioEntry = isAudioPath(path) || isAudioByMime;
+    if (
+      isAudioEntry &&
+      (transcribedAudioIndices.has(index) || (canStripSingleAttachmentByTranscript && index === 0))
+    ) {
+      continue;
+    }
+    entries.push({ path, type, url });
+  }
   if (entries.length === 0) {
     return undefined;
   }

@@ -64,11 +64,13 @@ export function buildMediaGenerationTaskStatusText(params: {
   const provider = getMediaGenerationTaskProviderId(params.task, params.sourcePrefix);
   const lines = [
     `${params.nounLabel} task ${params.task.taskId} is already ${params.task.status}${provider ? ` with ${provider}` : ""}.`,
-    params.task.progressSummary ? `Progress: ${params.task.progressSummary}.` : null,
     params.duplicateGuard
       ? `Do not call ${params.toolName} again for this request. Wait for the completion event; I will post the finished ${params.completionLabel} here.`
       : `Wait for the completion event; I will post the finished ${params.completionLabel} here when it's ready.`,
-  ].filter((entry): entry is string => Boolean(entry));
+  ];
+  if (params.task.progressSummary) {
+    lines.splice(1, 0, `Progress: ${params.task.progressSummary}.`);
+  }
   return lines.join("\n");
 }
 

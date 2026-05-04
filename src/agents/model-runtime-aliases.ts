@@ -26,25 +26,18 @@ const LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES = [
   },
 ] as const satisfies readonly LegacyRuntimeModelProviderAlias[];
 
-const LEGACY_ALIAS_BY_PROVIDER = new Map(
-  LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.map((entry) => [
-    normalizeProviderId(entry.legacyProvider),
-    entry,
-  ]),
-);
+const LEGACY_ALIAS_BY_PROVIDER = new Map<string, LegacyRuntimeModelProviderAlias>();
+const CLI_RUNTIME_BY_PROVIDER = new Map<string, LegacyRuntimeModelProviderAlias>();
+const CLI_RUNTIME_ALIASES = new Set<string>();
 
-const CLI_RUNTIME_BY_PROVIDER = new Map(
-  LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.filter((entry) => entry.cli).map((entry) => [
-    `${normalizeProviderId(entry.provider)}:${normalizeProviderId(entry.runtime)}`,
-    entry,
-  ]),
-);
-
-const CLI_RUNTIME_ALIASES = new Set(
-  LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.filter((entry) => entry.cli).map((entry) =>
-    normalizeProviderId(entry.runtime),
-  ),
-);
+for (const entry of LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES) {
+  LEGACY_ALIAS_BY_PROVIDER.set(normalizeProviderId(entry.legacyProvider), entry);
+  if (entry.cli) {
+    const runtime = normalizeProviderId(entry.runtime);
+    CLI_RUNTIME_BY_PROVIDER.set(`${normalizeProviderId(entry.provider)}:${runtime}`, entry);
+    CLI_RUNTIME_ALIASES.add(runtime);
+  }
+}
 
 export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeModelProviderAlias[] {
   return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;

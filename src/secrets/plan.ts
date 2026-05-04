@@ -84,10 +84,17 @@ export function resolveValidatedPlanTarget(candidate: {
   if (!path) {
     return null;
   }
-  const segments =
-    Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0
-      ? candidate.pathSegments.map((segment) => segment.trim()).filter(Boolean)
-      : parseDotPath(path);
+  const segments: string[] = [];
+  if (Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0) {
+    for (const segment of candidate.pathSegments) {
+      const trimmed = segment.trim();
+      if (trimmed) {
+        segments.push(trimmed);
+      }
+    }
+  } else {
+    segments.push(...parseDotPath(path));
+  }
   if (segments.length === 0 || hasForbiddenPathSegment(segments) || path !== toDotPath(segments)) {
     return null;
   }

@@ -301,16 +301,28 @@ export function getProviderEnvVars(
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must
 // remain available to child bridge/runtime processes.
 export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return [
-    ...new Set([
-      ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
-      ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
-    ]),
-  ];
+  const names = new Set<string>();
+  for (const keys of Object.values(resolveProviderAuthEnvVarCandidates(params))) {
+    for (const key of keys) {
+      names.add(key);
+    }
+  }
+  for (const keys of Object.values(resolveProviderEnvVars(params))) {
+    for (const key of keys) {
+      names.add(key);
+    }
+  }
+  return [...names];
 }
 
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return [...new Set(Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys))];
+  const names = new Set<string>();
+  for (const keys of Object.values(resolveProviderEnvVars(params))) {
+    for (const key of keys) {
+      names.add(key);
+    }
+  }
+  return [...names];
 }
 
 export function omitEnvKeysCaseInsensitive(

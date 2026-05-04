@@ -57,13 +57,21 @@ function resolveProviderFromContext(
   ctx: MsgContext,
   cfg: OpenClawConfig,
 ): { providerId: ChannelId | undefined; hadResolutionError: boolean } {
-  const explicitMessageChannels = [ctx.Surface, ctx.OriginatingChannel, ctx.Provider]
-    .map((value) => normalizeMessageChannel(value))
-    .filter((value): value is string => Boolean(value));
-  const explicitMessageChannel = explicitMessageChannels.find(
-    (value) => value !== INTERNAL_MESSAGE_CHANNEL,
-  );
-  if (!explicitMessageChannel && explicitMessageChannels.includes(INTERNAL_MESSAGE_CHANNEL)) {
+  let explicitMessageChannel: string | undefined;
+  let sawInternalChannel = false;
+  for (const value of [ctx.Surface, ctx.OriginatingChannel, ctx.Provider]) {
+    const normalized = normalizeMessageChannel(value);
+    if (!normalized) {
+      continue;
+    }
+    if (normalized === INTERNAL_MESSAGE_CHANNEL) {
+      sawInternalChannel = true;
+      continue;
+    }
+    explicitMessageChannel = normalized;
+    break;
+  }
+  if (!explicitMessageChannel && sawInternalChannel) {
     return { providerId: undefined, hadResolutionError: false };
   }
   const direct =
@@ -75,20 +83,23 @@ function resolveProviderFromContext(
   if (direct) {
     return { providerId: direct, hadResolutionError: false };
   }
-  const candidates = [ctx.From, ctx.To]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .flatMap((value) => value.split(":").map((part) => part.trim()));
-  for (const candidate of candidates) {
-    const normalizedCandidateChannel = normalizeMessageChannel(candidate);
-    if (normalizedCandidateChannel === INTERNAL_MESSAGE_CHANNEL) {
-      return { providerId: undefined, hadResolutionError: false };
+  for (const value of [ctx.From, ctx.To]) {
+    if (!value?.trim()) {
+      continue;
     }
-    const normalized =
-      normalizeAnyChannelId(normalizedCandidateChannel ?? undefined) ??
-      (normalizedCandidateChannel as ChannelId | undefined) ??
-      normalizeAnyChannelId(candidate);
-    if (normalized) {
-      return { providerId: normalized, hadResolutionError: false };
+    for (const part of value.split(":")) {
+      const candidate = part.trim();
+      const normalizedCandidateChannel = normalizeMessageChannel(candidate);
+      if (normalizedCandidateChannel === INTERNAL_MESSAGE_CHANNEL) {
+        return { providerId: undefined, hadResolutionError: false };
+      }
+      const normalized =
+        normalizeAnyChannelId(normalizedCandidateChannel ?? undefined) ??
+        (normalizedCandidateChannel as ChannelId | undefined) ??
+        normalizeAnyChannelId(candidate);
+      if (normalized) {
+        return { providerId: normalized, hadResolutionError: false };
+      }
     }
   }
   const inferredProviders = probeInferredProviders(ctx, cfg);
@@ -109,25 +120,24 @@ function resolveProviderFromContext(
 
 function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig): InferredProviderProbe {
   let droppedResolutionError = false;
-  const candidates = listLoadedChannelPlugins()
-    .map((plugin) => {
-      const resolvedAllowFrom = buildProviderAllowFromResolution({
-        plugin: plugin as ChannelPlugin,
-        cfg,
-        accountId: ctx.AccountId,
-      });
-      if (resolvedAllowFrom.allowFromList.length === 0) {
-        if (resolvedAllowFrom.hadResolutionError) {
-          droppedResolutionError = true;
-        }
-        return null;
+  const candidates: InferredProviderCandidate[] = [];
+  for (const plugin of listLoadedChannelPlugins()) {
+    const resolvedAllowFrom = buildProviderAllowFromResolution({
+      plugin: plugin as ChannelPlugin,
+      cfg,
+      accountId: ctx.AccountId,
+    });
+    if (resolvedAllowFrom.allowFromList.length === 0) {
+      if (resolvedAllowFrom.hadResolutionError) {
+        droppedResolutionError = true;
       }
-      return {
-        providerId: plugin.id,
-        hadResolutionError: resolvedAllowFrom.hadResolutionError,
-      };
-    })
-    .filter((value): value is InferredProviderCandidate => Boolean(value));
+      continue;
+    }
+    candidates.push({
+      providerId: plugin.id,
+      hadResolutionError: resolvedAllowFrom.hadResolutionError,
+    });
+  }
   return {
     candidates,
     droppedResolutionError,
@@ -162,7 +172,13 @@ function normalizeAllowFromEntry(params: {
     accountId: params.accountId,
     allowFrom: [params.value],
   });
-  return normalized.filter((entry) => entry.trim().length > 0);
+  const entries: string[] = [];
+  for (const entry of normalized) {
+    if (entry.trim().length > 0) {
+      entries.push(entry);
+    }
+  }
+  return entries;
 }
 
 function isWildcardAllowFromEntry(entry: string): boolean {
@@ -174,7 +190,25 @@ function hasWildcardAllowFrom(list: string[]): boolean {
 }
 
 function stripWildcardAllowFrom(list: string[]): string[] {
-  return list.filter((entry) => !isWildcardAllowFromEntry(entry));
+  const stripped: string[] = [];
+  for (const entry of list) {
+    if (!isWildcardAllowFromEntry(entry)) {
+      stripped.push(entry);
+    }
+  }
+  return stripped;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      unique.push(value);
+    }
+  }
+  return unique;
 }
 
 function resolveProviderAllowFrom(params: {
@@ -408,16 +442,14 @@ function resolveOwnerAuthorizationState(params: {
   const ownerAllowAll = hasWildcardAllowFrom(configOwnerAllowFromList);
   const explicitOwners = stripWildcardAllowFrom(configOwnerAllowFromList);
   const explicitOverrides = stripWildcardAllowFrom(contextOwnerAllowFromList);
-  const ownerList = Array.from(
-    new Set(
-      explicitOwners.length > 0
-        ? explicitOwners
-        : ownerAllowAll
-          ? []
-          : explicitOverrides.length > 0
-            ? explicitOverrides
-            : ownerCandidatesForCommands,
-    ),
+  const ownerList = uniqueStrings(
+    explicitOwners.length > 0
+      ? explicitOwners
+      : ownerAllowAll
+        ? []
+        : explicitOverrides.length > 0
+          ? explicitOverrides
+          : ownerCandidatesForCommands,
   );
   return {
     allowAll,
@@ -618,8 +650,22 @@ function resolveFallbackDefaultAccountConfig(
   if (preferred) {
     return preferred;
   }
-  const definedAccounts = Object.values(accounts).filter(Boolean);
-  return definedAccounts.length === 1 ? definedAccounts[0] : undefined;
+  let singleDefined:
+    | {
+        allowFrom?: Array<string | number>;
+        dm?: { allowFrom?: Array<string | number> };
+      }
+    | undefined;
+  for (const account of Object.values(accounts)) {
+    if (!account) {
+      continue;
+    }
+    if (singleDefined) {
+      return undefined;
+    }
+    singleDefined = account;
+  }
+  return singleDefined;
 }
 
 export function resolveCommandAuthorization(params: {

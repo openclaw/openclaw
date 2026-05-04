@@ -46,8 +46,8 @@ export function providerSupportsNativePdf(provider: string): boolean {
  */
 export function parsePageRange(range: string, maxPages: number): number[] {
   const pages = new Set<number>();
-  const parts = range.split(",").map((p) => p.trim());
-  for (const part of parts) {
+  for (const rawPart of range.split(",")) {
+    const part = rawPart.trim();
     if (!part) {
       continue;
     }

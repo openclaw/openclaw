@@ -30,8 +30,7 @@ function collectScopes(value: unknown, into: string[]) {
     if (!raw) {
       return;
     }
-    const parts = raw.split(/[,\s]+/).map((part) => part.trim());
-    for (const part of parts) {
+    for (const part of raw.split(/[,\s]+/)) {
       if (part) {
         into.push(part);
       }
@@ -49,7 +48,14 @@ function collectScopes(value: unknown, into: string[]) {
 }
 
 function normalizeScopes(scopes: string[]) {
-  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean))).toSorted();
+  const normalized = new Set<string>();
+  for (const scope of scopes) {
+    const trimmed = scope.trim();
+    if (trimmed) {
+      normalized.add(trimmed);
+    }
+  }
+  return Array.from(normalized).toSorted();
 }
 
 function extractScopes(payload: unknown): string[] {

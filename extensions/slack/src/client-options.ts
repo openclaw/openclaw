@@ -23,12 +23,12 @@ function isHostExcludedByNoProxy(hostname: string, env: NodeJS.ProcessEnv = proc
   if (!raw) {
     return false;
   }
-  const entries = raw
-    .split(/[,\s]+/)
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
   const lower = hostname.toLowerCase();
-  for (const entry of entries) {
+  for (const rawEntry of raw.split(/[,\s]+/)) {
+    const entry = rawEntry.trim().toLowerCase();
+    if (!entry) {
+      continue;
+    }
     if (entry === "*") {
       return true;
     }

@@ -205,9 +205,10 @@ Optional:
 
 - `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts (default redacts).
 
-Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts:44`):
+`telegram-canary` always runs first and is reported in the artifacts, but it is not a selectable `--scenario` id.
 
-- `telegram-canary`
+Selectable scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts:44`):
+
 - `telegram-mention-gating`
 - `telegram-mentioned-message-reply`
 - `telegram-help-command`

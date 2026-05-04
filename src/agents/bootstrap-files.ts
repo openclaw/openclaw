@@ -30,25 +30,40 @@ export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:
 const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
 const seenBootstrapWarnings = new Set<string>();
 const bootstrapWarningOrder: string[] = [];
+let bootstrapWarningOrderIndex = 0;
 
 function rememberBootstrapWarning(key: string): boolean {
   if (seenBootstrapWarnings.has(key)) {
     return false;
   }
   if (seenBootstrapWarnings.size >= BOOTSTRAP_WARNING_DEDUPE_LIMIT) {
-    const oldest = bootstrapWarningOrder.shift();
-    if (oldest) {
-      seenBootstrapWarnings.delete(oldest);
-    }
+    evictOldestBootstrapWarning();
   }
   seenBootstrapWarnings.add(key);
   bootstrapWarningOrder.push(key);
   return true;
 }
 
+function evictOldestBootstrapWarning(): void {
+  while (bootstrapWarningOrderIndex < bootstrapWarningOrder.length) {
+    const oldest = bootstrapWarningOrder[bootstrapWarningOrderIndex++];
+    if (oldest && seenBootstrapWarnings.delete(oldest)) {
+      break;
+    }
+  }
+  if (
+    bootstrapWarningOrderIndex > 64 &&
+    bootstrapWarningOrderIndex * 2 > bootstrapWarningOrder.length
+  ) {
+    bootstrapWarningOrder.splice(0, bootstrapWarningOrderIndex);
+    bootstrapWarningOrderIndex = 0;
+  }
+}
+
 export function _resetBootstrapWarningCacheForTest(): void {
   seenBootstrapWarnings.clear();
   bootstrapWarningOrder.length = 0;
+  bootstrapWarningOrderIndex = 0;
 }
 
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {

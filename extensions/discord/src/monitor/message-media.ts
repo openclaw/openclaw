@@ -77,10 +77,18 @@ function hasDiscordVoiceAttachmentFields(attachment: APIAttachment): boolean {
 }
 
 function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | undefined {
-  const merged = lists
-    .flatMap((list) => list ?? [])
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
+  const merged: string[] = [];
+  for (const list of lists) {
+    if (!list) {
+      continue;
+    }
+    for (const value of list) {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        merged.push(trimmed);
+      }
+    }
+  }
   if (merged.length === 0) {
     return undefined;
   }

@@ -31,16 +31,20 @@ function resolveSlackChannelPolicyEntry(
   const groupChannel = params.groupChannel;
   const channelName = groupChannel?.replace(/^#/, "");
   const normalizedName = normalizeHyphenSlug(channelName);
-  const candidates = [
-    channelId ?? "",
-    channelName ? `#${channelName}` : "",
-    channelName ?? "",
-    normalizedName,
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    if (candidate && channelMap[candidate]) {
-      return channelMap[candidate];
+  if (channelId && channelMap[channelId]) {
+    return channelMap[channelId];
+  }
+  if (channelName) {
+    const taggedName = `#${channelName}`;
+    if (channelMap[taggedName]) {
+      return channelMap[taggedName];
     }
+    if (channelMap[channelName]) {
+      return channelMap[channelName];
+    }
+  }
+  if (normalizedName && channelMap[normalizedName]) {
+    return channelMap[normalizedName];
   }
   return channelMap["*"];
 }

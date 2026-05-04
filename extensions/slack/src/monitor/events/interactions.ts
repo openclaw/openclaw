@@ -70,30 +70,29 @@ function buildCompactSlackInteractionPayload(
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
   const rawInputs = Array.isArray(payload.inputs) ? payload.inputs : [];
-  const compactInputs = rawInputs
-    .slice(0, SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS)
-    .flatMap((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return [];
-      }
-      const typed = entry as Record<string, unknown>;
-      return [
-        {
-          actionId: typed.actionId,
-          blockId: typed.blockId,
-          actionType: typed.actionType,
-          inputKind: typed.inputKind,
-          selectedValues: typed.selectedValues,
-          selectedLabels: typed.selectedLabels,
-          inputValue: typed.inputValue,
-          inputNumber: typed.inputNumber,
-          selectedDate: typed.selectedDate,
-          selectedTime: typed.selectedTime,
-          selectedDateTime: typed.selectedDateTime,
-          richTextPreview: typed.richTextPreview,
-        },
-      ];
+  const compactInputs = [];
+  const inputLimit = Math.min(rawInputs.length, SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS);
+  for (let index = 0; index < inputLimit; index += 1) {
+    const entry = rawInputs[index];
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const typed = entry as Record<string, unknown>;
+    compactInputs.push({
+      actionId: typed.actionId,
+      blockId: typed.blockId,
+      actionType: typed.actionType,
+      inputKind: typed.inputKind,
+      selectedValues: typed.selectedValues,
+      selectedLabels: typed.selectedLabels,
+      inputValue: typed.inputValue,
+      inputNumber: typed.inputNumber,
+      selectedDate: typed.selectedDate,
+      selectedTime: typed.selectedTime,
+      selectedDateTime: typed.selectedDateTime,
+      richTextPreview: typed.richTextPreview,
     });
+  }
 
   return {
     interactionType: payload.interactionType,

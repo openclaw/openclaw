@@ -24,19 +24,22 @@ function collectConfiguredChannelIds(
     ...listExplicitlyDisabledChannelIdsForConfig(config),
     ...listExplicitlyDisabledChannelIdsForConfig(activationSourceConfig),
   ]);
-  const ids = new Set([
-    ...listPotentialConfiguredChannelIds(config, env, { includePersistedAuthState: false }),
-    ...listExplicitConfiguredChannelIdsForConfig(activationSourceConfig),
-  ]);
-  return [...ids]
-    .map((channelId) => normalizeOptionalLowercaseString(channelId))
-    .filter((channelId): channelId is string => {
-      if (!channelId) {
-        return false;
-      }
-      return !disabled.has(channelId);
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  const ids = new Set<string>();
+  for (const channelId of listPotentialConfiguredChannelIds(config, env, {
+    includePersistedAuthState: false,
+  })) {
+    const normalized = normalizeOptionalLowercaseString(channelId);
+    if (normalized && !disabled.has(normalized)) {
+      ids.add(normalized);
+    }
+  }
+  for (const channelId of listExplicitConfiguredChannelIdsForConfig(activationSourceConfig)) {
+    const normalized = normalizeOptionalLowercaseString(channelId);
+    if (normalized && !disabled.has(normalized)) {
+      ids.add(normalized);
+    }
+  }
+  return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
 function collectBundledChannelOwnerPluginIds(params: {
@@ -47,11 +50,13 @@ function collectBundledChannelOwnerPluginIds(params: {
   bundledPluginsDir?: string;
 }): string[] {
   const plugins = normalizePluginsConfig(params.config.plugins);
-  const channelIds = new Set(
-    params.channelIds
-      .map((channelId) => normalizeOptionalLowercaseString(channelId))
-      .filter((channelId): channelId is string => Boolean(channelId)),
-  );
+  const channelIds = new Set<string>();
+  for (const channelId of params.channelIds) {
+    const normalized = normalizeOptionalLowercaseString(channelId);
+    if (normalized) {
+      channelIds.add(normalized);
+    }
+  }
   if (channelIds.size === 0) {
     return [];
   }
@@ -74,22 +79,27 @@ function collectBundledChannelOwnerPluginIds(params: {
     if (plugin.origin !== "bundled") {
       continue;
     }
-    if (
-      plugin.channels.some((channelId) =>
-        channelIds.has(normalizeOptionalLowercaseString(channelId) ?? ""),
-      )
-    ) {
-      const pluginId = normalizeOptionalLowercaseString(plugin.id);
-      if (
-        pluginId &&
-        passesManifestOwnerBasePolicy({
-          plugin: { id: pluginId },
-          normalizedConfig: plugins,
-          allowRestrictiveAllowlistBypass: true,
-        })
-      ) {
-        pluginIds.add(pluginId);
+    let ownsConfiguredChannel = false;
+    for (const channelId of plugin.channels) {
+      const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
+      if (normalizedChannelId && channelIds.has(normalizedChannelId)) {
+        ownsConfiguredChannel = true;
+        break;
       }
+    }
+    if (!ownsConfiguredChannel) {
+      continue;
+    }
+    const pluginId = normalizeOptionalLowercaseString(plugin.id);
+    if (
+      pluginId &&
+      passesManifestOwnerBasePolicy({
+        plugin: { id: pluginId },
+        normalizedConfig: plugins,
+        allowRestrictiveAllowlistBypass: true,
+      })
+    ) {
+      pluginIds.add(pluginId);
     }
   }
   return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
@@ -101,12 +111,10 @@ function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
     return [];
   }
 
+  const allow = new Set(plugins.allow);
   const ids = new Set(plugins.allow);
   for (const [pluginId, entry] of Object.entries(plugins.entries)) {
-    if (
-      entry?.enabled === true &&
-      (plugins.allow.length === 0 || plugins.allow.includes(pluginId))
-    ) {
+    if (entry?.enabled === true && (allow.size === 0 || allow.has(pluginId))) {
       ids.add(pluginId);
     }
   }

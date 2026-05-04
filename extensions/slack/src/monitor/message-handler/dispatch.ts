@@ -103,7 +103,13 @@ const UNICODE_TO_SLACK: Record<string, string> = {
 };
 
 function toSlackEmojiName(emoji: string): string {
-  const trimmed = emoji.trim().replace(/^:+|:+$/g, "");
+  let trimmed = emoji.trim();
+  while (trimmed.startsWith(":")) {
+    trimmed = trimmed.slice(1);
+  }
+  while (trimmed.endsWith(":")) {
+    trimmed = trimmed.slice(0, -1);
+  }
   return UNICODE_TO_SLACK[trimmed] ?? trimmed;
 }
 
@@ -165,6 +171,9 @@ type SlackTurnDeliveryAttempt = {
   textOverride?: string;
 };
 
+const SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX = 2000;
+const slackStreamRecipientTeamCache = new Map<string, string>();
+
 function buildSlackTurnDeliveryKey(params: SlackTurnDeliveryAttempt): string | null {
   const reply = resolveSendableOutboundReplyParts(params.payload, {
     text: params.textOverride,
@@ -181,6 +190,48 @@ function buildSlackTurnDeliveryKey(params: SlackTurnDeliveryAttempt): string | n
     mediaUrls: reply.mediaUrls,
     blocks: slackBlocks ?? null,
   });
+}
+
+function readSlackStreamRecipientTeamCache(params: {
+  fallbackTeamId?: string;
+  userId?: string;
+}): string | undefined {
+  if (!params.fallbackTeamId || !params.userId) {
+    return undefined;
+  }
+  const cacheKey = `${params.fallbackTeamId}:${params.userId}`;
+  const cached = slackStreamRecipientTeamCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  slackStreamRecipientTeamCache.delete(cacheKey);
+  slackStreamRecipientTeamCache.set(cacheKey, cached);
+  return cached;
+}
+
+function rememberSlackStreamRecipientTeam(params: {
+  fallbackTeamId?: string;
+  userId?: string;
+  teamId: string;
+}): void {
+  if (!params.fallbackTeamId || !params.userId) {
+    return;
+  }
+  const cacheKey = `${params.fallbackTeamId}:${params.userId}`;
+  if (slackStreamRecipientTeamCache.has(cacheKey)) {
+    slackStreamRecipientTeamCache.delete(cacheKey);
+  }
+  slackStreamRecipientTeamCache.set(cacheKey, params.teamId);
+  if (slackStreamRecipientTeamCache.size > SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX) {
+    const oldest = slackStreamRecipientTeamCache.keys().next().value;
+    if (oldest) {
+      slackStreamRecipientTeamCache.delete(oldest);
+    }
+  }
+}
+
+export function resetSlackStreamRecipientTeamCacheForTests(): void {
+  slackStreamRecipientTeamCache.clear();
 }
 
 export function createSlackTurnDeliveryTracker() {
@@ -219,6 +270,10 @@ export async function resolveSlackStreamRecipientTeamId(params: {
   userId?: PreparedSlackMessage["message"]["user"];
   fallbackTeamId?: string;
 }): Promise<string | undefined> {
+  const cachedTeamId = readSlackStreamRecipientTeamCache(params);
+  if (cachedTeamId) {
+    return cachedTeamId;
+  }
   if (params.userId) {
     try {
       const info = await params.client.users.info({
@@ -227,6 +282,7 @@ export async function resolveSlackStreamRecipientTeamId(params: {
       });
       const teamId = info.user?.team_id ?? info.user?.profile?.team;
       if (teamId) {
+        rememberSlackStreamRecipientTeam({ ...params, teamId });
         return teamId;
       }
     } catch (err) {

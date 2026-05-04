@@ -5,13 +5,24 @@ export function extractSimpleExplicitGroupId(raw: string | undefined | null): st
   if (!trimmed) {
     return undefined;
   }
-  const parts = trimmed.split(":").filter(Boolean);
+  const parts: string[] = [];
+  for (const part of trimmed.split(":")) {
+    if (part) {
+      parts.push(part);
+    }
+  }
   if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
-    const joined = parts.slice(2).join(":");
+    let joined = parts[2] ?? "";
+    for (let i = 3; i < parts.length; i++) {
+      joined += `:${parts[i]}`;
+    }
     return joined.replace(/:topic:.*$/, "") || undefined;
   }
   if (parts.length >= 2 && (parts[0] === "group" || parts[0] === "channel")) {
-    const joined = parts.slice(1).join(":");
+    let joined = parts[1] ?? "";
+    for (let i = 2; i < parts.length; i++) {
+      joined += `:${parts[i]}`;
+    }
     return joined.replace(/:topic:.*$/, "") || undefined;
   }
   return undefined;

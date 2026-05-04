@@ -103,9 +103,14 @@ function normalizeContributionId(value: string): string {
 }
 
 function sortUnique(values: Iterable<string>): string[] {
-  return [...new Set([...values].map((value) => value.trim()).filter(Boolean))].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
+  const normalized = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      normalized.add(trimmed);
+    }
+  }
+  return Array.from(normalized).toSorted((left, right) => left.localeCompare(right));
 }
 
 function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
@@ -117,9 +122,13 @@ function collectContractKeys(plugin: PluginManifestRecord): readonly string[] {
   if (!contracts) {
     return [];
   }
-  return Object.entries(contracts).flatMap(([key, value]) =>
-    Array.isArray(value) && value.length > 0 ? [key] : [],
-  );
+  const keys: string[] = [];
+  for (const [key, value] of Object.entries(contracts)) {
+    if (Array.isArray(value) && value.length > 0) {
+      keys.push(key);
+    }
+  }
+  return keys;
 }
 
 function listManifestContractValues(
@@ -298,9 +307,11 @@ export function listPluginContributionIds(
 ): readonly string[] {
   const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
   const plugins = listContributionManifestPlugins({ ...params, index });
-  return sortUnique(
-    plugins.flatMap((plugin) => listManifestContributionIds(plugin, params.contribution)),
-  );
+  const ids: string[] = [];
+  for (const plugin of plugins) {
+    ids.push(...listManifestContributionIds(plugin, params.contribution));
+  }
+  return sortUnique(ids);
 }
 
 export function resolvePluginContributionOwners(
@@ -325,11 +336,13 @@ export function resolvePluginContributionOwners(
       ? (contributionId: string) => contributionId === params.matches
       : params.matches;
   const plugins = listContributionManifestPlugins({ ...params, index });
-  return sortUnique(
-    plugins.flatMap((plugin) =>
-      listManifestContributionIds(plugin, params.contribution).some(matcher) ? [plugin.id] : [],
-    ),
-  );
+  const owners: string[] = [];
+  for (const plugin of plugins) {
+    if (listManifestContributionIds(plugin, params.contribution).some(matcher)) {
+      owners.push(plugin.id);
+    }
+  }
+  return sortUnique(owners);
 }
 
 export function resolveProviderOwners(params: ResolveProviderOwnersParams): readonly string[] {

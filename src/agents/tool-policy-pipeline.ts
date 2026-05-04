@@ -12,20 +12,34 @@ import {
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
 const toolPolicyWarningOrder: string[] = [];
+let toolPolicyWarningOrderIndex = 0;
 
 function rememberToolPolicyWarning(warning: string): boolean {
   if (seenToolPolicyWarnings.has(warning)) {
     return false;
   }
   if (seenToolPolicyWarnings.size >= MAX_TOOL_POLICY_WARNING_CACHE) {
-    const oldest = toolPolicyWarningOrder.shift();
-    if (oldest) {
-      seenToolPolicyWarnings.delete(oldest);
-    }
+    evictOldestToolPolicyWarning();
   }
   seenToolPolicyWarnings.add(warning);
   toolPolicyWarningOrder.push(warning);
   return true;
+}
+
+function evictOldestToolPolicyWarning(): void {
+  while (toolPolicyWarningOrderIndex < toolPolicyWarningOrder.length) {
+    const oldest = toolPolicyWarningOrder[toolPolicyWarningOrderIndex++];
+    if (oldest && seenToolPolicyWarnings.delete(oldest)) {
+      break;
+    }
+  }
+  if (
+    toolPolicyWarningOrderIndex > 32 &&
+    toolPolicyWarningOrderIndex * 2 > toolPolicyWarningOrder.length
+  ) {
+    toolPolicyWarningOrder.splice(0, toolPolicyWarningOrderIndex);
+    toolPolicyWarningOrderIndex = 0;
+  }
 }
 
 export type ToolPolicyPipelineStep = {
@@ -186,4 +200,5 @@ function describeUnknownAllowlistSuffix(params: {
 export function resetToolPolicyWarningCacheForTest(): void {
   seenToolPolicyWarnings.clear();
   toolPolicyWarningOrder.length = 0;
+  toolPolicyWarningOrderIndex = 0;
 }

@@ -19,16 +19,21 @@ export function extractModelDirective(
     /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?(?:\s+(?:--runtime|runtime=|harness=)\s*([A-Za-z0-9_.:-]+))?/i,
   );
 
-  const aliases = (options?.aliases ?? []).map((alias) => alias.trim()).filter(Boolean);
-  const aliasMatch =
-    modelMatch || aliases.length === 0
-      ? null
-      : body.match(
-          new RegExp(
-            `(?:^|\\s)\\/(${aliases.map(escapeRegExp).join("|")})(?=$|\\s|:)(?:\\s*:\\s*)?`,
-            "i",
-          ),
-        );
+  let aliasMatch: RegExpMatchArray | null = null;
+  if (!modelMatch && options?.aliases?.length) {
+    const aliases: string[] = [];
+    for (const alias of options.aliases) {
+      const trimmed = alias.trim();
+      if (trimmed) {
+        aliases.push(escapeRegExp(trimmed));
+      }
+    }
+    if (aliases.length > 0) {
+      aliasMatch = body.match(
+        new RegExp(`(?:^|\\s)\\/(${aliases.join("|")})(?=$|\\s|:)(?:\\s*:\\s*)?`, "i"),
+      );
+    }
+  }
 
   const match = modelMatch ?? aliasMatch;
   const raw = modelMatch ? modelMatch?.[1]?.trim() : aliasMatch?.[1]?.trim();

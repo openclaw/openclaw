@@ -114,7 +114,13 @@ function parsePreservedCliEnv(baseEnv: NodeJS.ProcessEnv) {
       return [];
     }
   }
-  return (raw ?? "").split(/[,\s]+/).filter((entry) => entry.length > 0);
+  const entries: string[] = [];
+  for (const entry of (raw ?? "").split(/[,\s]+/)) {
+    if (entry) {
+      entries.push(entry);
+    }
+  }
+  return entries;
 }
 
 function renderPreservedCliEnv(values: string[]) {

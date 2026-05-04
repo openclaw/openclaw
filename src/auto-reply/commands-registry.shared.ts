@@ -40,10 +40,21 @@ type DefineChatCommandInput = {
   tier?: CommandTier;
 };
 
+function normalizeCommandAliases(raw: readonly string[]): string[] {
+  const aliases: string[] = [];
+  for (const alias of raw) {
+    const trimmed = alias.trim();
+    if (trimmed) {
+      aliases.push(trimmed);
+    }
+  }
+  return aliases;
+}
+
 export function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
-  const aliases = (command.textAliases ?? (command.textAlias ? [command.textAlias] : []))
-    .map((alias) => alias.trim())
-    .filter(Boolean);
+  const aliases = normalizeCommandAliases(
+    command.textAliases ?? (command.textAlias ? [command.textAlias] : []),
+  );
   const scope =
     command.scope ?? (command.nativeName ? (aliases.length ? "both" : "native") : "text");
   const acceptsArgs = command.acceptsArgs ?? Boolean(command.args?.length);
@@ -51,7 +62,9 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   return {
     key: command.key,
     nativeName: command.nativeName,
-    nativeAliases: command.nativeAliases?.map((alias) => alias.trim()).filter(Boolean),
+    nativeAliases: command.nativeAliases
+      ? normalizeCommandAliases(command.nativeAliases)
+      : undefined,
     description: command.description,
     acceptsArgs,
     args: command.args,
@@ -70,11 +83,13 @@ function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliase
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
   }
-  const existing = new Set(
-    command.textAliases
-      .map((alias) => normalizeOptionalLowercaseString(alias))
-      .filter((alias): alias is string => Boolean(alias)),
-  );
+  const existing = new Set<string>();
+  for (const alias of command.textAliases) {
+    const lowered = normalizeOptionalLowercaseString(alias);
+    if (lowered) {
+      existing.add(lowered);
+    }
+  }
   for (const alias of aliases) {
     const trimmed = alias.trim();
     if (!trimmed) {

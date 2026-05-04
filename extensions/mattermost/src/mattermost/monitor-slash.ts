@@ -79,6 +79,16 @@ function buildTriggerMap(commands: MattermostCommandSpec[]): Map<string, string>
   return triggerMap;
 }
 
+function collectMattermostCommandTokens(commands: MattermostRegisteredCommand[]): string[] {
+  const tokens: string[] = [];
+  for (const command of commands) {
+    if (command.token) {
+      tokens.push(command.token);
+    }
+  }
+  return tokens;
+}
+
 function warnOnSuspiciousCallbackUrl(params: {
   runtime: RuntimeEnv;
   baseUrl: string;
@@ -197,7 +207,7 @@ export async function registerMattermostMonitorSlashCommands(params: {
 
     activateSlashCommands({
       account: params.account,
-      commandTokens: registered.map((cmd) => cmd.token).filter(Boolean),
+      commandTokens: collectMattermostCommandTokens(registered),
       registeredCommands: registered,
       triggerMap: buildTriggerMap(dedupedCommands),
       api: { cfg: params.cfg, runtime: params.runtime },

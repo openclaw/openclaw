@@ -348,7 +348,10 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       accountId,
       values: groupAllowFrom,
     });
-    const groupOverrideEntries = groupOverrides.flatMap((entry) => entry.entries);
+    const groupOverrideEntries: string[] = [];
+    for (const entry of groupOverrides) {
+      groupOverrideEntries.push(...entry.entries);
+    }
     const groupOverrideDisplay = normalizeAllowFrom({
       cfg: params.cfg,
       channelId,

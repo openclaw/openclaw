@@ -101,14 +101,16 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
   if (!events || events.length === 0) {
     return "";
   }
-  const blocks = events
-    .map((event) => {
-      if (event.type === "task_completion") {
-        return formatTaskCompletionEvent(event);
-      }
-      return "";
-    })
-    .filter((value) => value.trim().length > 0);
+  const blocks: string[] = [];
+  for (const event of events) {
+    if (event.type !== "task_completion") {
+      continue;
+    }
+    const block = formatTaskCompletionEvent(event);
+    if (block.trim().length > 0) {
+      blocks.push(block);
+    }
+  }
   if (blocks.length === 0) {
     return "";
   }
@@ -126,13 +128,15 @@ export function formatAgentInternalEventsForPlainPrompt(events?: AgentInternalEv
   if (!events || events.length === 0) {
     return "";
   }
-  return events
-    .map((event) => {
-      if (event.type === "task_completion") {
-        return formatTaskCompletionEventForPlainPrompt(event);
-      }
-      return "";
-    })
-    .filter((value) => value.trim().length > 0)
-    .join("\n\n---\n\n");
+  const blocks: string[] = [];
+  for (const event of events) {
+    if (event.type !== "task_completion") {
+      continue;
+    }
+    const block = formatTaskCompletionEventForPlainPrompt(event);
+    if (block.trim().length > 0) {
+      blocks.push(block);
+    }
+  }
+  return blocks.join("\n\n---\n\n");
 }

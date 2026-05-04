@@ -83,13 +83,13 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
 }
 
 function getSessionBranchMessages(sessionManager: SessionManagerLike): AgentMessage[] {
-  return sessionManager
-    .getBranch()
-    .flatMap((entry) =>
-      entry.type === "message" && typeof entry.message === "object" && entry.message !== null
-        ? [entry.message]
-        : [],
-    );
+  const messages: AgentMessage[] = [];
+  for (const entry of sessionManager.getBranch()) {
+    if (entry.type === "message" && typeof entry.message === "object" && entry.message !== null) {
+      messages.push(entry.message);
+    }
+  }
+  return messages;
 }
 
 function resolveSessionTokenSnapshot(sessionEntry: SessionEntry | undefined): number | undefined {

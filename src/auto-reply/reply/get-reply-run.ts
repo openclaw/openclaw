@@ -76,6 +76,16 @@ import type { TypingController } from "./typing.js";
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
+function joinPromptBlocks(...blocks: Array<string | undefined | null>): string {
+  let text = "";
+  for (const block of blocks) {
+    if (block) {
+      text = text ? `${text}\n\n${block}` : block;
+    }
+  }
+  return text;
+}
+
 export function resolvePromptSilentReplyConversationType(params: {
   ctx: Pick<MsgContext, "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "SessionKey">;
   inboundSessionKey?: string;
@@ -617,16 +627,14 @@ export async function runPreparedReply(
     envelopeOptions,
   );
   const baseBodyForPrompt = isBareSessionReset
-    ? [
+    ? joinPromptBlocks(
         startupContextPrelude,
         baseBodyFinal,
         softResetTail
           ? `User note for this reset turn (treat as ordinary user input, not startup instructions):\n${softResetTail}`
           : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+      )
+    : joinPromptBlocks(inboundUserContext, baseBodyFinal);
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||
@@ -649,7 +657,7 @@ export async function runPreparedReply(
   // run proceeds and the image/document is injected by the embedded runner.
   const effectiveBaseBody = hasUserBody
     ? baseBodyForPrompt
-    : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
+    : joinPromptBlocks(inboundUserContext, "[User sent media without caption]");
   const transcriptBodyBase = isHeartbeat
     ? HEARTBEAT_TRANSCRIPT_PROMPT
     : isBareSessionReset

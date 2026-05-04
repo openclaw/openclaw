@@ -25,9 +25,14 @@ function sortUnique(values: readonly string[] | undefined): readonly string[] {
   if (!values || values.length === 0) {
     return [];
   }
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).toSorted(
-    (left, right) => left.localeCompare(right),
-  );
+  const normalized = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      normalized.add(trimmed);
+    }
+  }
+  return Array.from(normalized).toSorted((left, right) => left.localeCompare(right));
 }
 
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {

@@ -26,10 +26,13 @@ function formatListenerContextSuffix(context?: Record<string, unknown>): string 
   if (!context) {
     return "";
   }
-  const entries = Object.entries(context).flatMap(([key, value]) => {
+  const entries: string[] = [];
+  for (const [key, value] of Object.entries(context)) {
     const formatted = formatListenerContextValue(value);
-    return formatted ? [`${key}=${formatted}`] : [];
-  });
+    if (formatted) {
+      entries.push(`${key}=${formatted}`);
+    }
+  }
   if (entries.length === 0) {
     return "";
   }

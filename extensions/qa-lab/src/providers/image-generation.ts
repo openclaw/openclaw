@@ -15,9 +15,14 @@ function splitModelProviderId(modelRef: string) {
 }
 
 function uniqueNonEmpty(values: readonly (string | null | undefined)[]) {
-  return [
-    ...new Set(values.map((value) => value?.trim()).filter((value): value is string => !!value)),
-  ];
+  const normalized = new Set<string>();
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      normalized.add(trimmed);
+    }
+  }
+  return [...normalized];
 }
 
 export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchInput) {

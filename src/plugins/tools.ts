@@ -83,7 +83,14 @@ export function buildPluginToolMetadataKey(pluginId: string, toolName: string): 
 }
 
 function normalizeAllowlist(list?: string[]) {
-  return new Set((list ?? []).map(normalizeToolName).filter(Boolean));
+  const normalized = new Set<string>();
+  for (const entry of list ?? []) {
+    const toolName = normalizeToolName(entry);
+    if (toolName) {
+      normalized.add(toolName);
+    }
+  }
+  return normalized;
 }
 
 function allowlistIncludesDefaultPluginTools(allowlist: Set<string>): boolean {

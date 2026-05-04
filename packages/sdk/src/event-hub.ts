@@ -55,6 +55,7 @@ export class EventHub<T> {
     return {
       [Symbol.asyncIterator]: (): AsyncIterator<T> => {
         const queue: T[] = options.replay ? this.snapshot(filter) : [];
+        let queueIndex = 0;
         let stopped = false;
         let wake: (() => void) | null = null;
         const wakePending = () => {
@@ -89,8 +90,16 @@ export class EventHub<T> {
               if (stopped) {
                 break;
               }
-              if (queue.length > 0) {
-                return { done: false, value: queue.shift() as T };
+              if (queueIndex < queue.length) {
+                const value = queue[queueIndex++];
+                if (queueIndex === queue.length) {
+                  queue.length = 0;
+                  queueIndex = 0;
+                } else if (queueIndex > 64 && queueIndex * 2 > queue.length) {
+                  queue.splice(0, queueIndex);
+                  queueIndex = 0;
+                }
+                return { done: false, value };
               }
               if (this.closed) {
                 break;

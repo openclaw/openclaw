@@ -62,7 +62,14 @@ export function normalizeAllowFromList(list: Array<string | number> | undefined 
   if (!Array.isArray(list)) {
     return [];
   }
-  return list.map((value) => String(value).trim()).filter(Boolean);
+  const normalized: string[] = [];
+  for (const value of list) {
+    const entry = String(value).trim();
+    if (entry) {
+      normalized.push(entry);
+    }
+  }
+  return normalized;
 }
 
 export function coerceNativeSetting(value: unknown): boolean | "auto" | undefined {
@@ -95,7 +102,14 @@ function collectMutableAllowlistWarningLines(
     .map((hit) => `- ${sanitizeForLog(hit.path)}: ${sanitizeForLog(hit.entry)}`);
   const remaining =
     hits.length > 8 ? `- +${hits.length - 8} more mutable allowlist entries.` : null;
-  const flagPaths = Array.from(new Set(hits.map((hit) => hit.dangerousFlagPath)));
+  const flagPaths: string[] = [];
+  const flagPathSeen = new Set<string>();
+  for (const hit of hits) {
+    if (!flagPathSeen.has(hit.dangerousFlagPath)) {
+      flagPathSeen.add(hit.dangerousFlagPath);
+      flagPaths.push(hit.dangerousFlagPath);
+    }
+  }
   const flagHint =
     flagPaths.length === 1
       ? sanitizeForLog(flagPaths[0] ?? "")

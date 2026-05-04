@@ -78,7 +78,13 @@ function normalizeReactionEmoji(raw: string) {
 }
 
 function normalizeStickerIds(raw: string[]) {
-  const ids = raw.map((entry) => entry.trim()).filter(Boolean);
+  const ids: string[] = [];
+  for (const entry of raw) {
+    const trimmed = entry.trim();
+    if (trimmed) {
+      ids.push(trimmed);
+    }
+  }
   if (ids.length === 0) {
     throw new Error("At least one sticker id is required");
   }
@@ -192,15 +198,18 @@ async function buildDiscordSendError(
     if (ctx.hasMedia) {
       required.push("AttachFiles");
     }
-    missing = required.filter((permission) => !current.has(permission));
+    missing = [];
+    for (const permission of required) {
+      if (!current.has(permission)) {
+        missing.push(permission);
+      }
+    }
   } catch {
     /* ignore permission probe errors */
   }
 
   const status = getDiscordErrorStatus(err);
-  const apiDetails = [`code=${code}`, status != null ? `status=${status}` : undefined]
-    .filter(Boolean)
-    .join(" ");
+  const apiDetails = status != null ? `code=${code} status=${status}` : `code=${code}`;
   const probedPermissions = ["ViewChannel", "SendMessages"];
   if (isThreadChannelType(probedChannelType)) {
     probedPermissions.push("SendMessagesInThreads");

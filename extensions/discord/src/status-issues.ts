@@ -96,9 +96,17 @@ function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsA
             return null;
           }
           const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
-          const missing = Array.isArray(entry.missing)
-            ? entry.missing.map((v) => asString(v)).filter(Boolean)
-            : undefined;
+          let missing: string[] | undefined;
+          if (Array.isArray(entry.missing)) {
+            const values: string[] = [];
+            for (const value of entry.missing) {
+              const normalized = asString(value);
+              if (normalized) {
+                values.push(normalized);
+              }
+            }
+            missing = values.length > 0 ? values : undefined;
+          }
           const error = asString(entry.error) ?? null;
           const matchKey = asString(entry.matchKey) ?? undefined;
           const matchSource = asString(entry.matchSource) ?? undefined;

@@ -59,9 +59,13 @@ async function readSlackSubteamUsers(params: {
       );
       return new Set();
     }
-    const users = new Set(
-      (response.users ?? []).map((userId) => normalizeSlackId(userId)).filter(Boolean) as string[],
-    );
+    const users = new Set<string>();
+    for (const userId of response.users ?? []) {
+      const normalized = normalizeSlackId(userId);
+      if (normalized) {
+        users.add(normalized);
+      }
+    }
     bySubteam.set(cacheKey, {
       expiresAt: params.now + SUBTEAM_MEMBER_CACHE_TTL_MS,
       users,

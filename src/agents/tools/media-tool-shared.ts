@@ -234,10 +234,13 @@ function resolveCapabilityModelCandidatesForTool(params: {
     ) {
       continue;
     }
-    const aliases = (provider.aliases ?? []).flatMap((alias) => {
+    const aliases: string[] = [];
+    for (const alias of provider.aliases ?? []) {
       const normalized = normalizeProviderId(alias);
-      return normalized ? [normalized] : [];
-    });
+      if (normalized) {
+        aliases.push(normalized);
+      }
+    }
     providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
   }
 

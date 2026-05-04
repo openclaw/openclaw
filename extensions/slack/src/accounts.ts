@@ -173,7 +173,12 @@ export function resolveSlackAccount(params: {
 }
 
 export function listEnabledSlackAccounts(cfg: OpenClawConfig): ResolvedSlackAccount[] {
-  return listSlackAccountIds(cfg)
-    .map((accountId) => resolveSlackAccount({ cfg, accountId }))
-    .filter((account) => account.enabled);
+  const accounts: ResolvedSlackAccount[] = [];
+  for (const accountId of listSlackAccountIds(cfg)) {
+    const account = resolveSlackAccount({ cfg, accountId });
+    if (account.enabled) {
+      accounts.push(account);
+    }
+  }
+  return accounts;
 }

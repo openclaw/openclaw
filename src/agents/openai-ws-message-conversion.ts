@@ -66,17 +66,16 @@ function contentToText(content: unknown): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return content
-    .filter(
-      (part): part is { type?: string; text?: string } => Boolean(part) && typeof part === "object",
-    )
-    .filter(
-      (part) =>
-        (part.type === "text" || part.type === "input_text" || part.type === "output_text") &&
-        typeof part.text === "string",
-    )
-    .map((part) => part.text as string)
-    .join("");
+  let text = "";
+  for (const part of content as Array<{ type?: unknown; text?: unknown }>) {
+    if (!part || typeof part !== "object" || typeof part.text !== "string") {
+      continue;
+    }
+    if (part.type === "text" || part.type === "input_text" || part.type === "output_text") {
+      text += part.text;
+    }
+  }
+  return text;
 }
 
 function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo): ContentPart[] {
@@ -241,7 +240,9 @@ function decodeToolCallReplayId(value: unknown): ToolCallReplayId | null {
   if (!raw) {
     return null;
   }
-  const [callId, itemId] = raw.split("|", 2);
+  const separatorIndex = raw.indexOf("|");
+  const callId = separatorIndex >= 0 ? raw.slice(0, separatorIndex) : raw;
+  const itemId = separatorIndex >= 0 ? raw.slice(separatorIndex + 1) : undefined;
   return {
     callId,
     ...(itemId ? { itemId } : {}),
@@ -255,20 +256,19 @@ function extractReasoningSummaryText(value: unknown): string {
   if (!Array.isArray(value)) {
     return "";
   }
-  return value
-    .map((item) => {
-      if (typeof item === "string") {
-        return item.trim();
-      }
-      if (!item || typeof item !== "object") {
-        return "";
-      }
-      const record = item as { text?: unknown };
-      return normalizeOptionalString(record.text) ?? "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
+  const parts: string[] = [];
+  for (const item of value) {
+    const text =
+      typeof item === "string"
+        ? item.trim()
+        : item && typeof item === "object"
+          ? (normalizeOptionalString((item as { text?: unknown }).text) ?? "")
+          : "";
+    if (text) {
+      parts.push(text);
+    }
+  }
+  return parts.join("\n").trim();
 }
 
 function extractResponseReasoningText(item: unknown): string {
@@ -284,19 +284,19 @@ function extractResponseReasoningText(item: unknown): string {
     return normalizeOptionalString(record.content) ?? "";
   }
   if (Array.isArray(record.content)) {
-    return record.content
-      .map((part) => {
-        if (typeof part === "string") {
-          return part.trim();
-        }
-        if (!part || typeof part !== "object") {
-          return "";
-        }
-        return normalizeOptionalString((part as { text?: unknown }).text) ?? "";
-      })
-      .filter(Boolean)
-      .join("\n")
-      .trim();
+    const parts: string[] = [];
+    for (const part of record.content) {
+      const text =
+        typeof part === "string"
+          ? part.trim()
+          : part && typeof part === "object"
+            ? (normalizeOptionalString((part as { text?: unknown }).text) ?? "")
+            : "";
+      if (text) {
+        parts.push(text);
+      }
+    }
+    return parts.join("\n").trim();
   }
   return "";
 }
@@ -330,10 +330,13 @@ export function planTurnInput(params: {
   lastContextLength: number;
 }): PlannedTurnInput {
   if (params.previousResponseId && params.lastContextLength > 0) {
-    const newMessages = params.context.messages.slice(params.lastContextLength);
-    const toolResults = newMessages.filter(
-      (message) => (message as AnyMessage).role === "toolResult",
-    );
+    const toolResults: Message[] = [];
+    for (let index = params.lastContextLength; index < params.context.messages.length; index += 1) {
+      const message = params.context.messages[index];
+      if (message && (message as AnyMessage).role === "toolResult") {
+        toolResults.push(message);
+      }
+    }
     if (toolResults.length > 0) {
       return {
         mode: "incremental_tool_results",
@@ -498,10 +501,15 @@ export function convertMessagesToInputItems(
       continue;
     }
     const parts = Array.isArray(m.content) ? contentToOpenAIParts(m.content, modelOverride) : [];
-    const textOutput = contentToText(m.content);
-    const imageParts = parts.filter(
-      (part) => part.type === "input_image" || part.type === "image_url",
-    );
+    let textOutput = Array.isArray(m.content) ? "" : contentToText(m.content);
+    const imageParts: ContentPart[] = [];
+    for (const part of parts) {
+      if (part.type === "input_text") {
+        textOutput += part.text;
+      } else if (part.type === "input_image" || part.type === "image_url") {
+        imageParts.push(part);
+      }
+    }
     items.push({
       type: "function_call_output",
       call_id: replayId.callId,
@@ -527,24 +535,29 @@ export function buildAssistantMessageFromResponse(
   modelInfo: { api: string; provider: string; id: string },
 ): AssistantMessage {
   const content: AssistantMessage["content"] = [];
-  const assistantMessageOutputs = (response.output ?? []).filter(
-    (item): item is Extract<ResponseObject["output"][number], { type: "message" }> =>
-      item.type === "message",
-  );
-  const hasExplicitPhasedAssistantText = assistantMessageOutputs.some((item) => {
-    const itemPhase = normalizeAssistantPhase(item.phase);
-    return Boolean(
-      itemPhase && item.content?.some((part) => part.type === "output_text" && Boolean(part.text)),
-    );
-  });
-  const hasFinalAnswerText = assistantMessageOutputs.some((item) => {
-    if (normalizeAssistantPhase(item.phase) !== "final_answer") {
-      return false;
+  let hasExplicitPhasedAssistantText = false;
+  let hasFinalAnswerText = false;
+  for (const item of response.output ?? []) {
+    if (item.type !== "message") {
+      continue;
     }
-    return item.content?.some((part) => part.type === "output_text" && Boolean(part.text)) ?? false;
-  });
-  const includedAssistantPhases = new Set<OpenAIResponsesAssistantPhase>();
+    const itemPhase = normalizeAssistantPhase(item.phase);
+    for (const part of item.content ?? []) {
+      if (part.type !== "output_text" || !part.text) {
+        continue;
+      }
+      if (itemPhase) {
+        hasExplicitPhasedAssistantText = true;
+        if (itemPhase === "final_answer") {
+          hasFinalAnswerText = true;
+        }
+      }
+    }
+  }
+  let includedAssistantPhase: OpenAIResponsesAssistantPhase | undefined;
+  let hasMultipleIncludedAssistantPhases = false;
   let hasIncludedUnphasedAssistantText = false;
+  let hasToolCalls = false;
 
   for (const item of response.output ?? []) {
     if (item.type === "message") {
@@ -560,7 +573,11 @@ export function buildAssistantMessageFromResponse(
             continue;
           }
           if (itemPhase) {
-            includedAssistantPhases.add(itemPhase);
+            if (!includedAssistantPhase) {
+              includedAssistantPhase = itemPhase;
+            } else if (includedAssistantPhase !== itemPhase) {
+              hasMultipleIncludedAssistantPhases = true;
+            }
           } else {
             hasIncludedUnphasedAssistantText = true;
           }
@@ -581,6 +598,7 @@ export function buildAssistantMessageFromResponse(
       }
       const callId = toNonEmptyString(item.call_id);
       const itemId = toNonEmptyString(item.id);
+      hasToolCalls = true;
       content.push({
         type: "toolCall",
         id: encodeToolCallReplayId({
@@ -615,7 +633,6 @@ export function buildAssistantMessageFromResponse(
     }
   }
 
-  const hasToolCalls = content.some((part) => part.type === "toolCall");
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
   const normalizedUsage = normalizeUsage(response.usage);
   const rawTotalTokens = normalizedUsage?.total;
@@ -641,8 +658,10 @@ export function buildAssistantMessageFromResponse(
   });
 
   const finalAssistantPhase =
-    includedAssistantPhases.size === 1 && !hasIncludedUnphasedAssistantText
-      ? [...includedAssistantPhases][0]
+    includedAssistantPhase &&
+    !hasMultipleIncludedAssistantPhases &&
+    !hasIncludedUnphasedAssistantText
+      ? includedAssistantPhase
       : undefined;
 
   return finalAssistantPhase

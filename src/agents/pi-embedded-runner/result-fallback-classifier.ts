@@ -18,8 +18,11 @@ function isEmbeddedPiRunResult(value: unknown): value is EmbeddedPiRunResult {
 }
 
 function hasDeliberateSilentTerminalReply(result: EmbeddedPiRunResult): boolean {
-  return [result.meta.finalAssistantRawText, result.meta.finalAssistantVisibleText].some(
-    (text) => typeof text === "string" && isSilentReplyPayloadText(text),
+  return (
+    (typeof result.meta.finalAssistantRawText === "string" &&
+      isSilentReplyPayloadText(result.meta.finalAssistantRawText)) ||
+    (typeof result.meta.finalAssistantVisibleText === "string" &&
+      isSilentReplyPayloadText(result.meta.finalAssistantVisibleText))
   );
 }
 
@@ -87,10 +90,13 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
   }
 
   const payloads = params.result.payloads ?? [];
-  const errorText = payloads
-    .filter((payload) => payload?.isError === true)
-    .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
-    .join("\n");
+  const errorLines: string[] = [];
+  for (const payload of payloads) {
+    if (payload?.isError === true) {
+      errorLines.push(typeof payload.text === "string" ? payload.text : "");
+    }
+  }
+  const errorText = errorLines.join("\n");
   if (EMPTY_TERMINAL_REPLY_RE.test(errorText)) {
     return {
       message: `${params.provider}/${params.model} ended with an incomplete terminal response`,

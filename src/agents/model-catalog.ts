@@ -104,7 +104,10 @@ function appendCatalogEntriesIfAbsent(
   models: ModelCatalogEntry[],
   entries: ModelCatalogEntry[],
 ): void {
-  const seen = new Set(models.map((entry) => catalogEntryDedupeKey(entry.provider, entry.id)));
+  const seen = new Set<string>();
+  for (const entry of models) {
+    seen.add(catalogEntryDedupeKey(entry.provider, entry.id));
+  }
   for (const entry of entries) {
     const key = catalogEntryDedupeKey(entry.provider, entry.id);
     if (seen.has(key)) {

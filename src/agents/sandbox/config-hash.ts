@@ -33,7 +33,14 @@ function normalizeForHash(value: unknown): unknown {
     return undefined;
   }
   if (Array.isArray(value)) {
-    return value.map(normalizeForHash).filter((item): item is unknown => item !== undefined);
+    const normalized: unknown[] = [];
+    for (const item of value) {
+      const next = normalizeForHash(item);
+      if (next !== undefined) {
+        normalized.push(next);
+      }
+    }
+    return normalized;
   }
   if (value && typeof value === "object") {
     const entries = Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));

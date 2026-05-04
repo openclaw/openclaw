@@ -317,9 +317,14 @@ export function buildButtonProps(params: {
   buttons: Array<unknown>;
   text?: string;
 }): Record<string, unknown> | undefined {
-  const rawButtons = params.buttons.flatMap((item) =>
-    Array.isArray(item) ? item : [item],
-  ) as MattermostInteractiveButtonInput[];
+  const rawButtons: MattermostInteractiveButtonInput[] = [];
+  for (const item of params.buttons) {
+    if (Array.isArray(item)) {
+      rawButtons.push(...(item as MattermostInteractiveButtonInput[]));
+    } else {
+      rawButtons.push(item as MattermostInteractiveButtonInput);
+    }
+  }
 
   const buttons = rawButtons
     .map((btn) => ({

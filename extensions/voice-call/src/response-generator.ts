@@ -132,16 +132,23 @@ function sanitizePlainSpokenText(text: string): string | null {
     return null;
   }
 
-  const paragraphs = withoutCodeFences
-    .split(/\n\s*\n+/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
-
-  while (paragraphs.length > 1 && isLikelyMetaReasoningParagraph(paragraphs[0])) {
-    paragraphs.shift();
+  const paragraphs: string[] = [];
+  for (const paragraph of withoutCodeFences.split(/\n\s*\n+/)) {
+    const trimmed = paragraph.trim();
+    if (trimmed) {
+      paragraphs.push(trimmed);
+    }
   }
 
-  return normalizeSpokenText(paragraphs.join(" "));
+  let startIndex = 0;
+  while (
+    paragraphs.length - startIndex > 1 &&
+    isLikelyMetaReasoningParagraph(paragraphs[startIndex])
+  ) {
+    startIndex += 1;
+  }
+
+  return normalizeSpokenText(paragraphs.slice(startIndex).join(" "));
 }
 
 function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string | null {

@@ -12,8 +12,8 @@ function collectNestedErrorCandidates(err: unknown): unknown[] {
   const seen = new Set<unknown>();
   const candidates: unknown[] = [];
 
-  while (queue.length > 0) {
-    const current = queue.shift();
+  for (let index = 0; index < queue.length; index++) {
+    const current = queue[index];
     if (current == null || seen.has(current)) {
       continue;
     }

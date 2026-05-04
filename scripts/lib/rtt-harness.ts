@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 export type RttProviderMode = "mock-openai" | "live-frontier";
+export type RttCredentialSource = "env" | "convex";
 
 type RttResult = {
   package: {
@@ -94,15 +95,20 @@ export function buildRunId(params: { now: Date; spec: string; index?: number }) 
 export function extractRtt(summary: TelegramQaSummary) {
   const scenarios = summary.scenarios ?? [];
   const mention = scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply");
-  const warmSamples = mention?.samples
-    ?.filter((sample) => sample.status === "pass" && sample.rttMs !== undefined)
-    .toSorted((left, right) => (left.index ?? 0) - (right.index ?? 0))
-    .flatMap((sample) => (sample.rttMs === undefined ? [] : [sample.rttMs]));
+  const sortedSamples = mention?.samples?.toSorted(
+    (left, right) => (left.index ?? 0) - (right.index ?? 0),
+  );
+  const warmSamples: number[] = [];
+  for (const sample of sortedSamples ?? []) {
+    if (sample.status === "pass" && sample.rttMs !== undefined) {
+      warmSamples.push(sample.rttMs);
+    }
+  }
   const rtt: RttResult["rtt"] = {
     canaryMs: scenarios.find((scenario) => scenario.id === "telegram-canary")?.rttMs,
     mentionReplyMs: mention?.stats?.p50Ms ?? mention?.rttMs,
   };
-  if (warmSamples?.length) {
+  if (warmSamples.length) {
     rtt.warmSamples = warmSamples;
   }
   if (mention?.stats) {
@@ -117,6 +123,8 @@ export function extractRtt(summary: TelegramQaSummary) {
 
 export function createHarnessEnv(params: {
   baseEnv: NodeJS.ProcessEnv;
+  credentialSource: RttCredentialSource;
+  credentialRole?: string;
   packageTgz?: string;
   providerMode: RttProviderMode;
   scenarios: string[];
@@ -132,6 +140,10 @@ export function createHarnessEnv(params: {
     OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: params.spec,
     ...(params.packageTgz ? { OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ: params.packageTgz } : {}),
     OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL: `${params.spec} (${params.version})`,
+    OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: params.credentialSource,
+    ...(params.credentialRole
+      ? { OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: params.credentialRole }
+      : {}),
     OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: params.providerMode,
     OPENCLAW_NPM_TELEGRAM_SCENARIOS: params.scenarios.join(","),
     OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: params.rawOutputDir,
@@ -150,8 +162,36 @@ export function assertRequiredEnv(env: NodeJS.ProcessEnv) {
   }
 }
 
-export async function assertHarnessRoot(harnessRoot: string) {
-  const scriptPath = path.join(harnessRoot, "scripts/e2e/npm-telegram-rtt-docker.sh");
+export function assertRequiredCredentialEnv(
+  env: NodeJS.ProcessEnv,
+  credentialSource: RttCredentialSource,
+) {
+  if (credentialSource === "env") {
+    assertRequiredEnv(env);
+    return;
+  }
+  const missing = ["OPENCLAW_QA_CONVEX_SITE_URL"].filter((key) => !env[key]?.trim());
+  const hasSecret =
+    env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim() || env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER?.trim();
+  if (!hasSecret) {
+    missing.push("OPENCLAW_QA_CONVEX_SECRET_CI or OPENCLAW_QA_CONVEX_SECRET_MAINTAINER");
+  }
+  if (missing.length > 0) {
+    throw new Error(`Missing Convex Telegram QA credential env: ${missing.join(", ")}`);
+  }
+}
+
+export function rttHarnessScriptName(credentialSource: RttCredentialSource) {
+  return credentialSource === "convex"
+    ? "scripts/e2e/npm-telegram-live-docker.sh"
+    : "scripts/e2e/npm-telegram-rtt-docker.sh";
+}
+
+export async function assertHarnessRoot(
+  harnessRoot: string,
+  credentialSource: RttCredentialSource,
+) {
+  const scriptPath = path.join(harnessRoot, rttHarnessScriptName(credentialSource));
   try {
     await fs.access(scriptPath);
   } catch {
@@ -208,8 +248,13 @@ export async function appendJsonl(pathname: string, value: unknown) {
   await fs.appendFile(pathname, `${JSON.stringify(value)}\n`);
 }
 
-export async function runHarness(params: { env: NodeJS.ProcessEnv; harnessRoot: string }) {
-  const scriptPath = path.join(params.harnessRoot, "scripts/e2e/npm-telegram-rtt-docker.sh");
+export async function runHarness(params: {
+  credentialSource: RttCredentialSource;
+  env: NodeJS.ProcessEnv;
+  harnessRoot: string;
+}) {
+  const scriptName = rttHarnessScriptName(params.credentialSource);
+  const scriptPath = path.join(params.harnessRoot, scriptName);
   const child = spawn("bash", [scriptPath], {
     cwd: params.harnessRoot,
     env: params.env,

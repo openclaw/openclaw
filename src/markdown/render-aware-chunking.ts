@@ -33,9 +33,10 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   const normalizedLimit = Math.max(1, Math.floor(options.limit));
   const pending = chunkMarkdownIR(options.ir, normalizedLimit);
   const finalized: MarkdownIR[] = [];
+  let pendingIndex = 0;
 
-  while (pending.length > 0) {
-    const chunk = pending.shift();
+  while (pendingIndex < pending.length) {
+    const chunk = pending[pendingIndex++];
     if (!chunk) {
       continue;
     }
@@ -52,7 +53,7 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
       finalized.push(chunk);
       continue;
     }
-    pending.unshift(...split);
+    pending.splice(pendingIndex, 0, ...split);
   }
 
   return coalesceWhitespaceOnlyMarkdownIRChunks(finalized, normalizedLimit, options).map(

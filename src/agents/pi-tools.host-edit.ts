@@ -42,19 +42,21 @@ function readEditReplacements(record: Record<string, unknown> | undefined): Edit
   if (!Array.isArray(record?.edits)) {
     return [];
   }
-  return record.edits.flatMap((entry) => {
+  const edits: EditReplacement[] = [];
+  for (const entry of record.edits) {
     if (!entry || typeof entry !== "object") {
-      return [];
+      continue;
     }
     const replacement = entry as Record<string, unknown>;
     if (typeof replacement.oldText !== "string" || replacement.oldText.trim().length === 0) {
-      return [];
+      continue;
     }
     if (typeof replacement.newText !== "string") {
-      return [];
+      continue;
     }
-    return [{ oldText: replacement.oldText, newText: replacement.newText }];
-  });
+    edits.push({ oldText: replacement.oldText, newText: replacement.newText });
+  }
+  return edits;
 }
 
 function readEditToolParams(params: unknown): EditToolParams {

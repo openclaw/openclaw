@@ -33,7 +33,12 @@ export function formatAllowlistMatchMeta(
 }
 
 export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowlist {
-  const set = new Set(entries.filter(Boolean));
+  const set = new Set<string>();
+  for (const entry of entries) {
+    if (entry) {
+      set.add(entry);
+    }
+  }
   return {
     set,
     wildcard: set.has("*"),
@@ -41,11 +46,17 @@ export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowl
 }
 
 function compileSimpleAllowlist(entries: ReadonlyArray<string | number>): CompiledAllowlist {
-  return compileAllowlist(
-    entries
-      .map((entry) => normalizeOptionalLowercaseString(String(entry)))
-      .filter((entry): entry is string => Boolean(entry)),
-  );
+  const set = new Set<string>();
+  for (const entry of entries) {
+    const normalized = normalizeOptionalLowercaseString(String(entry));
+    if (normalized) {
+      set.add(normalized);
+    }
+  }
+  return {
+    set,
+    wildcard: set.has("*"),
+  };
 }
 
 export function resolveAllowlistCandidates<TSource extends string>(params: {
@@ -107,16 +118,11 @@ export function resolveAllowlistMatchSimple(params: {
 
   const senderId = normalizeLowercaseStringOrEmpty(params.senderId);
   const senderName = normalizeOptionalLowercaseString(params.senderName);
-  return resolveAllowlistCandidates({
-    compiledAllowlist: allowFrom,
-    candidates: [
-      { value: senderId, source: "id" },
-      ...(params.allowNameMatching === true && senderName
-        ? ([{ value: senderName, source: "name" as const }] satisfies Array<{
-            value?: string;
-            source: "id" | "name";
-          }>)
-        : []),
-    ],
-  });
+  if (senderId && allowFrom.set.has(senderId)) {
+    return { allowed: true, matchKey: senderId, matchSource: "id" };
+  }
+  if (params.allowNameMatching === true && senderName && allowFrom.set.has(senderName)) {
+    return { allowed: true, matchKey: senderName, matchSource: "name" };
+  }
+  return { allowed: false };
 }

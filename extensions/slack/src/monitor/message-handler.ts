@@ -131,7 +131,12 @@ export function createSlackMessageHandler(params: {
           appMentionRetryKeys.delete(seenMessageKey);
         }
         if (entries.length > 1) {
-          const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
+          const ids: string[] = [];
+          for (const entry of entries) {
+            if (entry.message.ts) {
+              ids.push(entry.message.ts);
+            }
+          }
           if (ids.length > 0) {
             prepared.ctxPayload.MessageSids = ids;
             prepared.ctxPayload.MessageSidFirst = ids[0];

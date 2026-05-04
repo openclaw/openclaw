@@ -37,59 +37,63 @@ function resolveExplicitProviderOwnerPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): string[] {
-  return dedupeSortedPluginIds(
-    params.providerRefs.flatMap((provider) => {
-      const plannedPluginIds = resolveManifestActivationPluginIds({
+  const pluginIds: string[] = [];
+  for (const provider of params.providerRefs) {
+    const plannedPluginIds = resolveManifestActivationPluginIds({
+      trigger: {
+        kind: "provider",
+        provider,
+      },
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
+    if (plannedPluginIds.length > 0) {
+      pluginIds.push(...plannedPluginIds);
+      continue;
+    }
+    const apiOwnerHint = resolveProviderConfigApiOwnerHint({
+      provider,
+      config: params.config,
+    });
+    if (apiOwnerHint) {
+      const apiOwnerPluginIds = resolveManifestActivationPluginIds({
         trigger: {
           kind: "provider",
-          provider,
+          provider: apiOwnerHint,
         },
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
       });
-      if (plannedPluginIds.length > 0) {
-        return plannedPluginIds;
+      if (apiOwnerPluginIds.length > 0) {
+        pluginIds.push(...apiOwnerPluginIds);
+        continue;
       }
-      const apiOwnerHint = resolveProviderConfigApiOwnerHint({
-        provider,
+      const legacyApiOwnerPluginIds = resolveOwningPluginIdsForProvider({
+        provider: apiOwnerHint,
         config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
       });
-      if (apiOwnerHint) {
-        const apiOwnerPluginIds = resolveManifestActivationPluginIds({
-          trigger: {
-            kind: "provider",
-            provider: apiOwnerHint,
-          },
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        });
-        if (apiOwnerPluginIds.length > 0) {
-          return apiOwnerPluginIds;
-        }
-        const legacyApiOwnerPluginIds = resolveOwningPluginIdsForProvider({
-          provider: apiOwnerHint,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        });
-        if (legacyApiOwnerPluginIds?.length) {
-          return legacyApiOwnerPluginIds;
-        }
+      if (legacyApiOwnerPluginIds?.length) {
+        pluginIds.push(...legacyApiOwnerPluginIds);
+        continue;
       }
-      // Keep legacy provider/CLI-backend ownership working until every owner is
-      // expressible through activation descriptors.
-      return (
-        resolveOwningPluginIdsForProvider({
-          provider,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        }) ?? []
-      );
-    }),
-  );
+    }
+    // Keep legacy provider/CLI-backend ownership working until every owner is
+    // expressible through activation descriptors.
+    const legacyPluginIds = resolveOwningPluginIdsForProvider({
+      provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
+    if (legacyPluginIds?.length) {
+      pluginIds.push(...legacyPluginIds);
+    }
+  }
+  return dedupeSortedPluginIds(pluginIds);
 }
 
 function mergeExplicitOwnerPluginIds(

@@ -37,13 +37,23 @@ function hasZeroTokenUsageSnapshot(usage: unknown): boolean {
   if (total !== undefined) {
     return (
       total === 0 &&
-      [input, output, cacheRead, cacheWrite].every((value) => value === undefined || value === 0)
+      (input === undefined || input === 0) &&
+      (output === undefined || output === 0) &&
+      (cacheRead === undefined || cacheRead === 0) &&
+      (cacheWrite === undefined || cacheWrite === 0)
     );
   }
-  const components = [input, output, cacheRead, cacheWrite].filter(
-    (value): value is number => value !== undefined,
-  );
-  return components.length > 0 && components.every(isZero);
+  let sawComponent = false;
+  for (const value of [input, output, cacheRead, cacheWrite]) {
+    if (value === undefined) {
+      continue;
+    }
+    sawComponent = true;
+    if (!isZero(value)) {
+      return false;
+    }
+  }
+  return sawComponent;
 }
 
 export function isZeroUsageEmptyStopAssistantTurn(message: EmptyAssistantTurnLike | null): boolean {

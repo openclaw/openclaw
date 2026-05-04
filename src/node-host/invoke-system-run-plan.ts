@@ -214,10 +214,10 @@ function pathComponentsFromRootSync(targetPath: string): string[] {
   const parts: string[] = [];
   let cursor = absolute;
   while (true) {
-    parts.unshift(cursor);
+    parts.push(cursor);
     const parent = path.dirname(cursor);
     if (parent === cursor) {
-      return parts;
+      return parts.toReversed();
     }
     cursor = parent;
   }

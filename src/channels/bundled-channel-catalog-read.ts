@@ -22,10 +22,16 @@ const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalo
 const officialCatalogFileCache = new Map<string, ChannelCatalogEntryLike[] | null>();
 
 function listPackageRoots(): string[] {
-  return [
+  const roots: string[] = [];
+  for (const root of [
     resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
     resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
-  ].filter((entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index);
+  ]) {
+    if (root && !roots.includes(root)) {
+      roots.push(root);
+    }
+  }
+  return roots;
 }
 
 function readBundledExtensionCatalogEntriesSync(): PluginPackageChannel[] {
@@ -83,11 +89,15 @@ function toBundledChannelEntry(
   if (!id || !channel) {
     return null;
   }
-  const aliases = Array.isArray(channel.aliases)
-    ? channel.aliases
-        .map((alias) => normalizeOptionalLowercaseString(alias))
-        .filter((alias): alias is string => Boolean(alias))
-    : [];
+  const aliases: string[] = [];
+  if (Array.isArray(channel.aliases)) {
+    for (const alias of channel.aliases) {
+      const normalized = normalizeOptionalLowercaseString(alias);
+      if (normalized) {
+        aliases.push(normalized);
+      }
+    }
+  }
   const order =
     typeof channel.order === "number" && Number.isFinite(channel.order)
       ? channel.order
@@ -100,18 +110,22 @@ function toBundledChannelEntry(
   };
 }
 
+function addBundledChannelEntries(
+  entries: Map<string, BundledChannelCatalogEntry>,
+  source: readonly (ChannelCatalogEntryLike | PluginPackageChannel)[],
+): void {
+  for (const sourceEntry of source) {
+    const entry = toBundledChannelEntry(sourceEntry);
+    if (entry) {
+      entries.set(entry.id, entry);
+    }
+  }
+}
+
 export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[] {
   const entries = new Map<string, BundledChannelCatalogEntry>();
-  for (const entry of readOfficialCatalogFileSync()
-    .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
-    entries.set(entry.id, entry);
-  }
-  for (const entry of readBundledExtensionCatalogEntriesSync()
-    .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
-    entries.set(entry.id, entry);
-  }
+  addBundledChannelEntries(entries, readOfficialCatalogFileSync());
+  addBundledChannelEntries(entries, readBundledExtensionCatalogEntriesSync());
   return Array.from(entries.values()).toSorted(
     (left, right) => left.order - right.order || left.id.localeCompare(right.id),
   );

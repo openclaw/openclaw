@@ -99,9 +99,9 @@ export function describeToolForVerbose(params: {
     return params.fallback;
   }
 
-  const lines = raw.split("\n").map((line) => line.trimEnd());
   const kept: string[] = [];
-  for (const line of lines) {
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.trimEnd();
     const trimmed = line.trim();
     if (!trimmed) {
       if (kept.length > 0 && kept.at(-1) !== "") {

@@ -38,10 +38,14 @@ function readContextText(block: SlackBlockWithFields): string | undefined {
   if (!Array.isArray(block.elements)) {
     return undefined;
   }
-  const textParts = block.elements
-    .map((element) => cleanCandidate(element.text))
-    .filter((value): value is string => Boolean(value));
-  return textParts.length > 0 ? textParts.join(" ") : undefined;
+  let text = "";
+  for (const element of block.elements) {
+    const candidate = cleanCandidate(element.text);
+    if (candidate) {
+      text = text ? `${text} ${candidate}` : candidate;
+    }
+  }
+  return text || undefined;
 }
 
 export function buildSlackBlocksFallbackText(blocks: (Block | KnownBlock)[]): string {

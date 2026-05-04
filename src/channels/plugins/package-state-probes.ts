@@ -57,9 +57,14 @@ function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  const values: string[] = [];
+  for (const entry of value) {
+    const normalized = normalizeOptionalString(entry);
+    if (normalized) {
+      values.push(normalized);
+    }
+  }
+  return values;
 }
 
 function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {

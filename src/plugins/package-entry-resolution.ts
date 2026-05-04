@@ -35,7 +35,14 @@ function normalizePackageManifestStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+  const entries: string[] = [];
+  for (const entry of value) {
+    const normalized = normalizeOptionalString(entry);
+    if (normalized) {
+      entries.push(normalized);
+    }
+  }
+  return entries;
 }
 
 function resolvePackageRuntimeExtensionEntries(params: {

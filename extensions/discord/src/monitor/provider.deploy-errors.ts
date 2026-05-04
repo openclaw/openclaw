@@ -277,14 +277,18 @@ function formatDiscordRejectedDeployEntries(params: {
     return [];
   }
   const rawEntries = Object.entries(rejectedEntriesSource).filter(([key]) => /^\d+$/.test(key));
-  return rawEntries.slice(0, DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT).flatMap(([key, value]) => {
+  const entries: string[] = [];
+  for (const [key, value] of rawEntries.slice(0, DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT)) {
     const index = Number.parseInt(key, 10);
     if (!Number.isFinite(index) || index < 0 || index >= requestBody.length) {
-      return [];
+      continue;
     }
     const command = requestBody[index];
     if (!command || typeof command !== "object") {
-      return [`#${index} fields=${readDiscordDeployRejectedFields(value).join("|") || "unknown"}`];
+      entries.push(
+        `#${index} fields=${readDiscordDeployRejectedFields(value).join("|") || "unknown"}`,
+      );
+      continue;
     }
     const payload = command as {
       name?: unknown;
@@ -304,8 +308,9 @@ function formatDiscordRejectedDeployEntries(params: {
     if (Array.isArray(payload.options) && payload.options.length > 0) {
       parts.push(`options=${payload.options.length}`);
     }
-    return [parts.join(" ")];
-  });
+    entries.push(parts.join(" "));
+  }
+  return entries;
 }
 
 export function formatDiscordDeployErrorDetails(err: unknown): string {

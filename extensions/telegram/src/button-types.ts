@@ -29,22 +29,26 @@ function chunkInteractiveButtons(
   rows: TelegramInlineButton[][],
 ) {
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
-    const row = buttons.slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE).flatMap((button) => {
+    const row: TelegramInlineButton[] = [];
+    const end = Math.min(i + TELEGRAM_INTERACTIVE_ROW_SIZE, buttons.length);
+    for (let index = i; index < end; index += 1) {
+      const button = buttons[index];
+      if (!button) {
+        continue;
+      }
       if (!button.value) {
-        return [];
+        continue;
       }
       const callbackData = sanitizeTelegramCallbackData(button.value);
       if (!callbackData) {
-        return [];
+        continue;
       }
-      return [
-        {
-          text: button.label,
-          callback_data: callbackData,
-          style: toTelegramButtonStyle(button.style),
-        },
-      ];
-    });
+      row.push({
+        text: button.label,
+        callback_data: callbackData,
+        style: toTelegramButtonStyle(button.style),
+      });
+    }
     if (row.length > 0) {
       rows.push(row);
     }

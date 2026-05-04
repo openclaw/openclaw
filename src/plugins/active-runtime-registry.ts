@@ -17,9 +17,14 @@ function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefin
   if (ids === undefined) {
     return undefined;
   }
-  return [...new Set(ids.map((id) => id.trim()).filter(Boolean))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  const normalized = new Set<string>();
+  for (const id of ids) {
+    const trimmed = id.trim();
+    if (trimmed) {
+      normalized.add(trimmed);
+    }
+  }
+  return [...normalized].toSorted((left, right) => left.localeCompare(right));
 }
 
 function registryContainsPluginIds(

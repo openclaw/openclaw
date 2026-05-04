@@ -76,22 +76,22 @@ type OpenAIStrictToolSchemaDiagnostic = {
 export function findOpenAIStrictToolSchemaDiagnostics(
   tools: readonly ToolWithParameters[],
 ): OpenAIStrictToolSchemaDiagnostic[] {
-  return tools.flatMap((tool, toolIndex) => {
+  const diagnostics: OpenAIStrictToolSchemaDiagnostic[] = [];
+  for (const [toolIndex, tool] of tools.entries()) {
     const violations = findStrictOpenAIJsonSchemaViolations(
       normalizeStrictOpenAIJsonSchema(tool.parameters),
       `${typeof tool.name === "string" && tool.name ? tool.name : `tool[${toolIndex}]`}.parameters`,
     );
     if (violations.length === 0) {
-      return [];
+      continue;
     }
-    return [
-      {
-        toolIndex,
-        ...(typeof tool.name === "string" && tool.name ? { toolName: tool.name } : {}),
-        violations,
-      },
-    ];
-  });
+    diagnostics.push({
+      toolIndex,
+      ...(typeof tool.name === "string" && tool.name ? { toolName: tool.name } : {}),
+      violations,
+    });
+  }
+  return diagnostics;
 }
 
 function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
@@ -120,7 +120,7 @@ function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
         ? (record.properties as Record<string, unknown>)
         : {};
     const required = Array.isArray(record.required)
-      ? record.required.filter((entry): entry is string => typeof entry === "string")
+      ? collectStringEntries(record.required)
       : undefined;
     if (!required) {
       return false;
@@ -131,21 +131,39 @@ function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
     }
   }
 
-  return Object.entries(record).every(([key, entry]) => {
+  for (const [key, entry] of Object.entries(record)) {
     if (key === "properties" && entry && typeof entry === "object" && !Array.isArray(entry)) {
-      return Object.values(entry as Record<string, unknown>).every((value) =>
-        isStrictOpenAIJsonSchemaCompatibleRecursive(value),
-      );
+      for (const value of Object.values(entry as Record<string, unknown>)) {
+        if (!isStrictOpenAIJsonSchemaCompatibleRecursive(value)) {
+          return false;
+        }
+      }
+      continue;
     }
-    return isStrictOpenAIJsonSchemaCompatibleRecursive(entry);
-  });
+    if (!isStrictOpenAIJsonSchemaCompatibleRecursive(entry)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function collectStringEntries(values: unknown[]): string[] {
+  const strings: string[] = [];
+  for (const value of values) {
+    if (typeof value === "string") {
+      strings.push(value);
+    }
+  }
+  return strings;
 }
 
 function findStrictOpenAIJsonSchemaViolations(schema: unknown, path: string): string[] {
   if (Array.isArray(schema)) {
-    return schema.flatMap((entry, index) =>
-      findStrictOpenAIJsonSchemaViolations(entry, `${path}[${index}]`),
-    );
+    const violations: string[] = [];
+    for (const [index, entry] of schema.entries()) {
+      violations.push(...findStrictOpenAIJsonSchemaViolations(entry, `${path}[${index}]`));
+    }
+    return violations;
   }
   if (!schema || typeof schema !== "object") {
     return [];
@@ -172,7 +190,7 @@ function findStrictOpenAIJsonSchemaViolations(schema: unknown, path: string): st
         ? (record.properties as Record<string, unknown>)
         : {};
     const required = Array.isArray(record.required)
-      ? record.required.filter((entry): entry is string => typeof entry === "string")
+      ? collectStringEntries(record.required)
       : undefined;
     if (!required) {
       violations.push(`${path}.required`);

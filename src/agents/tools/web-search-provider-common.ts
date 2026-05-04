@@ -206,10 +206,13 @@ const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const PERPLEXITY_DATE_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
 
 function isValidIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  const match = ISO_DATE_PATTERN.exec(value);
+  if (!match) {
     return false;
   }
-  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+  const year = Number.parseInt(match[1] ?? "", 10);
+  const month = Number.parseInt(match[2] ?? "", 10);
+  const day = Number.parseInt(match[3] ?? "", 10);
   if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
     return false;
   }

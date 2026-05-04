@@ -141,7 +141,14 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const taskId = readString(payload.taskId);
   const agentId = readString(payload.agentId);
   const ts = readNumber(payload.ts) ?? Date.now();
-  const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(Boolean);
+  const idParts = [String(event.seq ?? "local"), event.event];
+  if (runId) {
+    idParts.push(runId);
+  }
+  if (sessionKey) {
+    idParts.push(sessionKey);
+  }
+  idParts.push(String(ts));
 
   return {
     version: 1,

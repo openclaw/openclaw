@@ -110,36 +110,37 @@ export function buildSlackInteractiveBlocks(
       return state;
     }
     if (block.type === "buttons") {
-      const elements = block.buttons
-        .flatMap((button, choiceIndex) => {
-          const value =
-            button.value && isWithinSlackLimit(button.value, SLACK_BUTTON_VALUE_MAX)
-              ? button.value
-              : undefined;
-          const url =
-            button.url && isWithinSlackLimit(button.url, SLACK_BUTTON_URL_MAX)
-              ? button.url
-              : undefined;
-          if (!value && !url) {
-            return [];
-          }
-          const style = resolveSlackButtonStyle(button.style);
-          return [
-            {
-              type: "button" as const,
-              action_id: buildSlackReplyButtonActionId(state.buttonIndex + 1, choiceIndex),
-              text: {
-                type: "plain_text" as const,
-                text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
-                emoji: true,
-              },
-              ...(value ? { value } : {}),
-              ...(url ? { url } : {}),
-              ...(style ? { style } : {}),
-            },
-          ];
-        })
-        .slice(0, SLACK_ACTION_BLOCK_ELEMENTS_MAX);
+      const elements = [];
+      for (let choiceIndex = 0; choiceIndex < block.buttons.length; choiceIndex += 1) {
+        if (elements.length >= SLACK_ACTION_BLOCK_ELEMENTS_MAX) {
+          break;
+        }
+        const button = block.buttons[choiceIndex];
+        const value =
+          button.value && isWithinSlackLimit(button.value, SLACK_BUTTON_VALUE_MAX)
+            ? button.value
+            : undefined;
+        const url =
+          button.url && isWithinSlackLimit(button.url, SLACK_BUTTON_URL_MAX)
+            ? button.url
+            : undefined;
+        if (!value && !url) {
+          continue;
+        }
+        const style = resolveSlackButtonStyle(button.style);
+        elements.push({
+          type: "button" as const,
+          action_id: buildSlackReplyButtonActionId(state.buttonIndex + 1, choiceIndex),
+          text: {
+            type: "plain_text" as const,
+            text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
+            emoji: true,
+          },
+          ...(value ? { value } : {}),
+          ...(url ? { url } : {}),
+          ...(style ? { style } : {}),
+        });
+      }
       if (elements.length === 0) {
         return state;
       }

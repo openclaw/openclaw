@@ -83,6 +83,12 @@ export function toStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const strings = value.map((v) => toStringOrEmpty(v)).filter(Boolean);
+  const strings: string[] = [];
+  for (const entry of value) {
+    const stringValue = toStringOrEmpty(entry);
+    if (stringValue) {
+      strings.push(stringValue);
+    }
+  }
   return strings.length ? strings : undefined;
 }

@@ -159,16 +159,18 @@ function resolveModelApiSurface(entry: { models?: unknown } | undefined): string
     return undefined;
   }
 
-  const apis = entry.models
-    .flatMap((model) => {
-      if (!model || typeof model !== "object") {
-        return [];
-      }
-      const api = (model as { api?: unknown }).api;
-      const normalized = normalizeOptionalString(api);
-      return normalized ? [normalized] : [];
-    })
-    .toSorted();
+  const apis: string[] = [];
+  for (const model of entry.models) {
+    if (!model || typeof model !== "object") {
+      continue;
+    }
+    const api = (model as { api?: unknown }).api;
+    const normalized = normalizeOptionalString(api);
+    if (normalized) {
+      apis.push(normalized);
+    }
+  }
+  apis.sort();
 
   return apis.length > 0 ? JSON.stringify(apis) : undefined;
 }

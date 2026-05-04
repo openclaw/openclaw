@@ -58,5 +58,11 @@ export function getChannelEnvVars(channelId: string, params?: ChannelEnvVarLooku
 }
 
 export function listKnownChannelEnvVarNames(params?: ChannelEnvVarLookupParams): string[] {
-  return [...new Set(Object.values(resolveChannelEnvVars(params)).flatMap((keys) => keys))];
+  const names = new Set<string>();
+  for (const keys of Object.values(resolveChannelEnvVars(params))) {
+    for (const key of keys) {
+      names.add(key);
+    }
+  }
+  return [...names];
 }

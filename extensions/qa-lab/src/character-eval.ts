@@ -125,7 +125,14 @@ export type QaCharacterEvalParams = {
 };
 
 function normalizeModelRefs(models: readonly string[]) {
-  return [...new Set(models.map((model) => model.trim()).filter((model) => model.length > 0))];
+  const refs = new Set<string>();
+  for (const model of models) {
+    const trimmed = model.trim();
+    if (trimmed) {
+      refs.add(trimmed);
+    }
+  }
+  return [...refs];
 }
 
 function resolveCandidateThinkingDefault(params: {

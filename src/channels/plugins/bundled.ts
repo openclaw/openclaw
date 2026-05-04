@@ -684,18 +684,26 @@ function getBundledChannelSetupSecretsForRoot(
 
 export function listBundledChannelPlugins(): readonly ChannelPlugin[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForRoot(rootScope).flatMap((id) => {
+  const plugins: ChannelPlugin[] = [];
+  for (const id of listBundledChannelPluginIdsForRoot(rootScope)) {
     const plugin = getBundledChannelPluginForRoot(id, rootScope, loadContext);
-    return plugin ? [plugin] : [];
-  });
+    if (plugin) {
+      plugins.push(plugin);
+    }
+  }
+  return plugins;
 }
 
 export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForRoot(rootScope).flatMap((id) => {
+  const plugins: ChannelPlugin[] = [];
+  for (const id of listBundledChannelPluginIdsForRoot(rootScope)) {
     const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
-    return plugin ? [plugin] : [];
-  });
+    if (plugin) {
+      plugins.push(plugin);
+    }
+  }
+  return plugins;
 }
 
 export function listBundledChannelSetupPluginsByFeature(
@@ -703,16 +711,20 @@ export function listBundledChannelSetupPluginsByFeature(
   options: { config?: OpenClawConfig } = {},
 ): readonly ChannelPlugin[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, feature, {
+  const plugins: ChannelPlugin[] = [];
+  for (const id of listBundledChannelPluginIdsForSetupFeature(rootScope, feature, {
     config: options.config,
-  }).flatMap((id) => {
+  })) {
     const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
     if (!hasSetupEntryFeature(setupEntry, feature)) {
-      return [];
+      continue;
     }
     const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
-    return plugin ? [plugin] : [];
-  });
+    if (plugin) {
+      plugins.push(plugin);
+    }
+  }
+  return plugins;
 }
 
 export function listBundledChannelLegacySessionSurfaces(
@@ -721,20 +733,25 @@ export function listBundledChannelLegacySessionSurfaces(
   } = {},
 ): readonly BundledChannelLegacySessionSurface[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacySessionSurfaces", {
+  const surfaces: BundledChannelLegacySessionSurface[] = [];
+  for (const id of listBundledChannelPluginIdsForSetupFeature(rootScope, "legacySessionSurfaces", {
     config: options.config,
-  }).flatMap((id) => {
+  })) {
     const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
     const surface = setupEntry?.loadLegacySessionSurface?.();
     if (surface) {
-      return [surface];
+      surfaces.push(surface);
+      continue;
     }
     if (!hasSetupEntryFeature(setupEntry, "legacySessionSurfaces")) {
-      return [];
+      continue;
     }
     const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
-    return plugin?.messaging ? [plugin.messaging] : [];
-  });
+    if (plugin?.messaging) {
+      surfaces.push(plugin.messaging);
+    }
+  }
+  return surfaces;
 }
 
 export function listBundledChannelLegacyStateMigrationDetectors(
@@ -743,22 +760,25 @@ export function listBundledChannelLegacyStateMigrationDetectors(
   } = {},
 ): readonly BundledChannelLegacyStateMigrationDetector[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacyStateMigrations", {
+  const detectors: BundledChannelLegacyStateMigrationDetector[] = [];
+  for (const id of listBundledChannelPluginIdsForSetupFeature(rootScope, "legacyStateMigrations", {
     config: options.config,
-  }).flatMap((id) => {
+  })) {
     const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
     const detector = setupEntry?.loadLegacyStateMigrationDetector?.();
     if (detector) {
-      return [detector];
+      detectors.push(detector);
+      continue;
     }
     if (!hasSetupEntryFeature(setupEntry, "legacyStateMigrations")) {
-      return [];
+      continue;
     }
     const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
-    return plugin?.lifecycle?.detectLegacyStateMigrations
-      ? [plugin.lifecycle.detectLegacyStateMigrations]
-      : [];
-  });
+    if (plugin?.lifecycle?.detectLegacyStateMigrations) {
+      detectors.push(plugin.lifecycle.detectLegacyStateMigrations);
+    }
+  }
+  return detectors;
 }
 
 export function hasBundledChannelEntryFeature(

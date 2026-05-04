@@ -22,7 +22,12 @@ export function formatToolAggregate(
   metas?: string[],
   options?: ToolAggregateOptions,
 ): string {
-  const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
+  const filtered: string[] = [];
+  for (const meta of metas ?? []) {
+    if (meta) {
+      filtered.push(shortenMeta(meta));
+    }
+  }
   const display = resolveToolDisplay({ name: toolName });
   const prefix = `${display.emoji} ${display.label}`;
   if (!filtered.length) {

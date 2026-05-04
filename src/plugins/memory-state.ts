@@ -219,10 +219,12 @@ export function buildMemoryPromptSection(params: {
   const primary = normalizeMemoryPromptLines(
     memoryPluginState.capability?.capability.promptBuilder?.(params) ?? [],
   );
-  const supplements = memoryPluginState.promptSupplements
+  const supplements: string[] = [];
+  for (const registration of memoryPluginState.promptSupplements
     // Keep supplement order stable even if plugin registration order changes.
-    .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))
-    .flatMap((registration) => normalizeMemoryPromptLines(registration.builder(params)));
+    .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))) {
+    supplements.push(...normalizeMemoryPromptLines(registration.builder(params)));
+  }
   return [...primary, ...supplements];
 }
 

@@ -10,6 +10,28 @@ function isTelegramBotEndpointSegment(segment: string): boolean {
   }
 }
 
+function splitNonEmptyPathSegments(pathname: string): string[] {
+  const segments: string[] = [];
+  for (const segment of pathname.split("/")) {
+    if (segment) {
+      segments.push(segment);
+    }
+  }
+  return segments;
+}
+
+function lastNonEmptyPathSegment(pathname: string): string | undefined {
+  let end = pathname.length;
+  while (end > 0 && pathname[end - 1] === "/") {
+    end--;
+  }
+  if (end === 0) {
+    return undefined;
+  }
+  const start = pathname.lastIndexOf("/", end - 1) + 1;
+  return pathname.slice(start, end) || undefined;
+}
+
 export function normalizeTelegramApiRoot(apiRoot?: string): string {
   const trimmed = apiRoot?.trim();
   if (!trimmed) {
@@ -19,7 +41,7 @@ export function normalizeTelegramApiRoot(apiRoot?: string): string {
   let normalized = trimmed.replace(/\/+$/u, "");
   try {
     const url = new URL(normalized);
-    const segments = url.pathname.split("/").filter(Boolean);
+    const segments = splitNonEmptyPathSegments(url.pathname);
     if (segments.length > 0 && isTelegramBotEndpointSegment(segments[segments.length - 1] ?? "")) {
       segments.pop();
       url.pathname = segments.length > 0 ? `/${segments.join("/")}` : "/";
@@ -40,8 +62,7 @@ export function hasTelegramBotEndpointApiRoot(apiRoot: unknown): boolean {
   }
   try {
     const url = new URL(apiRoot.trim());
-    const segments = url.pathname.split("/").filter(Boolean);
-    const last = segments[segments.length - 1];
+    const last = lastNonEmptyPathSegment(url.pathname);
     return Boolean(last && isTelegramBotEndpointSegment(last));
   } catch {
     return false;

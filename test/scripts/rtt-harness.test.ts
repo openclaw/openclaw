@@ -5,11 +5,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   appendJsonl,
+  assertRequiredCredentialEnv,
   buildRttResult,
   buildRunId,
   createHarnessEnv,
   extractRtt,
   readTelegramSummary,
+  rttHarnessScriptName,
   safeRunLabel,
   validateOpenClawPackageSpec,
 } from "../../scripts/lib/rtt-harness.ts";
@@ -55,6 +57,7 @@ describe("RTT harness", () => {
         OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100123",
         OPENCLAW_NPM_TELEGRAM_FAST: "0",
       },
+      credentialSource: "env",
       providerMode: "mock-openai",
       rawOutputDir: ".artifacts/rtt/run/raw",
       samples: 20,
@@ -68,6 +71,7 @@ describe("RTT harness", () => {
     expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBe("-100123");
     expect(env.OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC).toBe("openclaw@beta");
     expect(env.OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL).toBe("openclaw@beta (2026.4.30-beta.1)");
+    expect(env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE).toBe("env");
     expect(env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE).toBe("mock-openai");
     expect(env.OPENCLAW_NPM_TELEGRAM_SCENARIOS).toBe("telegram-mentioned-message-reply");
     expect(env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR).toBe(".artifacts/rtt/run/raw");
@@ -76,6 +80,59 @@ describe("RTT harness", () => {
     expect(env.OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS).toBe("30000");
     expect(env.OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS).toBe("180000");
     expect(env.OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS).toBe("180000");
+  });
+
+  it("constructs Convex credential harness env", () => {
+    const env = createHarnessEnv({
+      baseEnv: {
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+      },
+      credentialRole: "ci",
+      credentialSource: "convex",
+      providerMode: "mock-openai",
+      rawOutputDir: ".artifacts/rtt/run/raw",
+      samples: 20,
+      sampleTimeoutMs: 30_000,
+      scenarios: ["telegram-mentioned-message-reply"],
+      spec: "openclaw@beta",
+      timeoutMs: 180_000,
+      version: "2026.4.30-beta.1",
+    });
+
+    expect(env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE).toBe("convex");
+    expect(env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE).toBe("ci");
+    expect(env.OPENCLAW_QA_CONVEX_SITE_URL).toBe("https://qa-cred.example.convex.site");
+  });
+
+  it("validates credential-specific env requirements", () => {
+    expect(() =>
+      assertRequiredCredentialEnv(
+        {
+          OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100123",
+          OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver",
+          OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut",
+        },
+        "env",
+      ),
+    ).not.toThrow();
+    expect(() => assertRequiredCredentialEnv({}, "env")).toThrow(/Missing Telegram QA env/);
+    expect(() =>
+      assertRequiredCredentialEnv(
+        {
+          OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+          OPENCLAW_QA_CONVEX_SECRET_CI: "secret",
+        },
+        "convex",
+      ),
+    ).not.toThrow();
+    expect(() => assertRequiredCredentialEnv({}, "convex")).toThrow(
+      /Missing Convex Telegram QA credential env/,
+    );
+  });
+
+  it("selects the matching Docker harness script for credential mode", () => {
+    expect(rttHarnessScriptName("env")).toBe("scripts/e2e/npm-telegram-rtt-docker.sh");
+    expect(rttHarnessScriptName("convex")).toBe("scripts/e2e/npm-telegram-live-docker.sh");
   });
 
   it("extracts RTT values from Telegram QA summaries", async () => {
@@ -174,6 +231,10 @@ describe("RTT harness", () => {
       "/tmp/openclaw.tgz",
       "--provider",
       "live-frontier",
+      "--credential-source",
+      "convex",
+      "--credential-role",
+      "ci",
       "--runs",
       "3",
       "--samples",
@@ -191,6 +252,8 @@ describe("RTT harness", () => {
     expect(parsed.spec).toBe("openclaw@latest");
     expect(parsed.options).toMatchObject({
       packageTgz: "/tmp/openclaw.tgz",
+      credentialRole: "ci",
+      credentialSource: "convex",
       providerMode: "live-frontier",
       runs: 3,
       samples: 5,
@@ -200,5 +263,11 @@ describe("RTT harness", () => {
       scenarios: ["telegram-mentioned-message-reply"],
       timeoutMs: 240_000,
     });
+  });
+
+  it("parses credential source", () => {
+    expect(cliTesting.parseCredentialSource("env")).toBe("env");
+    expect(cliTesting.parseCredentialSource("convex")).toBe("convex");
+    expect(() => cliTesting.parseCredentialSource("vault")).toThrow(/--credential-source/);
   });
 });

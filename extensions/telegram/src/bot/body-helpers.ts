@@ -25,9 +25,9 @@ type TelegramPrimaryMedia = {
 };
 
 export function buildSenderName(msg: Message) {
-  const name =
-    [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ").trim() ||
-    msg.from?.username;
+  const first = msg.from?.first_name?.trim();
+  const last = msg.from?.last_name?.trim();
+  const name = first && last ? `${first} ${last}` : first || last || msg.from?.username;
   return name || undefined;
 }
 
@@ -203,7 +203,9 @@ export type TelegramForwardedContext = {
 };
 
 function normalizeForwardedUserLabel(user: User) {
-  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+  const first = user.first_name?.trim();
+  const last = user.last_name?.trim();
+  const name = first && last ? `${first} ${last}` : first || last || "";
   const username = normalizeOptionalString(user.username);
   const id = String(user.id);
   const display =

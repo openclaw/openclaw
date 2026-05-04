@@ -39,7 +39,17 @@ function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  const normalized: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (trimmed) {
+      normalized.push(trimmed);
+    }
+  }
+  return normalized;
 }
 
 function listKnownEnvApiKeyMarkers(): Set<string> {
@@ -52,16 +62,18 @@ function listKnownEnvApiKeyMarkers(): Set<string> {
 }
 
 export function listKnownNonSecretApiKeyMarkers(): string[] {
-  knownNonSecretApiKeyMarkersCache ??= [
-    ...new Set([
-      ...CORE_NON_SECRET_API_KEY_MARKERS,
-      ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
-        plugin.origin === "bundled"
-          ? normalizeStringList(plugin.manifest.nonSecretAuthMarkers)
-          : [],
-      ),
-    ]),
-  ];
+  if (!knownNonSecretApiKeyMarkersCache) {
+    const markers = new Set<string>(CORE_NON_SECRET_API_KEY_MARKERS);
+    for (const plugin of listOpenClawPluginManifestMetadata()) {
+      if (plugin.origin !== "bundled") {
+        continue;
+      }
+      for (const marker of normalizeStringList(plugin.manifest.nonSecretAuthMarkers)) {
+        markers.add(marker);
+      }
+    }
+    knownNonSecretApiKeyMarkersCache = [...markers];
+  }
   return [...knownNonSecretApiKeyMarkersCache];
 }
 

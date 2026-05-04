@@ -11,7 +11,13 @@ export function withBundledPluginAllowlistCompat(params: {
     return params.config;
   }
 
-  const allowSet = new Set(allow.map((entry) => entry.trim()).filter(Boolean));
+  const allowSet = new Set<string>();
+  for (const entry of allow) {
+    const trimmed = entry.trim();
+    if (trimmed) {
+      allowSet.add(trimmed);
+    }
+  }
   let changed = false;
   for (const pluginId of params.pluginIds) {
     if (!allowSet.has(pluginId)) {

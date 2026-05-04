@@ -98,10 +98,14 @@ function normalizeSlackScopeList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.flatMap((scope) => {
+  const scopes: string[] = [];
+  for (const scope of value) {
     const normalized = normalizeSlackApiString(scope);
-    return normalized ? [normalized] : [];
-  });
+    if (normalized) {
+      scopes.push(normalized);
+    }
+  }
+  return scopes;
 }
 
 function getSlackWebApiErrorData(err: unknown): SlackWebApiErrorData | undefined {
@@ -621,9 +625,10 @@ async function sendMessageSlackQueuedInner(params: {
     chunkMode === "newline"
       ? chunkMarkdownTextWithMode(trimmedMessage, chunkLimit, chunkMode)
       : [trimmedMessage];
-  const chunks = markdownChunks.flatMap((markdown) =>
-    markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
-  );
+  const chunks: string[] = [];
+  for (const markdown of markdownChunks) {
+    chunks.push(...markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }));
+  }
   const resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"

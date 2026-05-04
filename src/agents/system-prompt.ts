@@ -271,7 +271,13 @@ function buildOwnerIdentityLine(
   ownerDisplay: OwnerIdDisplay,
   ownerDisplaySecret?: string,
 ) {
-  const normalized = ownerNumbers.map((value) => value.trim()).filter(Boolean);
+  const normalized: string[] = [];
+  for (const value of ownerNumbers) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      normalized.push(trimmed);
+    }
+  }
   if (normalized.length === 0) {
     return undefined;
   }
@@ -624,13 +630,22 @@ export function buildAgentSystemPrompt(params: {
   const resolveToolName = (normalized: string) =>
     canonicalByNormalized.get(normalized) ?? normalized;
 
-  const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
+  const normalizedTools: string[] = [];
+  for (const tool of canonicalToolNames) {
+    normalizedTools.push(tool.toLowerCase());
+  }
   const availableTools = new Set(normalizedTools);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
-  const nativeCommandGuidanceLines = Array.from(
-    new Set((params.nativeCommandGuidanceLines ?? []).map((line) => line.trim()).filter(Boolean)),
-  );
+  const nativeCommandGuidanceSeen = new Set<string>();
+  const nativeCommandGuidanceLines: string[] = [];
+  for (const line of params.nativeCommandGuidanceLines ?? []) {
+    const trimmed = line.trim();
+    if (trimmed && !nativeCommandGuidanceSeen.has(trimmed)) {
+      nativeCommandGuidanceSeen.add(trimmed);
+      nativeCommandGuidanceLines.push(trimmed);
+    }
+  }
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
     const normalized = key.trim().toLowerCase();
@@ -639,9 +654,15 @@ export function buildAgentSystemPrompt(params: {
     }
     externalToolSummaries.set(normalized, value.trim());
   }
-  const extraTools = Array.from(
-    new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
-  );
+  const toolOrderSet = new Set(toolOrder);
+  const extraToolSeen = new Set<string>();
+  const extraTools: string[] = [];
+  for (const tool of normalizedTools) {
+    if (!toolOrderSet.has(tool) && !extraToolSeen.has(tool)) {
+      extraToolSeen.add(tool);
+      extraTools.push(tool);
+    }
+  }
   const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
   const toolLines = enabledTools.map((tool) => {
     const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
@@ -695,9 +716,13 @@ export function buildAgentSystemPrompt(params: {
   const runtimeInfo = params.runtimeInfo;
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
-  const runtimeCapabilitiesLower = new Set(
-    runtimeCapabilities.map((cap) => normalizeLowercaseStringOrEmpty(cap)).filter(Boolean),
-  );
+  const runtimeCapabilitiesLower = new Set<string>();
+  for (const cap of runtimeCapabilities) {
+    const normalized = normalizeLowercaseStringOrEmpty(cap);
+    if (normalized) {
+      runtimeCapabilitiesLower.add(normalized);
+    }
+  }
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
@@ -748,7 +773,13 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
-  const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
+  const workspaceNotes: string[] = [];
+  for (const note of params.workspaceNotes ?? []) {
+    const trimmed = note.trim();
+    if (trimmed) {
+      workspaceNotes.push(trimmed);
+    }
+  }
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {

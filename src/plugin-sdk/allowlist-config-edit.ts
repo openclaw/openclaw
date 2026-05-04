@@ -55,7 +55,14 @@ export function resolveLegacyDmAllowlistConfigPaths(scope: "dm" | "group") {
 export function readConfiguredAllowlistEntries(
   entries: Array<string | number> | null | undefined,
 ): string[] {
-  return (entries ?? []).map(String).filter(Boolean);
+  const normalized: string[] = [];
+  for (const entry of entries ?? []) {
+    const value = String(entry);
+    if (value) {
+      normalized.push(value);
+    }
+  }
+  return normalized;
 }
 
 /** Collect labeled allowlist overrides from a flat keyed record. */

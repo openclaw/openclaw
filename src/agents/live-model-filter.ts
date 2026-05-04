@@ -258,30 +258,31 @@ function capByProviderSpread<T>(
     return items;
   }
   const providerOrder: string[] = [];
-  const grouped = new Map<string, T[]>();
+  const grouped = new Map<string, { items: T[]; index: number }>();
   for (const item of items) {
     const provider = providerOf(item);
     const bucket = grouped.get(provider);
     if (bucket) {
-      bucket.push(item);
+      bucket.items.push(item);
       continue;
     }
     providerOrder.push(provider);
-    grouped.set(provider, [item]);
+    grouped.set(provider, { items: [item], index: 0 });
   }
 
   const selected: T[] = [];
   while (selected.length < maxItems && grouped.size > 0) {
     for (const provider of providerOrder) {
       const bucket = grouped.get(provider);
-      if (!bucket || bucket.length === 0) {
+      if (!bucket || bucket.index >= bucket.items.length) {
         continue;
       }
-      const item = bucket.shift();
+      const item = bucket.items[bucket.index];
       if (item) {
         selected.push(item);
+        bucket.index += 1;
       }
-      if (bucket.length === 0) {
+      if (bucket.index >= bucket.items.length) {
         grouped.delete(provider);
       }
       if (selected.length >= maxItems) {

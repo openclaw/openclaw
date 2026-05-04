@@ -257,9 +257,12 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
 }
 
 async function handleSystemWhich(params: SystemWhichParams, env?: Record<string, string>) {
-  const bins = params.bins.map((bin) => bin.trim()).filter(Boolean);
   const found: Record<string, string> = {};
-  for (const bin of bins) {
+  for (const rawBin of params.bins) {
+    const bin = rawBin.trim();
+    if (!bin) {
+      continue;
+    }
     const path = resolveExecutable(bin, env);
     if (path) {
       found[bin] = path;

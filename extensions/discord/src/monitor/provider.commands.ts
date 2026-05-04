@@ -32,9 +32,13 @@ async function appendPluginCommandSpecs(params: {
   getPluginCommandSpecs?: GetPluginCommandSpecs;
 }): Promise<NativeCommandSpec[]> {
   const merged = [...params.commandSpecs];
-  const existingNames = new Set(
-    merged.map((spec) => normalizeLowercaseStringOrEmpty(spec.name)).filter(Boolean),
-  );
+  const existingNames = new Set<string>();
+  for (const spec of merged) {
+    const normalizedName = normalizeLowercaseStringOrEmpty(spec.name);
+    if (normalizedName) {
+      existingNames.add(normalizedName);
+    }
+  }
   const getPluginCommandSpecs =
     params.getPluginCommandSpecs ?? (await loadPluginRuntime()).getPluginCommandSpecs;
   for (const pluginCommand of getPluginCommandSpecs("discord", { config: params.cfg })) {

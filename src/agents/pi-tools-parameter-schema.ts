@@ -28,10 +28,13 @@ function extractEnumValues(schema: unknown): unknown[] | undefined {
       ? record.oneOf
       : null;
   if (variants) {
-    const values = variants.flatMap((variant) => {
+    const values: unknown[] = [];
+    for (const variant of variants) {
       const extracted = extractEnumValues(variant);
-      return extracted ?? [];
-    });
+      if (extracted?.length) {
+        values.push(...extracted);
+      }
+    }
     return values.length > 0 ? values : undefined;
   }
   return undefined;

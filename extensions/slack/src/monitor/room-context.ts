@@ -17,11 +17,9 @@ export function resolveSlackRoomContextHints(params: {
       })
     : undefined;
 
-  const systemPromptParts = [
-    params.isRoomish ? (normalizeOptionalString(params.channelConfig?.systemPrompt) ?? null) : null,
-  ].filter((entry): entry is string => Boolean(entry));
-  const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  const groupSystemPrompt = params.isRoomish
+    ? normalizeOptionalString(params.channelConfig?.systemPrompt)
+    : undefined;
 
   return {
     untrustedChannelMetadata,

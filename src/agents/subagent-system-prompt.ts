@@ -27,9 +27,15 @@ export function buildSubagentSystemPrompt(params: {
       ? params.maxSpawnDepth
       : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const acpEnabled = params.acpEnabled === true;
-  const nativeCommandGuidanceLines = Array.from(
-    new Set((params.nativeCommandGuidanceLines ?? []).map((line) => line.trim()).filter(Boolean)),
-  );
+  const nativeCommandGuidanceSeen = new Set<string>();
+  const nativeCommandGuidanceLines: string[] = [];
+  for (const line of params.nativeCommandGuidanceLines ?? []) {
+    const trimmed = line.trim();
+    if (trimmed && !nativeCommandGuidanceSeen.has(trimmed)) {
+      nativeCommandGuidanceSeen.add(trimmed);
+      nativeCommandGuidanceLines.push(trimmed);
+    }
+  }
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
   const roleLines =

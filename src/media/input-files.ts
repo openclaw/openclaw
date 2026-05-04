@@ -144,17 +144,33 @@ export function parseContentType(value: string | undefined): {
   if (!value) {
     return {};
   }
-  const parts = value.split(";").map((part) => part.trim());
+  const parts = value.split(";");
   const mimeType = normalizeMimeType(parts[0]);
-  const charset = parts
-    .map((part) => normalizeOptionalString(part.match(/^charset=(.+)$/i)?.[1]))
-    .find((part) => part && part.length > 0);
+  let charset: string | undefined;
+  for (let index = 1; index < parts.length; index++) {
+    const part = parts[index].trim();
+    const match = part.match(/^charset=(.+)$/i);
+    if (!match) {
+      continue;
+    }
+    charset = normalizeOptionalString(match[1]);
+    if (charset) {
+      break;
+    }
+  }
   return { mimeType, charset };
 }
 
 export function normalizeMimeList(values: string[] | undefined, fallback: string[]): Set<string> {
   const input = values && values.length > 0 ? values : fallback;
-  return new Set(input.map((value) => normalizeMimeType(value)).filter(Boolean) as string[]);
+  const normalized = new Set<string>();
+  for (const value of input) {
+    const mimeType = normalizeMimeType(value);
+    if (mimeType) {
+      normalized.add(mimeType);
+    }
+  }
+  return normalized;
 }
 
 export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFileLimits {

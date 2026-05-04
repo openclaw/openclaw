@@ -31,9 +31,10 @@ export const listSlackDirectoryPeersFromConfig = createResolvedDirectoryEntriesL
   kind: "user",
   resolveAccount: (cfg, accountId) => resolveSlackDirectoryConfigAccount(cfg, accountId),
   resolveSources: (account) => {
-    const channelUsers = Object.values(account.config.channels ?? {}).flatMap(
-      (channel) => channel.users ?? [],
-    );
+    const channelUsers: Array<string | number> = [];
+    for (const channel of Object.values(account.config.channels ?? {})) {
+      channelUsers.push(...(channel.users ?? []));
+    }
     return [account.allowFrom, Object.keys(account.config.dms ?? {}), channelUsers];
   },
   normalizeId: (raw) => {

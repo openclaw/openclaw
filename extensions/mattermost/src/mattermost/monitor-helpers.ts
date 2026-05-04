@@ -43,12 +43,18 @@ export function normalizeMention(text: string, mention: string | undefined): str
     };
   });
 
-  while (normalizedLines[0]?.mentionOnlyBlank) {
-    normalizedLines.shift();
+  let startIndex = 0;
+  while (normalizedLines[startIndex]?.mentionOnlyBlank) {
+    startIndex += 1;
   }
-  while (normalizedLines.at(-1)?.text.trim() === "") {
-    normalizedLines.pop();
+  let endIndex = normalizedLines.length;
+  while (endIndex > startIndex && normalizedLines[endIndex - 1]?.text.trim() === "") {
+    endIndex -= 1;
   }
 
-  return normalizedLines.map((line) => line.text).join("\n");
+  const lines: string[] = [];
+  for (let index = startIndex; index < endIndex; index++) {
+    lines.push(normalizedLines[index].text);
+  }
+  return lines.join("\n");
 }

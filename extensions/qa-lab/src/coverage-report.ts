@@ -112,7 +112,12 @@ export function buildQaCoverageInventory(
         scenarios: feature.scenarios.filter((scenario) => scenario.theme === theme),
       });
     }
-    const surfaces = new Set(feature.scenarios.flatMap((scenario) => scenario.surfaces));
+    const surfaces = new Set<string>();
+    for (const scenario of feature.scenarios) {
+      for (const surface of scenario.surfaces) {
+        surfaces.add(surface);
+      }
+    }
     for (const surface of surfaces) {
       bySurface[surface] ??= [];
       bySurface[surface].push({

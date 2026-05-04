@@ -6,6 +6,17 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 const REPLY_MEDIA_HINT =
   "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Absolute and ~ paths only work when they stay inside your allowed file-read boundary; host file:// URLs are blocked. Keep caption in the text body.";
 
+function joinNonEmpty(separator: string, ...values: Array<string | undefined>): string {
+  let out = "";
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+    out = out ? `${out}${separator}${value}` : value;
+  }
+  return out;
+}
+
 export function buildReplyPromptBodies(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -21,7 +32,12 @@ export function buildReplyPromptBodies(params: {
   queuedBody: string;
   transcriptCommandBody: string;
 } {
-  const combinedEventsBlock = (params.systemEventBlocks ?? []).filter(Boolean).join("\n");
+  let combinedEventsBlock = "";
+  for (const block of params.systemEventBlocks ?? []) {
+    if (block) {
+      combinedEventsBlock = combinedEventsBlock ? `${combinedEventsBlock}\n${block}` : block;
+    }
+  }
   const prependEvents = (body: string) =>
     combinedEventsBlock ? `${combinedEventsBlock}\n\n${body}` : body;
   const bodyWithEvents = prependEvents(params.effectiveBaseBody);
@@ -29,21 +45,19 @@ export function buildReplyPromptBodies(params: {
     prependEvents(params.prefixedBody),
     params.sessionCtx.UntrustedContext,
   );
-  const prefixedBody = [params.threadContextNote, prefixedBodyWithEvents]
-    .filter(Boolean)
-    .join("\n\n");
-  const queueBodyBase = [params.threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
+  const prefixedBody = joinNonEmpty("\n\n", params.threadContextNote, prefixedBodyWithEvents);
+  const queueBodyBase = joinNonEmpty("\n\n", params.threadContextNote, bodyWithEvents);
   const mediaNote = buildInboundMediaNote(params.ctx);
   const mediaReplyHint = mediaNote ? REPLY_MEDIA_HINT : undefined;
   const queuedBodyRaw = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
+    ? joinNonEmpty("\n", mediaNote, mediaReplyHint, queueBodyBase).trim()
     : queueBodyBase;
   const prefixedCommandBodyRaw = mediaNote
-    ? [mediaNote, mediaReplyHint, prefixedBody].filter(Boolean).join("\n").trim()
+    ? joinNonEmpty("\n", mediaNote, mediaReplyHint, prefixedBody).trim()
     : prefixedBody;
   const transcriptBody = params.transcriptBody ?? params.effectiveBaseBody;
   const transcriptCommandBodyRaw = mediaNote
-    ? [mediaNote, transcriptBody].filter(Boolean).join("\n").trim()
+    ? joinNonEmpty("\n", mediaNote, transcriptBody).trim()
     : transcriptBody;
   return {
     mediaNote,

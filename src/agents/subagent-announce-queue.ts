@@ -217,7 +217,12 @@ function scheduleAnnounceDrain(key: string) {
               summary: pendingSummary,
               renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
             });
-            const internalEvents = groupItems.flatMap((item) => item.internalEvents ?? []);
+            const internalEvents: AgentInternalEvent[] = [];
+            for (const item of groupItems) {
+              if (item.internalEvents?.length) {
+                internalEvents.push(...item.internalEvents);
+              }
+            }
             const last = groupItems.at(-1);
             if (!last) {
               break;

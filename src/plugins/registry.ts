@@ -547,8 +547,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     config: OpenClawPluginApi["config"],
     pluginConfig: unknown,
   ) => {
+    const normalizedEvents: string[] = [];
     const eventList = Array.isArray(events) ? events : [events];
-    const normalizedEvents = eventList.map((event) => event.trim()).filter(Boolean);
+    for (const event of eventList) {
+      const trimmed = event.trim();
+      if (trimmed) {
+        normalizedEvents.push(trimmed);
+      }
+    }
     const entry = opts?.entry ?? null;
     const hookName = requireRegistrationValue(
       entry?.hook.name ?? opts?.name?.trim(),
@@ -1250,8 +1256,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ]);
 
   const registerReload = (record: PluginRecord, registration: OpenClawPluginReloadRegistration) => {
-    const normalize = (values?: string[]) =>
-      (values ?? []).map((value) => value.trim()).filter(Boolean);
+    const normalize = (values?: string[]) => {
+      const normalized: string[] = [];
+      for (const value of values ?? []) {
+        const trimmed = value.trim();
+        if (trimmed) {
+          normalized.push(trimmed);
+        }
+      }
+      return normalized;
+    };
     const normalized: OpenClawPluginReloadRegistration = {
       restartPrefixes: normalize(registration.restartPrefixes),
       hotPrefixes: normalize(registration.hotPrefixes),
@@ -1332,9 +1346,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     policy: OpenClawPluginNodeInvokePolicy,
     pluginConfig?: Record<string, unknown>,
   ) => {
-    const commands = Array.isArray(policy.commands)
-      ? policy.commands.map((command) => command.trim()).filter(Boolean)
-      : [];
+    const commands: string[] = [];
+    if (Array.isArray(policy.commands)) {
+      for (const command of policy.commands) {
+        const trimmed = command.trim();
+        if (trimmed) {
+          commands.push(trimmed);
+        }
+      }
+    }
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",

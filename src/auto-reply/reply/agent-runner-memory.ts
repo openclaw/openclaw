@@ -329,8 +329,8 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
       const chunk = buffer.toString("utf-8", 0, bytesRead);
       const combined = `${chunk}${leadingPartial}`;
       const lines = combined.split(/\n+/);
-      leadingPartial = lines.shift() ?? "";
-      for (let i = lines.length - 1; i >= 0; i -= 1) {
+      leadingPartial = lines[0] ?? "";
+      for (let i = lines.length - 1; i >= 1; i -= 1) {
         const usage = parseUsageFromTranscriptLine(lines[i] ?? "");
         if (usage) {
           return usage;

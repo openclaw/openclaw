@@ -318,11 +318,22 @@ export function normalizeHostnameSuffixAllowlist(
   if (!source || source.length === 0) {
     return [];
   }
-  const normalized = source.map(normalizeHostnameSuffix).filter(Boolean);
-  if (normalized.includes("*")) {
-    return ["*"];
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of source) {
+    const suffix = normalizeHostnameSuffix(value);
+    if (!suffix) {
+      continue;
+    }
+    if (suffix === "*") {
+      return ["*"];
+    }
+    if (!seen.has(suffix)) {
+      seen.add(suffix);
+      normalized.push(suffix);
+    }
   }
-  return Array.from(new Set(normalized));
+  return normalized;
 }
 
 /** Check whether a URL is HTTPS and its hostname matches the normalized suffix allowlist. */

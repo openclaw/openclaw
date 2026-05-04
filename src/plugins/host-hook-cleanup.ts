@@ -202,9 +202,13 @@ function collectHostHookPluginIds(registry: PluginRegistry): Set<string> {
 }
 
 function collectLoadedPluginIds(registry: PluginRegistry): Set<string> {
-  return new Set(
-    registry.plugins.filter((plugin) => plugin.status === "loaded").map((plugin) => plugin.id),
-  );
+  const ids = new Set<string>();
+  for (const plugin of registry.plugins) {
+    if (plugin.status === "loaded") {
+      ids.add(plugin.id);
+    }
+  }
+  return ids;
 }
 
 function collectSchedulerJobIds(

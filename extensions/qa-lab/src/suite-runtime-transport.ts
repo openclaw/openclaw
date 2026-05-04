@@ -30,11 +30,19 @@ async function waitForOutboundMessage(
     if (failureMessage) {
       throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
     }
-    const match = state
-      .getSnapshot()
-      .messages.filter((message: QaBusMessage) => message.direction === "outbound")
-      .slice(options?.sinceIndex ?? 0)
-      .find(predicate);
+    const startIndex = options?.sinceIndex ?? 0;
+    let outboundIndex = 0;
+    let match: QaBusMessage | undefined;
+    for (const message of state.getSnapshot().messages) {
+      if (message.direction !== "outbound") {
+        continue;
+      }
+      if (outboundIndex >= startIndex && predicate(message)) {
+        match = message;
+        break;
+      }
+      outboundIndex += 1;
+    }
     if (!match) {
       return undefined;
     }
@@ -48,21 +56,29 @@ async function waitForOutboundMessage(
 
 async function waitForNoOutbound(state: QaTransportState, timeoutMs = 1_200) {
   await sleep(timeoutMs);
-  const outbound = state
-    .getSnapshot()
-    .messages.filter((message: QaBusMessage) => message.direction === "outbound");
-  if (outbound.length > 0) {
-    throw new Error(`expected no outbound messages, saw ${outbound.length}`);
+  let outboundCount = 0;
+  for (const message of state.getSnapshot().messages) {
+    if (message.direction === "outbound") {
+      outboundCount += 1;
+    }
+  }
+  if (outboundCount > 0) {
+    throw new Error(`expected no outbound messages, saw ${outboundCount}`);
   }
 }
 
 function recentOutboundSummary(state: QaTransportState, limit = 5) {
-  return state
-    .getSnapshot()
-    .messages.filter((message: QaBusMessage) => message.direction === "outbound")
-    .slice(-limit)
-    .map((message: QaBusMessage) => `${message.conversation.id}:${message.text}`)
-    .join(" | ");
+  const recent: string[] = [];
+  for (const message of state.getSnapshot().messages) {
+    if (message.direction !== "outbound") {
+      continue;
+    }
+    recent.push(`${message.conversation.id}:${message.text}`);
+    if (recent.length > limit) {
+      recent.splice(0, recent.length - limit);
+    }
+  }
+  return recent.join(" | ");
 }
 
 function readTransportTranscript(
@@ -74,15 +90,23 @@ function readTransportTranscript(
     limit?: number;
   },
 ) {
-  const messages = state
-    .getSnapshot()
-    .messages.filter(
-      (message: QaBusMessage) =>
-        message.conversation.id === params.conversationId &&
-        (params.threadId ? message.threadId === params.threadId : true) &&
-        (params.direction ? message.direction === params.direction : true),
-    );
-  return params.limit ? messages.slice(-params.limit) : messages;
+  const messages: QaBusMessage[] = [];
+  for (const message of state.getSnapshot().messages) {
+    if (message.conversation.id !== params.conversationId) {
+      continue;
+    }
+    if (params.threadId && message.threadId !== params.threadId) {
+      continue;
+    }
+    if (params.direction && message.direction !== params.direction) {
+      continue;
+    }
+    messages.push(message);
+    if (params.limit && messages.length > params.limit) {
+      messages.splice(0, messages.length - params.limit);
+    }
+  }
+  return messages;
 }
 
 function formatTransportTranscript(
@@ -95,22 +119,21 @@ function formatTransportTranscript(
   },
 ) {
   const messages = readTransportTranscript(state, params);
-  return messages
-    .map((message: QaBusMessage) => {
-      const direction = message.direction === "inbound" ? "user" : "assistant";
-      const speaker = message.senderName?.trim() || message.senderId;
-      const attachmentSummary =
-        message.attachments && message.attachments.length > 0
-          ? ` [attachments: ${message.attachments
-              .map(
-                (attachment: NonNullable<QaBusMessage["attachments"]>[number]) =>
-                  `${attachment.kind}:${attachment.fileName ?? attachment.id}`,
-              )
-              .join(", ")}]`
-          : "";
-      return `${direction.toUpperCase()} ${speaker}: ${message.text}${attachmentSummary}`;
-    })
-    .join("\n\n");
+  const lines: string[] = [];
+  for (const message of messages) {
+    const direction = message.direction === "inbound" ? "USER" : "ASSISTANT";
+    const speaker = message.senderName?.trim() || message.senderId;
+    let attachmentSummary = "";
+    if (message.attachments && message.attachments.length > 0) {
+      const attachments: string[] = [];
+      for (const attachment of message.attachments) {
+        attachments.push(`${attachment.kind}:${attachment.fileName ?? attachment.id}`);
+      }
+      attachmentSummary = ` [attachments: ${attachments.join(", ")}]`;
+    }
+    lines.push(`${direction} ${speaker}: ${message.text}${attachmentSummary}`);
+  }
+  return lines.join("\n\n");
 }
 
 function formatConversationTranscript(

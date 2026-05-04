@@ -61,7 +61,10 @@ function mergeModelCatalogEntries(params: {
   secondary: readonly ModelCatalogEntry[];
 }): ModelCatalogEntry[] {
   const merged = [...params.primary];
-  const seen = new Set(merged.map((entry) => modelKey(entry.provider, entry.id)));
+  const seen = new Set<string>();
+  for (const entry of merged) {
+    seen.add(modelKey(entry.provider, entry.id));
+  }
   for (const entry of params.secondary) {
     const key = modelKey(entry.provider, entry.id);
     if (seen.has(key)) {
@@ -627,7 +630,10 @@ export function buildAllowedModelSetWithFallbacks(params: {
         })
       : null;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
-  const catalogKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
+  const catalogKeys = new Set<string>();
+  for (const entry of catalog) {
+    catalogKeys.add(modelKey(entry.provider, entry.id));
+  }
 
   if (allowAny) {
     if (defaultKey) {

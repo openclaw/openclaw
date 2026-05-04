@@ -1410,7 +1410,14 @@ function formatToolInputPreview(toolInput: Record<string, unknown>): string | un
   if (command) {
     return `Command: ${truncateText(sanitizeApprovalText(command), 240)}`;
   }
-  const keys = Object.keys(toolInput).map(sanitizeApprovalText).filter(Boolean).toSorted();
+  const keys: string[] = [];
+  for (const key of Object.keys(toolInput)) {
+    const sanitized = sanitizeApprovalText(key);
+    if (sanitized) {
+      keys.push(sanitized);
+    }
+  }
+  keys.sort((left, right) => left.localeCompare(right));
   if (!keys.length) {
     return undefined;
   }

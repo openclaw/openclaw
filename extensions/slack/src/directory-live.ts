@@ -145,25 +145,27 @@ export async function listSlackDirectoryPeersLive(
     cursor = next ? next : undefined;
   } while (cursor);
 
-  const filtered = members.filter((member) => {
-    const name = member.profile?.display_name || member.profile?.real_name || member.real_name;
-    const handle = member.name;
-    const email = member.profile?.email;
-    const candidates = [name, handle, email]
-      .map((item) => normalizeOptionalLowercaseString(item))
-      .filter(Boolean);
-    if (!query) {
-      return true;
+  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
+  const rows: ChannelDirectoryEntry[] = [];
+  for (const member of members) {
+    if (query) {
+      const name = normalizeOptionalLowercaseString(
+        member.profile?.display_name || member.profile?.real_name || member.real_name,
+      );
+      const handle = normalizeOptionalLowercaseString(member.name);
+      const email = normalizeOptionalLowercaseString(member.profile?.email);
+      if (!name?.includes(query) && !handle?.includes(query) && !email?.includes(query)) {
+        continue;
+      }
     }
-    return candidates.some((candidate) => candidate?.includes(query));
-  });
-
-  const rows = filtered
-    .map((member) => slackUserToDirectoryEntry(member))
-    .filter(Boolean) as ChannelDirectoryEntry[];
-
-  if (typeof params.limit === "number" && params.limit > 0) {
-    return rows.slice(0, params.limit);
+    const entry = slackUserToDirectoryEntry(member);
+    if (!entry) {
+      continue;
+    }
+    rows.push(entry);
+    if (limit && rows.length >= limit) {
+      break;
+    }
   }
   return rows;
 }
@@ -194,34 +196,29 @@ export async function listSlackDirectoryGroupsLive(
     cursor = next ? next : undefined;
   } while (cursor);
 
-  const filtered = channels.filter((channel) => {
-    const name = normalizeOptionalLowercaseString(channel.name);
-    if (!query) {
-      return true;
+  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
+  const rows: ChannelDirectoryEntry[] = [];
+  for (const channel of channels) {
+    const normalizedName = normalizeOptionalLowercaseString(channel.name);
+    if (query && !normalizedName?.includes(query)) {
+      continue;
     }
-    return Boolean(name && name.includes(query));
-  });
-
-  const rows = filtered
-    .map((channel) => {
-      const id = channel.id?.trim();
-      const name = channel.name?.trim();
-      if (!id || !name) {
-        return null;
-      }
-      return {
-        kind: "group",
-        id: `channel:${id}`,
-        name,
-        handle: `#${name}`,
-        rank: buildChannelRank(channel),
-        raw: channel,
-      } satisfies ChannelDirectoryEntry;
-    })
-    .filter(Boolean) as ChannelDirectoryEntry[];
-
-  if (typeof params.limit === "number" && params.limit > 0) {
-    return rows.slice(0, params.limit);
+    const id = channel.id?.trim();
+    const name = channel.name?.trim();
+    if (!id || !name) {
+      continue;
+    }
+    rows.push({
+      kind: "group",
+      id: `channel:${id}`,
+      name,
+      handle: `#${name}`,
+      rank: buildChannelRank(channel),
+      raw: channel,
+    });
+    if (limit && rows.length >= limit) {
+      break;
+    }
   }
   return rows;
 }

@@ -88,14 +88,28 @@ export function buildQaBusSnapshot(params: {
   messages: Map<string, QaBusMessage>;
   events: QaBusEvent[];
 }): QaBusStateSnapshot {
+  const conversations: QaBusConversation[] = [];
+  for (const conversation of params.conversations.values()) {
+    conversations.push({ ...conversation });
+  }
+  const threads: QaBusThread[] = [];
+  for (const thread of params.threads.values()) {
+    threads.push({ ...thread });
+  }
+  const messages: QaBusMessage[] = [];
+  for (const message of params.messages.values()) {
+    messages.push(cloneMessage(message));
+  }
+  const events: QaBusEvent[] = [];
+  for (const event of params.events) {
+    events.push(cloneEvent(event));
+  }
   return {
     cursor: params.cursor,
-    conversations: Array.from(params.conversations.values()).map((conversation) =>
-      Object.assign({}, conversation),
-    ),
-    threads: Array.from(params.threads.values()).map((thread) => Object.assign({}, thread)),
-    messages: Array.from(params.messages.values()).map((message) => cloneMessage(message)),
-    events: params.events.map((event) => cloneEvent(event)),
+    conversations,
+    threads,
+    messages,
+    events,
   };
 }
 
@@ -117,34 +131,42 @@ export function searchQaBusMessages(params: {
   const accountId = normalizeAccountId(params.input.accountId);
   const limit = Math.max(1, Math.min(params.input.limit ?? 20, 100));
   const query = normalizeOptionalLowercaseString(params.input.query);
-  return Array.from(params.messages.values())
-    .filter((message) => message.accountId === accountId)
-    .filter((message) =>
-      params.input.conversationId ? message.conversation.id === params.input.conversationId : true,
-    )
-    .filter((message) =>
-      params.input.threadId ? message.threadId === params.input.threadId : true,
-    )
-    .filter((message) => {
-      if (!query) {
-        return true;
-      }
-      const attachmentHaystack = message.attachments ?? [];
-      const searchableAttachmentText = attachmentHaystack
-        .flatMap((attachment) => [
-          attachment.fileName,
-          attachment.altText,
-          attachment.transcript,
-          attachment.mimeType,
-        ])
-        .filter((value): value is string => Boolean(value))
-        .join(" ")
-        .toLowerCase();
+  const matches: QaBusMessage[] = [];
+  for (const message of params.messages.values()) {
+    if (message.accountId !== accountId) {
+      continue;
+    }
+    if (params.input.conversationId && message.conversation.id !== params.input.conversationId) {
+      continue;
+    }
+    if (params.input.threadId && message.threadId !== params.input.threadId) {
+      continue;
+    }
+    if (query) {
       const messageText = normalizeOptionalLowercaseString(message.text) ?? "";
-      return `${messageText} ${searchableAttachmentText}`.includes(query);
-    })
-    .slice(-limit)
-    .map((message) => cloneMessage(message));
+      let matched = messageText.includes(query);
+      for (let index = 0; !matched && index < (message.attachments?.length ?? 0); index += 1) {
+        const attachment = message.attachments?.[index];
+        matched =
+          attachmentValueIncludes(attachment?.fileName, query) ||
+          attachmentValueIncludes(attachment?.altText, query) ||
+          attachmentValueIncludes(attachment?.transcript, query) ||
+          attachmentValueIncludes(attachment?.mimeType, query);
+      }
+      if (!matched) {
+        continue;
+      }
+    }
+    matches.push(cloneMessage(message));
+    if (matches.length > limit) {
+      matches.splice(0, matches.length - limit);
+    }
+  }
+  return matches;
+}
+
+function attachmentValueIncludes(value: string | undefined, query: string): boolean {
+  return Boolean(value && value.toLowerCase().includes(query));
 }
 
 export function pollQaBusEvents(params: {
@@ -156,10 +178,16 @@ export function pollQaBusEvents(params: {
   const startCursor = params.input?.cursor ?? 0;
   const effectiveStartCursor = params.cursor < startCursor ? 0 : startCursor;
   const limit = Math.max(1, Math.min(params.input?.limit ?? 100, 500));
-  const matches = params.events
-    .filter((event) => event.accountId === accountId && event.cursor > effectiveStartCursor)
-    .slice(0, limit)
-    .map((event) => cloneEvent(event));
+  const matches: QaBusEvent[] = [];
+  for (const event of params.events) {
+    if (event.accountId !== accountId || event.cursor <= effectiveStartCursor) {
+      continue;
+    }
+    matches.push(cloneEvent(event));
+    if (matches.length >= limit) {
+      break;
+    }
+  }
   return {
     cursor: params.cursor,
     events: matches,

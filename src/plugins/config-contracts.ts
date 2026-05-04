@@ -108,15 +108,25 @@ export function resolvePluginConfigContractsById(params: {
   pluginIds: readonly string[];
 }): ReadonlyMap<string, PluginConfigContractMetadata> {
   const matches = new Map<string, PluginConfigContractMetadata>();
-  const pluginIds = [
-    ...new Set(params.pluginIds.map((pluginId) => pluginId.trim()).filter(Boolean)),
-  ];
+  const pluginIds = [];
+  const seenPluginIds = new Set<string>();
+  for (const pluginId of params.pluginIds) {
+    const trimmed = pluginId.trim();
+    if (trimmed && !seenPluginIds.has(trimmed)) {
+      seenPluginIds.add(trimmed);
+      pluginIds.push(trimmed);
+    }
+  }
   if (pluginIds.length === 0) {
     return matches;
   }
-  const fallbackBundledPluginIds = new Set(
-    (params.fallbackBundledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
-  );
+  const fallbackBundledPluginIds = new Set<string>();
+  for (const pluginId of params.fallbackBundledPluginIds ?? []) {
+    const trimmed = pluginId.trim();
+    if (trimmed) {
+      fallbackBundledPluginIds.add(trimmed);
+    }
+  }
   const bundledContractFallbacks = new Map<string, PluginManifestConfigContracts | undefined>();
   const findBundledConfigContracts = (
     pluginId: string,

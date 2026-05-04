@@ -240,7 +240,11 @@ export function listPluginDoctorLegacyConfigRules(params?: {
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): LegacyConfigRule[] {
-  return resolvePluginDoctorContracts(params).flatMap((entry) => entry.rules);
+  const rules: LegacyConfigRule[] = [];
+  for (const entry of resolvePluginDoctorContracts(params)) {
+    rules.push(...entry.rules);
+  }
+  return rules;
 }
 
 export function applyPluginDoctorCompatibilityMigrations(

@@ -277,7 +277,7 @@ function createOccurrenceAwareResolver(
   const used = new Set<string>(options?.reservedIds ?? []);
   const assistantOccurrences = new Map<string, number>();
   const orphanToolResultOccurrences = new Map<string, number>();
-  const pendingByRawId = new Map<string, string[]>();
+  const pendingByRawId = new Map<string, { ids: string[]; index: number }>();
   const preserveNativeAnthropicToolUseIds = options?.preserveNativeAnthropicToolUseIds === true;
 
   const allocate = (seed: string): string => {
@@ -305,18 +305,18 @@ function createOccurrenceAwareResolver(
     const next = allocatePreservingNativeAnthropicId(id, occurrence);
     const pending = pendingByRawId.get(id);
     if (pending) {
-      pending.push(next);
+      pending.ids.push(next);
     } else {
-      pendingByRawId.set(id, [next]);
+      pendingByRawId.set(id, { ids: [next], index: 0 });
     }
     return next;
   };
 
   const resolveToolResultId = (id: string): string => {
     const pending = pendingByRawId.get(id);
-    if (pending && pending.length > 0) {
-      const next = pending.shift()!;
-      if (pending.length === 0) {
+    if (pending && pending.index < pending.ids.length) {
+      const next = pending.ids[pending.index++];
+      if (pending.index === pending.ids.length) {
         pendingByRawId.delete(id);
       }
       return next;
@@ -340,9 +340,9 @@ function createOccurrenceAwareResolver(
     used.add(id);
     const pending = pendingByRawId.get(id);
     if (pending) {
-      pending.push(id);
+      pending.ids.push(id);
     } else {
-      pendingByRawId.set(id, [id]);
+      pendingByRawId.set(id, { ids: [id], index: 0 });
     }
     return id;
   };

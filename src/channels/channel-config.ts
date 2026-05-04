@@ -98,11 +98,11 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
 
   const normalizeKey = params.normalizeKey;
   if (normalizeKey) {
-    const normalizedKeys = params.keys.map((key) => normalizeKey(key)).filter(Boolean);
-    if (normalizedKeys.length > 0) {
+    const normalizedKeys = buildNormalizedChannelKeySet(params.keys, normalizeKey);
+    if (normalizedKeys.size > 0) {
       for (const [entryKey, entry] of Object.entries(params.entries ?? {})) {
         const normalizedEntry = normalizeKey(entryKey);
-        if (normalizedEntry && normalizedKeys.includes(normalizedEntry)) {
+        if (normalizedEntry && normalizedKeys.has(normalizedEntry)) {
           return {
             ...direct,
             entry,
@@ -130,11 +130,11 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
       };
     }
     if (normalizeKey) {
-      const normalizedParentKeys = parentKeys.map((key) => normalizeKey(key)).filter(Boolean);
-      if (normalizedParentKeys.length > 0) {
+      const normalizedParentKeys = buildNormalizedChannelKeySet(parentKeys, normalizeKey);
+      if (normalizedParentKeys.size > 0) {
         for (const [entryKey, entry] of Object.entries(params.entries ?? {})) {
           const normalizedEntry = normalizeKey(entryKey);
-          if (normalizedEntry && normalizedParentKeys.includes(normalizedEntry)) {
+          if (normalizedEntry && normalizedParentKeys.has(normalizedEntry)) {
             return {
               ...direct,
               entry,
@@ -161,6 +161,20 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
   }
 
   return direct;
+}
+
+function buildNormalizedChannelKeySet(
+  keys: string[],
+  normalizeKey: (value: string) => string,
+): Set<string> {
+  const normalized = new Set<string>();
+  for (const key of keys) {
+    const value = normalizeKey(key);
+    if (value) {
+      normalized.add(value);
+    }
+  }
+  return normalized;
 }
 
 export function resolveNestedAllowlistDecision(params: {

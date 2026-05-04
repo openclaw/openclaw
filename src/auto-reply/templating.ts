@@ -268,20 +268,20 @@ function formatTemplateValue(value: unknown): string {
     return value.toString();
   }
   if (Array.isArray(value)) {
-    return value
-      .flatMap((entry) => {
-        if (entry == null) {
-          return [];
-        }
-        if (typeof entry === "string") {
-          return [entry];
-        }
-        if (typeof entry === "number" || typeof entry === "boolean" || typeof entry === "bigint") {
-          return [String(entry)];
-        }
-        return [];
-      })
-      .join(",");
+    const entries: string[] = [];
+    for (const entry of value) {
+      if (entry == null) {
+        continue;
+      }
+      if (typeof entry === "string") {
+        entries.push(entry);
+        continue;
+      }
+      if (typeof entry === "number" || typeof entry === "boolean" || typeof entry === "bigint") {
+        entries.push(String(entry));
+      }
+    }
+    return entries.join(",");
   }
   if (typeof value === "object") {
     return "";

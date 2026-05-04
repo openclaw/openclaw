@@ -7,9 +7,15 @@ export function mergeAttemptToolMediaPayloads(params: {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
 }): EmbeddedRunPayload[] | undefined {
-  const mediaUrls = Array.from(
-    new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
-  );
+  const mediaUrlSeen = new Set<string>();
+  const mediaUrls: string[] = [];
+  for (const url of params.toolMediaUrls ?? []) {
+    const trimmed = url.trim();
+    if (trimmed && !mediaUrlSeen.has(trimmed)) {
+      mediaUrlSeen.add(trimmed);
+      mediaUrls.push(trimmed);
+    }
+  }
   if (mediaUrls.length === 0 && !params.toolAudioAsVoice) {
     return params.payloads;
   }

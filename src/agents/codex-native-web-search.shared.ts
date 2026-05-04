@@ -23,13 +23,19 @@ function normalizeAllowedDomains(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const deduped = [
-    ...new Set(
-      value
-        .map((entry) => (typeof entry === "string" ? entry.trim() : null))
-        .filter((entry): entry is string => Boolean(entry)),
-    ),
-  ];
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    deduped.push(trimmed);
+  }
   return deduped.length > 0 ? deduped : undefined;
 }
 

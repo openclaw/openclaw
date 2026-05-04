@@ -446,12 +446,17 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     primaryModel,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
-  const enabledPluginIds = [
-    ...new Set([
-      ...collectQaSuitePluginIds(selectedCatalogScenarios),
-      ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
-    ]),
-  ];
+  const enabledPluginIdSet = new Set<string>();
+  for (const pluginId of collectQaSuitePluginIds(selectedCatalogScenarios)) {
+    enabledPluginIdSet.add(pluginId);
+  }
+  for (const pluginId of params?.enabledPluginIds ?? []) {
+    const trimmed = pluginId.trim();
+    if (trimmed) {
+      enabledPluginIdSet.add(trimmed);
+    }
+  }
+  const enabledPluginIds = [...enabledPluginIdSet];
   const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedCatalogScenarios);
   const concurrency = normalizeQaSuiteConcurrency(

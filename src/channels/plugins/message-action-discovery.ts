@@ -138,9 +138,13 @@ function normalizeMessageToolMediaSourceParams(
     const scoped = scopedMediaSourceParams[action];
     return Array.isArray(scoped) ? scoped : [];
   }
-  return Object.values(scopedMediaSourceParams).flatMap((scoped) =>
-    Array.isArray(scoped) ? scoped : [],
-  );
+  const merged: string[] = [];
+  for (const scoped of Object.values(scopedMediaSourceParams)) {
+    if (Array.isArray(scoped)) {
+      merged.push(...scoped);
+    }
+  }
+  return merged;
 }
 
 export function resolveCurrentChannelMessageToolDiscoveryAdapter(channel?: string | null): {

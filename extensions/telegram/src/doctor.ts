@@ -218,28 +218,28 @@ export function scanTelegramSelectedQuoteToolProgressWarnings(
   if (!asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram)) {
     return [];
   }
-  return listTelegramAccountIds(cfg).flatMap((accountId) => {
+  const hits: TelegramSelectedQuoteToolProgressHit[] = [];
+  for (const accountId of listTelegramAccountIds(cfg)) {
     const account = mergeTelegramAccountConfig(cfg, accountId);
     const replyToMode = account.replyToMode ?? "off";
     if (replyToMode === "off") {
-      return [];
+      continue;
     }
     if (resolveTelegramPreviewStreamMode(account) === "off") {
-      return [];
+      continue;
     }
     const blockStreamingEnabled =
       resolveChannelStreamingBlockEnabled(account) ??
       cfg.agents?.defaults?.blockStreamingDefault === "on";
     if (blockStreamingEnabled || !resolveChannelStreamingPreviewToolProgress(account)) {
-      return [];
+      continue;
     }
-    return [
-      {
-        path: formatTelegramAccountConfigPath(cfg, accountId),
-        replyToMode,
-      },
-    ];
-  });
+    hits.push({
+      path: formatTelegramAccountConfigPath(cfg, accountId),
+      replyToMode,
+    });
+  }
+  return hits;
 }
 
 export function collectTelegramSelectedQuoteToolProgressWarnings(params: {

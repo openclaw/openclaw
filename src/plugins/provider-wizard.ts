@@ -88,11 +88,13 @@ function listMethodWizardSetups(provider: ProviderPlugin): Array<{
   method: ProviderAuthMethod;
   wizard: ProviderPluginWizardSetup;
 }> {
-  return provider.auth
-    .map((method) => (method.wizard ? { method, wizard: method.wizard } : null))
-    .filter((entry): entry is { method: ProviderAuthMethod; wizard: ProviderPluginWizardSetup } =>
-      Boolean(entry),
-    );
+  const setups: Array<{ method: ProviderAuthMethod; wizard: ProviderPluginWizardSetup }> = [];
+  for (const method of provider.auth) {
+    if (method.wizard) {
+      setups.push({ method, wizard: method.wizard });
+    }
+  }
+  return setups;
 }
 
 function buildSetupOptionForMethod(params: {

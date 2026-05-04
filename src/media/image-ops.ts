@@ -38,10 +38,14 @@ const MEDIA_UNDERSTANDING_CORE_PLUGIN_ID = "media-understanding-core";
 const MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT = "image-ops.js";
 
 export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
-  return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
-    .map((value) => Math.min(maxSide, value))
-    .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
-    .toSorted((a, b) => b - a);
+  const unique = new Set<number>();
+  for (const value of [sideStart, 1800, 1600, 1400, 1200, 1000, 800]) {
+    const side = Math.min(maxSide, value);
+    if (side > 0) {
+      unique.add(side);
+    }
+  }
+  return Array.from(unique).toSorted((a, b) => b - a);
 }
 
 function isBun(): boolean {

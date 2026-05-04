@@ -96,15 +96,20 @@ function resolveConfiguredKeyProviderOrder(params: {
   capability: MediaUnderstandingCapability;
   fallbackProviders: readonly string[];
 }): string[] {
-  const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
-    .map((providerId) => normalizeMediaProviderId(providerId))
-    .filter(Boolean)
-    .filter((providerId, index, values) => values.indexOf(providerId) === index)
-    .filter((providerId) =>
-      providerSupportsCapability(params.providerRegistry.get(providerId), params.capability),
-    );
-
-  return [...new Set([...configuredProviders, ...params.fallbackProviders])];
+  const ordered = new Set<string>();
+  for (const providerId of Object.keys(params.cfg.models?.providers ?? {})) {
+    const normalized = normalizeMediaProviderId(providerId);
+    if (
+      normalized &&
+      providerSupportsCapability(params.providerRegistry.get(normalized), params.capability)
+    ) {
+      ordered.add(normalized);
+    }
+  }
+  for (const providerId of params.fallbackProviders) {
+    ordered.add(providerId);
+  }
+  return Array.from(ordered);
 }
 
 function resolveConfiguredImageModelId(params: {
@@ -317,13 +322,14 @@ function candidateBinaryNames(name: string): string[] {
   if (ext) {
     return [name];
   }
-  const pathext = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-    .split(";")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => (item.startsWith(".") ? item : `.${item}`));
-  const unique = Array.from(new Set(pathext));
-  return [name, ...unique.map((item) => `${name}${item}`)];
+  const unique = new Set<string>();
+  for (const item of (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")) {
+    const trimmed = item.trim();
+    if (trimmed) {
+      unique.add(trimmed.startsWith(".") ? trimmed : `.${trimmed}`);
+    }
+  }
+  return [name, ...Array.from(unique, (item) => `${name}${item}`)];
 }
 
 async function isExecutable(filePath: string): Promise<boolean> {

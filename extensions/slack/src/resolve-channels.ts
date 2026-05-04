@@ -59,22 +59,23 @@ async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[
         limit: 1000,
         cursor,
       })) as SlackListResponse,
-    collectPageItems: (res) =>
-      (res.channels ?? [])
-        .map((channel) => {
-          const id = channel.id?.trim();
-          const name = channel.name?.trim();
-          if (!id || !name) {
-            return null;
-          }
-          return {
-            id,
-            name,
-            archived: Boolean(channel.is_archived),
-            isPrivate: Boolean(channel.is_private),
-          } satisfies SlackChannelLookup;
-        })
-        .filter(Boolean) as SlackChannelLookup[],
+    collectPageItems: (res) => {
+      const items: SlackChannelLookup[] = [];
+      for (const channel of res.channels ?? []) {
+        const id = channel.id?.trim();
+        const name = channel.name?.trim();
+        if (!id || !name) {
+          continue;
+        }
+        items.push({
+          id,
+          name,
+          archived: Boolean(channel.is_archived),
+          isPrivate: Boolean(channel.is_private),
+        });
+      }
+      return items;
+    },
   });
 }
 
@@ -86,14 +87,19 @@ function resolveByName(
   if (!target) {
     return undefined;
   }
-  const matches = channels.filter(
-    (channel) => normalizeLowercaseStringOrEmpty(channel.name) === target,
-  );
-  if (matches.length === 0) {
-    return undefined;
+  let firstMatch: SlackChannelLookup | undefined;
+  for (const channel of channels) {
+    if (normalizeLowercaseStringOrEmpty(channel.name) !== target) {
+      continue;
+    }
+    if (!firstMatch) {
+      firstMatch = channel;
+    }
+    if (!channel.archived) {
+      return channel;
+    }
   }
-  const active = matches.find((channel) => !channel.archived);
-  return active ?? matches[0];
+  return firstMatch;
 }
 
 export async function resolveSlackChannelAllowlist(params: {
