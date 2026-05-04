@@ -247,7 +247,7 @@ export function parseFeishuMessageEvent(
   botOpenId?: string,
   _botName?: string,
 ): FeishuMessageContext {
-  const rawContent = parseMessageContent(event.message.content, event.message.message_type);
+  const rawContent = parseMessageContent(event.message.content ?? "", event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
   // Strip the bot's own mention so slash commands like @Bot /help retain
@@ -887,7 +887,8 @@ export async function handleFeishuMessage(params: {
       }
     }
 
-    const preview = ctx.content.replace(/\s+/g, " ").slice(0, 160);
+    const content = ctx.content ?? "";
+    const preview = content.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isGroup
       ? `Feishu[${account.accountId}] message in group ${ctx.chatId}`
       : `Feishu[${account.accountId}] DM from ${ctx.senderOpenId}`;
@@ -919,7 +920,7 @@ export async function handleFeishuMessage(params: {
     // user turn to the session causes downstream LLM providers (e.g. MiniMax)
     // to reject the request with "messages must not be empty" errors. Logging
     // the skip avoids silent loss without polluting the agent session.
-    if (!ctx.content.trim() && mediaList.length === 0) {
+    if (!content.trim() && mediaList.length === 0) {
       log(
         `feishu[${account.accountId}]: skipping empty message (no text, no media) from ${ctx.senderOpenId}`,
       );

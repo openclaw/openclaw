@@ -217,11 +217,13 @@ export function createFeishuMessageReceiveHandler({
   };
 
   const resolveDebounceText = (event: FeishuMessageEvent): string => {
-    return resolveText({
-      event,
-      botOpenId: getBotOpenId(accountId),
-      botName: getBotName(accountId),
-    }).trim();
+    return (
+      resolveText({
+        event,
+        botOpenId: getBotOpenId(accountId),
+        botName: getBotName(accountId),
+      }) ?? ""
+    ).trim();
   };
 
   const recordSuppressedMessageIds = async (
