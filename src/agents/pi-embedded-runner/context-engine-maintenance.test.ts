@@ -63,6 +63,10 @@ async function waitForAssertion(
   }
 }
 
+vi.mock("./context-engine-capabilities.js", () => ({
+  resolveContextEngineCapabilities: () => ({ llm: undefined }),
+}));
+
 vi.mock("./transcript-rewrite.js", () => ({
   rewriteTranscriptEntriesInSessionManager: (params: unknown) =>
     rewriteTranscriptEntriesInSessionManagerMock(params),
@@ -90,7 +94,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
   });
 
   it("adds a transcript rewrite helper that targets the current session file", async () => {
-    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
+    const runtimeContext = await buildContextEngineMaintenanceRuntimeContext({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionFile: "/tmp/session.jsonl",
@@ -128,7 +132,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
       typeof buildContextEngineMaintenanceRuntimeContext
     >[0]["sessionManager"];
-    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
+    const runtimeContext = await buildContextEngineMaintenanceRuntimeContext({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionFile: "/tmp/session.jsonl",
