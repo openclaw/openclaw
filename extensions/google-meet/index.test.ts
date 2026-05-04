@@ -451,6 +451,16 @@ describe("google-meet plugin", () => {
     ).toBe("jay");
   });
 
+  it("preserves an empty realtime intro message for silent joins", () => {
+    expect(
+      resolveGoogleMeetConfig({
+        realtime: {
+          introMessage: "",
+        },
+      }).realtime.introMessage,
+    ).toBe("");
+  });
+
   it("keeps legacy command-pair audio format when custom commands omit a format", () => {
     expect(
       resolveGoogleMeetConfig({

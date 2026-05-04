@@ -271,6 +271,10 @@ function readEnvString(env: NodeJS.ProcessEnv, keys: readonly string[]): string 
   return undefined;
 }
 
+function normalizeStringAllowEmpty(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
 function readEnvBoolean(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean | undefined {
   const normalized = normalizeOptionalLowercaseString(readEnvString(env, keys));
   if (!normalized) {
@@ -486,7 +490,7 @@ export function resolveGoogleMeetConfigWithEnv(
         normalizeOptionalString(realtime.instructions) ??
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.instructions,
       introMessage:
-        normalizeOptionalString(realtime.introMessage) ??
+        normalizeStringAllowEmpty(realtime.introMessage) ??
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.introMessage,
       agentId: normalizeOptionalString(realtime.agentId),
       toolPolicy: resolveRealtimeVoiceAgentConsultToolPolicy(
