@@ -113,10 +113,10 @@ export class SlashCommandRegistry {
     // Always register in the pre-dispatch map so QQ message-flow slash
     // commands can match and execute directly (with requireAuth gating).
     this.commands.set(key, cmd);
-    // Auth-gated commands may also be exposed to the framework command
-    // surface, but private-chat-only commands must stay on the QQBot message
-    // path so their channel and allowFrom checks remain intact.
-    if (cmd.requireAuth && !cmd.c2cOnly) {
+    // Auth-gated commands are exposed to the framework command surface.
+    // Private-chat-only metadata is preserved so the bridge can enforce the
+    // same routing restriction before dispatching handlers.
+    if (cmd.requireAuth) {
       this.frameworkCommands.set(key, cmd);
     }
   }

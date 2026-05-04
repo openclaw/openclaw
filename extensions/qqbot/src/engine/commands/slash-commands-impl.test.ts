@@ -29,16 +29,19 @@ function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): S
 }
 
 describe("QQBot framework slash commands", () => {
-  it("does not expose private-only admin commands through the framework registry", () => {
-    const names = getFrameworkCommands().map((command) => command.name);
+  it("exposes private-only admin commands with private-chat metadata", () => {
+    const commands = getFrameworkCommands();
+    const names = commands.map((command) => command.name);
 
-    expect(names).not.toContain("bot-approve");
-    expect(names).not.toContain("bot-clear-storage");
-    expect(names).not.toContain("bot-logs");
-    expect(names).not.toContain("bot-streaming");
+    expect(names).toEqual(
+      expect.arrayContaining(["bot-approve", "bot-clear-storage", "bot-logs", "bot-streaming"]),
+    );
+    for (const commandName of ["bot-approve", "bot-clear-storage", "bot-logs", "bot-streaming"]) {
+      expect(commands.find((command) => command.name === commandName)?.c2cOnly).toBe(true);
+    }
   });
 
-  it("keeps private-only auth commands out of framework registration", () => {
+  it("preserves private-only auth metadata for framework registration", () => {
     const registry = new SlashCommandRegistry();
     registry.register({
       name: "private-admin",
@@ -54,13 +57,15 @@ describe("QQBot framework slash commands", () => {
       handler: () => "ok",
     });
 
-    expect(registry.getFrameworkCommands().map((command) => command.name)).toEqual([
-      "shared-admin",
-    ]);
+    const commands = registry.getFrameworkCommands();
+
+    expect(commands.map((command) => command.name)).toEqual(["private-admin", "shared-admin"]);
+    expect(commands.find((command) => command.name === "private-admin")?.c2cOnly).toBe(true);
+    expect(commands.find((command) => command.name === "shared-admin")?.c2cOnly).toBeUndefined();
   });
 
-  it("keeps bot-streaming out of framework registration", () => {
-    expect(getFrameworkCommands().map((command) => command.name)).not.toContain("bot-streaming");
+  it("routes bot-streaming through the auth-gated framework registry", () => {
+    expect(getFrameworkCommands().map((command) => command.name)).toContain("bot-streaming");
   });
 
   it("does not write streaming config when the sender is not command-authorized", async () => {
