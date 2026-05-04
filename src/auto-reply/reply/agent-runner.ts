@@ -69,7 +69,6 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
-  resolvePiSteeringModeForQueueMode,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
@@ -1006,10 +1005,10 @@ export async function runReplyAgent(params: {
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
     const steered = queueEmbeddedPiMessage(steerSessionId, followupRun.prompt, {
-      steeringMode: resolvePiSteeringModeForQueueMode(resolvedQueue.mode),
+      steeringMode: "all",
       ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
     });
-    if (steered && !effectiveShouldFollowup) {
+    if (steered) {
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;

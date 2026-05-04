@@ -156,7 +156,6 @@ function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string 
 }
 
 type CodexSteeringQueueOptions = {
-  steeringMode?: "all" | "one-at-a-time";
   debounceMs?: number;
 };
 
@@ -295,11 +294,6 @@ function createCodexSteeringQueue(params: {
   return {
     async queue(text: string, options?: CodexSteeringQueueOptions) {
       if (params.answerPendingUserInput(text)) {
-        return;
-      }
-      if (options?.steeringMode === "one-at-a-time") {
-        await flushBatch();
-        await enqueueSend([text]);
         return;
       }
       batchedTexts.push(text);

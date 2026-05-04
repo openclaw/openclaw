@@ -461,6 +461,74 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
+  it.each([
+    ["discord", "collect"],
+    ["telegram", "followup"],
+    ["slack", "collect"],
+    ["whatsapp", "followup"],
+    ["signal", "followup"],
+    ["imessage", "followup"],
+    ["matrix", "collect"],
+    ["msteams", "collect"],
+    ["webchat", "followup"],
+  ] as const)(
+    "enables default same-turn steering for active %s runs before %s fallback",
+    async (channel, fallbackMode) => {
+      const queueSettings = await import("./queue/settings-runtime.js");
+      const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+      vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+        mode: fallbackMode,
+        debounceMs: 500,
+        cap: 20,
+        dropPolicy: "summarize",
+      });
+      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+        .mockReturnValueOnce("active-session")
+        .mockReturnValueOnce("active-session");
+      vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+      vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+
+      const params = baseParams({
+        sessionKey: `agent:main:${channel}:direct:steer-smoke`,
+      });
+      params.ctx = {
+        ...params.ctx,
+        Provider: channel,
+        OriginatingChannel: channel,
+        OriginatingTo: `${channel}-target`,
+        ChatType: "direct",
+      } as never;
+      params.sessionCtx = {
+        ...params.sessionCtx,
+        Provider: channel,
+        OriginatingChannel: channel,
+        OriginatingTo: `${channel}-target`,
+        ChatType: "direct",
+      } as never;
+      params.command = {
+        ...(params.command as Record<string, unknown>),
+        surface: channel,
+        channel,
+      } as never;
+
+      await runPreparedReply(params);
+
+      expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ channel }),
+      );
+      const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+      expect(call).toMatchObject({
+        shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+        isStreaming: true,
+        resolvedQueue: expect.objectContaining({ mode: fallbackMode }),
+      });
+      expect(call?.followupRun.run.messageProvider).toBe(channel);
+      expect(call?.followupRun.originatingChannel).toBe(channel);
+    },
+  );
+
   it("keeps thread history context on follow-up turns", async () => {
     const result = await runPreparedReply(
       baseParams({
@@ -897,11 +965,11 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
-  it("treats reset-triggered steer mode as interrupt when the session lane is empty", async () => {
+  it("treats reset-triggered followup mode as interrupt when the session lane is empty", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const piRuntime = await import("../../agents/pi-embedded.runtime.js");
     const commandQueue = await import("../../process/command-queue.js");
-    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "steer" });
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "followup" });
     vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
     vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
     vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
