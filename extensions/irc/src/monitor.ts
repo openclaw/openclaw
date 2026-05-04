@@ -1,6 +1,7 @@
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIrcAccount } from "./accounts.js";
+import { setActiveClient, removeActiveClientIfMatch } from "./active-clients.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import { handleIrcInbound } from "./inbound.js";
@@ -140,8 +141,13 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${client.nick}`,
   );
 
+  setActiveClient(account.accountId, client);
+
   return {
     stop: () => {
+      if (client) {
+        removeActiveClientIfMatch(account.accountId, client);
+      }
       client?.quit("shutdown");
       client = null;
     },
