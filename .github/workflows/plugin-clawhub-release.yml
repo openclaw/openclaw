@@ -31,6 +31,9 @@ env:
   PNPM_VERSION: "10.32.1"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
+  # @openclaw/acpx was first published before org ownership was backfilled.
+  # Keep beta publishes on the existing owner until ClawHub transfers it.
+  CLAWHUB_PACKAGE_OWNER_OVERRIDES: "@openclaw/acpx=steipete"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
   CLAWHUB_REF: "bbdde7fd5325666374a08537298d10316b1cd131"
 

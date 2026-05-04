@@ -34,6 +34,18 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 package_name="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.name)' "${package_dir}")"
 package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_dir}")"
+owner_override="${CLAWHUB_PACKAGE_OWNER_OVERRIDE:-}"
+if [[ -n "${CLAWHUB_PACKAGE_OWNER_OVERRIDES:-}" ]]; then
+  IFS=',' read -ra owner_override_entries <<< "${CLAWHUB_PACKAGE_OWNER_OVERRIDES}"
+  for owner_override_entry in "${owner_override_entries[@]}"; do
+    owner_override_name="${owner_override_entry%%=*}"
+    owner_override_value="${owner_override_entry#*=}"
+    if [[ "${owner_override_name}" == "${package_name}" && "${owner_override_value}" != "${owner_override_entry}" ]]; then
+      owner_override="${owner_override_value}"
+      break
+    fi
+  done
+fi
 publish_tag="${PACKAGE_TAG:-latest}"
 source_repo="${SOURCE_REPO:-${GITHUB_REPOSITORY:-openclaw/openclaw}}"
 source_commit="${SOURCE_COMMIT:-$(git rev-parse HEAD)}"
@@ -74,6 +86,7 @@ echo "Resolved package dir: ${package_dir}"
 echo "Resolved package source: ${package_source}"
 echo "Resolved package name: ${package_name}"
 echo "Resolved package version: ${package_version}"
+echo "Resolved owner override: ${owner_override:-<none>}"
 echo "Resolved publish tag: ${publish_tag}"
 echo "Resolved source repo: ${source_repo}"
 echo "Resolved source commit: ${source_commit}"
@@ -133,6 +146,13 @@ publish_cmd=(
   --source-path
   "${package_dir}"
 )
+
+if [[ -n "${owner_override}" ]]; then
+  publish_cmd+=(
+    --owner
+    "${owner_override}"
+  )
+fi
 
 if [[ -n "${source_ref}" ]]; then
   publish_cmd+=(
