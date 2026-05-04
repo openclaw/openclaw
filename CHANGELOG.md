@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Telegram: clean up tool-only draft previews after assistant message boundaries so transient `Surfacing...` tool-status bubbles do not linger when no matching final preview arrives. Thanks @BunsDev.
+- Cron: surface failed isolated-run diagnostics in `cron show`, status, and run history when requested tools are unavailable, so blocked cron runs report the actual tool-policy failure instead of a misleading green result. Fixes #75763. Thanks @RyanSandoval.
 - TUI/escape abort: track the in-flight runId after `chat.send` resolves so pressing Esc during the gap before the first gateway event aborts the run instead of repeatedly printing `no active run`. Fixes #1296. Thanks @Lukavyi and @romneyda.
 - TUI/render: stop the long-token sanitizer from injecting literal spaces inside inline code spans, fenced code blocks, table borders, and bare hyphenated/dotted identifiers, so copied package names, entity IDs, and shell line-continuations stay byte-for-byte intact while narrow-terminal protection still chunks unidentifiable long prose tokens. Fixes #48432, #39505. Thanks @DocOellerson, @xeusoc, @CCcassiusdjs, @akramcodez, @brokemac79, @romneyda.
 - Gateway/status: label Linux managed gateway services as `systemd user`, making status output explicit about the user-service scope instead of implying a system-level unit. Thanks @vincentkoc.
