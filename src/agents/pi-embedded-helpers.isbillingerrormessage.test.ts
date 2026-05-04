@@ -263,6 +263,42 @@ describe("isBillingErrorMessage", () => {
       expect(classifyFailoverReason(sample, { provider: "anthropic" })).toBe("billing");
     }
   });
+
+  it("classifies LiteLLM-style 'budget exceeded' proxy errors as billing", () => {
+    // LiteLLM proxies return HTTP 400 with a `"Budget has been exceeded!"`
+    // body when the configured budget is depleted. Without billing
+    // classification, the 400 falls through to the format-error fallback and
+    // triggers an unnecessary compaction/model fallback loop.
+    const samples = [
+      "Budget has been exceeded!",
+      "400 Budget has been exceeded!",
+      "budget exceeded",
+      "Budget exceeded for this organization",
+      "LiteLLM Budget has been exceeded",
+      "budget limit exceeded",
+      "budget for gpt-5 exceeded",
+      "daily budget has been exceeded today",
+    ];
+
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample), sample).toBe(true);
+      expect(classifyFailoverReason(sample), sample).toBe("billing");
+    }
+  });
+
+  it("does not classify negated or unrelated 'budget' / 'exceeded' text as billing", () => {
+    const samples = [
+      "your budget is not exceeded",
+      "the budget was not exceeded yet",
+      "exceeded the budget",
+      "budget: $100",
+      "I exceeded expectations",
+    ];
+
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample), sample).toBe(false);
+    }
+  });
 });
 
 describe("isCloudCodeAssistFormatError", () => {
@@ -623,6 +659,13 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
 
   it("treats HTTP 400 insufficient-quota payloads as billing instead of format", () => {
     expect(classifyFailoverReasonFromHttpStatus(400, INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
+  });
+
+  it("treats HTTP 400 proxy 'Budget has been exceeded!' payloads as billing instead of format", () => {
+    // LiteLLM-style proxies use HTTP 400 (not 402) for budget depletion.
+    // Without a billing classification the 400 falls through to format error.
+    expect(classifyFailoverReasonFromHttpStatus(400, "Budget has been exceeded!")).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(400, "budget limit exceeded")).toBe("billing");
   });
 
   it("keeps HTTP 400 provider-specific rate limits out of the generic format bucket", () => {

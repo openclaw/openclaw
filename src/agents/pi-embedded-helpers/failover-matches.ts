@@ -194,6 +194,14 @@ const ERROR_PATTERNS = {
     /out of extra usage/i,
     /draw from your extra usage/i,
     /extra usage is required(?: for long context requests)?/i,
+    // LiteLLM and similar OpenAI-compatible proxies emit "Budget has been
+    // exceeded!" on HTTP 400 when the configured budget is depleted. Without an
+    // explicit billing pattern the 400 falls through to the format-error
+    // fallback, triggering an unnecessary compaction/model fallback loop.
+    // Accepts common variants (e.g. "budget exceeded", "Budget has been
+    // exceeded", "budget limit exceeded") while refusing negations that contain
+    // "not" between the two anchors.
+    /\bbudget(?!(?:\s+\S+){0,4}\s+not\s)(?:\s+\S+){0,4}\s+exceeded\b/i,
     // Chinese provider billing messages
     "余额不足",
     "账户余额不足",
