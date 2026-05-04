@@ -19,20 +19,108 @@ const DEFAULT_THROTTLE_MS = 1000;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 
 const CHAT_SEND_INTERVAL_MS = 3_000;
+
+type AdaptiveThrottleState = {
+  currentMs: number;
+  minMs: number;
+  maxMs: number;
+  pausedUntil: number;
+  decayInterval: ReturnType<typeof setInterval> | null;
+};
+
+const _adaptiveThrottleState = ((globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.adaptiveThrottle")
+] ??= {
+  currentMs: DEFAULT_THROTTLE_MS,
+  minMs: DEFAULT_THROTTLE_MS,
+  maxMs: 120_000,
+  pausedUntil: 0,
+  decayInterval: null,
+} satisfies AdaptiveThrottleState) as AdaptiveThrottleState;
+
+export function getAdaptiveThrottleMs(): number {
+  const pauseRemaining = _adaptiveThrottleState.pausedUntil - Date.now();
+  if (pauseRemaining > 0) return Math.max(_adaptiveThrottleState.currentMs, pauseRemaining);
+  return _adaptiveThrottleState.currentMs;
+}
+
+function onTelegramRateLimit(retryAfterSec: number): void {
+  const retryMs = (retryAfterSec || 30) * 1000;
+  _adaptiveThrottleState.currentMs = Math.min(
+    Math.max(retryMs, _adaptiveThrottleState.currentMs),
+    _adaptiveThrottleState.maxMs,
+  );
+  _adaptiveThrottleState.pausedUntil = Date.now() + retryMs;
+  if (!_adaptiveThrottleState.decayInterval) {
+    _adaptiveThrottleState.decayInterval = setInterval(() => {
+      if (Date.now() < _adaptiveThrottleState.pausedUntil) return;
+      _adaptiveThrottleState.currentMs = Math.max(
+        _adaptiveThrottleState.currentMs * 0.5,
+        _adaptiveThrottleState.minMs,
+      );
+      if (_adaptiveThrottleState.currentMs <= _adaptiveThrottleState.minMs) {
+        clearInterval(_adaptiveThrottleState.decayInterval!);
+        _adaptiveThrottleState.decayInterval = null;
+      }
+    }, 10_000);
+    _adaptiveThrottleState.decayInterval.unref?.();
+  }
+}
+
+type ChatSendGateEntry = { lastSentAt: number; queue: number[] };
 const _perChatSendGate = ((globalThis as Record<PropertyKey, unknown>)[
   Symbol.for("openclaw.perChatSendGate")
-] ??= new Map<string | number, number>()) as Map<string | number, number>;
+] ??= new Map<string | number, ChatSendGateEntry>()) as Map<string | number, ChatSendGateEntry>;
+
+let _gateStreamIdCounter =
+  ((globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.gateStreamIdCounter")
+  ] as number) ?? 0;
 
 function acquireChatSendGate(
   chatId: string | number,
+  streamId: number,
   intervalMs: number,
-): Promise<void> | null {
-  if (intervalMs <= 0) return null;
-  const lastSent = _perChatSendGate.get(chatId) ?? 0;
-  const elapsed = Date.now() - lastSent;
-  const waitMs = elapsed < intervalMs ? intervalMs - elapsed : 0;
-  _perChatSendGate.set(chatId, Date.now() + waitMs);
-  return waitMs > 0 ? new Promise((r) => setTimeout(r, waitMs)) : null;
+  isFinal: boolean,
+): boolean {
+  if (intervalMs <= 0) {
+    return true;
+  }
+  let gate = _perChatSendGate.get(chatId);
+  if (!gate) {
+    gate = { lastSentAt: 0, queue: [] };
+    _perChatSendGate.set(chatId, gate);
+  }
+  const now = Date.now();
+  const elapsed = now - gate.lastSentAt;
+  if (isFinal) {
+    const idx = gate.queue.indexOf(streamId);
+    if (idx !== -1) {
+      gate.queue.splice(idx, 1);
+    }
+    if (elapsed < intervalMs) {
+      return false;
+    }
+    gate.lastSentAt = now;
+    return true;
+  }
+  if (elapsed < intervalMs) {
+    if (!gate.queue.includes(streamId)) {
+      gate.queue.push(streamId);
+    }
+    return false;
+  }
+  if (gate.queue.length > 0) {
+    if (gate.queue[0] !== streamId) {
+      if (!gate.queue.includes(streamId)) {
+        gate.queue.push(streamId);
+      }
+      return false;
+    }
+    gate.queue.shift();
+  }
+  gate.lastSentAt = now;
+  return true;
 }
 
 type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
@@ -132,6 +220,9 @@ export function createTelegramDraftStream(params: {
   const chatSendIntervalMs = params.chatSendIntervalMs ?? CHAT_SEND_INTERVAL_MS;
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
+  const streamId = ++_gateStreamIdCounter;
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.gateStreamIdCounter")] =
+    _gateStreamIdCounter;
   let textBaseOffset = 0;
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
@@ -348,10 +439,8 @@ export function createTelegramDraftStream(params: {
       }
     }
 
-    const gateWait = acquireChatSendGate(chatId, chatSendIntervalMs);
-    if (gateWait) {
-      await gateWait;
-      if (streamState.stopped && !streamState.final) return false;
+    if (!acquireChatSendGate(chatId, streamId, chatSendIntervalMs, streamState.final)) {
+      return false;
     }
 
     lastSentText = renderedText;
@@ -370,10 +459,12 @@ export function createTelegramDraftStream(params: {
     } catch (err) {
       if (isTelegramRateLimitError(err)) {
         const retryAfterMs = getTelegramRetryAfterMs(err) ?? 5_000;
+        const retryAfterSec = Math.ceil(retryAfterMs / 1000);
         const backoffMs = retryAfterMs + 500;
         rateLimitedUntilMs = Date.now() + backoffMs;
         lastSentText = "";
         lastSentParseMode = undefined;
+        onTelegramRateLimit(retryAfterSec);
         params.warn?.(
           `telegram stream preview rate limited; backing off ${retryAfterMs}ms (retry_after from API)`,
         );
@@ -486,6 +577,12 @@ export function createTelegramDraftStream(params: {
 export const __testing = {
   resetTelegramDraftStreamForTests: () => {
     _perChatSendGate.clear();
+    _adaptiveThrottleState.currentMs = DEFAULT_THROTTLE_MS;
+    _adaptiveThrottleState.pausedUntil = 0;
+    if (_adaptiveThrottleState.decayInterval) {
+      clearInterval(_adaptiveThrottleState.decayInterval);
+      _adaptiveThrottleState.decayInterval = null;
+    }
   },
   clearPerChatSendGate: () => {
     _perChatSendGate.clear();
