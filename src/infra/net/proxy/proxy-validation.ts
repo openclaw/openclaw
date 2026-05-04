@@ -422,13 +422,13 @@ async function runApnsReachabilityCheck(params: {
       authority: params.authority,
       timeoutMs: params.timeoutMs,
     });
-    if (!result.apnsId) {
+    if (!result.apnsId && result.status !== 403) {
       return {
         kind: "apns",
         url: params.authority,
         ok: false,
         error:
-          "APNs reachability check failed: response did not include an apns-id header. " +
+          "APNs reachability check failed: response was not a 403 and did not include an apns-id header. " +
           "The proxy may be intercepting the connection instead of tunneling it.",
       };
     }

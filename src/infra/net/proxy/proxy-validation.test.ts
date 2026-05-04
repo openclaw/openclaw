@@ -467,7 +467,31 @@ describe("proxy validation", () => {
     });
   });
 
-  it("fails APNs reachability when response has no apns-id (proxy intercept)", async () => {
+  it("accepts APNs 403 reachability even when apns-id is unavailable", async () => {
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: [],
+      apnsReachability: true,
+      apnsCheck: vi.fn().mockResolvedValue({ status: 403 }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks).toEqual([
+      {
+        kind: "apns",
+        url: "https://api.sandbox.push.apple.com",
+        ok: true,
+        status: 403,
+      },
+    ]);
+  });
+
+  it("fails APNs reachability when non-403 response has no apns-id (proxy intercept)", async () => {
     const result = await runProxyValidation({
       config: {
         enabled: true,
