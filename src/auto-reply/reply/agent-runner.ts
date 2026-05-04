@@ -81,7 +81,11 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
-import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import {
+  incrementRunCompactionCount,
+  persistRunSessionUsage,
+  persistSystemSentAfterSuccess,
+} from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -1400,6 +1404,13 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
+    });
+
+    await persistSystemSentAfterSuccess({
+      storePath,
+      sessionKey,
+      sessionEntry: activeSessionEntry,
+      runResult,
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".

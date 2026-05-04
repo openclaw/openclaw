@@ -12,6 +12,7 @@ const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
+const persistSystemSentAfterSuccessMock = vi.fn();
 const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
 const resolveProviderFollowupFallbackRouteMock = vi.fn();
@@ -242,6 +243,46 @@ async function persistRunSessionUsageForFollowupTest(
   await saveSessionStore(storePath, store);
 }
 
+async function persistSystemSentAfterSuccessForFollowupTest(
+  params: Parameters<typeof import("./session-run-accounting.js").persistSystemSentAfterSuccess>[0],
+): Promise<void> {
+  const { storePath, sessionKey, sessionEntry, runResult } = params;
+  if (!storePath || !sessionKey) {
+    return;
+  }
+  const registeredStore = FOLLOWUP_TEST_SESSION_STORES.get(storePath);
+  const store = registeredStore ?? loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey];
+  if (!entry || entry.systemSent === true || sessionEntry?.systemSent === true) {
+    return;
+  }
+  const payloadArray = runResult.payloads ?? [];
+  const hasMetaError = Boolean(runResult.meta?.error);
+  const hasNonErrorPayload = payloadArray.some(
+    (p) => !p.isError && Boolean(p.text?.trim() || p.mediaUrl || (p.mediaUrls?.length ?? 0) > 0),
+  );
+  const hasSentViaMessagingTool =
+    runResult.didSendViaMessagingTool === true ||
+    (runResult.messagingToolSentTexts?.length ?? 0) > 0 ||
+    (runResult.messagingToolSentMediaUrls?.length ?? 0) > 0;
+  const hasSuccessfulStopReason =
+    Boolean(runResult.meta?.stopReason) &&
+    runResult.meta.stopReason !== "error" &&
+    runResult.meta.stopReason !== "aborted";
+  if (!hasMetaError && (hasNonErrorPayload || hasSentViaMessagingTool || hasSuccessfulStopReason)) {
+    const nextEntry: SessionEntry = {
+      ...entry,
+      systemSent: true,
+      updatedAt: Date.now(),
+    };
+    store[sessionKey] = nextEntry;
+    if (sessionEntry) {
+      Object.assign(sessionEntry, nextEntry);
+    }
+    await saveSessionStore(storePath, store);
+  }
+}
+
 async function loadFreshFollowupRunnerModuleForTest() {
   vi.resetModules();
   vi.doUnmock("../../config/config.js");
@@ -273,6 +314,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   vi.doMock("./session-run-accounting.js", () => ({
     persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
     incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
+    persistSystemSentAfterSuccess: (...args: unknown[]) =>
+      persistSystemSentAfterSuccessMock(...args),
   }));
   vi.doMock("./agent-runner-memory.js", () => ({
     runMemoryFlushIfNeeded: async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
@@ -368,6 +411,7 @@ beforeEach(() => {
   runEmbeddedPiAgentMock.mockReset();
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
+  persistSystemSentAfterSuccessMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
   resolveQueuedReplyExecutionConfigMock.mockReset();
   resolveProviderFollowupFallbackRouteMock.mockReset();
@@ -382,6 +426,10 @@ beforeEach(() => {
   );
   runPreflightCompactionIfNeededMock.mockImplementation(
     async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
+  );
+  persistSystemSentAfterSuccessMock.mockImplementation(
+    async (...args: Parameters<typeof persistSystemSentAfterSuccessForFollowupTest>) =>
+      await persistSystemSentAfterSuccessForFollowupTest(...args),
   );
   resolveCommandSecretRefsViaGatewayMock.mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
@@ -1291,6 +1339,82 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     );
     expect(persistSpy.mock.calls[0]?.[0]?.usageIsContextSnapshot).toBeUndefined();
     persistSpy.mockRestore();
+  });
+
+  it("persists systemSent on successful silent followups", async () => {
+    const scenarios = [{ payloads: [{ text: "NO_REPLY" }] }, { payloads: [] }];
+
+    for (const agentResult of scenarios) {
+      const storePath = path.join(
+        await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-systemsent-")),
+        "sessions.json",
+      );
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        systemSent: false,
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+      await saveSessionStore(storePath, sessionStore);
+
+      await runMessagingCase({
+        agentResult: {
+          ...agentResult,
+          meta: { durationMs: 1, stopReason: "stop" },
+        },
+        runnerOverrides: {
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+        },
+      });
+
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(store[sessionKey]?.systemSent).toBe(true);
+    }
+  });
+
+  it("persists systemSent against the active session entry after preflight refresh", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-systemsent-refresh-")),
+      "sessions.json",
+    );
+    const sessionKey = "main";
+    const staleSessionEntry: SessionEntry = {
+      sessionId: "session-stale",
+      updatedAt: Date.now(),
+      systemSent: true,
+    };
+    const activeSessionEntry: SessionEntry = {
+      sessionId: "session-active",
+      updatedAt: Date.now(),
+      systemSent: false,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: activeSessionEntry };
+    await saveSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(async () => activeSessionEntry);
+
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { durationMs: 1, stopReason: "stop" },
+      },
+      runnerOverrides: {
+        sessionEntry: staleSessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      },
+    });
+
+    expect(persistSystemSentAfterSuccessMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionEntry: activeSessionEntry }),
+    );
+    expect(sessionStore[sessionKey]?.systemSent).toBe(true);
   });
 
   it("does not send cross-channel payload content to dispatcher when origin routing fails", async () => {

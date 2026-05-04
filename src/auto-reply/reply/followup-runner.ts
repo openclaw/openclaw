@@ -33,7 +33,11 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import {
+  incrementRunCompactionCount,
+  persistRunSessionUsage,
+  persistSystemSentAfterSuccess,
+} from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -385,7 +389,7 @@ export function createFollowupRunner(params: {
           provider: providerUsed,
           model: modelUsed,
           contextTokensOverride: agentCfgContextTokens,
-          fallbackContextTokens: sessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+          fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS;
 
@@ -405,6 +409,13 @@ export function createFollowupRunner(params: {
           logLabel: "followup",
         });
       }
+
+      await persistSystemSentAfterSuccess({
+        storePath,
+        sessionKey,
+        sessionEntry: activeSessionEntry,
+        runResult,
+      });
 
       const payloadArray = runResult.payloads ?? [];
       if (payloadArray.length === 0) {
@@ -443,7 +454,7 @@ export function createFollowupRunner(params: {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
           cfg: runtimeConfig,
-          sessionEntry,
+          sessionEntry: activeSessionEntry,
           sessionStore,
           sessionKey,
           storePath,
