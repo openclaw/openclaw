@@ -3333,6 +3333,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     },
     sandbox: input.sandbox,
     messageProvider: params.messageChannel ?? params.messageProvider,
+    messageChatType: params.messageChatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
@@ -3344,8 +3345,10 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
+    pluginAuth: params.pluginAuth,
     ...sessionKeys,
     sessionId: params.sessionId,
     runId: params.runId,

@@ -1996,6 +1996,49 @@ describe("runCodexAppServerAttempt", () => {
     ).toBe(testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
   });
 
+  it("passes delegated auth context to Codex dynamic tools", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const pluginAuth: NonNullable<EmbeddedRunAttemptParams["pluginAuth"]> = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: false as const,
+        reason: "unavailable" as const,
+      })),
+    };
+    params.disableTools = false;
+    params.config = { tools: { profile: "coding" } };
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.messageChannel = "msteams";
+    params.messageProvider = "msteams";
+    params.messageChatType = "direct";
+    params.pluginAuth = pluginAuth;
+    let createToolsOptions: unknown;
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      createToolsOptions = options;
+      return [];
+    });
+
+    await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: "agent:main:session-1",
+      sandbox: null,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(createToolsOptions).toEqual(
+      expect.objectContaining({
+        messageProvider: "msteams",
+        messageChatType: "direct",
+        pluginAuth,
+      }),
+    );
+  });
+
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;
