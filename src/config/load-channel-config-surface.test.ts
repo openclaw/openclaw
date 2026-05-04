@@ -60,7 +60,7 @@ async function importLoaderWithFailingJitiAndWorkingBun() {
     throw new Error("jiti failed");
   });
   vi.doMock("node:child_process", () => ({ spawnSync }));
-  stubChannelConfigSurfaceJitiFactory(createJiti as typeof createJitiType);
+  stubChannelConfigSurfaceJitiFactory(createJiti as unknown as typeof createJitiType);
 
   try {
     const imported = await importFreshModule<

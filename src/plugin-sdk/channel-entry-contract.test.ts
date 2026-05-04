@@ -286,7 +286,7 @@ describe("loadBundledEntryExportSync", () => {
 
   it("keeps Windows dist sidecar loads off source-transform loading", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ load: 42 })));
-    stubPluginModuleLoaderJitiFactory(createJiti as PluginModuleLoaderFactory);
+    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     try {
@@ -328,7 +328,7 @@ describe("loadBundledEntryExportSync", () => {
     fs.writeFileSync(openedFdPath, "opened\n", "utf8");
     const jitiLoad = vi.fn(() => ({ load: 42 }));
     const createJiti = vi.fn(() => jitiLoad);
-    stubPluginModuleLoaderJitiFactory(createJiti as PluginModuleLoaderFactory);
+    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
     vi.doMock("../infra/boundary-file-read.js", () => ({
       openBoundaryFileSync: () => ({
         ok: true,
