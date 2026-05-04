@@ -745,6 +745,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     reason: "startup" | "runtime";
     startupConfig?: OpenClawConfig;
     startupCron?: (() => CronServiceLike | null) | null;
+    warnOnUnavailableCron?: boolean;
   }): Promise<ShortTermPromotionDreamingConfig> => {
     const startupCfg =
       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
@@ -778,7 +779,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       }
     }
     const configKey = runtimeConfigKey(config);
-    if (!cron && config.enabled && !unavailableCronWarningEmitted) {
+    const warnOnUnavailableCron = params.warnOnUnavailableCron !== false;
+    if (!cron && config.enabled && warnOnUnavailableCron && !unavailableCronWarningEmitted) {
       // Avoid a noisy startup-path warning when the gateway has not exposed cron yet.
       // The runtime reconciliation path (heartbeat-driven) will still warn if the
       // cron service remains unavailable after boot.
@@ -888,9 +890,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return undefined;
       }
       const currentConfig = resolveCurrentConfig();
-      const config = await reconcileManagedDreamingCron({
-        reason: "runtime",
-      });
       const hasManagedDreamingToken = includesSystemEventToken(
         event.cleanedBody,
         DREAMING_SYSTEM_EVENT_TEXT,
@@ -898,7 +897,13 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       const isManagedHeartbeatTrigger =
         ctx.trigger === "heartbeat" && hasPendingManagedDreamingCronEvent(ctx.sessionKey);
       const isManagedCronTrigger = ctx.trigger === "cron";
-      if (!hasManagedDreamingToken || (!isManagedHeartbeatTrigger && !isManagedCronTrigger)) {
+      const shouldHandleManagedDreaming =
+        hasManagedDreamingToken && (isManagedHeartbeatTrigger || isManagedCronTrigger);
+      const config = await reconcileManagedDreamingCron({
+        reason: "runtime",
+        warnOnUnavailableCron: shouldHandleManagedDreaming,
+      });
+      if (!shouldHandleManagedDreaming) {
         return undefined;
       }
       return await runShortTermDreamingPromotionIfTriggered({
