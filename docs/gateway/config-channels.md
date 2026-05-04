@@ -786,6 +786,14 @@ replies.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls back to automatic visible replies instead of silently suppressing the response. `openclaw doctor` warns about this mismatch.
 
+**Troubleshooting: group @mention triggers typing then silence (no error)**
+
+Symptom: a group/channel @mention shows the typing indicator and the gateway log reports `dispatch complete (queuedFinal=false, replies=0)`, but no message lands in the room. DMs to the same agent reply normally.
+
+Cause: the `messages.groupChat.visibleReplies` default is `"message_tool"`, so OpenClaw runs the turn but suppresses the final assistant text unless the agent calls `message(action=send)`. There is no error because suppression is the configured behavior. DMs use a different default, which is why direct chats still reply.
+
+Fix: either pick a stronger tool-calling model, or set `messages.groupChat.visibleReplies: "automatic"` to restore legacy visible replies and restart the gateway.
+
 The gateway hot-reloads `messages` config after the file is saved. Restart only when file watching or config reload is disabled in the deployment.
 
 **Mention types:**
