@@ -36,6 +36,14 @@ type QueuedDeliveryPayload = {
   forceDocument?: boolean;
   silent?: boolean;
   mirror?: OutboundMirror;
+  /**
+   * Deterministic idempotency key for this delivery.
+   * When set, the persistent outbound dedupe layer uses this key to prevent
+   * duplicate sends across process restarts (crash recovery) and concurrent
+   * event replay.  Derived from the inbound message ID when the send was
+   * triggered by a Discord/forum thread reply.
+   */
+  idempotencyKey?: string;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -384,6 +392,7 @@ export async function recoverPendingDeliveries(opts: {
         forceDocument: entry.forceDocument,
         silent: entry.silent,
         mirror: entry.mirror,
+        idempotencyKey: entry.idempotencyKey,
         skipQueue: true, // Prevent re-enqueueing during recovery
       });
       await ackDelivery(entry.id, opts.stateDir);

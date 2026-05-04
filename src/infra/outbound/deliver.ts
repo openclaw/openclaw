@@ -37,6 +37,11 @@ import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
+import {
+  beginOutboundSendAttempt,
+  finishOutboundSendAttempt,
+  recordOutboundSendCompleted,
+} from "./outbound-dedupe.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
@@ -216,6 +221,15 @@ type DeliverOutboundPayloadsCoreParams = {
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
   silent?: boolean;
+  /**
+   * Deterministic idempotency key for this delivery batch.
+   * When present, the persistent outbound dedupe ledger is consulted before
+   * any actual send.  If the key was already recorded within the TTL window
+   * (duplicate_suppressed), the function returns an empty result set without
+   * making any network calls.  Intended for Discord→WhatsApp paths where the
+   * same Discord message could be replayed during crash recovery.
+   */
+  idempotencyKey?: string;
 };
 
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
@@ -455,6 +469,7 @@ export async function deliverOutboundPayloads(
         forceDocument: params.forceDocument,
         silent: params.silent,
         mirror: params.mirror,
+        idempotencyKey: params.idempotencyKey,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   // Wrap onError to detect partial failures under bestEffort mode.
@@ -483,6 +498,9 @@ export async function deliverOutboundPayloads(
     }
     return results;
   } catch (err) {
+    if (params.idempotencyKey) {
+      finishOutboundSendAttempt(params.idempotencyKey);
+    }
     if (queueId) {
       if (isAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
@@ -501,6 +519,18 @@ async function deliverOutboundPayloadsCore(
   params: DeliverOutboundPayloadsCoreParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
+
+  // Persistent idempotency gate: skip sends that were already completed, and
+  // suppress concurrent in-process replays. Successful sends are recorded at the
+  // end of this function, after the provider returns a message id.
+  if (params.idempotencyKey) {
+    const { shouldSend } = await beginOutboundSendAttempt(params.idempotencyKey).catch(
+      () => ({ shouldSend: true }), // fail-open: prefer a duplicate over a missed send
+    );
+    if (!shouldSend) {
+      return [];
+    }
+  }
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
@@ -782,6 +812,13 @@ async function deliverOutboundPayloadsCore(
       params.onError?.(err, payloadSummary);
     }
   }
+  if (params.idempotencyKey && results.length > 0) {
+    await recordOutboundSendCompleted(params.idempotencyKey).catch(() => undefined);
+  }
+  if (params.idempotencyKey) {
+    finishOutboundSendAttempt(params.idempotencyKey);
+  }
+
   if (params.mirror && results.length > 0) {
     const mirrorText = resolveMirroredTranscriptText({
       text: params.mirror.text,

@@ -9,6 +9,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { buildDiscordOutboundIdempotencyKey } from "../../infra/outbound/outbound-dedupe.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -80,6 +81,9 @@ export function createFollowupRunner(params: {
       return;
     }
 
+    // Counter for non-empty payloads delivered to `routeReply`, used to build
+    // per-payload idempotency keys that are stable across process restarts.
+    let routedPayloadIndex = 0;
     for (const payload of payloads) {
       if (!payload?.text && !payload?.mediaUrl && !payload?.mediaUrls?.length) {
         continue;
@@ -95,6 +99,20 @@ export function createFollowupRunner(params: {
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
       if (shouldRouteToOriginating) {
+        // When the queued run was triggered by a Discord message (messageId is
+        // set), derive a deterministic idempotency key so that crash recovery
+        // and concurrent Discord event replays cannot send the same WhatsApp
+        // message twice (duplicate_suppressed path in outbound-dedupe.ts).
+        const idempotencyKey = queued.messageId
+          ? buildDiscordOutboundIdempotencyKey({
+              discordMessageId: queued.messageId,
+              channel: String(originatingChannel),
+              to: originatingTo,
+              accountId: queued.originatingAccountId,
+              payloadIndex: routedPayloadIndex,
+            })
+          : undefined;
+        routedPayloadIndex++;
         const result = await routeReply({
           payload,
           channel: originatingChannel,
@@ -103,6 +121,7 @@ export function createFollowupRunner(params: {
           accountId: queued.originatingAccountId,
           threadId: queued.originatingThreadId,
           cfg: queued.run.config,
+          idempotencyKey,
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";

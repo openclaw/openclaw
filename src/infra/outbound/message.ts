@@ -251,6 +251,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
       silent: params.silent,
+      idempotencyKey: params.idempotencyKey,
       mirror: params.mirror
         ? {
             ...params.mirror,

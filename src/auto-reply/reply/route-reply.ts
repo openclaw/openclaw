@@ -55,6 +55,12 @@ export type RouteReplyParams = {
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
   groupId?: string;
+  /**
+   * Deterministic idempotency key for this delivery.
+   * Passed through to the persistent outbound dedupe ledger so that crash
+   * recovery and concurrent Discord event replays are suppressed.
+   */
+  idempotencyKey?: string;
 };
 
 export type RouteReplyResult = {
@@ -180,6 +186,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       threadId: resolvedThreadId,
       session: outboundSession,
       abortSignal,
+      idempotencyKey: params.idempotencyKey,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {

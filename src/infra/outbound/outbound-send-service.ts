@@ -10,6 +10,7 @@ import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
+import { buildToolOutboundIdempotencyKey } from "./outbound-dedupe.js";
 import { extractToolPayload } from "./tool-payload.js";
 
 export type OutboundGatewayContext = {
@@ -121,6 +122,15 @@ export async function executeSendAction(params: {
   }
 
   throwIfAborted(params.ctx.abortSignal);
+  const idempotencyKey = buildToolOutboundIdempotencyKey({
+    sourceChannel: params.ctx.toolContext?.currentChannelProvider,
+    sourceMessageId: params.ctx.toolContext?.currentMessageId,
+    targetChannel: params.ctx.channel,
+    to: params.to,
+    accountId: params.ctx.accountId ?? undefined,
+    content: params.message,
+    mediaUrls: params.mediaUrls ?? (params.mediaUrl ? [params.mediaUrl] : undefined),
+  });
   const result: MessageSendResult = await sendMessage({
     cfg: params.ctx.cfg,
     to: params.to,
@@ -138,6 +148,7 @@ export async function executeSendAction(params: {
     bestEffort: params.bestEffort ?? undefined,
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
+    idempotencyKey,
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
