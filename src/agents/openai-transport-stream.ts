@@ -20,6 +20,7 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
   ResponseOutputMessage,
+  ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -60,6 +61,7 @@ const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const log = createSubsystemLogger("openai-transport");
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
+type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -299,7 +301,13 @@ function convertResponsesMessages(
       for (const block of msg.content) {
         if (block.type === "thinking") {
           if (shouldReplayReasoningItems && block.thinkingSignature) {
-            output.push(JSON.parse(block.thinkingSignature));
+            const reasoningItem = JSON.parse(
+              block.thinkingSignature,
+            ) as ReplayableResponseReasoningItem;
+            if (!shouldReplayResponsesItemIds) {
+              delete reasoningItem.id;
+            }
+            output.push(reasoningItem as ResponseInputItem);
           }
         } else if (block.type === "text") {
           const textSignature = parseTextSignature(block.textSignature);
@@ -927,7 +935,6 @@ function usesNativeOpenAICodexResponsesBackend(model: Model<Api>): boolean {
 const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "max_output_tokens",
   "metadata",
-  "prompt_cache_key",
   "prompt_cache_retention",
   "service_tier",
   "temperature",
@@ -987,7 +994,7 @@ export function buildOpenAIResponsesParams(
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,
-      replayReasoningItems: !isNativeCodexResponses,
+      replayReasoningItems: true,
       replayResponsesItemIds: !isNativeCodexResponses,
     },
   );

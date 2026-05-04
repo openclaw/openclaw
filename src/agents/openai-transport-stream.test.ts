@@ -1020,7 +1020,7 @@ describe("openai transport stream", () => {
     expect(params.max_output_tokens).toBe(65_536);
   });
 
-  it("uses top-level instructions for Codex responses and strips unsupported ChatGPT params", () => {
+  it("uses top-level instructions for Codex responses and preserves prompt cache identity", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -1059,7 +1059,7 @@ describe("openai transport stream", () => {
     expect(params.input?.some((item) => item.role === "system" || item.role === "developer")).toBe(
       false,
     );
-    expect(params).not.toHaveProperty("prompt_cache_key");
+    expect(params.prompt_cache_key).toBe("session-123");
     expect(params.store).toBe(false);
     expect(params).not.toHaveProperty("metadata");
     expect(params).not.toHaveProperty("max_output_tokens");
@@ -1068,7 +1068,7 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("temperature");
   });
 
-  it("sanitizes Codex responses params after payload hooks mutate them", () => {
+  it("sanitizes Codex responses params after payload hooks mutate them without stripping cache identity", () => {
     const payload = {
       model: "gpt-5.4",
       input: [],
@@ -1097,7 +1097,7 @@ describe("openai transport stream", () => {
       payload,
     );
 
-    expect(sanitized).not.toHaveProperty("prompt_cache_key");
+    expect(sanitized.prompt_cache_key).toBe("session-123");
     expect(sanitized).not.toHaveProperty("metadata");
     expect(sanitized).not.toHaveProperty("max_output_tokens");
     expect(sanitized).not.toHaveProperty("prompt_cache_retention");
@@ -1257,10 +1257,16 @@ describe("openai transport stream", () => {
         id?: string;
         call_id?: string;
         phase?: string;
+        encrypted_content?: string;
       }>;
     };
 
-    expect(params.input?.some((item) => item.type === "reasoning")).toBe(false);
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expect(reasoningItem).toMatchObject({
+      type: "reasoning",
+      encrypted_content: "ciphertext",
+    });
+    expect(reasoningItem?.id).toBeUndefined();
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
