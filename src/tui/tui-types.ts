@@ -40,6 +40,7 @@ export type BtwEvent = {
 export type AgentEvent = {
   runId: string;
   stream: string;
+  sessionKey?: string;
   data?: Record<string, unknown>;
 };
 

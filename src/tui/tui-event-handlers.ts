@@ -467,9 +467,20 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as AgentEvent;
     syncSessionKey();
-    // Agent events (tool streaming, lifecycle) are emitted per-run. Filter against the
-    // active chat run id, not the session id. Tool results can arrive after the chat
-    // final event, so accept finalized runs for tool updates.
+    // Agent events (lifecycle, tool) can arrive before the first chat delta
+    // when the agent starts with tool calls instead of text output.
+    // Accept runs from the current session so tool cards render promptly.
+    const isSameSession = isSameSessionKey(evt.sessionKey, state.currentSessionKey);
+    if (!sessionRuns.has(evt.runId) && !finalizedRuns.has(evt.runId) && isSameSession) {
+      noteSessionRun(evt.runId);
+      if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
+        state.activeChatRunId = evt.runId;
+        if (state.pendingOptimisticUserMessage) {
+          noteLocalRunId?.(evt.runId);
+          state.pendingOptimisticUserMessage = false;
+        }
+      }
+    }
     const isActiveRun = evt.runId === state.activeChatRunId;
     const isKnownRun = isActiveRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
