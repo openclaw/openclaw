@@ -165,6 +165,7 @@ const pwMocks = vi.hoisted(() => ({
   clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
+  cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
   downloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
     suggestedFilename: "report.pdf",
@@ -196,6 +197,7 @@ const pwMocks = vi.hoisted(() => ({
     refs: { e1: { role: "button", name: "Role" } },
     stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
   })),
+  storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
   storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
   traceStartViaPlaywright: vi.fn(async () => {}),
   traceStopViaPlaywright: vi.fn(async () => {}),

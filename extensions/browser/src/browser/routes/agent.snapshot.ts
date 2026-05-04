@@ -318,6 +318,7 @@ export function registerBrowserAgentSnapshotRoutes(
         ctx,
         targetId,
         feature: "pdf",
+        enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw }) => {
           const pdf = await pw.pdfViaPlaywright({
             cdpUrl,

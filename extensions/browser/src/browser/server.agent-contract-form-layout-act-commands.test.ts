@@ -25,10 +25,13 @@ type GuardedCurrentTabRouteCase = {
   path: string;
   body?: Record<string, unknown>;
   mockName:
+    | "cookiesGetViaPlaywright"
+    | "pdfViaPlaywright"
     | "getConsoleMessagesViaPlaywright"
     | "getPageErrorsViaPlaywright"
     | "getNetworkRequestsViaPlaywright"
     | "responseBodyViaPlaywright"
+    | "storageGetViaPlaywright"
     | "traceStartViaPlaywright"
     | "traceStopViaPlaywright";
 };
@@ -51,9 +54,25 @@ const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
   },
   {
     method: "POST",
+    path: "/pdf",
+    body: { targetId: "abcd1234" },
+    mockName: "pdfViaPlaywright",
+  },
+  {
+    method: "POST",
     path: "/response/body",
     body: { targetId: "abcd1234", url: "**/api/data" },
     mockName: "responseBodyViaPlaywright",
+  },
+  {
+    method: "GET",
+    path: "/cookies?targetId=abcd1234",
+    mockName: "cookiesGetViaPlaywright",
+  },
+  {
+    method: "GET",
+    path: "/storage/local?targetId=abcd1234",
+    mockName: "storageGetViaPlaywright",
   },
   {
     method: "POST",
@@ -490,12 +509,13 @@ describe("browser control server", () => {
     );
   });
 
-  it("blocks guarded debug and export routes for disallowed current tab URLs", async () => {
-    setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
-    setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
-    const base = await startServerAndBase();
+  it.each(guardedCurrentTabRouteCases)(
+    "blocks $method $path on disallowed current tab URLs",
+    async (routeCase) => {
+      setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+      setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
+      const base = await startServerAndBase();
 
-    for (const routeCase of guardedCurrentTabRouteCases) {
       const res = await realFetch(`${base}${routeCase.path}`, {
         method: routeCase.method,
         headers: routeCase.body ? { "Content-Type": "application/json" } : undefined,
@@ -503,11 +523,10 @@ describe("browser control server", () => {
       });
       expect(res.status).toBe(400);
       const body = (await res.json()) as { error?: unknown };
-      expect(typeof body.error).toBe("string");
-      expect(body.error).not.toBe("");
+      expect(body.error).toEqual(expect.stringMatching(/(blocked|denied|not allowed|policy)/i));
       expect(pwMocks[routeCase.mockName]).not.toHaveBeenCalled();
-    }
-  });
+    },
+  );
 
   it("wait/download rejects traversal path outside downloads dir", async () => {
     const base = await startServerAndBase();
