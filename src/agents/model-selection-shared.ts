@@ -807,11 +807,23 @@ export function resolveAllowedModelRefFromAliasIndex(params: {
   }
 
   const status = params.getStatus(resolved.ref);
-  if (!status.allowed) {
-    return { error: `model not allowed: ${status.key}` };
+  if (status.allowed) {
+    return { ref: resolved.ref, key: status.key };
   }
 
-  return { ref: resolved.ref, key: status.key };
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: params.cfg,
+    model: trimmed,
+  });
+  if (inferredProvider && inferredProvider !== resolved.ref.provider) {
+    const inferredRef = normalizeModelRef(inferredProvider, trimmed);
+    const inferredStatus = params.getStatus(inferredRef);
+    if (inferredStatus.allowed) {
+      return { ref: inferredRef, key: inferredStatus.key };
+    }
+  }
+
+  return { error: `model not allowed: ${status.key}` };
 }
 
 export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): ModelCatalogEntry[] {

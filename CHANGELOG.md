@@ -63,6 +63,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron/models: resolve provider-less persisted OpenRouter cron model overrides through `agents.defaults.models`, so nested OpenRouter model IDs do not fail the allowlist after the provider prefix is stripped. Fixes #77234. Thanks @clawoneloke.
 - fix: harden backend message action gateway routing [AI]. (#76374) Thanks @pgondhi987.
 - Gate QQBot streaming command auth [AI]. (#76375) Thanks @pgondhi987.
 - Plugins/install: suppress dangerous-pattern scanner warnings for trusted official OpenClaw npm installs, so installing `@openclaw/discord` no longer prints credential-harvesting warnings for the official package.

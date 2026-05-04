@@ -37,6 +37,31 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
     });
   });
 
+  it("resolves configured OpenRouter models when persisted without the provider prefix", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/arcee-ai/trinity-large-preview:free": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "arcee-ai/trinity-large-preview:free",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      }),
+    ).toEqual({
+      key: "openrouter/arcee-ai/trinity-large-preview:free",
+      ref: { provider: "openrouter", model: "arcee-ai/trinity-large-preview:free" },
+    });
+  });
+
   it("resolves openrouter:auto through the canonical OpenRouter auto model", () => {
     const cfg = {
       agents: {
