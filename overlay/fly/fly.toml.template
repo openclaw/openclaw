@@ -1,0 +1,50 @@
+# Per-tenant Fly.io Machine template for the platform-runtime daemon.
+#
+# Each user gets their own Fly app named `pebble-rt-<slug>` running an
+# OpenClaw daemon with platform-skills mounted into the workspace. Auto-
+# stops when idle (cost = ~$0 compute + ~$1.20/mo for the 8 GB volume).
+#
+# Render placeholders before `fly deploy`:
+#   APP_NAME       e.g. pebble-rt-alice  (3-30 chars, lowercase, dashes)
+#   PRIMARY_REGION e.g. ord, iad, sea  (closest to the user)
+#   VOLUME_NAME    e.g. tenant_data
+#
+# Typical control-plane invocation:
+#   sed -e "s/{{APP_NAME}}/pebble-rt-alice/" \
+#       -e "s/{{PRIMARY_REGION}}/iad/" \
+#       -e "s/{{VOLUME_NAME}}/tenant_data/" \
+#     overlay/fly/fly.toml.template > /tmp/fly.toml
+#   flyctl apps create pebble-rt-alice
+#   flyctl volumes create tenant_data --region iad --size 8 -a pebble-rt-alice
+#   flyctl secrets set ANTHROPIC_API_KEY=... GOOGLE_API_KEY=... -a pebble-rt-alice
+#   flyctl deploy -c /tmp/fly.toml -a pebble-rt-alice
+
+app = "{{APP_NAME}}"
+primary_region = "{{PRIMARY_REGION}}"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[mounts]
+  source = "{{VOLUME_NAME}}"
+  destination = "/data"
+
+[env]
+  NODE_ENV = "production"
+  OPENCLAW_WORKSPACE_DIR = "/data/workspace"
+  OPENCLAW_SKILLS_DIR    = "/data/workspace/skills"
+
+[[services]]
+  internal_port = 8080
+  protocol      = "tcp"
+  auto_stop_machines  = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port     = 443
+    handlers = ["tls", "http"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
