@@ -811,7 +811,7 @@ describe("openai transport stream", () => {
       {
         reasoningEffort: "high",
       } as never,
-    ) as Record<string, unknown>;
+    );
 
     expect(params).toMatchObject({
       reasoning: {
@@ -850,7 +850,7 @@ describe("openai transport stream", () => {
       {
         reasoningEffort: "high",
       } as never,
-    ) as Record<string, unknown>;
+    );
 
     expect(params).toMatchObject({
       reasoning: {
