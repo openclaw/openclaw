@@ -145,6 +145,34 @@ describe("runtime postbuild static assets", () => {
     await expect(fs.stat(path.join(distDir, "install.runtime.js"))).rejects.toThrow();
   });
 
+  it("writes a stable plugin install runtime alias when install runtimes collide", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "install.runtime-Aaa111.js"),
+      [
+        "export const scanPackageInstallSource = true;",
+        "export const scanFileInstallSource = true;",
+        "export const scanInstalledPackageDependencyTree = true;",
+        "export const scanBundleInstallSource = true;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "install.runtime-Bbb222.js"),
+      "export const daemonInstall = true;\n",
+      "utf8",
+    );
+
+    writeStableRootRuntimeAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "install.runtime.js"), "utf8")).toBe(
+      'export * from "./install.runtime-Aaa111.js";\n',
+    );
+  });
+
   it("keeps stable aliases when one colliding root runtime chunk re-exports the implementation", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
@@ -288,6 +316,47 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "install-OldHash.js"), "utf8")).toBe(
       [
         'const pluginRuntime = () => import("./install.runtime-Aaa111.js");',
+        'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("rewrites plugin install runtime imports to stable aliases when install runtimes collide", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "install.runtime-Aaa111.js"),
+      [
+        "export const scanPackageInstallSource = true;",
+        "export const scanFileInstallSource = true;",
+        "export const scanInstalledPackageDependencyTree = true;",
+        "export const scanBundleInstallSource = true;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "install.runtime-Bbb222.js"),
+      "export const daemonInstall = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "install-OldHash.js"),
+      [
+        'const pluginRuntime = () => import("./install.runtime-Aaa111.js");',
+        'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "install-OldHash.js"), "utf8")).toBe(
+      [
+        'const pluginRuntime = () => import("./install.runtime.js");',
         'const daemonRuntime = () => import("./install.runtime-Bbb222.js");',
         "",
       ].join("\n"),
