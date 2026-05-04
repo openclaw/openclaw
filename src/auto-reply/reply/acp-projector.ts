@@ -54,8 +54,8 @@ function truncateText(input: string, maxChars: number): string {
   return `${input.slice(0, maxChars - 1)}…`;
 }
 
-function hashText(text: string): string {
-  return text.trim();
+function hashText(text: string | undefined): string {
+  return (text ?? "").trim();
 }
 
 function normalizeToolStatus(status: string | undefined): string | undefined {
@@ -469,7 +469,7 @@ export function createAcpReplyProjector(params: {
         }
         lastUsageTuple = usageTuple;
       }
-      await emitSystemStatus(event.text, event.tag ? { tag: event.tag } : undefined, {
+      await emitSystemStatus(event.text ?? "", event.tag ? { tag: event.tag } : undefined, {
         dedupe: true,
       });
       return;
