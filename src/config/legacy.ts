@@ -13,11 +13,29 @@ function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   return cursor;
 }
 
+function shouldIncludeLegacyRuleForTouchedPaths(
+  rulePath: readonly string[],
+  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+): boolean {
+  if (!touchedPaths || touchedPaths.length === 0) {
+    return true;
+  }
+  return touchedPaths.some((touchedPath) => {
+    const sharedLength = Math.min(rulePath.length, touchedPath.length);
+    for (let index = 0; index < sharedLength; index += 1) {
+      if (rulePath[index] !== touchedPath[index]) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
 export function findLegacyConfigIssues(
   raw: unknown,
   sourceRaw?: unknown,
   extraRules: LegacyConfigRule[] = [],
-  _touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
   if (!raw || typeof raw !== "object") {
     return [];
@@ -27,6 +45,9 @@ export function findLegacyConfigIssues(
     sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
   const issues: LegacyConfigIssue[] = [];
   for (const rule of [...LEGACY_CONFIG_RULES, ...extraRules]) {
+    if (!shouldIncludeLegacyRuleForTouchedPaths(rule.path, touchedPaths)) {
+      continue;
+    }
     const cursor = getPathValue(root, rule.path);
     if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
       if (rule.requireSourceLiteral) {

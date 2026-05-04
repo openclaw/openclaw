@@ -77,6 +77,43 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   });
 });
 
+test("sessions.create stores a session runtime envelope", async () => {
+  const { storePath } = await createSessionStoreDir();
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      envelope?: {
+        allowedTools?: string[];
+        deniedPaths?: string[];
+      };
+    };
+  }>("sessions.create", {
+    agentId: "ops",
+    label: "Scoped Dashboard Chat",
+    envelope: {
+      allowedTools: ["Read", "Bash"],
+      deniedPaths: ["/repo/secrets/**"],
+    },
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.envelope).toEqual({
+    allowedTools: ["Read", "Bash"],
+    deniedPaths: ["/repo/secrets/**"],
+  });
+
+  const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      envelope?: unknown;
+    }
+  >;
+  expect(rawStore[created.payload?.key as string]?.envelope).toEqual(
+    created.payload?.entry?.envelope,
+  );
+});
+
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
   await createSessionStoreDir();
 

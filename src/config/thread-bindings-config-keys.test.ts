@@ -37,6 +37,34 @@ describe("thread binding config keys", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("rejects touched channel-level thread binding ttlHours during raw write validation", () => {
+    const result = validateConfigObjectRaw(
+      {
+        channels: {
+          demo: {
+            threadBindings: {
+              ttlHours: 24,
+            },
+          },
+        },
+      },
+      {
+        touchedPaths: [["channels", "demo", "threadBindings", "ttlHours"]],
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        path: "channels",
+        message: expect.stringContaining("threadBindings.ttlHours"),
+      }),
+    );
+  });
+
   it("accepts account-level thread binding ttlHours compatibility", () => {
     const result = validateConfigObjectRaw({
       channels: {

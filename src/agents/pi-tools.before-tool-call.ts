@@ -25,6 +25,10 @@ import {
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import {
+  evaluateSessionRuntimeEnvelope,
+  readSessionRuntimeEnvelope,
+} from "./session-runtime-envelope.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -35,12 +39,20 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  /** Host workspace root used by file tools for resolving relative paths. */
+  workspaceDir?: string;
+  /** Container-visible workspace path, when tools run through a sandbox bridge. */
+  containerWorkdir?: string;
   trace?: DiagnosticTraceContext;
   loopDetection?: ToolLoopDetectionConfig;
 };
 
 type HookBlockedKind = "veto" | "failure";
-type HookBlockedReason = "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
+type HookBlockedReason =
+  | "plugin-before-tool-call"
+  | "plugin-approval"
+  | "session-envelope"
+  | "tool-loop";
 type HookOutcome =
   | {
       blocked: true;
@@ -403,6 +415,40 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+  const envelopeRead = readSessionRuntimeEnvelope(args.ctx?.sessionKey);
+  const applyEnvelope = (toolParams: unknown): HookOutcome | null => {
+    if (!envelopeRead.ok) {
+      return {
+        blocked: true,
+        kind: "failure",
+        deniedReason: "session-envelope",
+        reason: envelopeRead.reason,
+        params: toolParams,
+      };
+    }
+    const envelopeDecision = evaluateSessionRuntimeEnvelope({
+      envelope: envelopeRead.envelope,
+      toolName,
+      toolParams,
+      workspaceDir: args.ctx?.workspaceDir,
+      containerWorkdir: args.ctx?.containerWorkdir,
+    });
+    if (!envelopeDecision.allowed) {
+      return {
+        blocked: true,
+        kind: "veto",
+        deniedReason: "session-envelope",
+        reason: envelopeDecision.reason,
+        params: toolParams,
+      };
+    }
+    return null;
+  };
+
+  const initialEnvelopeOutcome = applyEnvelope(params);
+  if (initialEnvelopeOutcome) {
+    return initialEnvelopeOutcome;
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
@@ -514,7 +560,7 @@ export async function runBeforeToolCallHook(args: {
           params,
         };
       }
-      return await requestPluginToolApproval({
+      const approvedOutcome = await requestPluginToolApproval({
         approval: trustedPolicyResult.requireApproval,
         toolName,
         toolCallId: args.toolCallId,
@@ -523,9 +569,17 @@ export async function runBeforeToolCallHook(args: {
         baseParams: params,
         overrideParams: trustedPolicyResult.params,
       });
+      if (approvedOutcome.blocked) {
+        return approvedOutcome;
+      }
+      return applyEnvelope(approvedOutcome.params) ?? approvedOutcome;
     }
     const policyAdjustedParams = trustedPolicyResult?.params ?? params;
     if (!hookRunner?.hasHooks("before_tool_call")) {
+      const policyAdjustedEnvelopeOutcome = applyEnvelope(policyAdjustedParams);
+      if (policyAdjustedEnvelopeOutcome) {
+        return policyAdjustedEnvelopeOutcome;
+      }
       return { blocked: false, params: policyAdjustedParams };
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
@@ -562,7 +616,7 @@ export async function runBeforeToolCallHook(args: {
           params: policyAdjustedParams,
         };
       }
-      return await requestPluginToolApproval({
+      const approvedOutcome = await requestPluginToolApproval({
         approval: hookResult.requireApproval,
         toolName,
         toolCallId: args.toolCallId,
@@ -571,13 +625,26 @@ export async function runBeforeToolCallHook(args: {
         baseParams: policyAdjustedParams,
         overrideParams: hookResult.params,
       });
+      if (approvedOutcome.blocked) {
+        return approvedOutcome;
+      }
+      return applyEnvelope(approvedOutcome.params) ?? approvedOutcome;
     }
 
     if (hookResult?.params) {
+      const finalParams = mergeParamsWithApprovalOverrides(policyAdjustedParams, hookResult.params);
+      const hookAdjustedEnvelopeOutcome = applyEnvelope(finalParams);
+      if (hookAdjustedEnvelopeOutcome) {
+        return hookAdjustedEnvelopeOutcome;
+      }
       return {
         blocked: false,
-        params: mergeParamsWithApprovalOverrides(policyAdjustedParams, hookResult.params),
+        params: finalParams,
       };
+    }
+    const finalEnvelopeOutcome = applyEnvelope(policyAdjustedParams);
+    if (finalEnvelopeOutcome) {
+      return finalEnvelopeOutcome;
     }
     return { blocked: false, params: policyAdjustedParams };
   } catch (err) {

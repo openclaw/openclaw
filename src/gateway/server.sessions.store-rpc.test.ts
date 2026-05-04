@@ -201,6 +201,37 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(sendPolicyPatched.ok).toBe(true);
   expect(sendPolicyPatched.payload?.entry.sendPolicy).toBe("deny");
 
+  const envelopePatched = await directSessionReq<{
+    ok: true;
+    entry: {
+      envelope?: {
+        allowedTools?: string[];
+        deniedPaths?: string[];
+      };
+    };
+  }>("sessions.patch", {
+    key: "agent:main:main",
+    envelope: {
+      allowedTools: ["Read"],
+      deniedPaths: ["/repo/secrets/**"],
+    },
+  });
+  expect(envelopePatched.ok).toBe(true);
+  expect(envelopePatched.payload?.entry.envelope).toEqual({
+    allowedTools: ["Read"],
+    deniedPaths: ["/repo/secrets/**"],
+  });
+
+  const envelopeCleared = await directSessionReq<{
+    ok: true;
+    entry: { envelope?: unknown };
+  }>("sessions.patch", {
+    key: "agent:main:main",
+    envelope: null,
+  });
+  expect(envelopeCleared.ok).toBe(true);
+  expect(envelopeCleared.payload?.entry.envelope).toBeUndefined();
+
   const labelPatched = await directSessionReq<{
     ok: true;
     entry: { label?: string };
