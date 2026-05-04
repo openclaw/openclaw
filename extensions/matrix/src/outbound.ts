@@ -1,15 +1,146 @@
+import {
+  renderMessagePresentationFallbackText,
+  type MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import { resolvePayloadMediaUrls } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
+import type { MatrixExtraContentFields } from "./matrix/send/types.js";
 import {
   chunkTextForOutbound,
   resolveOutboundSendDep,
   type ChannelOutboundAdapter,
 } from "./runtime-api.js";
 
+const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
+const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
+
+type MatrixChannelData = {
+  extraContent?: MatrixExtraContentFields;
+};
+
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function resolveMatrixChannelData(payload: ReplyPayload): MatrixChannelData {
+  const raw = toRecord(payload.channelData)?.matrix;
+  return (toRecord(raw) as MatrixChannelData | undefined) ?? {};
+}
+
+function buildMatrixPresentationContent(presentation: MessagePresentation) {
+  return {
+    ...presentation,
+    version: 1,
+    type: MATRIX_OPENCLAW_PRESENTATION_TYPE,
+  };
+}
+
+function renderMatrixPresentationPayload(params: {
+  payload: ReplyPayload;
+  presentation: MessagePresentation;
+}): ReplyPayload {
+  const matrixData = resolveMatrixChannelData(params.payload);
+  return {
+    ...params.payload,
+    text: renderMessagePresentationFallbackText({
+      text: params.payload.text,
+      presentation: params.presentation,
+    }),
+    channelData: {
+      ...params.payload.channelData,
+      matrix: {
+        ...matrixData,
+        extraContent: {
+          ...matrixData.extraContent,
+          [MATRIX_OPENCLAW_PRESENTATION_KEY]: buildMatrixPresentationContent(params.presentation),
+        },
+      },
+    },
+  };
+}
+
+function resolveMatrixExtraContent(payload: ReplyPayload): MatrixExtraContentFields | undefined {
+  const extraContent = resolveMatrixChannelData(payload).extraContent;
+  return extraContent && Object.keys(extraContent).length > 0 ? extraContent : undefined;
+}
+
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: true,
+  },
+  renderPresentation: ({ payload, presentation }) =>
+    renderMatrixPresentationPayload({ payload, presentation }),
+  sendPayload: async ({
+    cfg,
+    to,
+    payload,
+    mediaLocalRoots,
+    mediaReadFile,
+    mediaAccess,
+    deps,
+    replyToId,
+    threadId,
+    accountId,
+    audioAsVoice,
+  }) => {
+    const send =
+      resolveOutboundSendDep<typeof sendMessageMatrix>(deps, "matrix") ?? sendMessageMatrix;
+    const resolvedThreadId =
+      threadId !== undefined && threadId !== null ? String(threadId) : undefined;
+    const resolvedReplyToId = replyToId ?? undefined;
+    const urls = resolvePayloadMediaUrls(payload);
+    if (urls.length > 0) {
+      let lastResult: Awaited<ReturnType<typeof send>> | undefined;
+      for (let i = 0; i < urls.length; i++) {
+        const isFirst = i === 0;
+        lastResult = await send(to, isFirst ? (payload.text ?? "") : "", {
+          cfg,
+          mediaUrl: urls[i],
+          mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile,
+          replyToId: resolvedReplyToId,
+          threadId: resolvedThreadId,
+          accountId: accountId ?? undefined,
+          audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
+          extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
+        });
+      }
+      return {
+        channel: "matrix",
+        messageId: lastResult!.messageId,
+        roomId: lastResult!.roomId,
+      };
+    }
+    const result = await send(to, payload.text ?? "", {
+      cfg,
+      mediaUrl: payload.mediaUrl,
+      mediaAccess,
+      mediaLocalRoots,
+      mediaReadFile,
+      replyToId: resolvedReplyToId,
+      threadId: resolvedThreadId,
+      accountId: accountId ?? undefined,
+      audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
+      extraContent: resolveMatrixExtraContent(payload),
+    });
+    return {
+      channel: "matrix",
+      messageId: result.messageId,
+      roomId: result.roomId,
+    };
+  },
   sendText: async ({ cfg, to, text, deps, replyToId, threadId, accountId, audioAsVoice }) => {
     const send =
       resolveOutboundSendDep<typeof sendMessageMatrix>(deps, "matrix") ?? sendMessageMatrix;

@@ -170,4 +170,236 @@ describe("matrixOutbound cfg threading", () => {
       }),
     );
   });
+
+  it("renders MessagePresentation into Matrix custom content metadata", async () => {
+    const presentation = {
+      title: "Select thinking level",
+      tone: "info" as const,
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            { label: "Low", value: "/think low" },
+            { label: "High", value: "/think high", style: "primary" as const },
+          ],
+        },
+      ],
+    };
+
+    const rendered = await matrixOutbound.renderPresentation!({
+      payload: { text: "fallback", presentation },
+      presentation,
+      ctx: {} as never,
+    });
+
+    const matrixData = rendered?.channelData?.matrix as {
+      extraContent?: Record<string, unknown>;
+    };
+    expect(rendered?.text).toContain("fallback");
+    expect(rendered?.text).toContain("Select thinking level");
+    expect(matrixData.extraContent?.["com.openclaw.presentation"]).toEqual({
+      ...presentation,
+      version: 1,
+      type: "message.presentation",
+    });
+  });
+
+  it("passes Matrix presentation metadata through sendPayload extraContent", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "resolved-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const presentationContent = {
+      version: 1,
+      type: "message.presentation",
+      title: "Select model",
+      blocks: [
+        {
+          type: "select",
+          placeholder: "Choose model",
+          options: [{ label: "DeepSeek", value: "/model deepseek/deepseek-chat" }],
+        },
+      ],
+    };
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "Select model",
+      payload: {
+        text: "Select model",
+        channelData: {
+          matrix: {
+            extraContent: {
+              "com.openclaw.presentation": presentationContent,
+            },
+          },
+        },
+      },
+      accountId: "default",
+      threadId: "$thread",
+      replyToId: "$reply",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
+      "room:!room:example",
+      "Select model",
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        threadId: "$thread",
+        replyToId: "$reply",
+        extraContent: {
+          "com.openclaw.presentation": presentationContent,
+        },
+      }),
+    );
+  });
+
+  it("sends all media URLs via sendPayload", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "resolved-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: ["file:///tmp/a.png", "file:///tmp/b.png"],
+      },
+      accountId: "default",
+      threadId: "$thread",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
+    // First call: caption + media
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      1,
+      "room:!room:example",
+      "caption",
+      expect.objectContaining({
+        mediaUrl: "file:///tmp/a.png",
+        threadId: "$thread",
+      }),
+    );
+    // Second call: no text, just media
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      2,
+      "room:!room:example",
+      "",
+      expect.objectContaining({
+        mediaUrl: "file:///tmp/b.png",
+        threadId: "$thread",
+      }),
+    );
+  });
+
+  it("sends mediaUrls with extraContent only on first item", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "resolved-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: ["file:///tmp/a.png", "file:///tmp/b.png"],
+        channelData: {
+          matrix: {
+            extraContent: {
+              "com.openclaw.presentation": {
+                version: 1,
+                type: "message.presentation",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+      threadId: "$thread",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
+    // First call gets extraContent
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      1,
+      "room:!room:example",
+      "caption",
+      expect.objectContaining({
+        extraContent: {
+          "com.openclaw.presentation": {
+            version: 1,
+            type: "message.presentation",
+          },
+        },
+      }),
+    );
+    // Second call does NOT get extraContent
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      2,
+      "room:!room:example",
+      "",
+      expect.not.objectContaining({
+        extraContent: expect.anything(),
+      }),
+    );
+  });
+
+  it("regression: mediaUrls are never silently dropped by sendPayload", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "regression-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:regression",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: ["file:///img1.png", "file:///img2.png", "file:///img3.png"],
+      },
+      accountId: "default",
+    });
+
+    // Every URL must be sent — none may be silently dropped
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(3);
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      1,
+      "room:!room:regression",
+      "caption",
+      expect.objectContaining({ mediaUrl: "file:///img1.png" }),
+    );
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      2,
+      "room:!room:regression",
+      "",
+      expect.objectContaining({ mediaUrl: "file:///img2.png" }),
+    );
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      3,
+      "room:!room:regression",
+      "",
+      expect.objectContaining({ mediaUrl: "file:///img3.png" }),
+    );
+  });
 });
