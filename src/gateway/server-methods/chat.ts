@@ -1411,6 +1411,33 @@ function payloadMediaUrlSet(payload: ReplyPayload): Set<string> {
   );
 }
 
+function buildMediaReplacementProbePayload(
+  payloads: readonly ReplyPayload[],
+  message?: string,
+): ReplyPayload | undefined {
+  const mediaUrls: string[] = [];
+  const seen = new Set<string>();
+  for (const payload of payloads) {
+    for (const mediaUrl of resolveSendableOutboundReplyParts(payload).mediaUrls) {
+      if (seen.has(mediaUrl)) {
+        continue;
+      }
+      seen.add(mediaUrl);
+      mediaUrls.push(mediaUrl);
+    }
+  }
+  if (mediaUrls.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(message ? { text: message } : {}),
+    mediaUrls,
+    ...(payloads.some((payload) => payload.trustedLocalMedia === true)
+      ? { trustedLocalMedia: true }
+      : {}),
+  };
+}
+
 function normalizeMediaSourceForEquivalence(source: string): string | undefined {
   const trimmed = source.trim();
   if (!trimmed) {
@@ -1477,14 +1504,13 @@ async function replaceLatestAssistantMediaDirectiveTranscriptMessage(params: {
 }> {
   try {
     const index = await readSessionTranscriptIndex(params.transcriptPath);
-    const latest = index?.entries.at(-1);
-    const latestMessage = latest?.record.message as Record<string, unknown> | undefined;
-    if (!latest?.id || !latestMessage) {
+    const latest = index?.entries
+      .toReversed()
+      .find((entry) => isAssistantMediaDirectiveMessage(entry.record.message, params.payload));
+    if (!latest?.id) {
       return { replaced: false };
     }
-    if (!isAssistantMediaDirectiveMessage(latestMessage, params.payload)) {
-      return { replaced: false };
-    }
+    const latestMessage = latest.record.message as Record<string, unknown>;
     const replacement: Record<string, unknown> = {
       ...latestMessage,
       content:
@@ -1510,9 +1536,7 @@ async function replaceLatestAssistantMediaDirectiveTranscriptMessage(params: {
     if (!result.changed) {
       return { replaced: false, error: result.reason };
     }
-    const updatedIndex = await readSessionTranscriptIndex(params.transcriptPath);
-    const messageId = updatedIndex?.entries.at(-1)?.id;
-    return { replaced: true, ...(messageId ? { messageId } : {}), message: replacement };
+    return { replaced: true, messageId: latest.id, message: replacement };
   } catch (err) {
     return { replaced: false, error: formatErrorMessage(err) };
   }
@@ -2582,10 +2606,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         if (resolvedTranscriptPath) {
+          const replacementPayload =
+            buildMediaReplacementProbePayload([payload, transcriptPayload], transcriptReply) ??
+            transcriptPayload;
           const replaced = await replaceLatestAssistantMediaDirectiveTranscriptMessage({
             transcriptPath: resolvedTranscriptPath,
             sessionKey,
-            payload: transcriptPayload,
+            payload: replacementPayload,
             message: transcriptReply,
             ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
             idempotencyKey: `${clientRunId}:assistant-media`,
@@ -2766,7 +2793,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     getAgentScopedMediaLocalRoots(cfg, agentId),
                     resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
                   );
-                  const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
+                  let assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
                     sessionKey,
                     payloads: finalPayloads,
                     managedImageLocalRoots: mediaLocalRoots,
@@ -2782,6 +2809,27 @@ export const chatHandlers: GatewayRequestHandlers = {
                       );
                     },
                   });
+                  if (!hasAssistantDisplayMediaContent(assistantContent) && rawFinalPayloads.length) {
+                    const rawAssistantContent = await buildAssistantDisplayContentFromReplyPayloads({
+                      sessionKey,
+                      payloads: rawFinalPayloads,
+                      managedImageLocalRoots: mediaLocalRoots,
+                      includeSensitiveMedia: false,
+                      onLocalAudioAccessDenied: (message) => {
+                        context.logGateway.warn(
+                          `webchat audio embedding denied local path: ${message}`,
+                        );
+                      },
+                      onManagedImagePrepareError: (message) => {
+                        context.logGateway.warn(
+                          `webchat image embedding skipped attachment: ${message}`,
+                        );
+                      },
+                    });
+                    if (hasAssistantDisplayMediaContent(rawAssistantContent)) {
+                      assistantContent = rawAssistantContent;
+                    }
+                  }
                   const mediaMessage = await buildWebchatAssistantMediaMessage(finalPayloads, {
                     localRoots: mediaLocalRoots,
                     onLocalAudioAccessDenied: (message) => {
@@ -2827,7 +2875,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                   const displayReply =
                     extractAssistantDisplayTextFromContent(assistantContent) ??
                     buildTranscriptReplyText(finalPayloads);
+                  const persistedDisplayReply =
+                    extractAssistantDisplayTextFromContent(persistedAssistantContent);
                   const transcriptReply =
+                    (persistedContentForAppend?.length ? persistedDisplayReply : undefined) ||
                     mediaMessage?.transcriptText ||
                     buildTranscriptReplyText(finalPayloads) ||
                     displayReply;
@@ -2836,6 +2887,43 @@ export const chatHandlers: GatewayRequestHandlers = {
                     transcriptReply ||
                     persistedContentForAppend?.length ||
                     assistantContent?.length
+                  ) {
+                    const replacementPayload = buildMediaReplacementProbePayload(
+                      [...rawFinalPayloads, ...finalPayloads],
+                      transcriptReply,
+                    );
+                    if (resolvedTranscriptPath && replacementPayload) {
+                      const replaced = await replaceLatestAssistantMediaDirectiveTranscriptMessage({
+                        transcriptPath: resolvedTranscriptPath,
+                        sessionKey,
+                        payload: replacementPayload,
+                        message: transcriptReply,
+                        ...(persistedContentForAppend?.length
+                          ? { content: persistedContentForAppend }
+                          : {}),
+                        idempotencyKey: `${clientRunId}:assistant-media`,
+                      });
+                      if (replaced.error) {
+                        context.logGateway.warn(
+                          `webchat final media reply transcript replacement failed: ${replaced.error}`,
+                        );
+                      }
+                      if (replaced.replaced) {
+                        if (replaced.messageId && assistantContent?.length) {
+                          await attachManagedOutgoingImagesToMessage({
+                            messageId: replaced.messageId,
+                            blocks: assistantContent,
+                          });
+                        }
+                        message = broadcastAssistantContent?.length
+                          ? { ...replaced.message, content: broadcastAssistantContent }
+                          : replaced.message;
+                      }
+                    }
+                  }
+                  if (
+                    !message &&
+                    (transcriptReply || persistedContentForAppend?.length || assistantContent?.length)
                   ) {
                     const appended = await appendAssistantTranscriptMessage({
                       message: transcriptReply,
