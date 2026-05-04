@@ -1,21 +1,11 @@
 {
-  "fallbackKeys": [
-    "sessionsView.activeTooltip",
-    "sessionsView.globalTooltip",
-    "sessionsView.hideFilters",
-    "sessionsView.limitTooltip",
-    "sessionsView.showArchived",
-    "sessionsView.showArchivedTooltip",
-    "sessionsView.showFilters",
-    "sessionsView.sourceFilters",
-    "sessionsView.unknownTooltip"
-  ],
-  "generatedAt": "2026-05-04T05:56:59.387Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-05-04T07:16:49.946Z",
   "locale": "tr",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "66b99bdd39fc9dae0476c0e2fd2c0392f068bc3f7f91b532b04a106f14a3f3df",
   "totalKeys": 1001,
-  "translatedKeys": 992,
+  "translatedKeys": 1001,
   "workflow": 1
 }
