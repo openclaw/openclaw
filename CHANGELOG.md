@@ -200,6 +200,7 @@ Docs: https://docs.openclaw.ai
 - Direct APNs: route direct HTTP/2 delivery through the active managed proxy with redacted proxy diagnostics, so push requests honor configured egress controls and `openclaw proxy validate --apns-reachable` can prove APNs is reachable through the proxy before deployment. (#74905) Thanks @jesse-merhi.
 - Agents/subagents: detect prefix-only completion announce replies and fall back to the captured child result so requester chats no longer lose most of long sub-agent reports silently. Fixes #76412. Thanks @inxaos and @davemorin.
 - TUI: replace the stale-response watchdog notice with plain user-facing copy so stalled replies no longer surface backend or streaming internals. (#77120) Thanks @davemorin.
+- Security/Windows: validate `SystemRoot`/`WINDIR` env values through the Windows install-root validator and add them to the dangerous-host-env policy when resolving `icacls.exe`/`whoami.exe` for `openclaw security audit`, so workspace `.env` overrides and bare command names cannot redirect Windows ACL helpers to attacker-controlled binaries. (#74458) Thanks @mmaps.
 
 ## 2026.5.3-1
 
