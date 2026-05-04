@@ -133,4 +133,21 @@ describe("legacy config detection", () => {
       expectedValue: "queue",
     });
   });
+  it("rejects retired messages.queue.mode without mutating the source", () => {
+    expectOpenClawSchemaInvalidPreservesField({
+      config: { messages: { queue: { mode: "steer" } } },
+      readValue: (parsed) =>
+        (
+          parsed as {
+            messages?: {
+              queue?: {
+                mode?: unknown;
+              };
+            };
+          }
+        ).messages?.queue?.mode,
+      expectedValue: "steer",
+      expectedPath: "messages.queue.mode",
+    });
+  });
 });
