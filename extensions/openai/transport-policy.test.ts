@@ -67,7 +67,7 @@ describe("openai transport policy", () => {
     ).toBeUndefined();
   });
 
-  it("uses turn-scoped request identity for ChatGPT Codex stream turns", () => {
+  it("keeps Codex request identity session-scoped while adding turn metadata", () => {
     expect(
       resolveOpenAITransportTurnState({
         provider: "openai-codex",
@@ -85,7 +85,7 @@ describe("openai transport policy", () => {
       }),
     ).toMatchObject({
       headers: {
-        "x-client-request-id": "turn-123",
+        "x-client-request-id": "session-123",
         "x-openclaw-session-id": "session-123",
         "x-openclaw-turn-id": "turn-123",
         "x-openclaw-turn-attempt": "2",

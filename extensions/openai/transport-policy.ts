@@ -46,13 +46,6 @@ function usesKnownNativeOpenAIRoute(provider: string, baseUrl?: string): boolean
   return false;
 }
 
-function usesNativeOpenAICodexRoute(provider: string, baseUrl?: string): boolean {
-  const normalizedProvider = normalizeProviderId(provider);
-  return (
-    normalizedProvider === OPENAI_CODEX_PROVIDER_ID && (!baseUrl || isOpenAICodexBaseUrl(baseUrl))
-  );
-}
-
 function resolveSessionHeaders(params: {
   provider: string;
   baseUrl?: string;
@@ -85,14 +78,10 @@ export function resolveOpenAITransportTurnState(
 
   const turnId = normalizeIdentityValue(ctx.turnId);
   const attempt = String(Math.max(1, ctx.attempt));
-  const requestId = usesNativeOpenAICodexRoute(ctx.provider, ctx.model?.baseUrl)
-    ? turnId || `${sessionHeaders["x-openclaw-session-id"] ?? "session"}:${attempt}`
-    : sessionHeaders["x-client-request-id"];
 
   return {
     headers: {
       ...sessionHeaders,
-      "x-client-request-id": requestId,
       "x-openclaw-turn-id": turnId,
       "x-openclaw-turn-attempt": attempt,
     },
