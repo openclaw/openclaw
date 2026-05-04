@@ -1278,43 +1278,65 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.extraSystemPromptStatic).toBe("group:discord:channel:#ops");
   });
 
-  it("uses a non-empty transcript marker while keeping bare reset startup instructions out of visible transcript prompt", async () => {
-    await runPreparedReply(
-      baseParams({
-        ctx: {
-          Body: "/new",
-          RawBody: "/new",
-          CommandBody: "/new",
-          Provider: "webchat",
-          Surface: "webchat",
-          ChatType: "direct",
-        },
-        sessionCtx: {
-          Body: "",
-          BodyStripped: "",
-          Provider: "webchat",
-          Surface: "webchat",
-          ChatType: "direct",
-        },
-        command: {
-          surface: "webchat",
-          channel: "webchat",
-          isAuthorizedSender: true,
-          abortKey: "session-key",
-          ownerList: [],
-          senderIsOwner: true,
-          rawBodyNormalized: "/new",
-          commandBodyNormalized: "/new",
-        } as never,
-      }),
-    );
+  it.each([
+    ["/new", "new"],
+    ["/reset", "reset"],
+  ] as const)(
+    "keeps inbound sender context in the bare %s model prompt while hiding startup instructions from transcript prompt",
+    async (commandText, startupAction) => {
+      vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+        [
+          "Conversation info (untrusted metadata):",
+          "Sender (untrusted metadata):",
+          "sender_id",
+          "telegram-user-1",
+        ].join("\n"),
+      );
 
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
-    expect(call?.commandBody).toContain("A new session was started via /new or /reset.");
-    expect(call?.followupRun.prompt).toContain("A new session was started via /new or /reset.");
-    expect(call?.transcriptCommandBody).toBe("[OpenClaw session new]");
-    expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw session new]");
-  });
+      await runPreparedReply(
+        baseParams({
+          ctx: {
+            Body: commandText,
+            RawBody: commandText,
+            CommandBody: commandText,
+            Provider: "webchat",
+            Surface: "webchat",
+            ChatType: "direct",
+          },
+          sessionCtx: {
+            Body: "",
+            BodyStripped: "",
+            Provider: "webchat",
+            Surface: "webchat",
+            ChatType: "direct",
+            SenderId: "telegram-user-1",
+            SenderName: "Ada Lovelace",
+          },
+          command: {
+            surface: "webchat",
+            channel: "webchat",
+            isAuthorizedSender: true,
+            abortKey: "session-key",
+            ownerList: [],
+            senderIsOwner: true,
+            rawBodyNormalized: commandText,
+            commandBodyNormalized: commandText,
+          } as never,
+        }),
+      );
+
+      const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+      expect(call?.commandBody).toContain("A new session was started via /new or /reset.");
+      expect(call?.commandBody).toContain("Conversation info (untrusted metadata):");
+      expect(call?.commandBody).toContain("Sender (untrusted metadata):");
+      expect(call?.commandBody).toContain("telegram-user-1");
+      expect(call?.followupRun.prompt).toContain("A new session was started via /new or /reset.");
+      expect(call?.followupRun.prompt).toContain("Sender (untrusted metadata):");
+      expect(call?.transcriptCommandBody).toBe(`[OpenClaw session ${startupAction}]`);
+      expect(call?.followupRun.transcriptPrompt).toBe(`[OpenClaw session ${startupAction}]`);
+      expect(call?.followupRun.transcriptPrompt).not.toContain("Sender (untrusted metadata):");
+    },
+  );
 
   it("keeps reset user notes visible while hiding startup instructions", async () => {
     await runPreparedReply(
