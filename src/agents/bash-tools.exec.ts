@@ -1213,19 +1213,57 @@ function isExplicitSystemdMemoryScope(argv: string[]): boolean {
   );
 }
 
+const PACKAGE_MANAGER_LEADING_VALUE_OPTIONS = new Set([
+  "-C",
+  "--cache",
+  "--config",
+  "--configfile",
+  "--cwd",
+  "--dir",
+  "--filter",
+  "--package",
+  "--prefix",
+  "--registry",
+  "--store-dir",
+  "--userconfig",
+  "--workspace",
+]);
+
+function stripPackageManagerLeadingOptions(args: string[]): string[] {
+  let index = 0;
+  while (index < args.length) {
+    const arg = args[index] ?? "";
+    if (arg === "--") {
+      index += 1;
+      break;
+    }
+    if (!arg.startsWith("-") || arg === "-") {
+      break;
+    }
+
+    const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    index += 1;
+    if (!arg.includes("=") && PACKAGE_MANAGER_LEADING_VALUE_OPTIONS.has(optionName)) {
+      index += 1;
+    }
+  }
+  return args.slice(index);
+}
+
 function packageManagerHeavyReason(packageManager: string, args: string[]): string | null {
-  const first = normalizeLowercaseStringOrEmpty(args[0] ?? "");
+  const commandArgs = stripPackageManagerLeadingOptions(args);
+  const first = normalizeLowercaseStringOrEmpty(commandArgs[0] ?? "");
   if (!first) {
     return null;
   }
   if (first === "exec" || first === "dlx") {
-    const executable = normalizeCommandBaseName(args[1]);
+    const executable = normalizeCommandBaseName(commandArgs[1]);
     return DIRECT_HEAVY_EXECUTABLES.has(executable)
       ? `${packageManager} ${first} ${executable}`
       : null;
   }
   if (first === "run") {
-    const script = normalizeLowercaseStringOrEmpty(args[1] ?? "");
+    const script = normalizeLowercaseStringOrEmpty(commandArgs[1] ?? "");
     return isHeavyPackageScriptName(script) ? `${packageManager} run ${script}` : null;
   }
   if (PACKAGE_MANAGER_HEAVY_DIRECT_COMMANDS.has(first) || isHeavyPackageScriptName(first)) {
