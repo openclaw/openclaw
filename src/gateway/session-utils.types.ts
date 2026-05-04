@@ -1,5 +1,9 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "../config/sessions/types.js";
+import type {
+  CliSessionBinding,
+  SessionCompactionCheckpoint,
+  SessionEntry,
+} from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type {
   GatewayAgentRuntime,
@@ -82,6 +86,19 @@ export type GatewaySessionRow = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
+  /**
+   * CLI-runner session ids keyed by provider (e.g. claude-cli). Forwarded so
+   * downstream surfaces (sessions_list MCP tool, dashboards) can resolve the
+   * canonical transcript location for sessions running under a CLI provider
+   * — the CLI owns its own transcript store outside the openclaw sessions dir.
+   */
+  cliSessionBindings?: Record<string, CliSessionBinding>;
+  /**
+   * Openclaw-store transcript path (delivery-mirror surface for CLI providers).
+   * Forwarded so the sessions_list MCP tool can run the same read-through
+   * resolver the gateway uses, instead of re-deriving it from the agent id.
+   */
+  sessionFile?: string;
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   deliveryContext?: DeliveryContext;

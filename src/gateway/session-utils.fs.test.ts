@@ -1596,6 +1596,73 @@ describe("resolveSessionTranscriptCandidates safety", () => {
     );
     expect(candidates).toContain(path.resolve(staleSessionFile));
   });
+
+  test("prefers the Claude CLI project transcript when modelProvider is claude-cli", () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hint-home-"));
+    const workspaceDirRaw = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hint-ws-"));
+    // Match the realpath canonicalization the helper performs internally so the
+    // sanitized workspace slug matches what the helper computes on disk.
+    const workspaceDir = fs.realpathSync.native(workspaceDirRaw);
+    const cliSessionId = "33333333-3333-4333-8333-333333333333";
+    const sanitizedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9]/g, "-");
+    const cliTranscript = path.join(
+      homeDir,
+      ".claude",
+      "projects",
+      sanitizedWorkspace,
+      `${cliSessionId}.jsonl`,
+    );
+    fs.mkdirSync(path.dirname(cliTranscript), { recursive: true });
+    fs.writeFileSync(cliTranscript, '{"type":"session"}\n', "utf-8");
+    vi.stubEnv("HOME", homeDir);
+
+    try {
+      const candidates = resolveSessionTranscriptCandidates(
+        "11111111-1111-4111-8111-111111111111",
+        "/tmp/openclaw/agents/main/sessions/sessions.json",
+        "/tmp/openclaw/agents/main/sessions/11111111-1111-4111-8111-111111111111.jsonl",
+        "main",
+        { modelProvider: "claude-cli", cliSessionId, workspaceDir },
+      );
+
+      expect(candidates[0]).toBe(cliTranscript);
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+      fs.rmSync(workspaceDirRaw, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  test("ignores the cliHint when the resolved CLI transcript does not exist", () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hint-miss-home-"));
+    const workspaceDirRaw = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hint-miss-ws-"));
+    const workspaceDir = fs.realpathSync.native(workspaceDirRaw);
+    vi.stubEnv("HOME", homeDir);
+
+    try {
+      const candidates = resolveSessionTranscriptCandidates(
+        "11111111-1111-4111-8111-111111111111",
+        "/tmp/openclaw/agents/main/sessions/sessions.json",
+        undefined,
+        "main",
+        {
+          modelProvider: "claude-cli",
+          cliSessionId: "44444444-4444-4444-8444-444444444444",
+          workspaceDir,
+        },
+      );
+
+      expect(candidates[0]).toBe(
+        path.resolve(
+          "/tmp/openclaw/agents/main/sessions/11111111-1111-4111-8111-111111111111.jsonl",
+        ),
+      );
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+      fs.rmSync(workspaceDirRaw, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe("archiveSessionTranscripts", () => {

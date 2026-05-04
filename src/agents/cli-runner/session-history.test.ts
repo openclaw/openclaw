@@ -187,6 +187,63 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
+  it("reads the Claude CLI project transcript when modelProvider is claude-cli", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-home-"));
+    const workspaceDirRaw = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-ws-"));
+    // macOS `os.tmpdir()` returns a `/var/folders/...` path that realpaths to
+    // `/private/var/folders/...`. The Claude CLI sanitizer canonicalizes via
+    // realpath before slugifying, so use the canonical form here so the test
+    // computes the same `<sanitized>/<cliSessionId>.jsonl` path the helper
+    // does on disk.
+    const workspaceDir = fs.realpathSync.native(workspaceDirRaw);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("HOME", homeDir);
+    // The openclaw-store sessionFile is a delivery-mirror surface that may not
+    // exist on disk for CLI-run sessions; the canonical transcript is owned by
+    // claude-cli at ~/.claude/projects/<workspace-slug>/<cliSessionId>.jsonl.
+    const openclawSessionFile = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "sessions",
+      "session-cli.jsonl",
+    );
+    const cliSessionId = "11111111-2222-4333-8444-555555555555";
+    const sanitizedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9]/g, "-");
+    const claudeProjectFile = path.join(
+      homeDir,
+      ".claude",
+      "projects",
+      sanitizedWorkspace,
+      `${cliSessionId}.jsonl`,
+    );
+    createSessionTranscript({
+      rootDir: workspaceDir,
+      sessionId: cliSessionId,
+      filePath: claudeProjectFile,
+      messages: ["claude cli history"],
+    });
+
+    try {
+      expect(
+        await loadCliSessionHistoryMessages({
+          sessionId: "session-cli",
+          sessionFile: openclawSessionFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          modelProvider: "claude-cli",
+          cliSessionId,
+          workspaceDir,
+        }),
+      ).toMatchObject([{ role: "user", content: "claude cli history" }]);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(homeDir, { recursive: true, force: true });
+      fs.rmSync(workspaceDirRaw, { recursive: true, force: true });
+    }
+  });
+
   it("honors custom session store roots when resolving hook history transcripts", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const customStoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-store-"));

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -138,6 +139,26 @@ export async function handleSessionHistoryHttpRequest(
   const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
   const store = loadSessionStore(target.storePath);
   const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+  // For sessions whose model provider is `claude-cli`, the canonical transcript
+  // lives under the Claude CLI project store, not the openclaw sessions dir.
+  // Carry that hint through so reads route to the live file instead of the
+  // (possibly missing) openclaw-store delivery-mirror sibling.
+  const cliBoundSessionId =
+    entry?.modelProvider === "claude-cli"
+      ? normalizeOptionalString(entry?.cliSessionBindings?.["claude-cli"]?.sessionId)
+      : undefined;
+  let cliHint: { modelProvider: string; cliSessionId: string; workspaceDir: string } | undefined;
+  if (cliBoundSessionId && target.agentId) {
+    try {
+      cliHint = {
+        modelProvider: "claude-cli",
+        cliSessionId: cliBoundSessionId,
+        workspaceDir: resolveAgentWorkspaceDir(cfg, target.agentId),
+      };
+    } catch {
+      cliHint = undefined;
+    }
+  }
   if (!entry?.sessionId) {
     sendJson(res, 404, {
       ok: false,
@@ -161,6 +182,7 @@ export async function handleSessionHistoryHttpRequest(
           target.storePath,
           entry.sessionFile,
           resolveSessionHistoryTailReadOptions(limit),
+          cliHint,
         )
       : undefined;
   // Cursor reads still need an arbitrary historical window. The common first
@@ -168,10 +190,16 @@ export async function handleSessionHistoryHttpRequest(
   const rawSnapshot =
     boundedSnapshot?.messages ??
     (entry?.sessionId
-      ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile, {
-          mode: "full",
-          reason: "session history cursor pagination",
-        })
+      ? await readSessionMessagesAsync(
+          entry.sessionId,
+          target.storePath,
+          entry.sessionFile,
+          {
+            mode: "full",
+            reason: "session history cursor pagination",
+          },
+          cliHint,
+        )
       : []);
   const historySnapshot = buildSessionHistorySnapshot({
     rawMessages: rawSnapshot,
@@ -198,6 +226,7 @@ export async function handleSessionHistoryHttpRequest(
           target.storePath,
           entry.sessionFile,
           target.agentId,
+          cliHint,
         )
           .map((candidate) => canonicalizePath(candidate))
           .filter((candidate): candidate is string => typeof candidate === "string"),
