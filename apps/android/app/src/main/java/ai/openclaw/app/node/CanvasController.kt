@@ -35,6 +35,12 @@ class CanvasController {
 
   @Volatile private var url: String? = null
 
+  @Volatile private var bearerToken: String? = null
+
+  @Volatile private var basicAuthUser: String? = null
+
+  @Volatile private var basicAuthPassword: String? = null
+
   @Volatile private var debugStatusEnabled: Boolean = false
 
   @Volatile private var debugStatusTitle: String? = null
@@ -71,6 +77,31 @@ class CanvasController {
     if (this.webView === webView) {
       this.webView = null
     }
+  }
+
+  fun setAuthHeaders(
+    bearerToken: String?,
+    basicUser: String?,
+    basicPass: String?,
+  ) {
+    this.bearerToken = bearerToken
+    this.basicAuthUser = basicUser
+    this.basicAuthPassword = basicPass
+  }
+
+  fun getAuthHeaders(): Map<String, String> {
+    val headers = mutableMapOf<String, String>()
+    bearerToken?.trim()?.takeIf { it.isNotEmpty() }?.let {
+      headers["Authorization"] = "Bearer $it"
+    }
+    val user = basicAuthUser
+    val pass = basicAuthPassword
+    if (!user.isNullOrEmpty() && !pass.isNullOrEmpty()) {
+      val creds = "$user:$pass"
+      val basic = android.util.Base64.encodeToString(creds.toByteArray(), android.util.Base64.NO_WRAP)
+      headers["Authorization"] = "Basic $basic"
+    }
+    return headers
   }
 
   fun navigate(url: String) {
@@ -129,7 +160,13 @@ class CanvasController {
         if (BuildConfig.DEBUG) {
           Log.d("OpenClawCanvas", "load url: $currentUrl")
         }
-        wv.loadUrl(currentUrl)
+        val headers = getAuthHeaders()
+
+        if (headers.isNotEmpty()) {
+          wv.loadUrl(currentUrl, headers)
+        } else {
+          wv.loadUrl(currentUrl)
+        }
       }
     }
   }

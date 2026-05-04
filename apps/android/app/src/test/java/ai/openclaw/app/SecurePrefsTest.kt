@@ -78,6 +78,25 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun saveGatewayProxyAuth_persistsSeparately() {
+    val context = RuntimeEnvironment.getApplication()
+    val securePrefs = context.getSharedPreferences("openclaw.node.secure.test", Context.MODE_PRIVATE)
+    securePrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
+
+    prefs.setGatewayBearerToken("bearer-token")
+    prefs.setGatewayBasicAuthUser("basic-user")
+    prefs.setGatewayBasicAuthPassword("basic-pass")
+
+    assertEquals("bearer-token", prefs.loadGatewayBearerToken())
+    assertEquals("basic-user", prefs.loadGatewayBasicAuthUser())
+    assertEquals("basic-pass", prefs.loadGatewayBasicAuthPassword())
+    assertEquals("bearer-token", prefs.gatewayBearerToken.value)
+    assertEquals("basic-user", prefs.gatewayBasicAuthUser.value)
+    assertEquals("basic-pass", prefs.gatewayBasicAuthPassword.value)
+  }
+
+  @Test
   fun clearGatewaySetupAuth_removesStoredGatewayAuth() {
     val context = RuntimeEnvironment.getApplication()
     val securePrefs = context.getSharedPreferences("openclaw.node.secure.test.clear", Context.MODE_PRIVATE)

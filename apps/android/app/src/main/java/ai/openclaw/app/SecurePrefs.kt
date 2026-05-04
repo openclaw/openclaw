@@ -89,12 +89,24 @@ class SecurePrefs(
     MutableStateFlow(plainPrefs.getBoolean("gateway.manual.tls", true))
   val manualTls: StateFlow<Boolean> = _manualTls
 
+  private val _manualDisableTlsVerification =
+    MutableStateFlow(plainPrefs.getBoolean("gateway.manual.disableTlsVerification", false))
+  val manualDisableTlsVerification: StateFlow<Boolean> = _manualDisableTlsVerification
+
   private val _gatewayToken = MutableStateFlow("")
   val gatewayToken: StateFlow<String> = _gatewayToken
 
   private val _gatewayBootstrapToken = MutableStateFlow("")
   val gatewayBootstrapToken: StateFlow<String> = _gatewayBootstrapToken
 
+  private val _gatewayBearerToken = MutableStateFlow("")
+  val gatewayBearerToken: StateFlow<String> = _gatewayBearerToken
+
+  private val _gatewayBasicAuthUser = MutableStateFlow("")
+  val gatewayBasicAuthUser: StateFlow<String> = _gatewayBasicAuthUser
+
+  private val _gatewayBasicAuthPassword = MutableStateFlow("")
+  val gatewayBasicAuthPassword: StateFlow<String> = _gatewayBasicAuthPassword
   private val _onboardingCompleted =
     MutableStateFlow(plainPrefs.getBoolean("onboarding.completed", false))
   val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted
@@ -223,6 +235,11 @@ class SecurePrefs(
     _manualTls.value = value
   }
 
+  fun setManualDisableTlsVerification(value: Boolean) {
+    plainPrefs.edit { putBoolean("gateway.manual.disableTlsVerification", value) }
+    _manualDisableTlsVerification.value = value
+  }
+
   fun setGatewayToken(value: String) {
     val trimmed = value.trim()
     securePrefs.edit { putString("gateway.manual.token", trimmed) }
@@ -231,6 +248,18 @@ class SecurePrefs(
 
   fun setGatewayPassword(value: String) {
     saveGatewayPassword(value)
+  }
+
+  fun setGatewayBearerToken(value: String) {
+    saveGatewayBearerToken(value)
+  }
+
+  fun setGatewayBasicAuthUser(value: String) {
+    saveGatewayBasicAuthUser(value)
+  }
+
+  fun setGatewayBasicAuthPassword(value: String) {
+    saveGatewayBasicAuthPassword(value)
   }
 
   fun setGatewayBootstrapToken(value: String) {
@@ -402,6 +431,45 @@ class SecurePrefs(
   fun saveGatewayPassword(password: String) {
     val key = "gateway.password.${_instanceId.value}"
     securePrefs.edit { putString(key, password.trim()) }
+  }
+
+  fun loadGatewayBearerToken(): String? {
+    val key = "gateway.bearerToken.${_instanceId.value}"
+    val stored = securePrefs.getString(key, null)?.trim()
+    return stored?.takeIf { it.isNotEmpty() }
+  }
+
+  fun saveGatewayBearerToken(bearerToken: String) {
+    val key = "gateway.bearerToken.${_instanceId.value}"
+    val trimmed = bearerToken.trim()
+    securePrefs.edit { putString(key, trimmed) }
+    _gatewayBearerToken.value = trimmed
+  }
+
+  fun loadGatewayBasicAuthUser(): String? {
+    val key = "gateway.basicAuthUser.${_instanceId.value}"
+    val stored = securePrefs.getString(key, null)?.trim()
+    return stored?.takeIf { it.isNotEmpty() }
+  }
+
+  fun saveGatewayBasicAuthUser(user: String) {
+    val key = "gateway.basicAuthUser.${_instanceId.value}"
+    val trimmed = user.trim()
+    securePrefs.edit { putString(key, trimmed) }
+    _gatewayBasicAuthUser.value = trimmed
+  }
+
+  fun loadGatewayBasicAuthPassword(): String? {
+    val key = "gateway.basicAuthPassword.${_instanceId.value}"
+    val stored = securePrefs.getString(key, null)?.trim()
+    return stored?.takeIf { it.isNotEmpty() }
+  }
+
+  fun saveGatewayBasicAuthPassword(password: String) {
+    val key = "gateway.basicAuthPassword.${_instanceId.value}"
+    val trimmed = password.trim()
+    securePrefs.edit { putString(key, trimmed) }
+    _gatewayBasicAuthPassword.value = trimmed
   }
 
   fun clearGatewaySetupAuth() {

@@ -24,12 +24,14 @@ class ConnectionManager(
   private val callLogAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
+  private val manualDisableTlsVerification: () -> Boolean,
 ) {
   companion object {
     internal fun resolveTlsParamsForEndpoint(
       endpoint: GatewayEndpoint,
       storedFingerprint: String?,
       manualTlsEnabled: Boolean,
+      manualDisableTlsVerification: Boolean = false,
     ): GatewayTlsParams? {
       val stableId = endpoint.stableId
       val stored = storedFingerprint?.trim().takeIf { !it.isNullOrEmpty() }
@@ -44,6 +46,7 @@ class ConnectionManager(
             expectedFingerprint = stored,
             allowTOFU = false,
             stableId = stableId,
+            disableTlsVerification = manualDisableTlsVerification,
           )
         }
         return GatewayTlsParams(
@@ -51,6 +54,7 @@ class ConnectionManager(
           expectedFingerprint = null,
           allowTOFU = false,
           stableId = stableId,
+          disableTlsVerification = manualDisableTlsVerification,
         )
       }
 
@@ -170,6 +174,6 @@ class ConnectionManager(
 
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)
-    return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls())
+    return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls(), manualDisableTlsVerification = manualDisableTlsVerification())
   }
 }
