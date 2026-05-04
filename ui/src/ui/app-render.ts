@@ -1510,18 +1510,6 @@ export function renderApp(state: AppViewState) {
               ${state.updateStatusBanner.text}
             </div>`
           : nothing}
-        ${state.sessionSwitchNotice
-          ? html`
-              <div
-                class="control-toast control-toast--success"
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-              >
-                ${icons.check}<span>${state.sessionSwitchNotice.text}</span>
-              </div>
-            `
-          : nothing}
         ${state.updateAvailable &&
         state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
         !isUpdateBannerDismissed(state.updateAvailable)
