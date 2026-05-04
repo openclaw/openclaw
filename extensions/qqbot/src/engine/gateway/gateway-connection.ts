@@ -191,6 +191,7 @@ export class GatewayConnection {
 
       const ws = new WebSocket(gatewayUrl, {
         headers: { "User-Agent": getPluginUserAgent() },
+        perMessageDeflate: true,
       });
       this.currentWs = ws;
 
@@ -219,6 +220,19 @@ export class GatewayConnection {
         log?.info(`WebSocket connected`);
         this.isConnecting = false;
         this.reconnect.onConnected();
+
+        // TCP keepalive: send a probe every 30s to keep NAT mappings alive
+        // and detect dead connections at the OS level.
+        const socket = (ws as unknown as { _socket: import("net").Socket | null })._socket;
+        if (socket) {
+          socket.setKeepAlive(true, 30_000);
+          socket.setTimeout(60_000);
+          socket.on("timeout", () => {
+            (log?.warn ?? log?.info)?.(`WebSocket socket timeout — closing and reconnecting`);
+            ws.close();
+          });
+        }
+
         this.msgQueue.startProcessor(this.ctx.handleMessage);
         startBackgroundTokenRefresh(account.appId, account.clientSecret, { log });
       });
@@ -336,6 +350,8 @@ export class GatewayConnection {
     }
 
     const interval = (d as { heartbeat_interval: number }).heartbeat_interval;
+    this.ctx.log?.info(`Heartbeat interval: ${interval}ms (${(interval / 1000).toFixed(1)}s)`);
+
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
     }
