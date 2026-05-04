@@ -1494,6 +1494,97 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("skips fallback candidates that lack tool support when requiresTools is true", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["ollama/deepseek-r1:14b", "anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            models: [
+              { id: "deepseek-r1:14b", name: "deepseek-r1:14b", compat: { supportsTools: false } },
+            ],
+          },
+        },
+      },
+    } as unknown as Parameters<typeof makeCfg>[0]);
+
+    const warnLogs = createWarnLogCapture("openclaw-model-fallback-tools-test");
+    try {
+      const calls: Array<{ provider: string; model: string }> = [];
+      const run = vi.fn(async (provider: string, model: string) => {
+        calls.push({ provider, model });
+        if (provider === "anthropic" && model === "claude-opus-4-7") {
+          throw Object.assign(new Error("primary down"), { status: 503 });
+        }
+        if (provider === "anthropic" && model === "claude-haiku-3-5") {
+          return "ok";
+        }
+        throw new Error(`unexpected candidate: ${provider}/${model}`);
+      });
+
+      const res = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        requiresTools: true,
+        run,
+      });
+
+      expect(res.result).toBe("ok");
+      expect(calls).toEqual([
+        { provider: "anthropic", model: "claude-opus-4-7" },
+        { provider: "anthropic", model: "claude-haiku-3-5" },
+      ]);
+      const warning = await warnLogs.findText("deepseek-r1:14b");
+      expect(warning).toContain("does not support tools");
+    } finally {
+      warnLogs.cleanup();
+    }
+  });
+
+  it("keeps fallbacks with unknown tool support when requiresTools is true", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn(async (provider: string, model: string) => {
+      calls.push({ provider, model });
+      if (provider === "openai") {
+        throw Object.assign(new Error("primary down"), { status: 503 });
+      }
+      return "ok";
+    });
+
+    const res = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.4",
+      requiresTools: true,
+      run,
+    });
+
+    expect(res.result).toBe("ok");
+    expect(calls).toEqual([
+      { provider: "openai", model: "gpt-5.4" },
+      { provider: "anthropic", model: "claude-haiku-3-5" },
+    ]);
+  });
+
   it("treats an empty fallbacksOverride as disabling global fallbacks", async () => {
     const cfg = makeFallbacksOnlyCfg();
 
