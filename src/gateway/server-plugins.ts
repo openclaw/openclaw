@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -16,7 +17,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
+import { PROTOCOL_VERSION } from "./protocol/version.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -599,6 +600,7 @@ export function loadGatewayPlugins(params: {
     };
   }
   const beforeLoad = performance.now();
+  const loaderStatsBefore = getPluginModuleLoaderStats();
   const pluginRegistry = loadOpenClawPlugins({
     config: resolvedConfig,
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,
@@ -624,6 +626,7 @@ export function loadGatewayPlugins(params: {
       : {}),
   });
   const loadMs = performance.now() - beforeLoad;
+  const loaderStatsAfter = getPluginModuleLoaderStats();
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
   params.startupTrace?.detail("plugins.gateway-load", [
@@ -633,6 +636,24 @@ export function loadGatewayPlugins(params: {
     ["loadMs", loadMs],
     ["pluginIds", String(pluginIds.length)],
     ["gatewayHandlers", String(pluginMethods.length)],
+    ["loaderCallsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],
+    ["loaderNativeHitsCount", loaderStatsAfter.nativeHits - loaderStatsBefore.nativeHits],
+    ["loaderNativeMissesCount", loaderStatsAfter.nativeMisses - loaderStatsBefore.nativeMisses],
+    [
+      "loaderSourceTransformForcedCount",
+      loaderStatsAfter.sourceTransformForced - loaderStatsBefore.sourceTransformForced,
+    ],
+    [
+      "loaderSourceTransformFallbacksCount",
+      loaderStatsAfter.sourceTransformFallbacks - loaderStatsBefore.sourceTransformFallbacks,
+    ],
+    [
+      "loaderTopSourceTransformTargets",
+      loaderStatsAfter.topSourceTransformTargets
+        .slice(0, 3)
+        .map((entry) => `${entry.count}:${entry.target}`)
+        .join(","),
+    ],
   ]);
   return { pluginRegistry, gatewayMethods };
 }

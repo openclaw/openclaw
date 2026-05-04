@@ -20,6 +20,26 @@ const distExtensionsRoot = path.join(packageRoot, "dist", "extensions");
 const excludedPackageExtensionDirs = collectRootPackageExcludedExtensionDirs({ cwd: packageRoot });
 const installedLayoutEnv = "OPENCLAW_BUNDLED_CHANNEL_SMOKE_INSTALLED_LAYOUT";
 
+function collectExcludedDistExtensionIds() {
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  if (!fs.existsSync(packageJsonPath)) {
+    return new Set();
+  }
+  const packageJson = readJson(packageJsonPath);
+  const files = Array.isArray(packageJson.files) ? packageJson.files : [];
+  const excludedIds = new Set();
+  for (const entry of files) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const match = /^!dist\/extensions\/([^/*]+)\/\*\*$/u.exec(entry.replaceAll("\\", "/"));
+    if (match) {
+      excludedIds.add(match[1]);
+    }
+  }
+  return excludedIds;
+}
+
 function packageRootLooksInstalled(root) {
   return root.replaceAll("\\", "/").endsWith("/node_modules/openclaw");
 }
@@ -71,8 +91,12 @@ function extensionEntryToDistFilename(entry) {
 
 function collectBundledChannelEntryFiles() {
   const files = [];
+  const excludedDistExtensionIds = collectExcludedDistExtensionIds();
   for (const dirent of fs.readdirSync(distExtensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
+      continue;
+    }
+    if (excludedDistExtensionIds.has(dirent.name)) {
       continue;
     }
     const extensionRoot = path.join(distExtensionsRoot, dirent.name);

@@ -99,11 +99,10 @@ If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
 reinstall path for plugins that opt into
 `openclaw.install.allowInvalidConfigRecovery`.
-During Gateway startup, invalid config for one plugin is isolated to that plugin:
-startup logs the `plugins.entries.<id>.config` issue, skips that plugin during
-load, and keeps other plugins and channels online. Run `openclaw doctor --fix`
-to quarantine the bad plugin config by disabling that plugin entry and removing
-its invalid config payload; the normal config backup keeps the previous values.
+During Gateway startup, invalid plugin config fails closed like any other invalid
+config. Run `openclaw doctor --fix` to quarantine the bad plugin config by
+disabling that plugin entry and removing its invalid config payload; the normal
+config backup keeps the previous values.
 When a channel config references a plugin that is no longer discoverable but the
 same stale plugin id remains in plugin config or install records, Gateway startup
 logs warnings and skips that channel instead of blocking every other channel.
@@ -161,6 +160,9 @@ Native plugin npm packages must declare `openclaw.extensions` in `package.json`.
 Each entry must stay inside the package directory and resolve to a readable
 runtime file, or to a TypeScript source file with an inferred built JavaScript
 peer such as `src/index.ts` to `dist/index.js`.
+Packaged installs must ship that JavaScript runtime output. The TypeScript
+source fallback is for source checkouts and local development paths, not for
+npm packages installed into OpenClaw's managed plugin root.
 
 Use `openclaw.runtimeExtensions` when published runtime files do not live at the
 same paths as the source entries. When present, `runtimeExtensions` must contain

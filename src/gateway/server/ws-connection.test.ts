@@ -31,6 +31,10 @@ function createResolvedAuth(token: string): ResolvedGatewayAuth {
   };
 }
 
+async function waitForLazyMessageHandler() {
+  await vi.dynamicImportSettled();
+}
+
 describe("attachGatewayWsConnectionHandler", () => {
   beforeEach(() => {
     attachGatewayWsMessageHandlerMock.mockReset();
@@ -40,7 +44,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     vi.useRealTimers();
   });
 
-  it("threads current auth getters into the handshake handler instead of a stale snapshot", () => {
+  it("threads current auth getters into the handshake handler instead of a stale snapshot", async () => {
     const listeners = new Map<string, (...args: unknown[]) => void>();
     const wss = {
       on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
@@ -91,6 +95,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     const onConnection = listeners.get("connection");
     expect(onConnection).toBeTypeOf("function");
     onConnection?.(socket, upgradeReq);
+    await waitForLazyMessageHandler();
 
     expect(attachGatewayWsMessageHandlerMock).toHaveBeenCalledTimes(1);
     const passed = attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as {
@@ -106,7 +111,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     );
   });
 
-  it("rejects late client registration after a pre-connect socket close", () => {
+  it("rejects late client registration after a pre-connect socket close", async () => {
     const listeners = new Map<string, (...args: unknown[]) => void>();
     const wss = {
       on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
@@ -156,6 +161,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     const onConnection = listeners.get("connection");
     expect(onConnection).toBeTypeOf("function");
     onConnection?.(socket, upgradeReq);
+    await waitForLazyMessageHandler();
 
     const passed = attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as {
       setClient: (client: unknown) => boolean;
@@ -173,7 +179,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(clients.size).toBe(0);
   });
 
-  it("sends protocol pings until the connection closes", () => {
+  it("sends protocol pings until the connection closes", async () => {
     vi.useFakeTimers();
     const listeners = new Map<string, (...args: unknown[]) => void>();
     const wss = {
@@ -224,6 +230,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     const onConnection = listeners.get("connection");
     expect(onConnection).toBeTypeOf("function");
     onConnection?.(socket, upgradeReq);
+    await waitForLazyMessageHandler();
 
     const passed = attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as {
       setClient: (client: unknown) => boolean;

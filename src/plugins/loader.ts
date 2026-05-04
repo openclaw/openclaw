@@ -46,6 +46,7 @@ import {
   type PluginActivationConfigSource,
   type NormalizedPluginsConfig,
 } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
@@ -1334,6 +1335,21 @@ function validatePluginConfig(params: {
   if (!schema) {
     return { ok: true, value: params.value as Record<string, unknown> | undefined };
   }
+  if (isEmptyPluginConfigJsonSchema(schema)) {
+    if (
+      params.value === undefined ||
+      (params.value &&
+        typeof params.value === "object" &&
+        !Array.isArray(params.value) &&
+        Object.keys(params.value).length === 0)
+    ) {
+      return { ok: true, value: {} };
+    }
+    if (!params.value || typeof params.value !== "object" || Array.isArray(params.value)) {
+      return { ok: false, errors: ["<root>: must be object"] };
+    }
+    return { ok: false, errors: ["<root>: config must be empty"] };
+  }
   const cacheKey = params.cacheKey ?? JSON.stringify(schema);
   const result = validateJsonSchemaValue({
     schema,
@@ -1345,6 +1361,31 @@ function validatePluginConfig(params: {
     return { ok: true, value: result.value as Record<string, unknown> | undefined };
   }
   return { ok: false, errors: result.errors.map((error) => error.text) };
+}
+
+function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
+  if (schema.type !== "object" || schema.additionalProperties !== false) {
+    return false;
+  }
+  const properties = schema.properties;
+  if (
+    !properties ||
+    typeof properties !== "object" ||
+    Array.isArray(properties) ||
+    Object.keys(properties).length > 0
+  ) {
+    return false;
+  }
+  return !(
+    "required" in schema ||
+    "dependentRequired" in schema ||
+    "dependencies" in schema ||
+    "minProperties" in schema ||
+    "allOf" in schema ||
+    "anyOf" in schema ||
+    "oneOf" in schema ||
+    "not" in schema
+  );
 }
 
 function resolvePluginModuleExport(moduleExport: unknown): {
@@ -1690,7 +1731,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         config: normalized,
         rootConfig: cfg,
-        enabledByDefault: manifestRecord.enabledByDefault,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
         autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
       });
@@ -1729,7 +1770,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         config: normalized,
         rootConfig: cfg,
-        enabledByDefault: manifestRecord.enabledByDefault,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
       });
       const entry = normalized.entries[pluginId];
@@ -2512,7 +2553,7 @@ export async function loadOpenClawPluginCliRegistry(
       origin: candidate.origin,
       config: normalized,
       rootConfig: cfg,
-      enabledByDefault: manifestRecord.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
       autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
     });
@@ -2551,7 +2592,7 @@ export async function loadOpenClawPluginCliRegistry(
       origin: candidate.origin,
       config: normalized,
       rootConfig: cfg,
-      enabledByDefault: manifestRecord.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
     });
     const entry = normalized.entries[pluginId];

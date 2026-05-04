@@ -719,6 +719,15 @@ export const en: TranslationMap = {
       dailyCsv: "Daily CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning: "Usage cache is rebuilding in the background. Displayed totals may be stale.",
+      title: "{status}: {pending} pending, {stale} stale, {cached} cached",
+      status: {
+        refreshing: "refreshing",
+        stale: "stale",
+        partial: "partial",
+      },
+    },
     empty: {
       title: "Start with a date range",
       subtitle:

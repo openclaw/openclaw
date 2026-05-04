@@ -729,6 +729,16 @@ export const tr: TranslationMap = {
       dailyCsv: "Günlük CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Kullanım önbelleği arka planda yeniden oluşturuluyor. Görüntülenen toplamlar güncel olmayabilir.",
+      title: "{status}: {pending} beklemede, {stale} güncel değil, {cached} önbellekte",
+      status: {
+        refreshing: "yenileniyor",
+        stale: "güncel değil",
+        partial: "kısmi",
+      },
+    },
     empty: {
       title: "Bir tarih aralığıyla başlayın",
       subtitle:

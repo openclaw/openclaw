@@ -717,6 +717,16 @@ export const ar: TranslationMap = {
       dailyCsv: "CSV اليومي",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "تجري إعادة بناء ذاكرة الاستخدام المؤقتة في الخلفية. قد تكون الإجماليات المعروضة قديمة.",
+      title: "{status}: {pending} معلّقة، {stale} قديمة، {cached} مخزّنة مؤقتًا",
+      status: {
+        refreshing: "جارٍ التحديث",
+        stale: "قديم",
+        partial: "جزئي",
+      },
+    },
     empty: {
       title: "ابدأ بنطاق تاريخ",
       subtitle:

@@ -48,7 +48,8 @@ export async function consultOpenClawAgentForGoogleMeet(params: {
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
 }): Promise<{ text: string }> {
   const agentId = normalizeAgentId(params.config.realtime.agentId);
-  const sessionKey = `agent:${agentId}:google-meet:${params.meetingSessionId}`;
+  const requesterSessionKey = `agent:${agentId}:main`;
+  const sessionKey = `agent:${agentId}:subagent:google-meet:${params.meetingSessionId}`;
   return await consultRealtimeVoiceAgent({
     cfg: params.fullConfig,
     agentRuntime: params.runtime.agent,
@@ -58,6 +59,7 @@ export async function consultOpenClawAgentForGoogleMeet(params: {
     messageProvider: "google-meet",
     lane: "google-meet",
     runIdPrefix: `google-meet:${params.meetingSessionId}`,
+    spawnedBy: requesterSessionKey,
     args: params.args,
     transcript: params.transcript,
     surface: "a private Google Meet",

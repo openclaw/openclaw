@@ -726,6 +726,16 @@ export const ja_JP: TranslationMap = {
       dailyCsv: "日次 CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "使用状況キャッシュをバックグラウンドで再構築しています。表示される合計は古い可能性があります。",
+      title: "{status}: 保留中 {pending}、古い {stale}、キャッシュ済み {cached}",
+      status: {
+        refreshing: "更新中",
+        stale: "古い",
+        partial: "一部",
+      },
+    },
     empty: {
       title: "まずは日付範囲を選択",
       subtitle:

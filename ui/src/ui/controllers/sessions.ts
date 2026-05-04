@@ -118,7 +118,11 @@ function hasOwn(record: Record<string, unknown>, key: string): boolean {
 }
 
 function normalizeSessionKind(value: unknown): GatewaySessionRow["kind"] | undefined {
-  return value === "direct" || value === "group" || value === "global" || value === "unknown"
+  return value === "cron" ||
+    value === "direct" ||
+    value === "group" ||
+    value === "global" ||
+    value === "unknown"
     ? value
     : undefined;
 }
