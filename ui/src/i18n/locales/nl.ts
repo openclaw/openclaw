@@ -192,6 +192,8 @@ export const nl: TranslationMap = {
     verbose: "Uitgebreid",
     reasoning: "Redenering",
     noSessions: "Geen sessies gevonden.",
+    noSessionsMatchFilters: "No sessions match your filters.",
+    showAll: "Show all",
     inherit: "overnemen",
     defaultOption: "Standaard ({value})",
     offExplicit: "uit (expliciet)",
@@ -936,6 +938,7 @@ export const nl: TranslationMap = {
     updating: "Bijwerken…",
     updateNow: "Nu bijwerken",
     dismissUpdateBanner: "Updatebanner sluiten",
+    switchedSession: "Switched to {session}",
   },
   languages: {
     en: "English (Engels)",

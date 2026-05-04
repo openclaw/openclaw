@@ -189,6 +189,8 @@ export const ko: TranslationMap = {
     verbose: "상세",
     reasoning: "추론",
     noSessions: "세션을 찾을 수 없습니다.",
+    noSessionsMatchFilters: "No sessions match your filters.",
+    showAll: "Show all",
     inherit: "상속",
     defaultOption: "기본값({value})",
     offExplicit: "꺼짐(명시적)",
@@ -929,6 +931,7 @@ export const ko: TranslationMap = {
     updating: "업데이트 중…",
     updateNow: "지금 업데이트",
     dismissUpdateBanner: "업데이트 배너 닫기",
+    switchedSession: "Switched to {session}",
   },
   languages: {
     en: "영어",

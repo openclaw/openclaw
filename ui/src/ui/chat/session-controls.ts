@@ -37,11 +37,14 @@ export function renderChatSessionSelect(
   const selectedSessionLabel =
     sessionGroups.flatMap((group) => group.options).find((entry) => entry.key === state.sessionKey)
       ?.label ?? state.sessionKey;
+  const flashSession = state.sessionSwitchFlashKey === state.sessionKey;
   return html`
     <div
       class=${hasAgentSelect
-        ? "chat-controls__session-row"
-        : "chat-controls__session-row chat-controls__session-row--single-agent"}
+        ? `chat-controls__session-row ${flashSession ? "chat-controls__session-row--flash" : ""}`
+        : `chat-controls__session-row chat-controls__session-row--single-agent ${
+            flashSession ? "chat-controls__session-row--flash" : ""
+          }`}
     >
       ${agentSelect}
       <label class="field chat-controls__session chat-controls__session-picker">

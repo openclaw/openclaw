@@ -1510,6 +1510,18 @@ export function renderApp(state: AppViewState) {
               ${state.updateStatusBanner.text}
             </div>`
           : nothing}
+        ${state.sessionSwitchNotice
+          ? html`
+              <div
+                class="control-toast control-toast--success"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                ${icons.check}<span>${state.sessionSwitchNotice.text}</span>
+              </div>
+            `
+          : nothing}
         ${state.updateAvailable &&
         state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
         !isUpdateBannerDismissed(state.updateAvailable)
@@ -1720,6 +1732,23 @@ export function renderApp(state: AppViewState) {
                 },
                 onToggleFiltersCollapsed: () => {
                   state.sessionsFiltersCollapsed = !state.sessionsFiltersCollapsed;
+                },
+                onClearFilters: () => {
+                  state.sessionsFilterActive = "";
+                  state.sessionsFilterLimit = "";
+                  state.sessionsIncludeGlobal = true;
+                  state.sessionsIncludeUnknown = true;
+                  state.sessionsShowArchived = true;
+                  state.sessionsSearchQuery = "";
+                  state.sessionsSelectedKeys = new Set();
+                  state.sessionsPage = 0;
+                  void loadSessions(state, {
+                    activeMinutes: 0,
+                    limit: 0,
+                    includeGlobal: true,
+                    includeUnknown: true,
+                    showArchived: true,
+                  });
                 },
                 onSearchChange: (q) => {
                   state.sessionsSearchQuery = q;

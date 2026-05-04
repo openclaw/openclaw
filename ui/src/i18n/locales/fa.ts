@@ -191,6 +191,8 @@ export const fa: TranslationMap = {
     verbose: "پرگویی",
     reasoning: "استدلال",
     noSessions: "هیچ نشستی پیدا نشد.",
+    noSessionsMatchFilters: "No sessions match your filters.",
+    showAll: "Show all",
     inherit: "ارث‌بری",
     defaultOption: "پیش‌فرض ({value})",
     offExplicit: "خاموش (صریح)",
@@ -934,6 +936,7 @@ export const fa: TranslationMap = {
     updating: "در حال به‌روزرسانی…",
     updateNow: "اکنون به‌روزرسانی کن",
     dismissUpdateBanner: "بستن بنر به‌روزرسانی",
+    switchedSession: "Switched to {session}",
   },
   languages: {
     en: "English (انگلیسی)",

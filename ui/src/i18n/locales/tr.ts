@@ -192,6 +192,8 @@ export const tr: TranslationMap = {
     verbose: "Ayrıntılı",
     reasoning: "Akıl yürütme",
     noSessions: "Oturum bulunamadı.",
+    noSessionsMatchFilters: "No sessions match your filters.",
+    showAll: "Show all",
     inherit: "devral",
     defaultOption: "Varsayılan ({value})",
     offExplicit: "kapalı (açıkça)",
@@ -938,6 +940,7 @@ export const tr: TranslationMap = {
     updating: "Güncelleniyor…",
     updateNow: "Şimdi güncelle",
     dismissUpdateBanner: "Güncelleme başlığını kapat",
+    switchedSession: "Switched to {session}",
   },
   languages: {
     en: "İngilizce",

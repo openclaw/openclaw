@@ -191,6 +191,8 @@ export const uk: TranslationMap = {
     verbose: "Докладно",
     reasoning: "Міркування",
     noSessions: "Сеансів не знайдено.",
+    noSessionsMatchFilters: "No sessions match your filters.",
+    showAll: "Show all",
     inherit: "успадковувати",
     defaultOption: "За замовчуванням ({value})",
     offExplicit: "вимкнено (явно)",
@@ -937,6 +939,7 @@ export const uk: TranslationMap = {
     updating: "Оновлення…",
     updateNow: "Оновити зараз",
     dismissUpdateBanner: "Закрити банер оновлення",
+    switchedSession: "Switched to {session}",
   },
   languages: {
     en: "Англійська",
