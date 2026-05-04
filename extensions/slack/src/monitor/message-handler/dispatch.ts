@@ -339,7 +339,7 @@ function shouldUseSlackProgressPlanStream(params: {
     return false;
   }
   if (params.isDirectMessage) {
-    return true;
+    return false;
   }
   return typeof params.threadTs === "string" && params.threadTs.length > 0;
 }
@@ -752,30 +752,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         status: "in_progress",
       }),
     ];
-    if (prepared.isDirectMessage) {
-      progressPlanMessageSession = await startSlackPlanMessage({
+    progressStreamSession = await startSlackChunkStream({
+      client: ctx.app.client,
+      channel: message.channel,
+      ...(streamThreadHint ? { threadTs: streamThreadHint } : {}),
+      teamId: await resolveSlackStreamRecipientTeamId({
         client: ctx.app.client,
-        channel: message.channel,
-        ...(streamThreadHint ? { threadTs: streamThreadHint } : {}),
-        chunks: initialChunks,
-        renderMode: "plan",
-      });
-    } else {
-      progressStreamSession = await startSlackChunkStream({
-        client: ctx.app.client,
-        channel: message.channel,
-        ...(streamThreadHint ? { threadTs: streamThreadHint } : {}),
-        teamId: await resolveSlackStreamRecipientTeamId({
-          client: ctx.app.client,
-          token: ctx.botToken,
-          userId: message.user,
-          fallbackTeamId: ctx.teamId,
-        }),
+        token: ctx.botToken,
         userId: message.user,
-        taskDisplayMode: "plan",
-        chunks: initialChunks,
-      });
-    }
+        fallbackTeamId: ctx.teamId,
+      }),
+      userId: message.user,
+      taskDisplayMode: "plan",
+      chunks: initialChunks,
+    });
     progressPlanStarted = true;
     didSetStatus = false;
     if (shouldUseSlackAssistantThreadStatus({ threadTs: streamThreadHint })) {

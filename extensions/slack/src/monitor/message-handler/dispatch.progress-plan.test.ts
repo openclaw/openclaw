@@ -340,7 +340,7 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
     setSlackThreadTitleMock.mockClear();
   });
 
-  it("renders direct message progress as a plan message inside the existing assistant thread", async () => {
+  it("keeps direct messages off the Slack progress-plan stream surface", async () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
         channel: "D123",
@@ -351,27 +351,8 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
       }),
     );
 
-    expect(startSlackPlanMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "D123",
-        threadTs: "171234.001",
-        chunks: [
-          expect.objectContaining({
-            type: "task_update",
-            id: "reading_message",
-            title: "Reading message",
-            status: "in_progress",
-          }),
-        ],
-        renderMode: "plan",
-      }),
-    );
+    expect(startSlackPlanMessageMock).not.toHaveBeenCalled();
     expect(startSlackChunkStreamMock).not.toHaveBeenCalled();
-    expect(setSlackThreadStatusMock).toHaveBeenCalledWith({
-      channelId: "D123",
-      threadTs: "171234.001",
-      status: "",
-    });
     expect(deliverRepliesMock).toHaveBeenCalledWith(
       expect.objectContaining({
         replyThreadTs: "171234.001",
