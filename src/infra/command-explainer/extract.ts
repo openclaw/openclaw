@@ -2,6 +2,7 @@ import type { Node as TreeSitterNode } from "web-tree-sitter";
 import type { InterpreterInlineEvalHit } from "../command-analysis/inline-eval.js";
 import {
   detectCarriedShellBuiltinArgv,
+  detectCarrierInlineEvalArgv as detectSharedCarrierInlineEvalArgv,
   detectCommandCarrierArgv,
   detectInlineEvalArgv,
   detectShellWrapperThroughCarrierArgv,
@@ -895,8 +896,91 @@ function shellWrapperPayloadForParsing(
   return { command: shellWrapper.command, spanBase };
 }
 
+function findExecArgv(argv: string[]): string[] | null {
+  const flagIndex = argv.findIndex((arg) => ["-exec", "-execdir", "-ok", "-okdir"].includes(arg));
+  if (flagIndex < 0) {
+    return null;
+  }
+  const terminatorIndex = argv.findIndex(
+    (arg, index) => index > flagIndex && (arg === ";" || arg === "\\;" || arg === "+"),
+  );
+  const endIndex = terminatorIndex < 0 ? argv.length : terminatorIndex;
+  const carried = argv.slice(flagIndex + 1, endIndex).filter((arg) => arg !== "{}");
+  return carried.length > 0 ? carried : null;
+}
+
+const XARGS_VALUE_OPTIONS = new Set([
+  "-I",
+  "--replace",
+  "-E",
+  "--eof",
+  "-n",
+  "--max-args",
+  "-L",
+  "--max-lines",
+  "-P",
+  "--max-procs",
+  "-s",
+  "--max-chars",
+]);
+
+function xargsCommandArgv(argv: string[]): string[] | null {
+  if (normalizeExecutableToken(argv[0] ?? "") !== "xargs") {
+    return null;
+  }
+  let commandStart = -1;
+  for (let index = 1; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (arg === "--") {
+      commandStart = index + 1;
+      break;
+    }
+    if (XARGS_VALUE_OPTIONS.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if (
+      arg.startsWith("--replace=") ||
+      arg.startsWith("--eof=") ||
+      arg.startsWith("--max-args=") ||
+      arg.startsWith("--max-lines=") ||
+      arg.startsWith("--max-procs=") ||
+      arg.startsWith("--max-chars=") ||
+      /^-[ILnPsE].+/.test(arg)
+    ) {
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    commandStart = index;
+    break;
+  }
+  return commandStart >= 0 ? argv.slice(commandStart) : null;
+}
+
+function carrierShellWrapperPayloadForParsing(
+  argv: string[],
+  argumentsList: CommandArgument[],
+  dynamicArguments: DynamicArgument[],
+): { command: string; spanBase: SpanBase } | null {
+  const executable = normalizeExecutableToken(argv[0] ?? "");
+  const carriedArgv =
+    executable === "find"
+      ? findExecArgv(argv)
+      : executable === "xargs"
+        ? xargsCommandArgv(argv)
+        : null;
+  return carriedArgv
+    ? shellWrapperPayloadForParsing(carriedArgv, argumentsList, dynamicArguments)
+    : null;
+}
+
 type InlineEvalHit = InterpreterInlineEvalHit;
 
+function detectCarrierInlineEvalArgv(argv: string[]): InlineEvalHit | null {
+  return detectSharedCarrierInlineEvalArgv(argv);
+}
 function recordInlineEvalRisk(
   inlineEval: InlineEvalHit,
   text: string,
@@ -941,7 +1025,7 @@ function recordCommandRisks(
   }
   const normalizedExecutable = normalizeExecutableToken(executable);
   recordDynamicArgumentRisks(normalizedExecutable, dynamicArguments, output);
-  const inlineEval = detectInlineEvalArgv(argv);
+  const inlineEval = detectInlineEvalArgv(argv) ?? detectCarrierInlineEvalArgv(argv);
   if (inlineEval) {
     recordInlineEvalRisk(inlineEval, text, span, output);
   }
@@ -1083,11 +1167,13 @@ async function walk(
       if (step.executable) {
         output.commands.push(step);
         recordCommandRisks(parsed.argv, parsed.dynamicArguments, node.text, span, output);
-        const wrapperPayload = shellWrapperPayloadForParsing(
-          parsed.argv,
-          parsed.arguments,
-          parsed.dynamicArguments,
-        );
+        const wrapperPayload =
+          shellWrapperPayloadForParsing(parsed.argv, parsed.arguments, parsed.dynamicArguments) ??
+          carrierShellWrapperPayloadForParsing(
+            parsed.argv,
+            parsed.arguments,
+            parsed.dynamicArguments,
+          );
         if (wrapperPayload && state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
           const wrapperTree = await parseBashForCommandExplanation(wrapperPayload.command);
           const wrapperSpanBase = spanBaseForParserSource(

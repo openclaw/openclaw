@@ -1444,6 +1444,58 @@ describe("exec approval handlers", () => {
     expect(request["warningText"]).not.toContain("\\u{A}");
   });
 
+  it("preserves command analysis and accepts command explanation metadata", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandExplanationLines: [""],
+        commandExplanationHighlights: [
+          { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
+          { startIndex: 3, endIndex: 8, kind: "risk", severity: "warning" },
+          { startIndex: 9, endIndex: 18, kind: "risk", severity: "danger" },
+        ],
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["commandAnalysis"]).toEqual(
+      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
+    );
+    expect(request["commandExplanationLines"]).toEqual([]);
+    expect(request["commandExplanationHighlights"]).toEqual([
+      { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
+      { startIndex: 3, endIndex: 8, kind: "risk", severity: "warning" },
+      { startIndex: 9, endIndex: 18, kind: "risk", severity: "danger" },
+    ]);
+  });
+
+  it("drops command explanation highlights when command display sanitization changes offsets", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls\u0000 | python -c 'print(1)'",
+        commandExplanationHighlights: [
+          { startIndex: 0, endIndex: 2, kind: "command", severity: "info" },
+          { startIndex: 6, endIndex: 15, kind: "risk", severity: "danger" },
+        ],
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).not.toBe("ls\u0000 | python -c 'print(1)'");
+    expect(request["commandExplanationHighlights"]).toBeUndefined();
+  });
+
   it("accepts resolve during broadcast", async () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);

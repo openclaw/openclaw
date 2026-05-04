@@ -109,6 +109,7 @@ Docs: https://docs.openclaw.ai
 - Developer tooling: add checked-in VS Code Gateway debugging configs and an opt-in `OUTPUT_SOURCE_MAPS=1` source-map build path for breakpoints in TypeScript source. (#45710) Thanks @SwissArmyBud.
 - Managed proxy: add `proxy.loopbackMode` for Gateway loopback control-plane traffic, allowing operators to keep the default Gateway loopback bypass, force loopback Gateway traffic through the proxy, or block it. (#77018) Thanks @jesse-merhi.
 - Telegram/native commands: show the current thinking level above the `/think` level picker so users can see the active setting before changing it. (#78278) Thanks @obviyus.
+- Control UI/exec approvals: highlight parsed shell command fragments that may deserve extra review in approval prompts. (#77153) thanks @jesse-merhi
 
 ### Fixes
 
