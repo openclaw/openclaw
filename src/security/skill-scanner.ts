@@ -145,6 +145,8 @@ type SourceRule = {
   pattern: RegExp;
   /** Secondary context pattern; both must match for the rule to fire. */
   requiresContext?: RegExp;
+  /** If set, secondary context must be within this many lines of the primary match. */
+  requiresContextWindowLines?: number;
 };
 
 const LINE_RULES: LineRule[] = [
@@ -205,6 +207,7 @@ const SOURCE_RULES: SourceRule[] = [
       "Environment variable access combined with network send — possible credential harvesting",
     pattern: /process\.env/,
     requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
+    requiresContextWindowLines: 8,
   },
 ];
 
@@ -238,6 +241,42 @@ function stripFullLineCommentsForHeuristics(source: string): string {
     .split("\n")
     .map((line) => (line.trimStart().startsWith("//") ? "" : line))
     .join("\n");
+}
+
+function findSourceRuleMatch(params: {
+  rule: SourceRule;
+  source: string;
+  lines: string[];
+}): { line: number; evidence: string } | null {
+  if (!params.rule.pattern.test(params.source)) {
+    return null;
+  }
+  if (params.rule.requiresContext && !params.rule.requiresContext.test(params.source)) {
+    return null;
+  }
+
+  for (let i = 0; i < params.lines.length; i++) {
+    if (!params.rule.pattern.test(params.lines[i] ?? "")) {
+      continue;
+    }
+
+    if (params.rule.requiresContext && params.rule.requiresContextWindowLines !== undefined) {
+      const start = Math.max(0, i - params.rule.requiresContextWindowLines);
+      const end = Math.min(params.lines.length, i + params.rule.requiresContextWindowLines + 1);
+      const windowSource = params.lines.slice(start, end).join("\n");
+      if (!params.rule.requiresContext.test(windowSource)) {
+        continue;
+      }
+    }
+
+    return { line: i + 1, evidence: params.lines[i] ?? "" };
+  }
+
+  if (params.rule.requiresContextWindowLines !== undefined) {
+    return null;
+  }
+
+  return { line: 1, evidence: params.source.slice(0, 120) };
 }
 
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
@@ -300,38 +339,22 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       continue;
     }
 
-    if (!rule.pattern.test(heuristicSource)) {
+    const match = findSourceRuleMatch({
+      rule,
+      source: heuristicSource,
+      lines: heuristicLines,
+    });
+    if (!match) {
       continue;
-    }
-    if (rule.requiresContext && !rule.requiresContext.test(heuristicSource)) {
-      continue;
-    }
-
-    // Find the first matching line for evidence + line number
-    let matchLine = 0;
-    let matchEvidence = "";
-    for (let i = 0; i < lines.length; i++) {
-      if (rule.pattern.test(heuristicLines[i] ?? "")) {
-        matchLine = i + 1;
-        matchEvidence = lines[i].trim();
-        break;
-      }
-    }
-
-    // For source rules, if we can't find a line match the pattern might span
-    // lines. Report line 0 with truncated source as evidence.
-    if (matchLine === 0) {
-      matchLine = 1;
-      matchEvidence = source.slice(0, 120);
     }
 
     findings.push({
       ruleId: rule.ruleId,
       severity: rule.severity,
       file: filePath,
-      line: matchLine,
+      line: match.line,
       message: rule.message,
-      evidence: truncateEvidence(matchEvidence),
+      evidence: truncateEvidence(lines[match.line - 1]?.trim() ?? match.evidence.trim()),
     });
     matchedSourceRules.add(ruleKey);
   }
