@@ -4,6 +4,14 @@ import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
+private final class TaskStorage {
+    var task: Task<Void, Never>?
+
+    deinit {
+        task?.cancel()
+    }
+}
+
 @MainActor
 @Observable
 final class WorkActivityStore {
@@ -16,6 +24,10 @@ final class WorkActivityStore {
         let label: String
         let startedAt: Date
         var lastUpdate: Date
+
+        mutating func refreshTimestamp() {
+            self.lastUpdate = Date()
+        }
     }
 
     private(set) var current: Activity?
@@ -28,8 +40,21 @@ final class WorkActivityStore {
     private var currentSessionKey: String?
     private var toolSeqBySession: [String: Int] = [:]
 
+    private static let jobWatchdogInterval: TimeInterval = 30.0 // 30 seconds - frequent cleanup
+    private static let jobStaleThreshold: TimeInterval = 180.0 // 3 minutes - fast cleanup to prevent frozen menubar
+    private let watchdogTaskStorage = TaskStorage()
+
+    var watchdogTask: Task<Void, Never>? {
+        get { self.watchdogTaskStorage.task }
+        set { self.watchdogTaskStorage.task = newValue }
+    }
+
     private var mainSessionKeyStorage = "main"
     private let toolResultGrace: TimeInterval = 2.0
+
+    init() {
+        self.startWatchdog()
+    }
 
     var mainSessionKey: String {
         self.mainSessionKeyStorage
@@ -38,14 +63,27 @@ final class WorkActivityStore {
     func handleJob(sessionKey: String, state: String) {
         let isStart = state.lowercased() == "started" || state.lowercased() == "streaming"
         if isStart {
-            let activity = Activity(
-                sessionKey: sessionKey,
-                role: self.role(for: sessionKey),
-                kind: .job,
-                label: "job",
-                startedAt: Date(),
-                lastUpdate: Date())
-            self.setJobActive(activity)
+            if var existing = self.jobs[sessionKey], state.lowercased() == "streaming" {
+                existing.refreshTimestamp()
+                // Recompute role in case mainSessionKey changed
+                let updatedActivity = Activity(
+                    sessionKey: existing.sessionKey,
+                    role: self.role(for: sessionKey),
+                    kind: existing.kind,
+                    label: existing.label,
+                    startedAt: existing.startedAt,
+                    lastUpdate: existing.lastUpdate)
+                self.setJobActive(updatedActivity)
+            } else {
+                let activity = Activity(
+                    sessionKey: sessionKey,
+                    role: self.role(for: sessionKey),
+                    kind: .job,
+                    label: "job",
+                    startedAt: Date(),
+                    lastUpdate: Date())
+                self.setJobActive(activity)
+            }
         } else {
             // Job ended (done/error/aborted/etc). Clear everything for this session.
             self.clearTool(sessionKey: sessionKey)
@@ -62,10 +100,17 @@ final class WorkActivityStore {
     {
         let toolKind = Self.mapToolKind(name)
         let label = Self.buildLabel(name: name, meta: meta, args: args)
+
         if phase.lowercased() == "start" {
+            // Refresh job timestamp when tool starts
+            if var job = self.jobs[sessionKey] {
+                job.refreshTimestamp()
+                self.jobs[sessionKey] = job
+            }
             self.lastToolLabel = label
             self.lastToolUpdatedAt = Date()
             self.toolSeqBySession[sessionKey, default: 0] += 1
+
             let activity = Activity(
                 sessionKey: sessionKey,
                 role: self.role(for: sessionKey),
@@ -256,5 +301,64 @@ final class WorkActivityStore {
             return array.map { self.unwrapJSONValue($0) }
         }
         return value
+    }
+
+    private func startWatchdog() {
+        self.watchdogTask?.cancel()
+        self.watchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(Self.jobWatchdogInterval * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                self?.evictStaleActivities()
+            }
+        }
+    }
+
+    func clearAllActivities() {
+        // Clear all UI state when gateway disconnects or encounters fatal errors
+        // NOTE: This only clears menubar display state - actual background processes continue
+        self.jobs.removeAll()
+        self.tools.removeAll()
+        self.currentSessionKey = nil
+        self.refreshDerivedState()
+    }
+
+    func evictStaleActivities() {
+        // Clear UI state after 3 minutes to prevent frozen menubar
+        // NOTE: This only affects menubar display - actual background jobs continue running
+        // The menubar must NEVER freeze - user experience is priority #1
+        let now = Date()
+        let threshold = Self.jobStaleThreshold
+        var changed = false
+
+        var staleJobKeys: [String] = []
+        var staleToolKeys: [String] = []
+
+        for (key, activity) in self.jobs {
+            if now.timeIntervalSince(activity.lastUpdate) > threshold {
+                staleJobKeys.append(key)
+            }
+        }
+        for (key, activity) in self.tools {
+            if now.timeIntervalSince(activity.lastUpdate) > threshold {
+                staleToolKeys.append(key)
+            }
+        }
+
+        for key in staleJobKeys {
+            self.jobs.removeValue(forKey: key)
+            changed = true
+        }
+        for key in staleToolKeys {
+            self.tools.removeValue(forKey: key)
+            changed = true
+        }
+
+        if changed {
+            if let key = self.currentSessionKey, !self.isActive(sessionKey: key) {
+                self.pickNextSession()
+            }
+            self.refreshDerivedState()
+        }
     }
 }
