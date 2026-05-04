@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
+import { __testing as modelSelectionCliTesting } from "./model-selection-cli.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
@@ -157,6 +158,7 @@ describe("model-selection", () => {
 
   describe("isCliProvider", () => {
     beforeEach(() => {
+      modelSelectionCliTesting.resetCliProviderCache();
       setupRegistryRuntimeTesting.resetRuntimeState();
       setupRegistryRuntimeTesting.setRuntimeModuleForTest({
         resolvePluginSetupCliBackend: ({ backend }) =>
@@ -170,6 +172,7 @@ describe("model-selection", () => {
     });
 
     afterEach(() => {
+      modelSelectionCliTesting.resetCliProviderCache();
       setupRegistryRuntimeTesting.resetRuntimeState();
     });
 
@@ -179,6 +182,23 @@ describe("model-selection", () => {
 
     it("returns false for provider ids", () => {
       expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
+    });
+
+    it("caches setup registry cli backend lookups", () => {
+      const resolvePluginSetupCliBackend = vi.fn(({ backend }) =>
+        backend === "claude-cli"
+          ? {
+              pluginId: "anthropic",
+              backend: { id: "claude-cli", config: { command: "claude" } },
+            }
+          : undefined,
+      );
+      setupRegistryRuntimeTesting.setRuntimeModuleForTest({ resolvePluginSetupCliBackend });
+
+      expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
+      expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
+
+      expect(resolvePluginSetupCliBackend).toHaveBeenCalledTimes(1);
     });
   });
 

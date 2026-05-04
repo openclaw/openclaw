@@ -5,6 +5,7 @@ import {
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
+  CHAT_SESSIONS_REFRESH_LIMIT,
   clearPendingQueueItemsForRun,
   flushChatQueueForEvent,
   refreshChatAvatar,
@@ -584,6 +585,7 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+        limit: CHAT_SESSIONS_REFRESH_LIMIT,
       });
     }
   }

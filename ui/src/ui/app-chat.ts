@@ -78,6 +78,7 @@ export type ChatSendOptions = {
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+export const CHAT_SESSIONS_REFRESH_LIMIT = 5;
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
