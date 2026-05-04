@@ -1,11 +1,15 @@
-import { mulawToPcm } from "openclaw/plugin-sdk/realtime-voice";
-
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
 const TELEPHONY_CHUNK_MS = 20;
 const DEFAULT_SPEECH_RMS_THRESHOLD = 0.02;
 const DEFAULT_REQUIRED_LOUD_CHUNKS = 2;
 const DEFAULT_REQUIRED_QUIET_CHUNKS = 10;
+const PCM16_MAX_AMPLITUDE = 32768;
+const MULAW_LINEAR_SAMPLES = new Int16Array(256);
+
+for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
+  MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
+}
 
 type RealtimeTwilioAudioQueueItem =
   | {
@@ -125,17 +129,12 @@ export function calculateMulawRms(muLaw: Buffer): number {
   if (muLaw.length === 0) {
     return 0;
   }
-  const pcm = mulawToPcm(muLaw);
-  const samples = Math.floor(pcm.length / 2);
-  if (samples === 0) {
-    return 0;
-  }
   let sum = 0;
-  for (let i = 0; i < samples; i += 1) {
-    const normalized = pcm.readInt16LE(i * 2) / 32768;
+  for (let i = 0; i < muLaw.length; i += 1) {
+    const normalized = (MULAW_LINEAR_SAMPLES[muLaw[i] ?? 0] ?? 0) / PCM16_MAX_AMPLITUDE;
     sum += normalized * normalized;
   }
-  return Math.sqrt(sum / samples);
+  return Math.sqrt(sum / muLaw.length);
 }
 
 export class RealtimeMulawSpeechStartDetector {
@@ -173,4 +172,14 @@ export class RealtimeMulawSpeechStartDetector {
     }
     return false;
   }
+}
+
+function decodeMulawSample(value: number): number {
+  const muLaw = ~value & 0xff;
+  const sign = muLaw & 0x80;
+  const exponent = (muLaw >> 4) & 0x07;
+  const mantissa = muLaw & 0x0f;
+  let sample = ((mantissa << 3) + 132) << exponent;
+  sample -= 132;
+  return sign ? -sample : sample;
 }
