@@ -127,6 +127,7 @@ Imported themes are stored only in the current browser profile. They are not wri
   </Accordion>
   <Accordion title="Debug, logs, update">
     - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`).
+    - The event log includes Control UI refresh/RPC timings plus browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
     - Update: run a package/git update + restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
 
