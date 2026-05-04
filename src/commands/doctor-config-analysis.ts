@@ -1,9 +1,13 @@
 import path from "node:path";
 import type { ZodIssue } from "zod";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { parseModelRef, normalizeProviderId } from "../agents/model-selection.js";
 import { CONFIG_PATH } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { note } from "../terminal/note.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 
 type UnrecognizedKeysIssue = ZodIssue & {
@@ -17,6 +21,109 @@ function normalizeIssuePath(path: PropertyKey[]): Array<string | number> {
 
 function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
   return issue.code === "unrecognized_keys";
+}
+
+function collectActiveProviderIdsFromModelConfig(
+  value: unknown,
+  defaultProvider: string,
+  activeProviders: Set<string>,
+): void {
+  if (typeof value === "string") {
+    const parsed = parseModelRef(value.trim(), defaultProvider);
+    if (parsed) {
+      activeProviders.add(normalizeProviderId(parsed.provider));
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  const primary = normalizeOptionalString(value.primary);
+  let nextDefaultProvider = defaultProvider;
+  if (primary) {
+    const parsedPrimary = parseModelRef(primary, defaultProvider);
+    if (parsedPrimary) {
+      activeProviders.add(normalizeProviderId(parsedPrimary.provider));
+      nextDefaultProvider = parsedPrimary.provider;
+    }
+  }
+  if (Array.isArray(value.fallbacks)) {
+    for (const fallback of value.fallbacks) {
+      if (typeof fallback !== "string") {
+        continue;
+      }
+      const parsedFallback = parseModelRef(fallback.trim(), nextDefaultProvider);
+      if (parsedFallback) {
+        activeProviders.add(normalizeProviderId(parsedFallback.provider));
+      }
+    }
+  }
+}
+
+function collectActiveProviderIds(cfg: OpenClawConfig): Set<string> {
+  const activeProviders = new Set<string>();
+
+  for (const [providerId, provider] of Object.entries(cfg.models?.providers ?? {})) {
+    if (hasConfiguredSecretInput((provider as Record<string, unknown>).apiKey)) {
+      activeProviders.add(normalizeProviderId(providerId));
+    }
+  }
+
+  const collectFromAgent = (agent: unknown): void => {
+    if (!isRecord(agent)) {
+      return;
+    }
+    for (const key of [
+      "model",
+      "imageModel",
+      "imageGenerationModel",
+      "videoGenerationModel",
+      "musicGenerationModel",
+      "pdfModel",
+    ]) {
+      collectActiveProviderIdsFromModelConfig(agent[key], DEFAULT_PROVIDER, activeProviders);
+    }
+    if (isRecord(agent.models)) {
+      for (const modelRef of Object.keys(agent.models)) {
+        collectActiveProviderIdsFromModelConfig(modelRef, DEFAULT_PROVIDER, activeProviders);
+      }
+    }
+  };
+
+  collectFromAgent(cfg.agents?.defaults);
+  for (const entry of cfg.agents?.list ?? []) {
+    collectFromAgent(entry);
+  }
+
+  return activeProviders;
+}
+
+function collectProtectedAuthProfileReasons(cfg: OpenClawConfig): Map<string, string> {
+  const protectedProfiles = new Map<string, string>();
+  const activeProviders = collectActiveProviderIds(cfg);
+  const authProfiles = cfg.auth?.profiles;
+  if (!authProfiles) {
+    return protectedProfiles;
+  }
+
+  for (const [provider, profileIds] of Object.entries(cfg.auth?.order ?? {})) {
+    for (const profileId of profileIds) {
+      if (!protectedProfiles.has(profileId)) {
+        protectedProfiles.set(profileId, `referenced by auth.order.${provider}`);
+      }
+    }
+  }
+
+  for (const [profileId, profile] of Object.entries(authProfiles)) {
+    if (activeProviders.has(normalizeProviderId(profile.provider))) {
+      protectedProfiles.set(
+        profileId,
+        `provider ${profile.provider} is still active via models.providers or model fallbacks`,
+      );
+    }
+  }
+
+  return protectedProfiles;
 }
 
 export function formatConfigPath(parts: Array<string | number>): string {
@@ -70,6 +177,8 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
 
   const next = structuredClone(config);
   const removed: string[] = [];
+  const warnings = new Map<string, string>();
+  const protectedAuthProfiles = collectProtectedAuthProfileReasons(config);
   for (const issue of parsed.error.issues) {
     if (!isUnrecognizedKeysIssue(issue)) {
       continue;
@@ -80,13 +189,29 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       continue;
     }
     const record = target as Record<string, unknown>;
+    const authProfileId =
+      issuePath[0] === "auth" && issuePath[1] === "profiles" && typeof issuePath[2] === "string"
+        ? issuePath[2]
+        : undefined;
+    const protectedReason = authProfileId ? protectedAuthProfiles.get(authProfileId) : undefined;
     for (const key of issue.keys) {
       if (typeof key !== "string" || !(key in record)) {
+        continue;
+      }
+      if (protectedReason) {
+        warnings.set(
+          formatConfigPath([...issuePath, key]),
+          `- ${formatConfigPath([...issuePath, key])} preserved during doctor repair because ${protectedReason}.`,
+        );
         continue;
       }
       delete record[key];
       removed.push(formatConfigPath([...issuePath, key]));
     }
+  }
+
+  if (warnings.size > 0) {
+    note([...warnings.values()].join("\n"), "Doctor warnings");
   }
 
   return { config: next, removed };

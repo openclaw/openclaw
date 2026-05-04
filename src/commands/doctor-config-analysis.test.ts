@@ -1,11 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatConfigPath,
   resolveConfigPathTarget,
   stripUnknownConfigKeys,
 } from "./doctor-config-analysis.js";
 
+const noteMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../terminal/note.js", () => ({
+  note: noteMock,
+}));
+
 describe("doctor config analysis helpers", () => {
+  beforeEach(() => {
+    noteMock.mockReset();
+  });
+
   it("formats config paths predictably", () => {
     expect(formatConfigPath([])).toBe("<root>");
     expect(formatConfigPath(["channels", "slack", "accounts", 0, "token"])).toBe(
@@ -30,5 +40,80 @@ describe("doctor config analysis helpers", () => {
     expect(result.removed).toContain("unexpected");
     expect((result.config as Record<string, unknown>).unexpected).toBeUndefined();
     expect((result.config as Record<string, unknown>).hooks).toEqual({});
+  });
+
+  it("preserves active auth profile secrets when the provider has configured API keys", () => {
+    const result = stripUnknownConfigKeys({
+      auth: {
+        profiles: {
+          "openai:default": {
+            provider: "openai",
+            mode: "api_key",
+            apiKey: "legacy-openai-key",
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "${OPENAI_API_KEY}",
+            models: [],
+          },
+        },
+      },
+    } as never);
+
+    expect(result.removed).toEqual([]);
+    expect((result.config as Record<string, unknown>).auth).toMatchObject({
+      profiles: {
+        "openai:default": {
+          provider: "openai",
+          mode: "api_key",
+          apiKey: "legacy-openai-key",
+        },
+      },
+    });
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("auth.profiles.openai:default.apiKey"),
+      "Doctor warnings",
+    );
+  });
+
+  it("preserves active auth profile secrets when the provider is referenced in model fallbacks", () => {
+    const result = stripUnknownConfigKeys({
+      auth: {
+        profiles: {
+          "openai:default": {
+            provider: "openai",
+            mode: "api_key",
+            apiKey: "legacy-openai-key",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    } as never);
+
+    expect(result.removed).toEqual([]);
+    expect((result.config as Record<string, unknown>).auth).toMatchObject({
+      profiles: {
+        "openai:default": {
+          provider: "openai",
+          mode: "api_key",
+          apiKey: "legacy-openai-key",
+        },
+      },
+    });
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("auth.profiles.openai:default.apiKey"),
+      "Doctor warnings",
+    );
   });
 });
