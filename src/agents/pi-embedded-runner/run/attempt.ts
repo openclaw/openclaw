@@ -62,10 +62,11 @@ import {
 } from "../../bootstrap-budget.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+  buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
   isWorkspaceBootstrapPending,
   makeBootstrapWarn,
-  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -945,8 +946,26 @@ export async function runEmbeddedAttempt(
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
     const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
+    const bootstrapWarn = makeBootstrapWarn({
+      sessionLabel,
+      workspaceDir: resolvedWorkspace,
+      warn: (message) => log.warn(message),
+    });
+    const preloadedBootstrapFiles =
+      isRawModelRun || contextInjectionMode === "never"
+        ? undefined
+        : await resolveBootstrapFilesForRun({
+            workspaceDir: resolvedWorkspace,
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            warn: bootstrapWarn,
+            contextMode: params.bootstrapContextMode,
+            runKind: params.bootstrapContextRunKind,
+          });
     const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending,
+      bootstrapFiles: preloadedBootstrapFiles,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       trigger: params.trigger,
       sessionKey: params.sessionKey,
@@ -970,20 +989,26 @@ export async function runEmbeddedAttempt(
       bootstrapMode,
       sessionFile: params.sessionFile,
       hasCompletedBootstrapTurn,
-      resolveBootstrapContextForRun: async () =>
-        await resolveBootstrapContextForRun({
-          workspaceDir: resolvedWorkspace,
-          config: params.config,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          warn: makeBootstrapWarn({
-            sessionLabel,
+      resolveBootstrapContextForRun: async () => {
+        const bootstrapFiles =
+          preloadedBootstrapFiles ??
+          (await resolveBootstrapFilesForRun({
             workspaceDir: resolvedWorkspace,
-            warn: (message) => log.warn(message),
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            warn: bootstrapWarn,
+            contextMode: params.bootstrapContextMode,
+            runKind: params.bootstrapContextRunKind,
+          }));
+        return {
+          bootstrapFiles,
+          contextFiles: buildBootstrapContextForFiles(bootstrapFiles, {
+            config: params.config,
+            warn: bootstrapWarn,
           }),
-          contextMode: params.bootstrapContextMode,
-          runKind: params.bootstrapContextRunKind,
-        }),
+        };
+      },
     });
     prepStages.mark("bootstrap-context");
     const remappedContextFiles = remapInjectedContextFilesToWorkspace({
