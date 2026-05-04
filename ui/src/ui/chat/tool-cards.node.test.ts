@@ -53,6 +53,36 @@ describe("tool-card extraction", () => {
     expect(cards[0]?.inputText).toContain('"retry": 0');
   });
 
+  it("pretty-prints toolresult text when the API delivers a structured object", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        toolCallId: "call-obj",
+        content: [
+          {
+            type: "toolcall",
+            id: "call-obj",
+            name: "status",
+            arguments: {},
+          },
+          {
+            type: "toolresult",
+            id: "call-obj",
+            name: "status",
+            text: { ok: true, role: "gateway" },
+          },
+        ],
+      },
+      "msg:obj",
+    );
+
+    expect(cards).toHaveLength(1);
+    expect(typeof cards[0]?.outputText).toBe("string");
+    expect(cards[0]?.outputText).toContain('"ok": true');
+    expect(cards[0]?.outputText).toContain('"role": "gateway"');
+    expect(cards[0]?.outputText).not.toMatch(/\[object Object\]/);
+  });
+
   it("preserves string args verbatim and keeps empty-output cards", () => {
     const cards = extractToolCards(
       {
