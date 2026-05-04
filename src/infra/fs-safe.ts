@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { z } from "zod";
 import { logWarn } from "../logger.js";
 import { resolveBoundaryPath } from "./boundary-path.js";
 import { sameFileIdentity } from "./file-identity.js";
@@ -53,12 +54,40 @@ export type SafeLocalReadResult = {
 
 export type SafePathKind = "missing" | "file" | "directory" | "symlink" | "other";
 
+export type SafePathStats = {
+  blocks: number;
+  blksize: number;
+  rdev: number;
+  gid: number;
+  uid: number;
+  nlink: number;
+  ino: number;
+  dev: number;
+  mode: number;
+  size: number;
+  atimeMs: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  birthtimeMs: number;
+  atime: Date;
+  mtime: Date;
+  ctime: Date;
+  birthtime: Date;
+  isFile(): boolean;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+  isBlockDevice(): boolean;
+  isCharacterDevice(): boolean;
+  isFIFO(): boolean;
+  isSocket(): boolean;
+};
+
 export type SafePathStatResult = {
   exists: boolean;
   kind: SafePathKind;
   size?: number;
   realPath?: string;
-  stat?: Stats;
+  stat?: SafePathStats;
 };
 
 export type FsSafeTestHooks = {
@@ -104,91 +133,59 @@ const OPEN_APPEND_CREATE_FLAGS =
 
 const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
 
-type PinnedStatPayload = {
-  blocks: number;
-  blksize: number;
-  rdev: number;
-  gid: number;
-  uid: number;
-  nlink: number;
-  ino: number;
-  dev: number;
-  mode: number;
-  size: number;
-  atimeMs: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  birthtimeMs: number;
-};
+const pinnedStatNumberSchema = z.number().finite();
 
-function statKindFromMode(mode: number): SafePathKind {
-  const fileType = mode & fsConstants.S_IFMT;
-  if (fileType === fsConstants.S_IFREG) {
-    return "file";
-  }
-  if (fileType === fsConstants.S_IFDIR) {
-    return "directory";
-  }
-  if (fileType === fsConstants.S_IFLNK) {
-    return "symlink";
-  }
-  return "other";
-}
+const pinnedStatPayloadSchema = z
+  .object({
+    blocks: pinnedStatNumberSchema,
+    blksize: pinnedStatNumberSchema,
+    rdev: pinnedStatNumberSchema,
+    gid: pinnedStatNumberSchema,
+    uid: pinnedStatNumberSchema,
+    nlink: pinnedStatNumberSchema,
+    ino: pinnedStatNumberSchema,
+    dev: pinnedStatNumberSchema,
+    mode: pinnedStatNumberSchema,
+    size: pinnedStatNumberSchema,
+    atimeMs: pinnedStatNumberSchema,
+    mtimeMs: pinnedStatNumberSchema,
+    ctimeMs: pinnedStatNumberSchema,
+    birthtimeMs: pinnedStatNumberSchema,
+  })
+  .strict()
+  .transform((payload): SafePathStats => {
+    const isModeType = (type: number) => (payload.mode & fsConstants.S_IFMT) === type;
+    return {
+      ...payload,
+      atime: new Date(payload.atimeMs),
+      mtime: new Date(payload.mtimeMs),
+      ctime: new Date(payload.ctimeMs),
+      birthtime: new Date(payload.birthtimeMs),
+      isFile: () => isModeType(fsConstants.S_IFREG),
+      isDirectory: () => isModeType(fsConstants.S_IFDIR),
+      isSymbolicLink: () => isModeType(fsConstants.S_IFLNK),
+      isBlockDevice: () => isModeType(fsConstants.S_IFBLK),
+      isCharacterDevice: () => isModeType(fsConstants.S_IFCHR),
+      isFIFO: () => isModeType(fsConstants.S_IFIFO),
+      isSocket: () => isModeType(fsConstants.S_IFSOCK),
+    };
+  });
 
-function statsLikeFromPinnedPayload(payload: PinnedStatPayload): Stats {
-  const kind = statKindFromMode(payload.mode);
-  return {
-    blocks: payload.blocks,
-    blksize: payload.blksize,
-    rdev: payload.rdev,
-    gid: payload.gid,
-    uid: payload.uid,
-    nlink: payload.nlink,
-    ino: payload.ino,
-    dev: payload.dev,
-    mode: payload.mode,
-    size: payload.size,
-    atimeMs: payload.atimeMs,
-    mtimeMs: payload.mtimeMs,
-    ctimeMs: payload.ctimeMs,
-    birthtimeMs: payload.birthtimeMs,
-    atime: new Date(payload.atimeMs),
-    mtime: new Date(payload.mtimeMs),
-    ctime: new Date(payload.ctimeMs),
-    birthtime: new Date(payload.birthtimeMs),
-    isFile: () => kind === "file",
-    isDirectory: () => kind === "directory",
-    isSymbolicLink: () => kind === "symlink",
-    isBlockDevice: () => (payload.mode & fsConstants.S_IFMT) === fsConstants.S_IFBLK,
-    isCharacterDevice: () => (payload.mode & fsConstants.S_IFMT) === fsConstants.S_IFCHR,
-    isFIFO: () => (payload.mode & fsConstants.S_IFMT) === fsConstants.S_IFIFO,
-    isSocket: () => (payload.mode & fsConstants.S_IFMT) === fsConstants.S_IFSOCK,
-  } as Stats;
-}
-
-function parsePinnedStatPayload(stdout: string): Stats {
-  const payload: unknown = JSON.parse(stdout);
-  if (
-    typeof payload !== "object" ||
-    payload === null ||
-    typeof (payload as PinnedStatPayload).dev !== "number" ||
-    typeof (payload as PinnedStatPayload).ino !== "number" ||
-    typeof (payload as PinnedStatPayload).nlink !== "number" ||
-    typeof (payload as PinnedStatPayload).uid !== "number" ||
-    typeof (payload as PinnedStatPayload).gid !== "number" ||
-    typeof (payload as PinnedStatPayload).rdev !== "number" ||
-    typeof (payload as PinnedStatPayload).blksize !== "number" ||
-    typeof (payload as PinnedStatPayload).blocks !== "number" ||
-    typeof (payload as PinnedStatPayload).mode !== "number" ||
-    typeof (payload as PinnedStatPayload).size !== "number" ||
-    typeof (payload as PinnedStatPayload).atimeMs !== "number" ||
-    typeof (payload as PinnedStatPayload).mtimeMs !== "number" ||
-    typeof (payload as PinnedStatPayload).ctimeMs !== "number" ||
-    typeof (payload as PinnedStatPayload).birthtimeMs !== "number"
-  ) {
-    throw new SafeOpenError("invalid-path", "invalid stat result");
+function parsePinnedStatPayload(stdout: string): SafePathStats {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(stdout);
+  } catch (err) {
+    throw new SafeOpenError("invalid-path", "invalid stat result", {
+      cause: err instanceof Error ? err : undefined,
+    });
   }
-  return statsLikeFromPinnedPayload(payload as PinnedStatPayload);
+
+  const result = pinnedStatPayloadSchema.safeParse(payload);
+  if (!result.success) {
+    throw new SafeOpenError("invalid-path", "invalid stat result", { cause: result.error });
+  }
+  return result.data;
 }
 
 async function expandRelativePathWithHome(relativePath: string): Promise<string> {
@@ -465,13 +462,10 @@ export async function statPathWithinRoot(params: {
   }
   const expectedFollowedStat =
     params.followSymlinks !== false ? await fs.stat(realPath) : undefined;
-  let stat: Stats;
+  let stat: SafePathStats;
   try {
     if (process.platform === "win32") {
-      stat =
-        params.followSymlinks === false
-          ? await fs.lstat(resolved.canonicalPath)
-          : await fs.stat(resolved.canonicalPath);
+      throw new SafeOpenError("invalid-path", "safe stat helper unavailable on Windows");
     } else {
       const stdout = await runPinnedPathHelper({
         operation: "stat",
@@ -488,23 +482,10 @@ export async function statPathWithinRoot(params: {
       }
     }
   } catch (err) {
-    if (isPinnedPathHelperSpawnError(err) || process.platform === "win32") {
-      try {
-        stat =
-          params.followSymlinks === false
-            ? await fs.lstat(resolved.canonicalPath)
-            : await fs.stat(resolved.canonicalPath);
-      } catch (fallbackErr) {
-        if (isNotFoundPathError(fallbackErr)) {
-          if (params.allowMissing === true) {
-            return { exists: false, kind: "missing" };
-          }
-          throw new SafeOpenError("not-found", "file not found", {
-            cause: fallbackErr instanceof Error ? fallbackErr : undefined,
-          });
-        }
-        throw fallbackErr;
-      }
+    if (isPinnedPathHelperSpawnError(err)) {
+      throw new SafeOpenError("invalid-path", "safe stat helper unavailable", {
+        cause: err instanceof Error ? err : undefined,
+      });
     } else {
       const normalized = normalizePinnedPathError(err);
       if (normalized instanceof SafeOpenError && normalized.code === "not-found") {
@@ -544,7 +525,7 @@ export async function readdirWithinRoot(params: {
     allowRoot: true,
   });
   if (process.platform === "win32") {
-    return await readdirWithinRootLegacy(resolved);
+    throw new SafeOpenError("invalid-path", "safe directory listing helper unavailable on Windows");
   }
   try {
     const stdout = await runPinnedPathHelper({
@@ -559,7 +540,9 @@ export async function readdirWithinRoot(params: {
     return entries;
   } catch (error) {
     if (isPinnedPathHelperSpawnError(error)) {
-      return await readdirWithinRootLegacy(resolved);
+      throw new SafeOpenError("invalid-path", "safe directory listing helper unavailable", {
+        cause: error instanceof Error ? error : undefined,
+      });
     }
     throw normalizePinnedPathError(error);
   }
@@ -921,11 +904,19 @@ export async function renamePathWithinRoot(params: {
   toRelativePath: string;
   overwrite?: boolean;
 }): Promise<void> {
-  const from = await resolvePinnedPathWithinRoot({
+  await assertNoFinalSymlinkRenameEndpoint({
     rootDir: params.rootDir,
     relativePath: params.fromRelativePath,
   });
-  const to = await resolvePinnedPathWithinRoot({
+  await assertNoFinalSymlinkRenameEndpoint({
+    rootDir: params.rootDir,
+    relativePath: params.toRelativePath,
+  });
+  const from = await resolvePinnedRenamePathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.fromRelativePath,
+  });
+  const to = await resolvePinnedRenamePathWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.toRelativePath,
   });
@@ -933,8 +924,7 @@ export async function renamePathWithinRoot(params: {
     throw new SafeOpenError("outside-workspace", "rename roots do not match");
   }
   if (process.platform === "win32") {
-    await renamePathWithinRootLegacy({ from, to, overwrite: params.overwrite });
-    return;
+    throw new SafeOpenError("invalid-path", "safe rename helper unavailable on Windows");
   }
   try {
     await runPinnedPathHelper({
@@ -946,8 +936,9 @@ export async function renamePathWithinRoot(params: {
     });
   } catch (error) {
     if (isPinnedPathHelperSpawnError(error)) {
-      await renamePathWithinRootLegacy({ from, to, overwrite: params.overwrite });
-      return;
+      throw new SafeOpenError("invalid-path", "safe rename helper unavailable", {
+        cause: error instanceof Error ? error : undefined,
+      });
     }
     throw normalizePinnedPathError(error);
   }
@@ -1190,6 +1181,55 @@ async function resolvePinnedPathWithinRoot(params: {
   return { rootReal: resolved.rootReal, resolved: resolved.canonicalPath, relativePosix };
 }
 
+async function assertNoFinalSymlinkRenameEndpoint(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<void> {
+  const resolved = await resolvePinnedBoundaryPathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    policy: PATH_ALIAS_POLICIES.unlinkTarget,
+  });
+  try {
+    const stat = await fs.lstat(resolved.canonicalPath);
+    if (stat.isSymbolicLink()) {
+      throw new SafeOpenError("symlink", "rename endpoint cannot be a symlink");
+    }
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      return;
+    }
+    throw err;
+  }
+}
+
+async function resolvePinnedRenamePathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<{ rootReal: string; resolved: string; relativePosix: string }> {
+  const resolved = await resolvePinnedBoundaryPathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    policy: PATH_ALIAS_POLICIES.unlinkTarget,
+  });
+  const relativeResolved = path.relative(resolved.rootReal, resolved.canonicalPath);
+  if (
+    relativeResolved === "" ||
+    relativeResolved === "." ||
+    relativeResolved.startsWith("..") ||
+    path.isAbsolute(relativeResolved)
+  ) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+
+  const relativePosix = relativeResolved.split(path.sep).join(path.posix.sep);
+  if (!isPathInside(resolved.rootWithSep, resolved.canonicalPath)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+
+  return { rootReal: resolved.rootReal, resolved: resolved.canonicalPath, relativePosix };
+}
+
 async function resolvePinnedRemovePathWithinRoot(params: {
   rootDir: string;
   relativePath: string;
@@ -1286,29 +1326,6 @@ function normalizePinnedPathError(error: unknown): Error {
 
 async function removePathWithinRootLegacy(resolved: { resolved: string }): Promise<void> {
   await fs.rm(resolved.resolved);
-}
-
-async function readdirWithinRootLegacy(resolved: { resolved: string }): Promise<string[]> {
-  return (await fs.readdir(resolved.resolved)).toSorted();
-}
-
-async function renamePathWithinRootLegacy(params: {
-  from: { resolved: string };
-  to: { resolved: string };
-  overwrite?: boolean;
-}): Promise<void> {
-  if (params.overwrite !== true) {
-    try {
-      await fs.lstat(params.to.resolved);
-      throw new SafeOpenError("invalid-path", "destination already exists");
-    } catch (err) {
-      if (!isNotFoundPathError(err)) {
-        throw err;
-      }
-    }
-  }
-  await fs.mkdir(path.dirname(params.to.resolved), { recursive: true });
-  await fs.rename(params.from.resolved, params.to.resolved);
 }
 
 async function mkdirPathWithinRootLegacy(resolved: { resolved: string }): Promise<void> {

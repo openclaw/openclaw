@@ -30,6 +30,18 @@ import {
 
 const tempDirs = createTrackedTempDirs();
 
+async function withMockedPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+  try {
+    return await fn();
+  } finally {
+    if (descriptor) {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+  }
+}
+
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
   vi.unstubAllEnvs();
@@ -471,6 +483,186 @@ describe("fs-safe", () => {
       code: "ENOENT",
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects final symlink source rename endpoints",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const target = path.join(root, "target.txt");
+      const from = path.join(root, "from-link.txt");
+      const to = path.join(root, "to-link.txt");
+      await fs.writeFile(target, "target");
+      await fs.symlink(target, from);
+
+      await expect(
+        renamePathWithinRoot({
+          rootDir: root,
+          fromRelativePath: "from-link.txt",
+          toRelativePath: "to-link.txt",
+          overwrite: true,
+        }),
+      ).rejects.toMatchObject({ code: "symlink" });
+
+      expect((await fs.lstat(from)).isSymbolicLink()).toBe(true);
+      await expect(fs.lstat(to)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("target");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects final symlink destination rename endpoints",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const target = path.join(root, "target.txt");
+      const from = path.join(root, "from.txt");
+      const to = path.join(root, "to-link.txt");
+      await fs.writeFile(target, "target");
+      await fs.writeFile(from, "from");
+      await fs.symlink(target, to);
+
+      await expect(
+        renamePathWithinRoot({
+          rootDir: root,
+          fromRelativePath: "from.txt",
+          toRelativePath: "to-link.txt",
+          overwrite: true,
+        }),
+      ).rejects.toMatchObject({ code: "symlink" });
+
+      await expect(fs.readFile(from, "utf8")).resolves.toBe("from");
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("target");
+      expect((await fs.lstat(to)).isSymbolicLink()).toBe(true);
+    },
+  );
+
+  it("fails closed for stat, readdir, and rename helpers on Windows", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    await fs.mkdir(path.join(root, "nested"), { recursive: true });
+    await fs.writeFile(path.join(root, "nested", "from.txt"), "hello");
+
+    await withMockedPlatform("win32", async () => {
+      await expect(
+        statPathWithinRoot({ rootDir: root, relativePath: path.join("nested", "from.txt") }),
+      ).rejects.toMatchObject({ code: "invalid-path" });
+      await expect(
+        readdirWithinRoot({ rootDir: root, relativePath: "nested" }),
+      ).rejects.toMatchObject({
+        code: "invalid-path",
+      });
+      await expect(
+        renamePathWithinRoot({
+          rootDir: root,
+          fromRelativePath: path.join("nested", "from.txt"),
+          toRelativePath: path.join("nested", "to.txt"),
+        }),
+      ).rejects.toMatchObject({ code: "invalid-path" });
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when pinned stat helper is unavailable after path changes",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const slot = path.join(root, "slot");
+      await fs.mkdir(slot, { recursive: true });
+      await fs.writeFile(path.join(slot, "safe.txt"), "safe");
+      await fs.writeFile(path.join(outside, "safe.txt"), "secret");
+
+      const runPinnedPathHelperSpy = vi
+        .spyOn(pinnedPathHelperModule, "runPinnedPathHelper")
+        .mockImplementation(async (params) => {
+          if (params.operation === "stat") {
+            await fs.rm(slot, { force: true, recursive: true });
+            await fs.symlink(outside, slot);
+            throw new Error("safe helper unavailable");
+          }
+          throw new Error("unexpected helper operation");
+        });
+
+      try {
+        await expect(
+          statPathWithinRoot({
+            rootDir: root,
+            relativePath: path.join("slot", "safe.txt"),
+            followSymlinks: false,
+          }),
+        ).rejects.toMatchObject({ code: "invalid-path" });
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when pinned readdir helper is unavailable after path changes",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const slot = path.join(root, "slot");
+      await fs.mkdir(slot, { recursive: true });
+      await fs.writeFile(path.join(slot, "safe.txt"), "safe");
+      await fs.writeFile(path.join(outside, "secret.txt"), "secret");
+
+      const runPinnedPathHelperSpy = vi
+        .spyOn(pinnedPathHelperModule, "runPinnedPathHelper")
+        .mockImplementation(async (params) => {
+          if (params.operation === "readdir") {
+            await fs.rm(slot, { force: true, recursive: true });
+            await fs.symlink(outside, slot);
+            throw new Error("safe helper unavailable");
+          }
+          throw new Error("unexpected helper operation");
+        });
+
+      try {
+        await expect(
+          readdirWithinRoot({ rootDir: root, relativePath: "slot" }),
+        ).rejects.toMatchObject({
+          code: "invalid-path",
+        });
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when pinned rename helper is unavailable after path changes",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const slot = path.join(root, "slot");
+      await fs.mkdir(slot, { recursive: true });
+      await fs.writeFile(path.join(slot, "from.txt"), "from");
+      await fs.writeFile(path.join(outside, "from.txt"), "secret");
+
+      const runPinnedPathHelperSpy = vi
+        .spyOn(pinnedPathHelperModule, "runPinnedPathHelper")
+        .mockImplementation(async (params) => {
+          if (params.operation === "rename") {
+            await fs.rm(slot, { force: true, recursive: true });
+            await fs.symlink(outside, slot);
+            throw new Error("safe helper unavailable");
+          }
+          throw new Error("unexpected helper operation");
+        });
+
+      try {
+        await expect(
+          renamePathWithinRoot({
+            rootDir: root,
+            fromRelativePath: path.join("slot", "from.txt"),
+            toRelativePath: "to.txt",
+            overwrite: true,
+          }),
+        ).rejects.toMatchObject({ code: "invalid-path" });
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+      await expect(fs.readFile(path.join(outside, "from.txt"), "utf8")).resolves.toBe("secret");
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "does not stat out-of-root files when path parents change before pinned stat",
