@@ -226,6 +226,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkTranscript: string | null = null;
   private realtimeTalkSession: RealtimeTalkSession | null = null;
   @state() chatManualRefreshInFlight = false;
+  @state() chatHeaderControlsHidden = false;
   @state() chatMobileControlsOpen = false;
   private chatMobileControlsTrigger: HTMLElement | null = null;
   @state() navDrawerOpen = false;
@@ -564,6 +565,7 @@ export class OpenClawApp extends LitElement {
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
   private chatScrollTimeout: number | null = null;
+  private chatLastScrollTop = 0;
   private chatHasAutoScrolled = false;
   private chatUserNearBottom = true;
   @state() chatNewMessagesBelow = false;

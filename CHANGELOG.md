@@ -22,6 +22,8 @@ Docs: https://docs.openclaw.ai
 - Channels/streaming: cap progress-draft tool lines by default so edited progress boxes avoid jumpy reflow from long wrapped lines.
 - Agents/verbose: use compact explain-mode tool summaries for `/verbose` and progress drafts by default, with `agents.defaults.toolProgressDetail: "raw"` and per-agent overrides for debugging raw command/detail output.
 - Agents/commands: add `/steer <message>` for queue-independent steering of the active current-session run without starting a new turn when the session is idle. (#76934)
+- Control UI/chat: add an agent-first filter to the chat session picker, keep chat controls/composer responsive across phone/tablet/desktop widths, keep desktop chat controls on one row, avoid duplicate avatar refreshes during initial chat load, and hide that row while scrolling down the transcript. Thanks @BunsDev.
+- Control UI/chat: collapse consecutive duplicate text messages into one bubble with a count so no-op heartbeat acknowledgements stay compact without hiding nearby context.
 - Agents/subagents: preserve every grouped child result when direct completion fallback has to bypass the requester-agent announce turn. Thanks @vincentkoc.
 - TTS/telephony: honor provider voice/model overrides in telephony synthesis providers so Google Meet agent speech logs match the backend that actually produced the audio. Thanks @vincentkoc.
 - Voice Call/realtime: bound the paced Twilio audio queue and close overloaded realtime streams before provider audio can pile up behind the websocket backpressure guard. Thanks @vincentkoc.
@@ -62,6 +64,20 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/commands: scope QQBot framework slash commands to the QQBot channel so `/bot-*` command handlers and native specs do not leak onto unrelated chat surfaces. Thanks @vincentkoc.
+- fix: harden backend message action gateway routing [AI]. (#76374) Thanks @pgondhi987.
+- Gate QQBot streaming command auth [AI]. (#76375) Thanks @pgondhi987.
+- Plugins/discovery: ignore managed npm plugin packages that only expose TypeScript source entries without compiled runtime output, so stale/broken installs cannot hide a working bundled or reinstallable channel plugin during setup.
+- CLI/update: treat OpenClaw stable correction versions like `2026.5.3-1` as newer than their base stable release, so package updates no longer ask for downgrade confirmation.
+- Plugins/install: suppress dangerous-pattern scanner warnings for trusted official OpenClaw npm installs, so installing `@openclaw/discord` no longer prints credential-harvesting warnings for the official package.
+- Plugins/release: make the published npm runtime verifier reject blank `openclaw.runtimeExtensions` entries instead of treating them as absent and passing via inferred outputs. Thanks @vincentkoc.
+- Plugins/security: ignore inline and block comments when matching source-rule context in plugin install scans, so comment-only `fetch`/`post` references near environment defaults do not block clean plugins. Thanks @vincentkoc.
+- Doctor/plugins: remove stale managed install records for bundled plugins even when the bundled plugin is not explicitly configured, so doctor cleanup cannot leave orphaned install metadata behind. Thanks @vincentkoc.
+- Web fetch: scope provider fallback cache entries by the selected fetch provider so config reloads cannot reuse another provider's cached fallback payload. Thanks @vincentkoc.
+- Web search: honor late-bound `tools.web.search.enabled: false` during tool execution so config reloads cannot leave an already-created `web_search` tool runnable. Thanks @vincentkoc.
+- Plugins/packages: reject inferred built runtime entries that exist but fail package-boundary checks instead of falling back to TypeScript source for installed packages. Thanks @vincentkoc.
+- Plugins/loader: do not retry native-loaded JavaScript plugin modules through the source transformer after native evaluation has already reached a missing dependency, avoiding duplicate top-level side effects. Thanks @vincentkoc.
+- Plugins/security: stop the install scanner from blocking official bundled plugin packages when `process.env` access and normal API sends only appear in distant parts of the same compiled bundle.
 - Plugins/packages: reject blank `openclaw.runtimeExtensions` entries instead of silently ignoring them and falling back to inferred TypeScript runtime entries. Thanks @vincentkoc.
 - Doctor/plugins: remove stale managed npm plugin shadow entries from the managed package lock as well as `package.json` and `node_modules`, so future npm operations do not keep referencing repaired bundled-plugin shadows. Thanks @vincentkoc.
 - Plugins/runtime state: keep the key being registered when namespace eviction runs in the same millisecond as existing entries, so `register` and `registerIfAbsent` do not report success while evicting their own fresh value. Thanks @vincentkoc.
@@ -71,7 +87,7 @@ Docs: https://docs.openclaw.ai
 - Canvas host: preserve the Gateway TLS scheme in browser canvas host URLs and startup mount logs, so direct HTTPS gateways do not advertise insecure canvas links. Thanks @vincentkoc.
 - WhatsApp/login: route login success and failure messages through the injected runtime, so setup/onboarding surfaces capture all login output instead of only the QR. Thanks @vincentkoc.
 - Google Chat: create an isolated Google auth transport per auth client, so google-auth-library interceptor mutations do not accumulate across webhook verification and access-token clients. Thanks @vincentkoc.
-- Doctor/plugins: remove orphaned managed npm copies of bundled `@openclaw/*` plugins during `doctor --fix`, so stale package manifests cannot shadow the current bundled plugin config schema.
+- Doctor/plugins: remove orphaned or recovered managed npm copies of bundled `@openclaw/*` plugins during `doctor --fix`, so stale package manifests cannot shadow the current bundled plugin config schema.
 - Control UI/performance: cap long-task and long-animation-frame diagnostics in the shared event log, so slow-render telemetry does not evict gateway/plugin events from the Debug and Overview views. Thanks @vincentkoc.
 - Gateway/startup: log the canvas host mount only after the HTTP server has bound, so startup logs no longer report the canvas host as mounted before it can serve requests.
 - Control UI/i18n: render the Sessions active filter tooltip with the configured minute count in every locale and make the i18n check reject placeholder drift. Thanks @BunsDev.
@@ -86,6 +102,7 @@ Docs: https://docs.openclaw.ai
 - Google Meet: fork the caller's current agent transcript into agent-mode meeting consultant sessions, so Meet replies inherit the context from the tool call that joined the meeting.
 - iOS/mobile pairing: reject non-loopback `ws://` setup URLs before QR/setup-code issuance and let the iOS Gateway settings screen scan QR codes or paste full setup-code messages. Thanks @BunsDev.
 - Control UI: keep Gateway Access inputs and locale picker contained inside the card at narrow and tablet widths.
+- Agents/trajectory: bound runtime trajectory capture and yield queued sidecar writes so oversized traces stop recording instead of monopolizing Gateway cleanup. Fixes #77124. Thanks @loyur.
 - Telegram/streaming: sanitize tool-progress draft preview backticks before shared compaction, so long backtick-heavy progress text still renders inside the safe code-formatted preview instead of collapsing to an ellipsis.
 - UI/chat: remove the unsupported `line-clamp` declaration from the chat queue text rule to eliminate Firefox console noise without changing visible truncation behavior. Thanks @ZanderH-code.
 - Agents/Pi: suppress persistence for synthetic mid-turn overflow continuation prompts, so transcript-retry recovery does not write the "continue from transcript" prompt as a new user turn. Thanks @vincentkoc.
@@ -111,6 +128,7 @@ Docs: https://docs.openclaw.ai
 - Web search: keep first-class assistant `web_search` auto-detect and configured runtime providers visible when active runtime metadata or the active plugin registry is incomplete. Fixes #77073. Thanks @joeykrug.
 - Plugins/tools: mark manifest-optional sibling tools as optional even when they come from a shared non-optional factory, so cached/status/MCP metadata keeps opt-in tool policy accurate. Thanks @vincentkoc.
 - Matrix: keep `streaming.progress.toolProgress` scoped to progress draft mode, so partial and quiet Matrix previews do not lose tool progress unless `streaming.preview.toolProgress` is disabled. Thanks @vincentkoc.
+- Gateway/validation: isolate gateway server validation files, ignore unrelated startup logs in request-trace coverage, and fail fast on stuck shared-auth sockets, reducing false main-branch CI failures for contributors. Thanks @amknight.
 - Channels/streaming: keep `streaming.progress.toolProgress` scoped to progress draft mode, so disabling compact progress lines does not silence partial/block preview tool updates. Thanks @vincentkoc.
 - Plugins/update: treat OpenClaw stable correction versions like `2026.5.3-1` as stable releases for npm installs, plugin updates, and bundled-version comparisons, so `latest` can advance official plugins without prerelease opt-in. Thanks @vincentkoc.
 - Control UI: point the Appearance tweakcn browse action and docs at the live tweakcn editor route instead of the removed `/themes` page. Fixes #77048.

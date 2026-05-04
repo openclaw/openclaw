@@ -406,11 +406,52 @@ describe("getCachedPluginModuleLoader", () => {
     // allowWindows must be passed so the native fast path works on Windows too.
     expect(nativeStub).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js", {
       allowWindows: true,
-      fallbackOnMissingDependency: true,
     });
     expect(getPluginModuleLoaderStats()).toMatchObject({
       calls: 1,
       nativeHits: 1,
+      nativeMisses: 0,
+      sourceTransformFallbacks: 0,
+      sourceTransformForced: 0,
+    });
+  });
+
+  it("does not source-transform fallback after native loading reaches a missing dependency", async () => {
+    const fromSourceTransformer = vi.fn();
+    const createJiti = vi.fn(() => fromSourceTransformer);
+    vi.doMock("jiti", () => ({ createJiti }));
+    const missingDependency = Object.assign(new Error("Cannot find module 'missing-dep'"), {
+      code: "MODULE_NOT_FOUND",
+    });
+    const nativeStub = vi.fn(() => {
+      throw missingDependency;
+    });
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: () => true,
+      tryNativeRequireJavaScriptModule: nativeStub,
+    }));
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-missing-dependency");
+
+    const cache = new Map();
+    const loader = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/demo/api.js",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+      createLoader: asPluginModuleLoaderFactory(createJiti),
+    });
+
+    expect(() => loader("/repo/dist/extensions/demo/api.js")).toThrow("missing-dep");
+    expect(createJiti).not.toHaveBeenCalled();
+    expect(fromSourceTransformer).not.toHaveBeenCalled();
+    expect(nativeStub).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js", {
+      allowWindows: true,
+    });
+    expect(getPluginModuleLoaderStats()).toMatchObject({
+      calls: 1,
+      nativeHits: 0,
       nativeMisses: 0,
       sourceTransformFallbacks: 0,
       sourceTransformForced: 0,

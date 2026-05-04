@@ -748,7 +748,7 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
   });
 
-  it("warns but still loads source-only TypeScript entries for installed package plugins", async () => {
+  it("skips source-only TypeScript entries for installed package plugins", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "source-only-pack");
     mkdirSafe(path.join(pluginDir, "src"));
@@ -762,13 +762,62 @@ describe("discoverOpenClawPlugins", () => {
 
     const result = await discoverWithStateDir(stateDir, {});
 
-    expectCandidateIds(result.candidates, { includes: ["source-only-pack"] });
+    expectCandidateIds(result.candidates, { excludes: ["source-only-pack"] });
     expect(
       result.diagnostics.some(
         (entry) =>
           entry.level === "warn" &&
+          entry.pluginId === "source-only-pack" &&
           entry.message.includes("requires compiled runtime output") &&
           entry.message.includes("./dist/index.js"),
+      ),
+    ).toBe(true);
+  });
+
+  it("lets a valid bundled plugin win when a managed package is source-only TypeScript", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const bundledPluginDir = path.join(bundledDir, "discord");
+    const installedPluginDir = path.join(stateDir, "extensions", "discord");
+    mkdirSafe(bundledPluginDir);
+    mkdirSafe(path.join(installedPluginDir, "src"));
+
+    writePluginPackageManifest({
+      packageDir: bundledPluginDir,
+      packageName: "@openclaw/discord",
+      extensions: ["./index.js"],
+    });
+    writePluginManifest({ pluginDir: bundledPluginDir, id: "discord" });
+    writePluginEntry(path.join(bundledPluginDir, "index.js"));
+
+    writePluginPackageManifest({
+      packageDir: installedPluginDir,
+      packageName: "@openclaw/discord",
+      extensions: ["./src/index.ts"],
+    });
+    writePluginManifest({ pluginDir: installedPluginDir, id: "discord" });
+    writePluginEntry(path.join(installedPluginDir, "src", "index.ts"));
+
+    const result = discoverOpenClawPlugins({
+      env: buildDiscoveryEnvWithOverrides(stateDir, {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      }),
+    });
+
+    const discordCandidates = result.candidates.filter(
+      (candidate) => candidate.idHint === "discord",
+    );
+    expect(discordCandidates).toEqual([
+      expect.objectContaining({
+        origin: "bundled",
+        source: fs.realpathSync(path.join(bundledPluginDir, "index.js")),
+      }),
+    ]);
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.pluginId === "discord" &&
+          entry.message.includes("requires compiled runtime output"),
       ),
     ).toBe(true);
   });
@@ -1501,6 +1550,39 @@ describe("discoverOpenClawPlugins", () => {
           packageDir: globalExt,
           packageName: "@openclaw/pack",
           extensions: ["./escape.ts"],
+        });
+        return true;
+      },
+    },
+    {
+      name: "rejects hardlinked inferred built runtime entries instead of falling back to source",
+      expectedDiagnostic: "escapes" as const,
+      expectedId: "pack",
+      setup: (stateDir: string) => {
+        if (process.platform === "win32") {
+          return false;
+        }
+        const globalExt = path.join(stateDir, "extensions", "pack");
+        const outsideDir = path.join(stateDir, "outside");
+        const outsideFile = path.join(outsideDir, "index.js");
+        const linkedFile = path.join(globalExt, "dist", "index.js");
+        mkdirSafe(path.join(globalExt, "src"));
+        mkdirSafe(path.dirname(linkedFile));
+        mkdirSafe(outsideDir);
+        fs.writeFileSync(path.join(globalExt, "src", "index.ts"), "export default {}", "utf-8");
+        fs.writeFileSync(outsideFile, "export default {}", "utf-8");
+        try {
+          fs.linkSync(outsideFile, linkedFile);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+            return false;
+          }
+          throw err;
+        }
+        writePluginPackageManifest({
+          packageDir: globalExt,
+          packageName: "@openclaw/pack",
+          extensions: ["./src/index.ts"],
         });
         return true;
       },
