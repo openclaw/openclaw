@@ -12,6 +12,21 @@ import { SESSION_LABEL_MAX_LENGTH } from "../../../sessions/session-label.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 
 export const NonEmptyString = Type.String({ minLength: 1 });
+// Connect-frame auth bounds. Real shared-secret/bootstrap/device tokens are
+// 32-byte base64url (43 chars) or hex (64 chars); 256 chars is well above any
+// plausible legitimate value while bounding the work an attacker can force on
+// pre-auth code paths (e.g. `safeEqualSecret` pads both operands to
+// `Math.max(provided, expected)` before `timingSafeEqual`, so an unbounded
+// `auth.bootstrapToken` would amplify each stored-token comparison under the
+// bootstrap-state mutex).
+export const HANDSHAKE_AUTH_TOKEN_MAX_LENGTH = 256;
+export const HANDSHAKE_AUTH_PASSWORD_MAX_LENGTH = 1024;
+export const HandshakeAuthTokenString = Type.String({
+  maxLength: HANDSHAKE_AUTH_TOKEN_MAX_LENGTH,
+});
+export const HandshakeAuthPasswordString = Type.String({
+  maxLength: HANDSHAKE_AUTH_PASSWORD_MAX_LENGTH,
+});
 export const CHAT_SEND_SESSION_KEY_MAX_LENGTH = 512;
 export const ChatSendSessionKeyString = Type.String({
   minLength: 1,

@@ -1,5 +1,11 @@
 import { Type } from "typebox";
-import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
+import {
+  GatewayClientIdSchema,
+  GatewayClientModeSchema,
+  HandshakeAuthPasswordString,
+  HandshakeAuthTokenString,
+  NonEmptyString,
+} from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
 export const TickEventSchema = Type.Object(
@@ -55,10 +61,10 @@ export const ConnectParamsSchema = Type.Object(
     auth: Type.Optional(
       Type.Object(
         {
-          token: Type.Optional(Type.String()),
-          bootstrapToken: Type.Optional(Type.String()),
-          deviceToken: Type.Optional(Type.String()),
-          password: Type.Optional(Type.String()),
+          token: Type.Optional(HandshakeAuthTokenString),
+          bootstrapToken: Type.Optional(HandshakeAuthTokenString),
+          deviceToken: Type.Optional(HandshakeAuthTokenString),
+          password: Type.Optional(HandshakeAuthPasswordString),
         },
         { additionalProperties: false },
       ),
