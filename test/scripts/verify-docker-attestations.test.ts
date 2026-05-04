@@ -51,6 +51,27 @@ function createAttestation(
   };
 }
 
+// Current buildx (>= 0.16/Docker buildkit ~0.16.x) writes attestation
+// manifests as plain OCI image manifests without `artifactType` set.
+// They are still identifiable via in-toto layer mediaTypes.
+function createAttestationWithoutArtifactType(
+  predicates = ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"],
+) {
+  return {
+    schemaVersion: 2,
+    mediaType: "application/vnd.oci.image.manifest.v1+json",
+    artifactType: null,
+    layers: predicates.map((predicate) => ({
+      mediaType: "application/vnd.in-toto+json",
+      digest: imageDigest,
+      size: 1,
+      annotations: {
+        "in-toto.io/predicate-type": predicate,
+      },
+    })),
+  };
+}
+
 describe("verify-docker-attestations", () => {
   it("resolves digest refs from tagged image refs", () => {
     expect(imageRefForDigest("ghcr.io/openclaw/openclaw:2026.4.26", imageDigest)).toBe(
@@ -70,6 +91,40 @@ describe("verify-docker-attestations", () => {
     });
 
     expect(errors).toEqual([]);
+  });
+
+  it("accepts attestations from current buildx (no artifactType, in-toto layers only)", () => {
+    const errors = collectDockerAttestationErrors({
+      imageRef: "ghcr.io/openclaw/openclaw:test",
+      index: createIndex(),
+      requiredPlatforms: [parsePlatform("linux/amd64")],
+      inspectAttestation: () => createAttestationWithoutArtifactType(),
+    });
+
+    expect(errors).toEqual([]);
+  });
+
+  it("rejects attestation manifests with neither artifactType nor in-toto layers", () => {
+    const errors = collectDockerAttestationErrors({
+      imageRef: "ghcr.io/openclaw/openclaw:test",
+      index: createIndex(),
+      requiredPlatforms: [parsePlatform("linux/amd64")],
+      inspectAttestation: () => ({
+        schemaVersion: 2,
+        mediaType: "application/vnd.oci.image.manifest.v1+json",
+        layers: [
+          {
+            mediaType: "application/vnd.docker.image.rootfs.diff.tar.gzip",
+            digest: imageDigest,
+            size: 1,
+          },
+        ],
+      }),
+    });
+
+    expect(errors.some((e) => e.includes("not a recognized Docker attestation manifest"))).toBe(
+      true,
+    );
   });
 
   it("reports missing attestation manifests", () => {
