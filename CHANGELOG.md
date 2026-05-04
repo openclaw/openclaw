@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 - fix(gateway): clamp unbound websocket auth scopes [AI]. (#77413) Thanks @pgondhi987.
 - Gate zalouser startup name matching [AI]. (#77411) Thanks @pgondhi987.
 - fix(device-pair): require pairing scope for pair command [AI]. (#76377) Thanks @pgondhi987.
+- Providers/OpenRouter: keep DeepSeek V4 `reasoning_effort` on OpenRouter-supported values, mapping stale `max` thinking overrides to `xhigh` so `openrouter/deepseek/deepseek-v4-pro` no longer fails with OpenRouter's invalid-effort 400. Fixes #77350. Thanks @krllagent and @sallyom.
 - fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
 - Claude CLI: honor non-off `/think` levels by passing Claude Code's session-scoped `--effort` flag through the CLI backend seam, so chat bridges no longer show an inert thinking control. Fixes #77303. Thanks @Petr1t.
 - Agents/subagents: refresh deferred final-delivery payloads when same-session completion output changes, so retried parent notifications use the final child summary instead of stale progress text. Thanks @vincentkoc.
