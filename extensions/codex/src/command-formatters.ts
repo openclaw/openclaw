@@ -19,7 +19,7 @@ export function formatCodexStatus(probes: CodexStatusProbes): string {
     lines.push(
       `Models: ${
         probes.models.value.models
-          .map((model) => model.id)
+          .map((model) => formatCodexDisplayText(model.id))
           .slice(0, 8)
           .join(", ") || "none"
       }`,
@@ -30,7 +30,7 @@ export function formatCodexStatus(probes: CodexStatusProbes): string {
   lines.push(
     `Account: ${
       probes.account.ok
-        ? summarizeAccount(probes.account.value)
+        ? formatCodexAccountSummary(probes.account.value)
         : formatCodexDisplayText(probes.account.error)
     }`,
   );
@@ -103,7 +103,7 @@ export function formatAccount(
   limits: SafeValue<JsonValue | undefined>,
 ): string {
   return [
-    `Account: ${account.ok ? summarizeAccount(account.value) : formatCodexDisplayText(account.error)}`,
+    `Account: ${account.ok ? formatCodexAccountSummary(account.value) : formatCodexDisplayText(account.error)}`,
     `Rate limits: ${limits.ok ? summarizeArrayLike(limits.value) : formatCodexDisplayText(limits.error)}`,
   ].join("\n");
 }
@@ -167,6 +167,13 @@ function formatCodexDisplayText(value: string): string {
   return escapeCodexChatText(formatCodexTextForDisplay(value));
 }
 
+function formatCodexAccountSummary(value: JsonValue | undefined): string {
+  const safe = formatCodexTextForDisplay(summarizeAccount(value));
+  return isLikelyEmailAddress(safe)
+    ? escapeCodexChatTextPreservingAt(safe)
+    : escapeCodexChatText(safe);
+}
+
 function formatCodexTextForDisplay(value: string): string {
   let safe = "";
   for (const character of value) {
@@ -191,6 +198,14 @@ function escapeCodexChatText(value: string): string {
     .replaceAll("*", "\u2217")
     .replaceAll("~", "\uff5e")
     .replaceAll("|", "\uff5c");
+}
+
+function escapeCodexChatTextPreservingAt(value: string): string {
+  return escapeCodexChatText(value).replaceAll("\uff20", "@");
+}
+
+function isLikelyEmailAddress(value: string): boolean {
+  return /^[^\s@<>()\[\]`]+@[^\s@<>()\[\]`]+\.[^\s@<>()\[\]`]+$/.test(value);
 }
 
 function isUnsafeDisplayCodePoint(codePoint: number): boolean {

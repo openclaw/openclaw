@@ -273,6 +273,40 @@ describe("codex command", () => {
     expect(result.text).not.toContain("@here");
   });
 
+  it("escapes successful Codex status model ids and account summaries", async () => {
+    const unsafe = "<@U123> [trusted](https://evil) @here";
+    const deps = createDeps({
+      readCodexStatusProbes: vi.fn(async () => ({
+        models: {
+          ok: true as const,
+          value: {
+            models: [
+              {
+                id: unsafe,
+                model: unsafe,
+                inputModalities: ["text"],
+                supportedReasoningEfforts: ["medium"],
+              },
+            ],
+          },
+        },
+        account: { ok: true as const, value: { account: { id: unsafe } } },
+        limits: { ok: true as const, value: [] },
+        mcps: { ok: true as const, value: [] },
+        skills: { ok: true as const, value: [] },
+      })),
+    });
+
+    const result = await handleCodexCommand(createContext("status"), { deps });
+
+    expect(result.text).toContain(
+      "&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
+    );
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[trusted](https://evil)");
+    expect(result.text).not.toContain("@here");
+  });
+
   it("rejects extra operands for read-only Codex commands", async () => {
     const readCodexStatusProbes = vi.fn();
     const listCodexAppServerModels = vi.fn();
@@ -349,6 +383,25 @@ describe("codex command", () => {
       .fn()
       .mockResolvedValueOnce({ ok: false as const, error: unsafe })
       .mockResolvedValueOnce({ ok: false as const, error: unsafe });
+
+    const result = await handleCodexCommand(createContext("account"), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain(
+      "&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
+    );
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[trusted](https://evil)");
+    expect(result.text).not.toContain("@here");
+  });
+
+  it("escapes successful Codex account fallback summaries before chat display", async () => {
+    const unsafe = "<@U123> [trusted](https://evil) @here";
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true as const, value: { account: { id: unsafe } } })
+      .mockResolvedValueOnce({ ok: true as const, value: [] });
 
     const result = await handleCodexCommand(createContext("account"), {
       deps: createDeps({ safeCodexControlRequest }),
