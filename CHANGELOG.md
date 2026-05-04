@@ -230,6 +230,7 @@ Docs: https://docs.openclaw.ai
 - Agents/subagents: detect prefix-only completion announce replies and fall back to the captured child result so requester chats no longer lose most of long sub-agent reports silently. Fixes #76412. Thanks @inxaos and @davemorin.
 - Agents/subagent: add bounded transient-error retry to sweep delete so gateway close(1006) during archive cleanup no longer silently drops the delete and leaves stale sessions. Also removes unused `deleteSubagentSessionForCleanup` import.
 - Agents/subagent: pin the readiness probe to admin scope instead of read scope so that subsequent write/admin lifecycle calls cannot fail with close(1008) scope-upgrade pairing errors.
+- Agents/subagent: move readiness probe after local spawn guards so denied spawns skip unnecessary admin-gateway calls.
 - Active Memory: give timeout partial transcript recovery enough abort-settle headroom so temporary recall summaries are returned before cleanup. Thanks @vincentkoc.
 - Active Memory: send a bounded latest-message search query to the recall worker so channel/runtime metadata does not become the memory search string. Fixes #65309. Thanks @joeykrug, @westley3601, @pimenov, and @tasi333.
 - active-memory: skip the memory sub-agent gracefully instead of logging a confusing allowlist error when no memory plugin (`memory-core` or `memory-lancedb`) is loaded, so active-memory with no memory backend no longer produces misleading "No callable tools remain" warnings in the gateway log. Fixes #77506. Thanks @hclsys.
