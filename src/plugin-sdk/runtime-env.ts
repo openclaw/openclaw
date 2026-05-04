@@ -22,6 +22,7 @@ export { isTruthyEnvValue } from "../infra/env.js";
 export * from "../logging.js";
 export { waitForAbortSignal } from "../infra/abort-signal.js";
 export { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
+export { TerminalChannelError } from "../infra/terminal-channel-error.js";
 export {
   formatDurationPrecise,
   formatDurationSeconds,
