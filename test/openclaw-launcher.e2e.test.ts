@@ -10,6 +10,10 @@ async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
     path.resolve(process.cwd(), "openclaw.mjs"),
     path.join(fixtureRoot, "openclaw.mjs"),
   );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "openclaw-respawn.mjs"),
+    path.join(fixtureRoot, "openclaw-respawn.mjs"),
+  );
   await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
   return fixtureRoot;
 }
