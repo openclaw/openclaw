@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Diffs plugin: accept `defaults.ttlSeconds` as a plugin-wide artifact lifetime default, so LAN-viewable diff links can keep their configured six-hour TTL without doctor quarantining the plugin entry.
 - Gate zalouser startup name matching [AI]. (#77411) Thanks @pgondhi987.
 - fix(device-pair): require pairing scope for pair command [AI]. (#76377) Thanks @pgondhi987.
 - fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
