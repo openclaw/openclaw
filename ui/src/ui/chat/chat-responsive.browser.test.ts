@@ -13,6 +13,7 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
+const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe : describe.skip;
 
 let browser: Browser;
 
@@ -228,7 +229,7 @@ afterAll(async () => {
   await browser.close();
 });
 
-describe("chat responsive browser layout", () => {
+describeBrowserLayout("chat responsive browser layout", () => {
   it.each([
     [1120, 740],
     [1366, 900],
