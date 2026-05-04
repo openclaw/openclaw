@@ -4,6 +4,23 @@ import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-contex
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
+// Keep these trace types local to embedded runner metadata. They intentionally
+// mirror the redacted completion-truth shape without exporting the internal
+// completion-truth contract through runner meta/public trace surfaces.
+export type CompletionTruthTrace = {
+  /** Internal producer of this completion truth envelope. */
+  source: string;
+  /** Producer-specific completion status. */
+  status: string;
+  [key: string]: unknown;
+};
+
+export type CompletionTruthSelectionTrace = {
+  source: "toolResult" | "transcriptResult" | "verificationArtifact" | "realtimeHint" | "none";
+  confidence: "high" | "medium" | "low" | "none";
+  notes?: string[];
+};
+
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
   sessionFile?: string;
@@ -101,6 +118,10 @@ export type CompletionTrace = {
   finishReason?: string;
   stopReason?: string;
   refusal?: boolean;
+  /** Redacted completion truth resolved from internal host/runtime signals. */
+  truth?: CompletionTruthTrace;
+  /** Source/confidence metadata for the selected completion truth. */
+  truthSelection?: CompletionTruthSelectionTrace;
 };
 
 export type ContextManagementTrace = {

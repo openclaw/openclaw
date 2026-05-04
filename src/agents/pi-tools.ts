@@ -22,6 +22,7 @@ import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
+import type { SessionsYieldCompletionOutput } from "./completion-truth.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
@@ -265,7 +266,7 @@ export const __testing = {
   applyModelProviderToolPolicy,
 } as const;
 
-export function createOpenClawCodingTools(options?: {
+export type OpenClawCodingToolsOptions = {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
@@ -378,7 +379,20 @@ export function createOpenClawCodingTools(options?: {
   onYield?: (message: string) => Promise<void> | void;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
-}): AnyAgentTool[] {
+};
+
+type InternalOpenClawCodingToolsOptions = OpenClawCodingToolsOptions & {
+  /** Internal callback carrying explicit sessions_yield completion truth. */
+  onCompletionTruth?: (output: SessionsYieldCompletionOutput) => Promise<void> | void;
+};
+
+export function createOpenClawCodingTools(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
+  return createOpenClawCodingToolsInternal(options);
+}
+
+export function createOpenClawCodingToolsInternal(
+  options?: InternalOpenClawCodingToolsOptions,
+): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
@@ -744,6 +758,7 @@ export function createOpenClawCodingTools(options?: {
           senderIsOwner: options?.senderIsOwner,
           sessionId: options?.sessionId,
           onYield: options?.onYield,
+          onCompletionTruth: options?.onCompletionTruth,
           allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
           recordToolPrepStage: options?.recordToolPrepStage,
         })
