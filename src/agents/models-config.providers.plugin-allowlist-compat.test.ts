@@ -132,6 +132,27 @@ describe("implicit provider plugin allowlist compatibility", () => {
     ).toEqual(["openrouter"]);
   });
 
+  it("does not re-enable plugins when allowlist mode rejects every compat plugin", () => {
+    const config = withBundledPluginEnablementCompat({
+      config: {
+        plugins: {
+          enabled: false,
+          allow: ["openrouter"],
+          bundledDiscovery: "allowlist",
+        },
+      },
+      pluginIds: ["kilocode", "moonshot"],
+    });
+
+    expect(config).toEqual({
+      plugins: {
+        enabled: false,
+        allow: ["openrouter"],
+        bundledDiscovery: "allowlist",
+      },
+    });
+  });
+
   it("still honors explicit plugin denies over compat allowlist injection", () => {
     const config = withBundledPluginEnablementCompat({
       config: withBundledPluginAllowlistCompat({

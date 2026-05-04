@@ -46,14 +46,16 @@ export function withBundledPluginEnablementCompat(params: {
   const allow = params.config?.plugins?.allow;
   const allowSet =
     !useCompatDiscovery && Array.isArray(allow) && allow.length > 0 ? new Set(allow) : undefined;
+  let hasEligiblePlugin = false;
   let changed = false;
   const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
 
   for (const pluginId of params.pluginIds) {
-    if (existingEntries[pluginId] !== undefined) {
+    if (allowSet && !allowSet.has(pluginId)) {
       continue;
     }
-    if (allowSet && !allowSet.has(pluginId)) {
+    hasEligiblePlugin = true;
+    if (existingEntries[pluginId] !== undefined) {
       continue;
     }
     nextEntries[pluginId] = { enabled: true };
@@ -61,7 +63,7 @@ export function withBundledPluginEnablementCompat(params: {
   }
 
   if (!changed) {
-    if (!forcePluginsEnabled) {
+    if (!forcePluginsEnabled || !hasEligiblePlugin) {
       return params.config;
     }
   }
