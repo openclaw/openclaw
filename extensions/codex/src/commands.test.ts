@@ -1458,6 +1458,53 @@ describe("codex command", () => {
     });
   });
 
+  it("binds quoted workspace paths that contain spaces", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const startCodexConversationThread = vi.fn(async () => ({
+      kind: "codex-app-server-session" as const,
+      version: 1 as const,
+      sessionFile,
+      workspaceDir: "/repo with space",
+    }));
+    const requestConversationBinding = vi.fn(async () => ({
+      status: "bound" as const,
+      binding: {
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: "/plugin",
+        channel: "test",
+        accountId: "default",
+        conversationId: "conversation",
+        boundAt: 1,
+      },
+    }));
+
+    await expect(
+      handleCodexCommand(
+        createContext('bind thread-123 --cwd "/repo with space"', sessionFile, {
+          requestConversationBinding,
+        }),
+        {
+          deps: createDeps({
+            startCodexConversationThread,
+            resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
+          }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: "Bound this conversation to Codex thread thread-123 in /repo with space.",
+    });
+    expect(startCodexConversationThread).toHaveBeenCalledWith({
+      pluginConfig: undefined,
+      config: {},
+      sessionFile,
+      workspaceDir: "/repo with space",
+      threadId: "thread-123",
+      model: undefined,
+      modelProvider: undefined,
+    });
+  });
+
   it("rejects bind options with missing values before starting Codex", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const startCodexConversationThread = vi.fn();
