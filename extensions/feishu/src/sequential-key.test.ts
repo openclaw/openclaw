@@ -69,4 +69,16 @@ describe("getFeishuSequentialKey", () => {
       }),
     ).toBe("feishu:default:oc_dm_chat:btw");
   });
+
+  it("handles events without parsed content", () => {
+    const event = createTextEvent({ text: "hello" });
+    delete (event.message as { content?: string }).content;
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
+  });
 });
