@@ -271,9 +271,17 @@ export function resolvePluginPath(input: string, rootDir: string | undefined): s
   return rootDir ? path.resolve(rootDir, trimmed) : resolveUserPath(input);
 }
 
-function isOfficialNpmCodexPluginRecord(record: Pick<PluginRecord, "id" | "rootDir" | "source">) {
+function isOfficialCodexPluginRecord(
+  record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
+) {
   if (record.id !== "codex") {
     return false;
+  }
+  if (record.origin !== "global") {
+    return false;
+  }
+  if (record.packageName === "@openclaw/codex") {
+    return true;
   }
   const sourcePath = path
     .normalize(record.rootDir ?? record.source)
@@ -283,9 +291,9 @@ function isOfficialNpmCodexPluginRecord(record: Pick<PluginRecord, "id" | "rootD
 }
 
 function canClaimReservedCommandOwnership(
-  record: Pick<PluginRecord, "id" | "origin" | "rootDir" | "source">,
+  record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
 ) {
-  return record.origin === "bundled" || isOfficialNpmCodexPluginRecord(record);
+  return record.origin === "bundled" || isOfficialCodexPluginRecord(record);
 }
 
 const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");

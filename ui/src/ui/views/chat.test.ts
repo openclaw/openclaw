@@ -873,6 +873,21 @@ describe("chat session controls", () => {
     expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:main");
   });
 
+  it("renders session switch feedback in the chat controls live region", () => {
+    const { state } = createChatHeaderState();
+    state.sessionSwitchNotice = { id: 1, text: "Switched to Coding" };
+    state.sessionSwitchFlashKey = state.sessionKey;
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const notice = container.querySelector<HTMLElement>(".chat-controls__session-notice");
+    expect(notice?.getAttribute("role")).toBe("status");
+    expect(notice?.getAttribute("aria-live")).toBe("polite");
+    expect(notice?.textContent?.trim()).toBe("Switched to Coding");
+    expect(container.querySelector(".chat-controls__session-row--flash")).not.toBeNull();
+  });
+
   it("shows the active agent main session instead of a blank select when no row exists yet", () => {
     const { state } = createChatHeaderState();
     state.sessionKey = "agent:main:main";

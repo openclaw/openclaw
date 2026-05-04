@@ -18,18 +18,21 @@ type PublishablePluginPackage = {
   packageName: string;
 };
 
-const REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
+const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
   "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
-  "@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs",
-  "@openclaw/acpx:dangerous-exec:dist/service-<hash>.js",
   "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
-  "@openclaw/codex:dangerous-exec:dist/client-<hash>.js",
   "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
   "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
-  "@openclaw/google-meet:dangerous-exec:dist/index.js",
   "@openclaw/voice-call:dangerous-exec:src/tunnel.ts",
   "@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts",
+]);
+
+const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS = new Set([
+  "@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs",
+  "@openclaw/acpx:dangerous-exec:dist/service-<hash>.js",
+  "@openclaw/codex:dangerous-exec:dist/client-<hash>.js",
+  "@openclaw/google-meet:dangerous-exec:dist/index.js",
   "@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js",
 ]);
 
@@ -142,9 +145,18 @@ describe("publishable plugin npm package install security scan", () => {
   it("keeps npm-published plugin files clear of unexpected critical hits", async () => {
     const unexpectedCriticalFindings: string[] = [];
     const reviewedCriticalFindings = new Set<string>();
+    const expectedReviewedCriticalFindings = new Set(
+      REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS,
+    );
 
     for (const plugin of collectPublishablePluginPackages()) {
       const packedFiles = collectNpmPackedFiles(plugin.packageDir, plugin.packageName);
+      for (const packedFile of packedFiles) {
+        const key = `${plugin.packageName}:dangerous-exec:${normalizePackedFindingPath(packedFile)}`;
+        if (OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS.has(key)) {
+          expectedReviewedCriticalFindings.add(key);
+        }
+      }
       const stageDir = stageScannerRelevantPackedFiles(plugin.packageDir, packedFiles);
       const summary = await scanDirectoryWithSummary(stageDir, {
         excludeTestFiles: true,
@@ -159,7 +171,7 @@ describe("publishable plugin npm package install security scan", () => {
           relative(stageDir, finding.file).split(sep).join("/"),
         );
         const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
-        if (REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS.has(key)) {
+        if (expectedReviewedCriticalFindings.has(key)) {
           reviewedCriticalFindings.add(key);
           continue;
         }
@@ -169,7 +181,7 @@ describe("publishable plugin npm package install security scan", () => {
 
     expect(unexpectedCriticalFindings).toEqual([]);
     expect([...reviewedCriticalFindings].toSorted()).toEqual(
-      [...REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS].toSorted(),
+      [...expectedReviewedCriticalFindings].toSorted(),
     );
   });
 });

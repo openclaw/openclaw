@@ -37,12 +37,16 @@ export function renderChatSessionSelect(
   const selectedSessionLabel =
     sessionGroups.flatMap((group) => group.options).find((entry) => entry.key === state.sessionKey)
       ?.label ?? state.sessionKey;
+  const flashSession = state.sessionSwitchFlashKey === state.sessionKey;
+  const rowClass = [
+    "chat-controls__session-row",
+    hasAgentSelect ? "" : "chat-controls__session-row--single-agent",
+    flashSession ? "chat-controls__session-row--flash" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return html`
-    <div
-      class=${hasAgentSelect
-        ? "chat-controls__session-row"
-        : "chat-controls__session-row chat-controls__session-row--single-agent"}
-    >
+    <div class=${rowClass}>
       ${agentSelect}
       <label class="field chat-controls__session chat-controls__session-picker">
         <select
@@ -81,6 +85,9 @@ export function renderChatSessionSelect(
         </select>
       </label>
       ${modelSelect} ${thinkingSelect}
+    </div>
+    <div class="chat-controls__session-notice" role="status" aria-live="polite">
+      ${state.sessionSwitchNotice?.text ?? ""}
     </div>
   `;
 }

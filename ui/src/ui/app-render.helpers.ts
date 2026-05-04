@@ -574,7 +574,13 @@ export function renderChatMobileToggle(state: AppViewState) {
 }
 
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
+  const previousSessionKey = state.sessionKey;
+  const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
+  const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
   resetChatStateForSessionSwitch(state, nextSessionKey);
+  if (previousSessionKey !== nextSessionKey) {
+    state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
+  }
   void state.loadAssistantIdentity();
   void refreshChatAvatar(state);
   void refreshSlashCommands({
