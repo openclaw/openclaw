@@ -1558,6 +1558,57 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("does not ratchet containment matches away from the nearest range", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "intro",
+        "summary",
+        "daily note churn",
+        "another inserted line",
+        "nearest envelope before repeated target",
+        "",
+        "",
+        "",
+        "",
+        "Far prefix Move backups to S3 Glacier. Far suffix.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier ratchet repeated",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 5,
+            endLine: 10,
+            score: 0.94,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBeLessThanOrEqual(6);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(10);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).not.toContain("memory/2026-04-01.md:10-10");
+    });
+  });
+
   it("prefers the nearest matching snippet when the same text appears multiple times", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
