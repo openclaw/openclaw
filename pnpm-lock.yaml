@@ -924,6 +924,9 @@ importers:
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
+      json5:
+        specifier: ^2.2.3
+        version: 2.2.3
       typebox:
         specifier: 1.1.37
         version: 1.1.37
