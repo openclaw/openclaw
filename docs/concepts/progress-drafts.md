@@ -217,6 +217,12 @@ Limit how many lines stay visible:
 }
 ```
 
+Progress lines are compacted automatically to reduce chat-bubble reflow while the draft is edited.
+
+OpenClaw truncates long progress lines by default so repeated draft edits do not
+wrap differently on every update. The prefix stays readable, and long details
+such as paths or raw commands are shortened with an ellipsis.
+
 Keep the single progress draft but hide tool and task lines:
 
 ```json5

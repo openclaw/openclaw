@@ -186,6 +186,16 @@ describe("channel-streaming", () => {
     ).toBe("Shelling\n🛠️ Exec\n• plain update");
   });
 
+  it("bounds progress draft line length to reduce edit reflow", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: "Shelling" } } },
+        lines: ["x".repeat(80)],
+        formatLine: (line) => `\`${line}\``,
+      }),
+    ).toBe(`Shelling\n• \`${"x".repeat(71)}…\``);
+  });
+
   it("formats progress draft lines with shared tool display labels", () => {
     expect(
       formatChannelProgressDraftLine({

@@ -110,6 +110,7 @@ export const DEFAULT_PROGRESS_DRAFT_LABELS = [
 ] as const;
 
 export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5_000;
+const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 72;
 
 const NON_WORK_PROGRESS_TOOL_NAMES = new Set([
   "message",
@@ -537,6 +538,52 @@ export function resolveChannelProgressDraftMaxLines(
   return configured && configured > 0 ? configured : defaultValue;
 }
 
+function sliceCodePoints(value: string, start: number, end?: number): string {
+  return Array.from(value).slice(start, end).join("");
+}
+
+function compactProgressLineDetail(detail: string, maxChars: number): string {
+  const chars = Array.from(detail);
+  if (chars.length <= maxChars) {
+    return detail;
+  }
+  if (maxChars <= 1) {
+    return "…";
+  }
+  const keepStart = Math.max(1, Math.ceil((maxChars - 1) * 0.45));
+  const keepEnd = Math.max(1, maxChars - keepStart - 1);
+  const rawStart = chars.slice(0, keepStart).join("").trimEnd();
+  const start =
+    rawStart.length > 8 && /\s+\S+$/.test(rawStart) ? rawStart.replace(/\s+\S+$/, "") : rawStart;
+  return `${start}…${chars.slice(-keepEnd).join("").trimStart()}`;
+}
+
+function compactChannelProgressDraftLine(line: string, maxChars: number): string {
+  const normalized = line.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+  const chars = Array.from(normalized);
+  if (chars.length <= maxChars) {
+    return normalized;
+  }
+  if (maxChars <= 1) {
+    return "…";
+  }
+
+  const splitIndex = normalized.indexOf(": ");
+  if (splitIndex > 0) {
+    const prefix = normalized.slice(0, splitIndex + 2);
+    const prefixChars = Array.from(prefix).length;
+    const detailLimit = maxChars - prefixChars;
+    if (detailLimit >= 8) {
+      return `${prefix}${compactProgressLineDetail(normalized.slice(splitIndex + 2), detailLimit)}`;
+    }
+  }
+
+  return `${sliceCodePoints(normalized, 0, maxChars - 1).trimEnd()}…`;
+}
+
 export function formatChannelProgressDraftText(params: {
   entry?: StreamingCompatEntry | null;
   lines: string[];
@@ -554,7 +601,7 @@ export function formatChannelProgressDraftText(params: {
   const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
   const lines = params.lines
-    .map((line) => line.replace(/\s+/g, " ").trim())
+    .map((line) => compactChannelProgressDraftLine(line, DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS))
     .filter((line) => line.length > 0)
     .slice(-maxLines)
     .map((line) =>
