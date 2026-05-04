@@ -2350,9 +2350,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       !registry.plugins.some((plugin) => plugin.id === record.id);
     const shouldCommitWorkflowSideEffect = () =>
       sideEffectGuard.active &&
-      isPluginRegistryActivated(registry) &&
       !isPluginRegistryRetired(registry) &&
-      (isLoadedRecordInRegistry() || isActivatingLoadedRecord());
+      (isActivatingLoadedRecord() ||
+        (isPluginRegistryActivated(registry) && isLoadedRecordInRegistry()));
     return buildPluginApi({
       id: record.id,
       name: record.name,
