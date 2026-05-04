@@ -7,6 +7,32 @@ const DISCORD_INTERNAL_TRACE_LINE_RE =
 const DISCORD_INTERNAL_CHANNEL_LINE_RE =
   /^(?:>\s*)?(?:analysis|commentary|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call|thinking|reasoning)\s*[:=]/i;
 
+function hasNonEmptyRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0,
+  );
+}
+
+function hasInteractiveOrPresentationBlocks(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.title === "string" && record.title.trim().length > 0) {
+    return true;
+  }
+  return Array.isArray(record.blocks) && record.blocks.length > 0;
+}
+
+function hasNonTextReplyPayloadContent(payload: ReplyPayload): boolean {
+  return (
+    payload.audioAsVoice === true ||
+    hasNonEmptyRecord(payload.channelData) ||
+    hasInteractiveOrPresentationBlocks(payload.interactive) ||
+    hasInteractiveOrPresentationBlocks(payload.presentation)
+  );
+}
+
 function stripDiscordInternalTraceLines(text: string): string {
   let inFence = false;
   const kept: string[] = [];
@@ -45,7 +71,6 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
 ): ReplyPayload[] {
   const safePayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
-    const originalParts = resolveSendableOutboundReplyParts(payload);
     const safeText =
       typeof payload.text === "string"
         ? sanitizeDiscordFrontChannelText(payload.text)
@@ -55,7 +80,7 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
         ? payload
         : ({ ...payload, text: safeText || undefined } as ReplyPayload);
     const nextParts = resolveSendableOutboundReplyParts(nextPayload);
-    if (!nextParts.hasText && !originalParts.hasMedia) {
+    if (!nextParts.hasContent && !hasNonTextReplyPayloadContent(nextPayload)) {
       continue;
     }
     safePayloads.push(nextPayload);
