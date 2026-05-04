@@ -290,6 +290,7 @@ actor VoiceWakeRuntime {
         guard let transcript = update.transcript else { return }
 
         let now = Date()
+        let previousTranscript = self.isCapturing ? nil : self.lastTranscript
         if !transcript.isEmpty {
             self.lastHeard = now
             if !self.isCapturing {
@@ -347,6 +348,16 @@ actor VoiceWakeRuntime {
                 transcript: transcript,
                 triggers: config.triggers,
                 config: gateConfig,
+                trimWake: Self.trimmedAfterTrigger)
+            usedFallback = match != nil
+        }
+        if match == nil, !update.isFinal, Self.hasNoUsableTiming(update.segments) {
+            match = VoiceWakeRecognitionDebugSupport.appendedTextOnlyFallbackMatch(
+                transcript: transcript,
+                previousTranscript: previousTranscript,
+                triggers: config.triggers,
+                config: gateConfig,
+                allowTriggerOnly: config.triggersTalkMode,
                 trimWake: Self.trimmedAfterTrigger)
             usedFallback = match != nil
         }
@@ -795,6 +806,10 @@ actor VoiceWakeRuntime {
         return text
     }
 
+    private static func hasNoUsableTiming(_ segments: [WakeWordSegment]) -> Bool {
+        segments.allSatisfy { $0.start <= 0 && $0.duration <= 0 }
+    }
+
     private static func commandAfterTrigger(
         transcript: String,
         segments: [WakeWordSegment],
@@ -826,6 +841,25 @@ actor VoiceWakeRuntime {
 
     static func _testMatchedTriggerWord(_ text: String, triggers: [String]) -> String? {
         self.matchedTriggerWordText(transcript: text, triggers: triggers)
+    }
+
+    static func _testAppendedTextOnlyFallbackMatch(
+        transcript: String,
+        previousTranscript: String?,
+        triggers: [String],
+        allowTriggerOnly: Bool = false) -> WakeWordGateMatch?
+    {
+        VoiceWakeRecognitionDebugSupport.appendedTextOnlyFallbackMatch(
+            transcript: transcript,
+            previousTranscript: previousTranscript,
+            triggers: triggers,
+            config: WakeWordGateConfig(triggers: triggers),
+            allowTriggerOnly: allowTriggerOnly,
+            trimWake: self.trimmedAfterTrigger)
+    }
+
+    static func _testHasNoUsableTiming(_ segments: [WakeWordSegment]) -> Bool {
+        self.hasNoUsableTiming(segments)
     }
 
     static func _testAttributedColor(isFinal: Bool) -> NSColor {

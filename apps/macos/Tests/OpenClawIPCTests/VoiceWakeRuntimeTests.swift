@@ -110,6 +110,59 @@ struct VoiceWakeRuntimeTests {
         #expect(match == nil)
     }
 
+    @Test func `appended text only fallback matches interim trigger command without timings`() {
+        let match = VoiceWakeRuntime._testAppendedTextOnlyFallbackMatch(
+            transcript: "ambient speech nero turn on talk mode",
+            previousTranscript: "ambient speech",
+            triggers: ["nero"])
+        #expect(match?.trigger == "nero")
+        #expect(match?.command == "turn on talk mode")
+    }
+
+    @Test func `appended text only fallback can activate trigger only talk mode`() {
+        let match = VoiceWakeRuntime._testAppendedTextOnlyFallbackMatch(
+            transcript: "ambient speech nero",
+            previousTranscript: "ambient speech",
+            triggers: ["nero"],
+            allowTriggerOnly: true)
+        #expect(match?.trigger == "nero")
+        #expect(match?.command == "")
+    }
+
+    @Test func `appended text only fallback leaves trigger only disabled outside talk mode`() {
+        let match = VoiceWakeRuntime._testAppendedTextOnlyFallbackMatch(
+            transcript: "ambient speech nero",
+            previousTranscript: "ambient speech",
+            triggers: ["nero"],
+            allowTriggerOnly: false)
+        #expect(match == nil)
+    }
+
+    @Test func `appended text only fallback rejects larger word suffix matches`() {
+        let match = VoiceWakeRuntime._testAppendedTextOnlyFallbackMatch(
+            transcript: "ambient computers",
+            previousTranscript: "ambient ",
+            triggers: ["computer"],
+            allowTriggerOnly: true)
+        #expect(match == nil)
+    }
+
+    @Test func `appended text only fallback requires boundary from previous text`() {
+        let match = VoiceWakeRuntime._testAppendedTextOnlyFallbackMatch(
+            transcript: "somecomputer",
+            previousTranscript: "some",
+            triggers: ["computer"],
+            allowTriggerOnly: true)
+        #expect(match == nil)
+    }
+
+    @Test func `no usable timing requires all segments to lack start and duration`() {
+        let zeroSegments = [WakeWordSegment(text: "nero", start: 0, duration: 0)]
+        let timedSegments = [WakeWordSegment(text: "nero", start: 0, duration: 0.2)]
+        #expect(VoiceWakeRuntime._testHasNoUsableTiming(zeroSegments))
+        #expect(!VoiceWakeRuntime._testHasNoUsableTiming(timedSegments))
+    }
+
     @Test func `trims after chinese trigger keeps post speech`() {
         let triggers = ["小爪", "openclaw"]
         let text = "嘿 小爪 帮我打开设置"
