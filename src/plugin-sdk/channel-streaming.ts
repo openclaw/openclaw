@@ -558,6 +558,11 @@ function compactProgressLineDetail(detail: string, maxChars: number): string {
   return `${start}…${chars.slice(-keepEnd).join("").trimStart()}`;
 }
 
+function removeUnbalancedInlineBackticks(value: string): string {
+  const backtickCount = Array.from(value).filter((char) => char === "`").length;
+  return backtickCount % 2 === 1 ? value.replaceAll("`", "") : value;
+}
+
 function compactChannelProgressDraftLine(line: string, maxChars: number): string {
   const normalized = line.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -577,11 +582,15 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     const prefixChars = Array.from(prefix).length;
     const detailLimit = maxChars - prefixChars;
     if (detailLimit >= 8) {
-      return `${prefix}${compactProgressLineDetail(normalized.slice(splitIndex + 2), detailLimit)}`;
+      return removeUnbalancedInlineBackticks(
+        `${prefix}${compactProgressLineDetail(normalized.slice(splitIndex + 2), detailLimit)}`,
+      );
     }
   }
 
-  return `${sliceCodePoints(normalized, 0, maxChars - 1).trimEnd()}…`;
+  return removeUnbalancedInlineBackticks(
+    `${sliceCodePoints(normalized, 0, maxChars - 1).trimEnd()}…`,
+  );
 }
 
 export function formatChannelProgressDraftText(params: {

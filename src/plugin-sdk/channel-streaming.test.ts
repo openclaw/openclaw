@@ -196,6 +196,28 @@ describe("channel-streaming", () => {
     ).toBe(`Shelling\n• \`${"x".repeat(71)}…\``);
   });
 
+  it("keeps compacted raw progress lines from leaking unmatched markdown backticks", () => {
+    const line = formatChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: {
+          command:
+            "node scripts/check-something-with-a-very-long-path /tmp/openclaw/some/really/deep/path/that/keeps/going/and/going/index.ts --flag value",
+        },
+      },
+      { detailMode: "raw" },
+    );
+
+    const text = formatChannelProgressDraftText({
+      entry: { streaming: { progress: { label: "Shelling" } } },
+      lines: [line ?? ""],
+    });
+
+    expect(text).toBe("Shelling\n🛠️ Exec: run node script…that/keeps/going/and/going/index…");
+    expect(text.match(/`/g) ?? []).toHaveLength(0);
+  });
+
   it("formats progress draft lines with shared tool display labels", () => {
     expect(
       formatChannelProgressDraftLine({
