@@ -82,14 +82,16 @@ function renderLabelSummary(params: {
 }) {
   const byLabel = new Map<string, { kept: number; pruned: number }>();
   for (const row of params.actionRows) {
-    const label = row.label ?? "(unlabeled)";
-    const bucket = byLabel.get(label) ?? { kept: 0, pruned: 0 };
+    if (!row.label) {
+      continue;
+    }
+    const bucket = byLabel.get(row.label) ?? { kept: 0, pruned: 0 };
     if (row.action === "keep") {
       bucket.kept += 1;
     } else {
       bucket.pruned += 1;
     }
-    byLabel.set(label, bucket);
+    byLabel.set(row.label, bucket);
   }
   if (byLabel.size === 0) {
     return;

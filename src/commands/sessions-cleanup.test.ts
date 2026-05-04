@@ -468,6 +468,44 @@ describe("sessionsCleanupCommand", () => {
     expect(summaryBlock).toMatch(/cron:weekly.*0 kept.*1 pruned/);
   });
 
+  it("omits label summary when no entries have a label", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 2,
+            afterCount: 1,
+            missing: 0,
+            pruned: 1,
+            capped: 0,
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {
+            stale: { sessionId: "s1", updatedAt: 1, model: "pi:opus" },
+            fresh: { sessionId: "s2", updatedAt: 2, model: "pi:opus" },
+          },
+          missingKeys: new Set<string>(),
+          staleKeys: new Set(["stale"]),
+          cappedKeys: new Set<string>(),
+          budgetEvictedKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand({ dryRun: true }, runtime);
+
+    expect(logs.some((l) => l.includes("Summary by label:"))).toBe(false);
+  });
+
   it("returns grouped JSON for --all-agents dry-runs", async () => {
     mocks.resolveSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/main-sessions.json" },
