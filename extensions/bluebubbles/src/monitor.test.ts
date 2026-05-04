@@ -668,7 +668,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.GroupSystemPrompt).toBe("exact value");
     });
 
-    it("omits GroupSystemPrompt for DMs even when the group config would match", async () => {
+    it("omits GroupSystemPrompt for DMs when no direct config is set", async () => {
       setupWebhookTarget({
         account: createMockAccount({
           groups: {
@@ -680,6 +680,93 @@ describe("BlueBubbles webhook monitor", () => {
       const payload = createTimestampedNewMessagePayloadForTest({
         text: "hi",
         isGroup: false,
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBeUndefined();
+    });
+
+    it("threads per-DM systemPrompt into ctx for DM messages (#77009)", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          direct: {
+            "+15551234567": { systemPrompt: "Always reply in haiku." },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi",
+        isGroup: false,
+        handle: { address: "+15551234567" },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe("Always reply in haiku.");
+    });
+
+    it("falls back to the direct '*' wildcard systemPrompt when no exact DM match (#77009)", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          direct: {
+            "*": { systemPrompt: "Default DM rule: be concise." },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi",
+        isGroup: false,
+        handle: { address: "+15559999999" },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe("Default DM rule: be concise.");
+    });
+
+    it("prefers an exact direct systemPrompt over the '*' wildcard (#77009)", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          direct: {
+            "*": { systemPrompt: "wildcard DM rule" },
+            "+15551234567": { systemPrompt: "exact DM rule" },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi",
+        isGroup: false,
+        handle: { address: "+15551234567" },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe("exact DM rule");
+    });
+
+    it("does not apply direct DM systemPrompt to group messages (#77009)", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          direct: {
+            "*": { systemPrompt: "DM only rule" },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567", displayName: "Alice" }],
       });
 
       await dispatchWebhookPayload(payload);
