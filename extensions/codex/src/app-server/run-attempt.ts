@@ -561,6 +561,7 @@ export async function runCodexAppServerAttempt(
             appServer.start,
             startupAuthProfileId,
             agentDir,
+            params.config,
           );
           attemptedClient = startupClient;
           startupClientForCleanup = startupClient;

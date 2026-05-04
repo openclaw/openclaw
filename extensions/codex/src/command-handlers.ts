@@ -185,12 +185,16 @@ export async function handleCodexSubcommand(
     return { text: buildHelp() };
   }
   if (normalized === "status") {
-    return { text: formatCodexStatus(await deps.readCodexStatusProbes(options.pluginConfig)) };
+    return {
+      text: formatCodexStatus(await deps.readCodexStatusProbes(options.pluginConfig, ctx.config)),
+    };
   }
   if (normalized === "models") {
     return {
       text: formatModels(
-        await deps.listCodexAppServerModels(deps.requestOptions(options.pluginConfig, 100)),
+        await deps.listCodexAppServerModels(
+          deps.requestOptions(options.pluginConfig, 100, ctx.config),
+        ),
       ),
     };
   }
