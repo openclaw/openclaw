@@ -137,7 +137,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     vi.restoreAllMocks();
   });
 
-  it("sends transcriptPrompt visibly and queues runtime context as hidden custom context", async () => {
+  it("sends transcriptPrompt with runtime context as a prompt suffix and queues hidden custom context", async () => {
     const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
 
     const result = await createContextEngineAttemptRunner({
@@ -164,8 +164,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seen.prompt).toBe("visible ask");
-    expect(result.finalPromptText).toBe("visible ask");
+    expect(seen.prompt).toContain("visible ask");
+    expect(seen.prompt).toContain(
+      "OpenClaw runtime context for the immediately preceding user message.",
+    );
+    expect(seen.prompt).toContain("secret runtime context");
+    expect(result.finalPromptText).toBe(seen.prompt);
     expect(seen.messages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -192,18 +196,18 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const modelCompleted = trajectoryEvents.find((event) => event.type === "model.completed");
     const traceArtifacts = trajectoryEvents.find((event) => event.type === "trace.artifacts");
 
-    expect(promptSubmitted?.data?.prompt).toBe("visible ask");
-    expect(contextCompiled?.data?.prompt).toBe("visible ask");
-    expect(modelCompleted?.data?.finalPromptText).toBe("visible ask");
-    expect(traceArtifacts?.data?.finalPromptText).toBe("visible ask");
+    expect(promptSubmitted?.data?.prompt).toBe(seen.prompt);
+    expect(contextCompiled?.data?.prompt).toBe(seen.prompt);
+    expect(modelCompleted?.data?.finalPromptText).toBe(seen.prompt);
+    expect(traceArtifacts?.data?.finalPromptText).toBe(seen.prompt);
     for (const value of [
       promptSubmitted?.data?.prompt,
       contextCompiled?.data?.prompt,
       modelCompleted?.data?.finalPromptText,
       traceArtifacts?.data?.finalPromptText,
     ]) {
-      expect(String(value)).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
-      expect(String(value)).not.toContain("secret runtime context");
+      expect(String(value)).toContain("OPENCLAW_INTERNAL_CONTEXT");
+      expect(String(value)).toContain("secret runtime context");
     }
   });
 
@@ -316,7 +320,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(systemPrompt).toContain("Ask who I am.");
   });
 
-  it("adds explicit reply context to the current model input without exposing generic runtime context", async () => {
+  it("adds explicit reply and runtime context to the current model input", async () => {
     let seenPrompt: string | undefined;
 
     const result = await createContextEngineAttemptRunner({
@@ -354,8 +358,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seenPrompt).toContain("WT daily plan - Sat May 2");
     expect(seenPrompt).toContain("./quoted-secret.png");
     expect(seenPrompt).toContain("media://inbound/quoted.png");
-    expect(seenPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
-    expect(seenPrompt).not.toContain("secret runtime context");
+    expect(seenPrompt).toContain(
+      "OpenClaw runtime context for the immediately preceding user message.",
+    );
+    expect(seenPrompt).toContain("OPENCLAW_INTERNAL_CONTEXT");
+    expect(seenPrompt).toContain("secret runtime context");
     expect(result.finalPromptText).toBe(seenPrompt);
     expect(hoisted.detectAndLoadPromptImagesMock).toHaveBeenCalledTimes(1);
     expect(hoisted.detectAndLoadPromptImagesMock.mock.calls[0]?.[0]).toMatchObject({
@@ -370,7 +377,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
     expect(promptSubmitted?.data?.prompt).toBe(seenPrompt);
     expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
-    expect(promptSubmitted?.data?.prompt).not.toContain("secret runtime context");
+    expect(promptSubmitted?.data?.prompt).toContain("secret runtime context");
   });
 
   it("marks inter-session transcriptPrompt before submitting the visible prompt", async () => {

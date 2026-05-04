@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildCurrentTurnPromptContextSuffix,
+  buildRuntimeContextPromptSuffix,
   buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
@@ -118,6 +119,18 @@ describe("runtime context prompt submission", () => {
     );
     expect(systemContext).toContain("not user-authored");
     expect(systemContext).toContain("secret runtime context");
+  });
+
+  it("formats next-turn runtime context as a user prompt suffix for normal turns", () => {
+    const suffix = buildRuntimeContextPromptSuffix("secret runtime context");
+
+    expect(suffix).toContain(
+      "OpenClaw runtime context for the immediately preceding user message.",
+    );
+    expect(suffix).toContain("not user-authored");
+    expect(suffix).toContain("secret runtime context");
+    expect(suffix.startsWith("\n\n")).toBe(true);
+    expect(buildRuntimeContextPromptSuffix("   ")).toBe("");
   });
 
   it("labels runtime-only events as system context", async () => {

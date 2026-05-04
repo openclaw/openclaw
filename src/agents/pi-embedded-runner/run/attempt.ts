@@ -328,7 +328,7 @@ import {
 } from "./preemptive-compaction.js";
 import {
   buildCurrentTurnPromptContextSuffix,
-  buildRuntimeContextSystemContext,
+  buildRuntimeContextPromptSuffix,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -2786,7 +2786,12 @@ export async function runEmbeddedAttempt(
           const currentTurnPromptContextSuffix = promptSubmission.runtimeOnly
             ? ""
             : buildCurrentTurnPromptContextSuffix(params.currentTurnContext);
-          const promptForModel = promptSubmission.prompt + currentTurnPromptContextSuffix;
+          const runtimeContext = promptSubmission.runtimeContext?.trim();
+          const runtimeContextPromptSuffix = promptSubmission.runtimeOnly
+            ? ""
+            : buildRuntimeContextPromptSuffix(runtimeContext);
+          const promptForModel =
+            promptSubmission.prompt + currentTurnPromptContextSuffix + runtimeContextPromptSuffix;
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
             const runtimeSystemPrompt = composeSystemPromptWithHookContext({
@@ -3036,35 +3041,19 @@ export async function runEmbeddedAttempt(
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptForModel));
             } else {
-              const runtimeContext = promptSubmission.runtimeContext?.trim();
-              const runtimeSystemPrompt = runtimeContext
-                ? composeSystemPromptWithHookContext({
-                    baseSystemPrompt: systemPromptText,
-                    appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
-                  })
-                : undefined;
-              if (runtimeSystemPrompt) {
-                applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
-              }
-              try {
-                await queueRuntimeContextForNextTurn({
-                  session: activeSession,
-                  runtimeContext,
-                });
+              await queueRuntimeContextForNextTurn({
+                session: activeSession,
+                runtimeContext,
+              });
 
-                // Only pass images option if there are actually images to pass
-                // This avoids potential issues with models that don't expect the images parameter
-                if (imageResult.images.length > 0) {
-                  await abortable(
-                    activeSession.prompt(promptForModel, { images: imageResult.images }),
-                  );
-                } else {
-                  await abortable(activeSession.prompt(promptForModel));
-                }
-              } finally {
-                if (runtimeSystemPrompt) {
-                  applySystemPromptOverrideToSession(activeSession, systemPromptText);
-                }
+              // Only pass images option if there are actually images to pass
+              // This avoids potential issues with models that don't expect the images parameter
+              if (imageResult.images.length > 0) {
+                await abortable(
+                  activeSession.prompt(promptForModel, { images: imageResult.images }),
+                );
+              } else {
+                await abortable(activeSession.prompt(promptForModel));
               }
             }
           }
