@@ -154,6 +154,15 @@ export async function probeTelegram(
   const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
   const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());
 
+  // Resolve per-request HTTP timeout from network config (allows faster fail-fast on IPv6 issues)
+  const configuredHttpTimeoutMs = options?.network?.httpTimeoutMs;
+  const resolveRequestTimeoutMs = (remainingBudgetMs: number): number => {
+    if (typeof configuredHttpTimeoutMs === "number" && configuredHttpTimeoutMs > 0) {
+      return Math.max(1, Math.min(configuredHttpTimeoutMs, remainingBudgetMs));
+    }
+    return Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs));
+  };
+
   const result: TelegramProbe = {
     ok: false,
     status: null,
@@ -175,7 +184,7 @@ export async function probeTelegram(
         meRes = await fetchWithTimeout(
           `${base}/getMe`,
           {},
-          Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
+          resolveRequestTimeoutMs(remainingBudgetMs),
           fetcher,
         );
         break;
@@ -238,7 +247,7 @@ export async function probeTelegram(
           const webhookRes = await fetchWithTimeout(
             `${base}/getWebhookInfo`,
             {},
-            Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
+            resolveRequestTimeoutMs(webhookRemainingBudgetMs),
             fetcher,
           );
           const webhookJson = (await webhookRes.json()) as {
