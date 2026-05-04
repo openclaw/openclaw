@@ -2,6 +2,7 @@ import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
   COMMAND_CARRIER_EXECUTABLES,
   isEnvAssignmentToken,
+  parseEnvInvocationPrelude,
   resolveCarrierCommandArgv,
   SOURCE_EXECUTABLES,
 } from "../command-carriers.js";
@@ -169,13 +170,30 @@ export function detectEnvSplitStringFlag(argv: string[]): string | null {
   if (normalizeExecutableToken(argv[0] ?? "") !== "env") {
     return null;
   }
-  for (const arg of argv.slice(1)) {
+  const parsed = parseEnvInvocationPrelude(argv);
+  if (!parsed?.splitArgv) {
+    return null;
+  }
+  for (const arg of argv.slice(1, parsed.commandIndex)) {
     const token = arg.trim();
-    if (token === "-S" || token === "--split-string") {
+    if (token === "-S" || token === "-s") {
       return token;
+    }
+    if (token === "--split-string") {
+      return "--split-string";
     }
     if (token.startsWith("--split-string=") || (token.startsWith("-S") && token.length > 2)) {
       return token.startsWith("--") ? "--split-string" : "-S";
+    }
+    if (token.startsWith("-") && !token.startsWith("--")) {
+      for (const option of token.slice(1)) {
+        if (option === "S") {
+          return "-S";
+        }
+        if (option === "s") {
+          return "-s";
+        }
+      }
     }
   }
   return null;

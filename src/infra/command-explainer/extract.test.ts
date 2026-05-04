@@ -602,6 +602,10 @@ describe("command explainer tree-sitter runtime", () => {
     expect(envSplitString.risks).toContainEqual(
       expect.objectContaining({ kind: "command-carrier", command: "env", flag: "-S" }),
     );
+    const envCombinedSplitString = await explainShellCommand("env -iS 'sh -c \"id\"'");
+    expect(envCombinedSplitString.risks).toContainEqual(
+      expect.objectContaining({ kind: "command-carrier", command: "env", flag: "-S" }),
+    );
 
     for (const command of [
       'env python -c "print(1)"',
