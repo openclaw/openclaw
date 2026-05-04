@@ -20,6 +20,26 @@ describe("command-analysis risks", () => {
     expect(detectInlineEvalArgv(["sudo", "-EH", "python3", "-c", "print(1)"])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["sudo", "-i", "python3", "-c", "print(1)"])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["sudo", "-s", "python3", "-c", "print(1)"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["sudo", "-k", "python3", "-c", "print(1)"])?.flag).toBe("-c");
+    expect(
+      detectInlineEvalArgv(["sudo", "--reset-timestamp", "python3", "-c", "print(1)"])?.flag,
+    ).toBe("-c");
+    expect(
+      detectInlineEvalArgv(["sudo", "--command-timeout=1", "python3", "-c", "print(1)"])?.flag,
+    ).toBe("-c");
+    expect(detectInlineEvalArgv(["sudo", "--chroot=/", "python3", "-c", "print(1)"])?.flag).toBe(
+      "-c",
+    );
+    expect(
+      detectInlineEvalArgv(["sudo", "PYTHONPATH=/tmp", "python3", "-c", "print(1)"])?.flag,
+    ).toBe("-c");
+    expect(
+      detectInlineEvalArgv(["sudo", "-u", "root", "PYTHONPATH=/tmp", "python3", "-c", "print(1)"])
+        ?.flag,
+    ).toBe("-c");
+    expect(
+      detectInlineEvalArgv(["sudo", "--", "PYTHONPATH=/tmp", "python3", "-c", "print(1)"])?.flag,
+    ).toBe("-c");
     expect(detectInlineEvalArgv(["sudo", "--shell", "python3", "-c", "print(1)"])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["sudo", "-Eu", "root", "python3", "-c", "print(1)"])?.flag).toBe(
       "-c",
@@ -42,6 +62,9 @@ describe("command-analysis risks", () => {
   it("keeps carrier inline eval detection command-boundary aware", () => {
     expect(detectInlineEvalArgv(["command", "echo", "python3", "-c", "print(1)"])).toBeNull();
     expect(detectInlineEvalArgv(["sudo", "echo", "python3", "-c", "print(1)"])).toBeNull();
+    expect(
+      detectInlineEvalArgv(["sudo", "FOO=bar", "echo", "python3", "-c", "print(1)"]),
+    ).toBeNull();
     expect(detectInlineEvalArgv(["env", "-S", 'echo python3 -c "print(1)"'])).toBeNull();
     expect(detectInlineEvalArgv(["command", "-v", "python3", "-c", "print(1)"])).toBeNull();
   });
@@ -113,6 +136,18 @@ describe("command-analysis risks", () => {
       "/approve abc",
     ]);
     expect(buildCommandPayloadCandidates(["sudo", "-s", "/approve", "abc"])).toEqual([
+      "/approve abc",
+    ]);
+    expect(buildCommandPayloadCandidates(["sudo", "-k", "/approve", "abc"])).toEqual([
+      "/approve abc",
+    ]);
+    expect(buildCommandPayloadCandidates(["sudo", "--reset-timestamp", "/approve", "abc"])).toEqual(
+      ["/approve abc"],
+    );
+    expect(
+      buildCommandPayloadCandidates(["sudo", "--command-timeout=1", "/approve", "abc"]),
+    ).toEqual(["/approve abc"]);
+    expect(buildCommandPayloadCandidates(["sudo", "OPENCLAW_ENV=1", "/approve", "abc"])).toEqual([
       "/approve abc",
     ]);
     expect(buildCommandPayloadCandidates(["sudo", "--shell", "/approve", "abc"])).toEqual([

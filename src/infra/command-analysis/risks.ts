@@ -74,22 +74,23 @@ function detectCarrierInlineEvalArgvInternal(
   argv: string[],
   seenArgv: Set<string>,
 ): InterpreterInlineEvalHit | null {
-  const key = commandArgvKey(argv);
+  const executableArgv = stripLeadingEnvAssignments(argv);
+  const key = commandArgvKey(executableArgv);
   if (seenArgv.has(key)) {
     return null;
   }
   seenArgv.add(key);
 
-  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(argv);
+  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(executableArgv);
   if (dispatchUnwrap.kind === "unwrapped") {
     return detectInlineEvalArgvInternal(dispatchUnwrap.argv, seenArgv);
   }
 
-  const executable = normalizeExecutableToken(argv[0] ?? "");
+  const executable = normalizeExecutableToken(executableArgv[0] ?? "");
   if (!COMMAND_CARRIER_EXECUTABLES.has(executable)) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(argv);
+  const carriedArgv = resolveCarrierCommandArgv(executableArgv);
   if (!carriedArgv) {
     return null;
   }
