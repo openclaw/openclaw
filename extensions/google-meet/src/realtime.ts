@@ -173,9 +173,13 @@ function hasMeaningfulEchoOverlap(userTokens: string[], assistantTokens: string[
   if (userTokens.length < 4 || assistantTokens.length < 4) {
     return false;
   }
+  const uniqueUserTokens = [...new Set(userTokens)];
+  if (uniqueUserTokens.length < 4) {
+    return false;
+  }
   const assistantTokenSet = new Set(assistantTokens);
-  const overlap = userTokens.filter((token) => assistantTokenSet.has(token)).length;
-  return overlap / userTokens.length >= 0.58;
+  const overlap = uniqueUserTokens.filter((token) => assistantTokenSet.has(token)).length;
+  return overlap / uniqueUserTokens.length >= 0.58;
 }
 
 export function isGoogleMeetLikelyAssistantEchoTranscript(params: {

@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - Plugin tools: keep auth-unavailable optional tools hidden even when another default tool from the same plugin is available and `tools.alsoAllow` names the optional tool. Thanks @vincentkoc.
 - Realtime transcription: report socket closes before provider readiness as closed-before-ready failures instead of mislabeling them as connection timeouts for OpenAI, xAI, and Deepgram streaming transcription. Thanks @vincentkoc.
 - OpenAI/Google Meet: fail realtime voice connection attempts when the socket closes before `session.updated`, avoiding stuck Meet joins waiting on a bridge that never became ready. Thanks @vincentkoc.
+- Google Meet: avoid treating repeated participant words as multiple assistant-overlap matches when suppressing realtime echo transcripts. Thanks @vincentkoc.
 - QA/cache: require the full `CACHE-OK <suffix>` marker before live cache probes stop retrying, so suffix-only prose cannot hide a broken probe response. Thanks @vincentkoc.
 - Slack/Matrix: avoid creating blank progress-draft messages when `streaming.progress.label=false` and progress tool lines are disabled. Thanks @vincentkoc.
 - QA/Matrix: keep the mock OpenAI tool-progress provider aligned with exact-marker Matrix prompts so the hardened live preview scenario still forces a deterministic read before final delivery. Thanks @vincentkoc.

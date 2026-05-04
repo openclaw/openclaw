@@ -3857,6 +3857,13 @@ describe("google-meet plugin", () => {
         nowMs,
       }),
     ).toBe(false);
+    expect(
+      isGoogleMeetLikelyAssistantEchoTranscript({
+        transcript,
+        text: "yes yes yes yes",
+        nowMs,
+      }),
+    ).toBe(false);
   });
 
   it("uses a local barge-in input command to clear active Chrome playback", async () => {
