@@ -272,6 +272,7 @@ function createMockReplyOperation(): {
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
       complete: vi.fn(),
+      completeThen: vi.fn((afterClear: () => void) => afterClear()),
       fail: failMock,
       abortByUser: vi.fn(),
       abortForRestart: vi.fn(),

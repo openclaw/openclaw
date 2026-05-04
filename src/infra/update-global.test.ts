@@ -150,6 +150,47 @@ describe("update global helpers", () => {
     });
   });
 
+  it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      await expect(
+        createGlobalInstallEnv({
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+          PATH: "/home/peter/.npm-global/bin",
+        }),
+      ).resolves.toMatchObject({
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+        NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("preserves explicit npm script shell config for global installs", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      await expect(
+        createGlobalInstallEnv({
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+          NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
+        }),
+      ).resolves.toMatchObject({
+        NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
+      });
+      await expect(
+        createGlobalInstallEnv({
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+          npm_config_script_shell: "/custom/lower-sh",
+        }),
+      ).resolves.toMatchObject({
+        npm_config_script_shell: "/custom/lower-sh",
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("resolves portable Git paths from process-local app data only", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
