@@ -606,10 +606,16 @@ async function ensureGatewayReadyForSubagentSpawn(): Promise<void> {
   let attempt = 0;
   for (;;) {
     try {
+      // Probe at admin scope rather than read scope so that the gateway
+      // connection pairs at a tier sufficient for the subsequent lifecycle
+      // calls (agent → write, sessions.delete / sessions.patch → admin).
+      // A read-scoped probe can trigger close(1008) "pairing required"
+      // on the later higher-scope upgrade (#59428).
       await callSubagentGateway({
         method: "sessions.list",
         params: {},
         timeoutMs: SUBAGENT_GATEWAY_READINESS_TIMEOUT_MS,
+        scopes: [ADMIN_SCOPE],
       });
       return;
     } catch (err) {
