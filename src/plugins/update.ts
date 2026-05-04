@@ -431,13 +431,31 @@ function shouldFallbackBetaClawHubUpdate(result: { ok: false; code?: string }): 
   return shouldFallbackClawHubBridgeToNpm(result);
 }
 
-function shouldFallbackBetaNpmUpdate(result: { ok: false; code?: string; error: string }): boolean {
-  if (result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND) {
-    return true;
+function describeBetaNpmFallback(params: {
+  pluginId: string;
+  betaSpec: string | undefined;
+  fallbackSpec: string;
+  result: { ok: false; code?: string; error: string };
+}): string {
+  const betaSpec = params.betaSpec ?? "the beta npm release";
+  const missingBeta =
+    params.result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND ||
+    /\b(ETARGET|notarget)\b|No matching version found|dist-tag|tag .*not found/i.test(
+      params.result.error,
+    );
+  const reason = missingBeta ? "has no beta npm release" : "failed beta npm update";
+  return `Plugin "${params.pluginId}" ${reason} for ${betaSpec}; falling back to ${params.fallbackSpec}.`;
+}
+
+function npmUpdateFailureSpec(params: {
+  effectiveSpec: string | undefined;
+  fallbackSpec: string | undefined;
+  usedFallback: boolean;
+}): string {
+  if (params.usedFallback && params.fallbackSpec) {
+    return params.fallbackSpec;
   }
-  return /\b(ETARGET|notarget)\b|No matching version found|dist-tag|tag .*not found/i.test(
-    result.error,
-  );
+  return params.effectiveSpec ?? params.fallbackSpec ?? "unknown";
 }
 
 function isDefaultNpmSpecForBetaUpdate(spec: string): { name: string } | null {
@@ -1026,15 +1044,17 @@ export async function updateNpmInstalledPlugins(params: {
         });
         continue;
       }
-      if (
-        !probe.ok &&
-        record.source === "npm" &&
-        npmSpecs?.fallbackSpec &&
-        shouldFallbackBetaNpmUpdate(probe)
-      ) {
+      let usedNpmFallback = false;
+      if (!probe.ok && record.source === "npm" && npmSpecs?.fallbackSpec) {
         logger.warn?.(
-          `Plugin "${pluginId}" has no beta npm release for ${npmSpecs.fallbackLabel ?? effectiveSpec}; falling back to ${npmSpecs.fallbackSpec}.`,
+          describeBetaNpmFallback({
+            pluginId,
+            betaSpec: npmSpecs.fallbackLabel ?? effectiveSpec,
+            fallbackSpec: npmSpecs.fallbackSpec,
+            result: probe,
+          }),
         );
+        usedNpmFallback = true;
         probe = await installPluginFromNpmSpec({
           spec: npmSpecs.fallbackSpec,
           mode: "update",
@@ -1083,7 +1103,11 @@ export async function updateNpmInstalledPlugins(params: {
             record.source === "npm"
               ? formatNpmInstallFailure({
                   pluginId,
-                  spec: effectiveSpec!,
+                  spec: npmUpdateFailureSpec({
+                    effectiveSpec,
+                    fallbackSpec: npmSpecs?.fallbackSpec,
+                    usedFallback: usedNpmFallback,
+                  }),
                   phase: "check",
                   result: probe,
                 })
@@ -1207,15 +1231,17 @@ export async function updateNpmInstalledPlugins(params: {
       });
       continue;
     }
-    if (
-      !result.ok &&
-      record.source === "npm" &&
-      npmSpecs?.fallbackSpec &&
-      shouldFallbackBetaNpmUpdate(result)
-    ) {
+    let usedNpmFallback = false;
+    if (!result.ok && record.source === "npm" && npmSpecs?.fallbackSpec) {
       logger.warn?.(
-        `Plugin "${pluginId}" has no beta npm release for ${npmSpecs.fallbackLabel ?? effectiveSpec}; falling back to ${npmSpecs.fallbackSpec}.`,
+        describeBetaNpmFallback({
+          pluginId,
+          betaSpec: npmSpecs.fallbackLabel ?? effectiveSpec,
+          fallbackSpec: npmSpecs.fallbackSpec,
+          result,
+        }),
       );
+      usedNpmFallback = true;
       result = await installPluginFromNpmSpec({
         spec: npmSpecs.fallbackSpec,
         mode: "update",
@@ -1262,7 +1288,11 @@ export async function updateNpmInstalledPlugins(params: {
           record.source === "npm"
             ? formatNpmInstallFailure({
                 pluginId,
-                spec: effectiveSpec!,
+                spec: npmUpdateFailureSpec({
+                  effectiveSpec,
+                  fallbackSpec: npmSpecs?.fallbackSpec,
+                  usedFallback: usedNpmFallback,
+                }),
                 phase: "update",
                 result: result,
               })
