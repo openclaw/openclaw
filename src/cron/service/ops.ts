@@ -277,6 +277,13 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     await ensureLoadedForRead(state);
     const query = normalizeLowercaseStringOrEmpty(opts?.query);
     const enabledFilter = resolveEnabledFilter(opts);
+    const agentIdFilter =
+      typeof opts?.agentId === "string" && opts.agentId.trim() ? opts.agentId.trim() : null;
+    // Cron jobs are allowed to omit `agentId` for the default agent — delivery
+    // and session-cleanup code already treats missing agentId as the default.
+    // Mirror that here so `cron.list({ agentId: defaultAgentId })` returns
+    // default-agent jobs that omit the field, not an empty page. See #77118.
+    const defaultAgentId = state.deps.defaultAgentId?.trim() || undefined;
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
     const source = state.store?.jobs ?? [];
@@ -286,6 +293,12 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       }
       if (enabledFilter === "disabled" && isJobEnabled(job)) {
         return false;
+      }
+      if (agentIdFilter !== null) {
+        const effectiveOwner = (job.agentId ?? "").trim() || defaultAgentId || "";
+        if (effectiveOwner !== agentIdFilter) {
+          return false;
+        }
       }
       if (!query) {
         return true;

@@ -343,6 +343,12 @@ export const CronListParamsSchema = Type.Object(
     enabled: Type.Optional(CronJobsEnabledFilterSchema),
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
+    /**
+     * Restrict the result set to jobs owned by this agent. Additive,
+     * backwards-compatible filter — historical clients that omit it keep
+     * receiving every agent's jobs. See #77118.
+     */
+    agentId: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

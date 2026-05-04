@@ -235,6 +235,7 @@ export function createDeferred<T>() {
 export function createMockCronStateForJobs(params: {
   jobs: CronJob[];
   nowMs?: number;
+  defaultAgentId?: string;
 }): CronServiceState {
   const nowMs = params.nowMs ?? Date.now();
   return {
@@ -253,6 +254,7 @@ export function createMockCronStateForJobs(params: {
       enqueueSystemEvent: () => {},
       requestHeartbeat: () => {},
       runIsolatedAgentJob: async () => ({ status: "ok" }),
+      ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
       log: {
         debug: () => {},
         info: () => {},
