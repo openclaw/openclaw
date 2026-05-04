@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 
 - fix(device-pair): require pairing scope for pair command [AI]. (#76377) Thanks @pgondhi987.
 - fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
+- CLI/diagnostics: emit an agent-tool hint instead of a `plugins.allow` suggestion when a missing CLI argument matches a plugin's `contracts.tools` entry, so users running an agent tool name at the shell see a clear "use from an agent session" message rather than a misleading allowlist error. Fixes #77214. Thanks @hclsys.
 - Memory/wiki: preserve representation from both corpora in `corpus=all` searches while backfilling unused result capacity, so memory hits are not starved by numerically higher wiki integer scores. Fixes #77337. Thanks @hclsys.
 - Telegram: clean up tool-only draft previews after assistant message boundaries so transient `Surfacing...` tool-status bubbles do not linger when no matching final preview arrives. Thanks @BunsDev.
 - Cron: surface failed isolated-run diagnostics in `cron show`, status, and run history when requested tools are unavailable, so blocked cron runs report the actual tool-policy failure instead of a misleading green result. Fixes #75763. Thanks @RyanSandoval.
