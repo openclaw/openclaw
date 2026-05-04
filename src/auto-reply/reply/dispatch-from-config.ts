@@ -94,7 +94,10 @@ import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
-import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import {
+  isCommandSourceTurn,
+  resolveSourceReplyVisibilityPolicy,
+} from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -682,7 +685,7 @@ export async function dispatchReplyFromConfig(
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
     (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
-      ctx.CommandSource !== "native" &&
+      !isCommandSourceTurn(ctx) &&
       (chatType === "group" || chatType === "channel"
         ? effectiveVisibleReplies !== "automatic"
         : effectiveVisibleReplies === "message_tool"));
