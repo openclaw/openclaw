@@ -138,6 +138,22 @@ describe("codex command", () => {
     );
   });
 
+  it("rejects malformed resume commands before attaching a Codex thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const codexControlRequest = vi.fn();
+    const writeCodexAppServerBinding = vi.fn();
+
+    await expect(
+      handleCodexCommand(createContext("resume thread-123 extra", sessionFile), {
+        deps: createDeps({ codexControlRequest, writeCodexAppServerBinding }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex resume <thread-id>",
+    });
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    expect(writeCodexAppServerBinding).not.toHaveBeenCalled();
+  });
+
   it("shows model ids from Codex app-server", async () => {
     const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
     const deps = createDeps({

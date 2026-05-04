@@ -203,7 +203,7 @@ export async function handleCodexSubcommand(
     return { text: await buildThreads(deps, options.pluginConfig, rest.join(" ")) };
   }
   if (normalized === "resume") {
-    return { text: await resumeThread(deps, ctx, options.pluginConfig, rest[0]) };
+    return { text: await resumeThread(deps, ctx, options.pluginConfig, rest) };
   }
   if (normalized === "bind") {
     return await bindConversation(deps, ctx, options.pluginConfig, rest);
@@ -435,10 +435,11 @@ async function resumeThread(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
-  threadId: string | undefined,
+  args: string[],
 ): Promise<string> {
+  const [threadId] = args;
   const normalizedThreadId = threadId?.trim();
-  if (!normalizedThreadId) {
+  if (!normalizedThreadId || args.length !== 1) {
     return "Usage: /codex resume <thread-id>";
   }
   if (!ctx.sessionFile) {
