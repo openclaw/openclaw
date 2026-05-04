@@ -4,7 +4,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
   expectedIntegrityForUpdate,
   readInstalledPackageVersion,
@@ -176,6 +176,24 @@ function shouldSkipUnchangedNpmInstall(params: {
     params.record.resolvedName === params.metadata.name &&
     params.record.resolvedSpec === params.metadata.resolvedSpec &&
     params.record.resolvedVersion === params.metadata.version
+  );
+}
+
+function shouldBypassTrustedOfficialUnchangedNpmCheck(params: {
+  metadata: NpmSpecResolution;
+  spec: string;
+  trustedSourceLinkedOfficialInstall: boolean;
+}): boolean {
+  if (!params.trustedSourceLinkedOfficialInstall || !params.metadata.version) {
+    return false;
+  }
+  const parsedSpec = parseRegistryNpmSpec(params.spec);
+  return Boolean(
+    parsedSpec &&
+    !isPrereleaseResolutionAllowed({
+      spec: parsedSpec,
+      resolvedVersion: params.metadata.version,
+    }),
   );
 }
 
@@ -853,6 +871,11 @@ export async function updateNpmInstalledPlugins(params: {
       });
       if (metadataResult.ok) {
         if (
+          !shouldBypassTrustedOfficialUnchangedNpmCheck({
+            metadata: metadataResult.metadata,
+            spec: effectiveSpec!,
+            trustedSourceLinkedOfficialInstall,
+          }) &&
           shouldSkipUnchangedNpmInstall({
             currentVersion,
             record,

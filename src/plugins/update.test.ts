@@ -507,6 +507,59 @@ describe("updateNpmInstalledPlugins", () => {
     );
   });
 
+  it("does not skip trusted official default updates when latest resolves to the installed prerelease", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.5.2-beta.2",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.5.2-beta.2",
+      integrity: "sha512-beta",
+      shasum: "beta",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "acpx",
+        targetDir: installPath,
+        version: "2026.5.2",
+        npmResolution: {
+          name: "@openclaw/acpx",
+          version: "2026.5.2",
+          resolvedSpec: "@openclaw/acpx@2026.5.2",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx",
+        installPath,
+        integrity: "sha512-beta",
+        shasum: "beta",
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.5.2-beta.2",
+        resolvedVersion: "2026.5.2-beta.2",
+      }),
+      pluginIds: ["acpx"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/acpx",
+        expectedPluginId: "acpx",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "acpx",
+      status: "updated",
+      currentVersion: "2026.5.2-beta.2",
+      nextVersion: "2026.5.2",
+    });
+  });
+
   it("does not trust official npm updates when the install record package mismatches", async () => {
     const installPath = createInstalledPackageDir({
       name: "@vendor/acpx-fork",
