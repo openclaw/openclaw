@@ -293,6 +293,11 @@ describe("runtime postbuild static assets", () => {
       'export * from "./runtime-plugins.runtime-NewHash.js";\n',
       "utf8",
     );
+    await fs.writeFile(
+      path.join(distDir, "provider-dispatcher.js"),
+      'export * from "./provider-dispatcher-NewHash.js";\n',
+      "utf8",
+    );
 
     writeLegacyRootRuntimeCompatAliases({ rootDir });
 
@@ -302,6 +307,9 @@ describe("runtime postbuild static assets", () => {
     expect(
       await fs.readFile(path.join(distDir, "runtime-plugins.runtime-CNAfmQRG.js"), "utf8"),
     ).toBe('export * from "./runtime-plugins.runtime.js";\n');
+    expect(await fs.readFile(path.join(distDir, "provider-dispatcher-6EQEtc-t.js"), "utf8")).toBe(
+      'export * from "./provider-dispatcher.js";\n',
+    );
   });
 
   it("writes compatibility aliases for previous gateway shutdown chunk names", async () => {

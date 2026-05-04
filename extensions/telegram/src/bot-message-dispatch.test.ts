@@ -2862,7 +2862,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps reasoning preview message when reasoning is streamed but final is answer-only", async () => {
+  it("clears reasoning preview message when reasoning is streamed but final is answer-only", async () => {
     const { reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 999,
       reasoningMessageId: 111,
@@ -2887,7 +2887,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(reasoningDraftStream.update).toHaveBeenCalledWith(
       "Reasoning:\n_Word: strawberry. r appears at 3, 8, 9._",
     );
-    expect(reasoningDraftStream.clear).not.toHaveBeenCalled();
+    expect(reasoningDraftStream.clear).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       999,
