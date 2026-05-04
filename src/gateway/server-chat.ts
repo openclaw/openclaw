@@ -354,8 +354,9 @@ export function createAgentEventHandler({
     agentRunSeq.delete(clientRunId);
 
     if (sessionKey) {
-      void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
-      bumpGatewaySessionMutationVersion();
+      void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt })
+        .then(() => bumpGatewaySessionMutationVersion())
+        .catch(() => undefined);
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
         broadcastToConnIds(
@@ -726,8 +727,9 @@ export function createAgentEventHandler({
     }
 
     if (sessionKey && lifecyclePhase === "start") {
-      void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
-      bumpGatewaySessionMutationVersion();
+      void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt })
+        .then(() => bumpGatewaySessionMutationVersion())
+        .catch(() => undefined);
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
         broadcastToConnIds(
