@@ -304,6 +304,31 @@ export function createOpenClawCodingTools(options?: {
   config?: OpenClawConfig;
   abortSignal?: AbortSignal;
   /**
+   * Skip wrapToolWithBeforeToolCallHook on the returned tools. Used by the
+   * /tools/invoke HTTP surface, which runs runBeforeToolCallHook itself.
+   * Avoids double-firing the hook and adjusted-params leaks; the only safe way
+   * since exec/process are re-spread by applyDeferredFollowupToolDescriptions
+   * after wrapping, dropping symbol-keyed unwrap markers.
+   */
+  skipBeforeToolCallHook?: boolean;
+  /**
+   * Skip the appended `createOpenClawTools(...)` plugin-capable tool block AND
+   * the channel-defined agent tools. Used by the /tools/invoke HTTP surface so
+   * the resolver's `disablePluginTools` intent is honored end-to-end — without
+   * this, a "core-only" HTTP request would still re-enter plugin resolution
+   * via the coding factory. Independent of `includeCoreTools`: keeps the core
+   * coding tools (read/write/edit/exec/process) materialized, only suppresses
+   * plugin-loading.
+   */
+  disablePluginTools?: boolean;
+  /**
+   * Skip materializing tools that require model/provider context to construct
+   * (currently `apply_patch`, gated to OpenAI providers). Used by the
+   * /tools/invoke HTTP surface where no model context is available — without
+   * this, allowlisting a provider-gated tool would silently produce nothing.
+   */
+  excludeProviderGatedTools?: boolean;
+  /**
    * Provider of the currently selected model (used for provider-specific tool quirks).
    * Example: "anthropic", "openai", "google", "openai-codex".
    */
@@ -492,6 +517,7 @@ export function createOpenClawCodingTools(options?: {
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
   const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
+    !options?.excludeProviderGatedTools &&
     applyPatchConfig?.enabled !== false &&
     isOpenAIProvider(options?.modelProvider) &&
     isApplyPatchAllowedForModel({
@@ -698,8 +724,13 @@ export function createOpenClawCodingTools(options?: {
     ...(execTool ? [execTool as unknown as AnyAgentTool] : []),
     ...(processTool ? [processTool as unknown as AnyAgentTool] : []),
     // Channel docking: include channel-defined agent tools (login, etc.).
-    ...(includeCoreTools ? listChannelAgentTools({ cfg: options?.config }) : []),
-    ...(includeCoreTools
+    ...(includeCoreTools && !options?.disablePluginTools
+      ? listChannelAgentTools({ cfg: options?.config })
+      : []),
+    // Plugin-capable OpenClaw tools (channel/messaging/skill plugins). Skipped
+    // when `disablePluginTools` is set so a "core-only" caller (e.g. /tools/invoke
+    // HTTP surface) does not re-enter plugin resolution via the coding factory.
+    ...(includeCoreTools && !options?.disablePluginTools
       ? createOpenClawTools({
           sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
@@ -829,22 +860,25 @@ export function createOpenClawCodingTools(options?: {
     }),
   );
   options?.recordToolPrepStage?.("schema-normalization");
-  const withHooks = normalized.map((tool) =>
-    wrapToolWithBeforeToolCallHook(tool, {
-      agentId,
-      ...(options?.config ? { config: options.config } : {}),
-      sessionKey: options?.sessionKey,
-      sessionId: options?.sessionId,
-      runId: options?.runId,
-      ...(options?.trace ? { trace: options.trace } : {}),
-      loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-    }),
-  );
+  const withHooks = options?.skipBeforeToolCallHook
+    ? normalized
+    : normalized.map((tool) =>
+        wrapToolWithBeforeToolCallHook(tool, {
+          agentId,
+          ...(options?.config ? { config: options.config } : {}),
+          sessionKey: options?.sessionKey,
+          sessionId: options?.sessionId,
+          runId: options?.runId,
+          ...(options?.trace ? { trace: options.trace } : {}),
+          loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+        }),
+      );
   options?.recordToolPrepStage?.("tool-hooks");
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : withHooks;
   options?.recordToolPrepStage?.("abort-wrappers");
+
   const withDeferredFollowupDescriptions = applyDeferredFollowupToolDescriptions(withAbort, {
     agentId,
   });
@@ -854,4 +888,35 @@ export function createOpenClawCodingTools(options?: {
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
   return withDeferredFollowupDescriptions;
+}
+
+// HTTP-safe variant of createOpenClawCodingTools.
+//
+// Returns the same tool set but WITHOUT wrapToolWithBeforeToolCallHook applied
+// to ANY tool — including exec/process which applyDeferredFollowupToolDescriptions
+// re-spreads after wrapping (the spread drops symbol-keyed wrap markers, so a
+// post-construction unwrap step cannot reach those tools).
+//
+// The gateway /tools/invoke handler (handleToolsInvokeHttpRequest) calls
+// runBeforeToolCallHook itself before dispatching execute(); routing
+// hook-wrapped tools through that path would double-fire the hook and leak
+// adjusted-params state (the wrapper stashes adjusted params keyed by
+// toolCallId; only the agent subscribe path drains them via
+// consumeAdjustedParamsForToolCall).
+export function createOpenClawCodingToolsRaw(
+  options?: Parameters<typeof createOpenClawCodingTools>[0],
+): AnyAgentTool[] {
+  return createOpenClawCodingTools({
+    ...options,
+    skipBeforeToolCallHook: true,
+    // The /tools/invoke HTTP surface has no session-bound model context, so
+    // provider-gated tools (apply_patch is OpenAI-only) cannot be safely
+    // materialized here. Drop them rather than letting allowlist opt-in
+    // silently produce nothing.
+    excludeProviderGatedTools: true,
+    // The resolver already gates plugin loading (`disablePluginTools`) for
+    // core-only HTTP requests; honor that here so the coding factory does not
+    // re-enter plugin resolution via the appended createOpenClawTools(...) block.
+    disablePluginTools: true,
+  });
 }

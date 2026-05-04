@@ -37,6 +37,9 @@ vi.mock("../logger.js", () => ({
 
 vi.mock("../agents/pi-tools.js", () => ({
   resolveToolLoopDetectionConfig,
+  // Stub coding-tool factory so resolveGatewayScopedTools can wire the unwrapped
+  // factory into the HTTP surface without pulling the real plugin runtime.
+  createOpenClawCodingToolsRaw: () => [],
 }));
 
 vi.mock("../agents/pi-tools.before-tool-call.js", () => ({

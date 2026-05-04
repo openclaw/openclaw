@@ -205,12 +205,43 @@ vi.mock("../agents/openclaw-tools.js", () => {
   };
 });
 
+// Coding tool stub mock: returns the canonical coding-tool names the resolver
+// would wire on the HTTP surface (Option A: createOpenClawCodingToolsRaw is
+// the unwrapped factory used by /tools/invoke). Includes mutating tools
+// (write, edit, process) to verify the default HTTP deny-list blocks them.
+const codingToolMocks = {
+  createOpenClawCodingToolsRaw: vi.fn(() => [
+    {
+      name: "read",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+      execute: async () => ({ ok: true, result: "coding-tool-result" }),
+    },
+    {
+      name: "write",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "write" }),
+    },
+    {
+      name: "edit",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "edit" }),
+    },
+    {
+      name: "process",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "process" }),
+    },
+  ]),
+};
+
 vi.mock("../agents/pi-tools.js", () => ({
   resolveToolLoopDetectionConfig: hookMocks.resolveToolLoopDetectionConfig,
+  createOpenClawCodingToolsRaw: codingToolMocks.createOpenClawCodingToolsRaw,
 }));
 
 vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
+  consumeAdjustedParamsForToolCall: vi.fn(() => undefined),
 }));
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
@@ -967,6 +998,85 @@ describe("POST /tools/invoke", () => {
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: "browser" });
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+
+  // PR #63919 (Option A): coding tools are wired into /tools/invoke via the
+  // unwrapped factory createOpenClawCodingToolsRaw. The HTTP handler remains
+  // the sole runBeforeToolCallHook caller — no double-fire, no adjusted-params
+  // leak, deny-list still applies.
+
+  it("exposes coding tools via /tools/invoke when allowlisted", async () => {
+    setMainAllowedTools({ allow: ["read"] });
+
+    const res = await invokeToolAuthed({
+      tool: "read",
+      args: { path: "README.md" },
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toEqual({ ok: true, result: "coding-tool-result" });
+    expect(codingToolMocks.createOpenClawCodingToolsRaw).toHaveBeenCalled();
+  });
+
+  it("invokes runBeforeToolCallHook exactly once for a coding tool", async () => {
+    setMainAllowedTools({ allow: ["read"] });
+    hookMocks.runBeforeToolCallHook.mockClear();
+
+    const res = await invokeToolAuthed({
+      tool: "read",
+      args: { path: "README.md" },
+      sessionKey: "main",
+    });
+
+    await expectOkInvokeResponse(res);
+    expect(hookMocks.runBeforeToolCallHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retain adjusted params after a coding-tool invocation", async () => {
+    // Coding tools come from the raw (unwrapped) factory, so the wrapper's
+    // adjustedParamsByToolCallId map is never populated. Asserting via the
+    // mock'd consumer returning undefined documents the invariant.
+    const { consumeAdjustedParamsForToolCall } =
+      await import("../agents/pi-tools.before-tool-call.js");
+    setMainAllowedTools({ allow: ["read"] });
+
+    await invokeToolAuthed({
+      tool: "read",
+      args: { path: "README.md" },
+      sessionKey: "main",
+    });
+
+    expect(consumeAdjustedParamsForToolCall("any-tool-call-id")).toBeUndefined();
+  });
+
+  it("blocks canonical mutating coding tools (write, edit, process) by default", async () => {
+    // Per-bot review: write/edit/process are canonical coding-tool names and
+    // must be on DEFAULT_GATEWAY_HTTP_TOOL_DENY so they require explicit
+    // gateway.tools.allow opt-in even after the resolver wires coding tools
+    // into the HTTP surface.
+    setMainAllowedTools({ allow: ["write", "edit", "process"] });
+
+    const writeRes = await invokeToolAuthed({ tool: "write", sessionKey: "main" });
+    const editRes = await invokeToolAuthed({ tool: "edit", sessionKey: "main" });
+    const processRes = await invokeToolAuthed({ tool: "process", sessionKey: "main" });
+
+    expect(writeRes.status).toBe(404);
+    expect(editRes.status).toBe(404);
+    expect(processRes.status).toBe(404);
+  });
+
+  it("allows canonical mutating coding tools when gateway.tools.allow opts in", async () => {
+    // The deny-list is suppressible per the existing gateway.tools.allow contract.
+    // Operators must be able to opt in to write/edit/process explicitly.
+    setMainAllowedTools({
+      allow: ["write"],
+      gatewayAllow: ["write"],
+    });
+
+    const res = await invokeToolAuthed({ tool: "write", sessionKey: "main" });
+
+    expect(res.status).toBe(200);
   });
 });
 

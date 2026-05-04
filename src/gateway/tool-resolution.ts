@@ -1,5 +1,10 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import { createOpenClawCodingToolsRaw } from "../agents/pi-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -86,7 +91,7 @@ export function resolveGatewayScopedTools(params: {
     agentId ?? resolveDefaultAgentId(params.cfg),
   );
 
-  const allTools = createOpenClawTools({
+  const gatewayTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
@@ -121,6 +126,40 @@ export function resolveGatewayScopedTools(params: {
     ]),
   });
 
+  const surface = params.surface ?? "http";
+
+  // Include coding tools (exec, edit, read, browser, etc.) so they are
+  // reachable via /tools/invoke HTTP API. Normally only wired into agent
+  // session runners; direct invocation without an LLM round-trip is needed
+  // for deterministic automation (linting, tests, browser capture). The
+  // existing gateway.tools deny-list still gates them — exec stays blocked
+  // by default unless gateway.tools.allow names it.
+  //
+  // We use createOpenClawCodingToolsRaw (unwrapped) — handleToolsInvokeHttp
+  // already calls runBeforeToolCallHook before dispatch; passing wrapped
+  // tools would double-fire hooks and leak adjusted-params state.
+  //
+  // Restricted to surface === "http". MCP loopback uses this same resolver
+  // but does not apply DEFAULT_GATEWAY_HTTP_TOOL_DENY, so any coding tool
+  // outside the loopback excludeToolNames set would otherwise become
+  // reachable on loopback even though this PR is scoped to /tools/invoke.
+  // See: https://github.com/openclaw/openclaw/issues/37131
+  const codingTools =
+    surface === "http"
+      ? createOpenClawCodingToolsRaw({
+          agentId: agentId ?? resolveDefaultAgentId(params.cfg),
+          sessionKey: params.sessionKey,
+          workspaceDir,
+          agentDir: resolveAgentDir(params.cfg, agentId ?? resolveDefaultAgentId(params.cfg)),
+          config: params.cfg,
+          senderIsOwner: params.senderIsOwner,
+        })
+      : [];
+
+  // Merge, deduplicating by tool name (gateway tools take precedence).
+  const gatewayToolNames = new Set(gatewayTools.map((t) => t.name));
+  const allTools = [...gatewayTools, ...codingTools.filter((t) => !gatewayToolNames.has(t.name))];
+
   const policyFiltered = applyToolPolicyPipeline({
     tools: allTools,
     toolMeta: (tool: AnyAgentTool) => getPluginToolMeta(tool),
@@ -144,7 +183,6 @@ export function resolveGatewayScopedTools(params: {
     ],
   });
 
-  const surface = params.surface ?? "http";
   const gatewayToolsCfg = params.cfg.gateway?.tools;
   const defaultGatewayDeny =
     surface === "http"

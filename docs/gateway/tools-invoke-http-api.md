@@ -106,16 +106,23 @@ Gateway HTTP also applies a hard deny list by default (even if session policy al
 - `exec` — direct command execution (RCE surface)
 - `spawn` — arbitrary child process creation (RCE surface)
 - `shell` — shell command execution (RCE surface)
-- `fs_write` — arbitrary file mutation on the host
+- `process` — background process orchestration; sibling of exec (RCE surface via shell)
+- `write` — canonical workspace write tool; arbitrary file mutation on the host
+- `edit` — canonical workspace edit tool; arbitrary file mutation on the host
+- `fs_write` — arbitrary file mutation on the host (legacy/alternate name)
 - `fs_delete` — arbitrary file deletion on the host
 - `fs_move` — arbitrary file move/rename on the host
-- `apply_patch` — patch application can rewrite arbitrary files
+- `apply_patch` — patch application can rewrite arbitrary files (note: not currently materializable via `/tools/invoke` even if allowlisted, since this surface has no session-bound model context and `apply_patch` is provider-gated to OpenAI-family models)
 - `sessions_spawn` — session orchestration; spawning agents remotely is RCE
 - `sessions_send` — cross-session message injection
 - `cron` — persistent automation control plane
 - `gateway` — gateway control plane; prevents reconfiguration via HTTP
 - `nodes` — node command relay can reach system.run on paired hosts
 - `whatsapp_login` — interactive setup requiring terminal QR scan; hangs on HTTP
+
+### Coding tools available via HTTP
+
+The default coding-primitive tools (`read`, plus the deny-listed `write`/`edit`/`exec`/`process` if allowlisted) are reachable here for deterministic automation use cases that don't need a full LLM round-trip (linting, tests, browser capture, etc.). They are constructed via the unwrapped factory `createOpenClawCodingToolsRaw()`, which omits plugin-capable tools and provider-gated tools — the resolver's plugin-suppression intent is honored end-to-end.
 
 You can customize this deny list via `gateway.tools`:
 

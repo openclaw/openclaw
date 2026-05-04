@@ -13,7 +13,13 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "spawn",
   // Shell command execution — immediate RCE surface
   "shell",
-  // Arbitrary file mutation on the host
+  // Background process orchestration — sibling of exec; RCE surface via shell
+  "process",
+  // Canonical workspace write tool — arbitrary file mutation on the host
+  "write",
+  // Canonical workspace edit tool — arbitrary file mutation on the host
+  "edit",
+  // Arbitrary file mutation on the host (legacy/alternate name)
   "fs_write",
   // Arbitrary file deletion on the host
   "fs_delete",
