@@ -24186,6 +24186,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
           },
+          bundledDiscovery: {
+            type: "string",
+            enum: ["compat", "allowlist"],
+            title: "Bundled Plugin Discovery",
+            description:
+              'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
+          },
         },
         additionalProperties: false,
         title: "Plugins",
@@ -28864,6 +28871,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Plugin Allowlist",
       help: "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
       tags: ["access"],
+    },
+    "plugins.bundledDiscovery": {
+      label: "Bundled Plugin Discovery",
+      help: 'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
+      tags: ["advanced"],
     },
     "plugins.deny": {
       label: "Plugin Denylist",

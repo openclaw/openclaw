@@ -2222,6 +2222,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "diagnostic.liveness.warning":
               recordLivenessWarning(evt);
               return;
+            case "diagnostic.phase.completed":
+              return;
             case "run.started":
               recordRunStarted(evt, metadata);
               return;

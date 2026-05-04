@@ -16,6 +16,7 @@ import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-m
 import {
   agentOutputHasExpectedOkMarker,
   buildCrossOsReleaseSmokePluginAllowlist,
+  buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
@@ -37,6 +38,7 @@ import {
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
+  isRecoverableWindowsPackagedUpgradeTimeoutError,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
@@ -230,6 +232,19 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "--ignore-scripts",
       "--loglevel=notice",
     ]);
+  });
+
+  it("keeps packaged-upgrade release updates out of service restart flow", () => {
+    const args = buildPackagedUpgradeUpdateArgs("http://127.0.0.1:49152/openclaw-current.tgz");
+    expect(args.slice(0, 6)).toEqual([
+      "update",
+      "--tag",
+      "http://127.0.0.1:49152/openclaw-current.tgz",
+      "--yes",
+      "--json",
+      "--no-restart",
+    ]);
+    expect(args.at(-2)).toBe("--timeout");
   });
 
   it("keeps cross-OS live smoke agent turns on GPT-5-safe timeouts and minimal context", () => {
@@ -728,6 +743,29 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         "win32",
       ),
     ).toBe(true);
+  });
+
+  it("recognizes the shipped Windows updater packaged-upgrade timeout", () => {
+    const error = new Error(
+      "Command timed out: C:\\hostedtoolcache\\windows\\node\\24.15.0\\x64\\node.exe C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\openclaw-upgrade-q9DsA7\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-2026.5.4-beta.1.tgz --yes --json --no-restart --timeout 1500",
+    );
+
+    expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "win32")).toBe(true);
+    expect(
+      isRecoverableWindowsPackagedUpgradeTimeoutError(
+        new Error(
+          "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-current.tgz --yes --json --timeout 1500",
+        ),
+        "win32",
+      ),
+    ).toBe(true);
+    expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "linux")).toBe(false);
+    expect(
+      isRecoverableWindowsPackagedUpgradeTimeoutError(
+        new Error("Command timed out: node openclaw.mjs update --tag openclaw@beta"),
+        "win32",
+      ),
+    ).toBe(false);
   });
 
   it("skips the packaged upgrade status probe after the Windows fallback install", () => {
