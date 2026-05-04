@@ -186,17 +186,26 @@ export function resolvePluginWebProviders<TEntry>(
     workspaceDir: context.workspaceDir,
     requiredPluginIds: context.loadPluginIds,
   });
+  const scopedPluginIds = context.onlyPluginIds;
+  const hasExplicitEmptyScope = scopedPluginIds !== undefined && scopedPluginIds.length === 0;
   if (compatible) {
-    return deps.mapRegistryProviders({
+    const resolved = deps.mapRegistryProviders({
       registry: compatible,
       onlyPluginIds: context.onlyPluginIds,
     });
+    if (resolved.length > 0 || hasExplicitEmptyScope) {
+      return resolved;
+    }
+    // The active gateway plugin registry may be otherwise compatible with this
+    // config while contributing zero web providers (for example when channels,
+    // memory, harnesses, and sidecars are loaded but Brave/web providers are
+    // not). Do not treat that empty active registry as authoritative: fall
+    // through to a scoped provider load below so first-class assistant tools
+    // still see the configured provider.
   }
   if (isPluginRegistryLoadInFlight(loadOptions)) {
     return [];
   }
-  const scopedPluginIds = context.onlyPluginIds;
-  const hasExplicitEmptyScope = scopedPluginIds !== undefined && scopedPluginIds.length === 0;
   if (hasExplicitEmptyScope) {
     return [];
   }
@@ -217,10 +226,15 @@ export function resolveRuntimeWebProviders<TEntry>(
     requiredPluginIds: params.onlyPluginIds,
   });
   if (runtimeRegistry) {
-    return deps.mapRegistryProviders({
+    const resolved = deps.mapRegistryProviders({
       registry: runtimeRegistry,
       onlyPluginIds: params.onlyPluginIds,
     });
+    const hasExplicitEmptyScope =
+      params.onlyPluginIds !== undefined && params.onlyPluginIds.length === 0;
+    if (resolved.length > 0 || hasExplicitEmptyScope) {
+      return resolved;
+    }
   }
   return resolvePluginWebProviders(params, deps);
 }

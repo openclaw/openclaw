@@ -89,7 +89,7 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args, signal) => {
       const runtimeWebSearch =
         options?.lateBindRuntimeConfig === true
-          ? getActiveRuntimeWebToolsMetadata()?.search
+          ? (getActiveRuntimeWebToolsMetadata()?.search ?? options?.runtimeWebSearch)
           : options?.runtimeWebSearch;
       const runtimeProviderId =
         runtimeWebSearch?.selectedProvider ?? runtimeWebSearch?.providerConfigured;
@@ -97,11 +97,20 @@ export function createWebSearchTool(options?: {
         options?.lateBindRuntimeConfig === true
           ? (getActiveSecretsRuntimeSnapshot()?.config ?? options?.config)
           : options?.config;
+      // The active gateway plugin registry may omit the configured search
+      // provider; fall back to the provider id captured in config so the
+      // first-class assistant tool still resolves the right plugin instead of
+      // reporting "no provider available".
+      const configuredProviderId =
+        typeof config?.tools?.web?.search?.provider === "string"
+          ? config.tools.web.search.provider.trim().toLowerCase()
+          : "";
+      const providerSelectionId = runtimeProviderId || configuredProviderId;
       const preferRuntimeProviders =
-        !runtimeProviderId ||
+        Boolean(providerSelectionId) &&
         !resolveManifestContractOwnerPluginId({
           contract: "webSearchProviders",
-          value: runtimeProviderId,
+          value: providerSelectionId,
           origin: "bundled",
           config,
         });
