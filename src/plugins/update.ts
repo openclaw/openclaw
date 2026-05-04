@@ -1056,7 +1056,7 @@ export async function updateNpmInstalledPlugins(params: {
         logger.warn?.(
           formatBetaNpmFallbackWarning({
             pluginId,
-            attemptedSpec: npmSpecs.fallbackLabel ?? effectiveSpec,
+            attemptedSpec: npmSpecs.fallbackLabel ?? effectiveSpec!,
             fallbackSpec: npmSpecs.fallbackSpec,
             result: probe,
           }),
@@ -1242,7 +1242,7 @@ export async function updateNpmInstalledPlugins(params: {
       logger.warn?.(
         formatBetaNpmFallbackWarning({
           pluginId,
-          attemptedSpec: npmSpecs.fallbackLabel ?? effectiveSpec,
+          attemptedSpec: npmSpecs.fallbackLabel ?? effectiveSpec!,
           fallbackSpec: npmSpecs.fallbackSpec,
           result,
         }),
