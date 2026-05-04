@@ -107,7 +107,7 @@ export function createWebSearchTool(options?: {
           : "";
       const providerSelectionId = runtimeProviderId || configuredProviderId;
       const preferRuntimeProviders =
-        Boolean(providerSelectionId) &&
+        !providerSelectionId ||
         !resolveManifestContractOwnerPluginId({
           contract: "webSearchProviders",
           value: providerSelectionId,
