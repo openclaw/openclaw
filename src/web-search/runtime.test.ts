@@ -588,13 +588,46 @@ describe("web search runtime", () => {
     expect(resolveManifestContractOwnerPluginIdMock).toHaveBeenCalledWith(
       expect.objectContaining({
         contract: "webSearchProviders",
-        origin: "bundled",
         value: "duckduckgo",
       }),
     );
     expect(resolveRuntimeWebSearchProvidersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["duckduckgo"],
+      }),
+    );
+  });
+
+  it("discovers a globally-installed (non-bundled) provider when no origin filter is applied", async () => {
+    const braveProvider = createCustomSearchProvider({
+      id: "brave",
+      pluginId: "brave-search",
+      requiresCredential: false,
+    });
+    resolvePluginWebSearchProvidersMock.mockReturnValue([braveProvider]);
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([braveProvider]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "brave",
+              },
+            },
+          },
+        },
+        preferRuntimeProviders: false,
+        args: { query: "global-provider" },
+      }),
+    ).resolves.toMatchObject({
+      provider: "brave",
+    });
+
+    expect(resolvePluginWebSearchProvidersMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        origin: expect.anything(),
       }),
     );
   });
