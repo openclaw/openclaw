@@ -945,6 +945,54 @@ describe("probeChromeMcpHealth confidence levels", () => {
     expect(result.reasons[0]).toBe("file:devtools-active-port-detected");
   });
 
+  it("holds MEDIUM when chrome owner is reported but /json/version times out", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abcdef01-2345-6789-abcd-ef0123456789",
+        portListening: true,
+        portFileMtimeMs: Date.now(),
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({
+        kind: "chrome",
+        process: "Google Chrome",
+        pid: 37121,
+        reason: "lsof-chrome-listener",
+      }),
+      jsonVersionProbe: async () => ({ ok: false, reason: "http-timeout" }),
+    });
+    const result = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(result.level).toBe("medium");
+    expect(result.attached).toBe(false);
+  });
+
+  it("holds MEDIUM when chrome owner is reported but /json/version errors", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abcdef01-2345-6789-abcd-ef0123456789",
+        portListening: true,
+        portFileMtimeMs: Date.now(),
+        reason: "devtools-active-port-detected",
+      }),
+      portOwnerProbe: async () => ({
+        kind: "chrome",
+        process: "Google Chrome",
+        pid: 37121,
+        reason: "lsof-chrome-listener",
+      }),
+      jsonVersionProbe: async () => ({ ok: false, reason: "http-error" }),
+    });
+    const result = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
+    expect(result.level).toBe("medium");
+    expect(result.attached).toBe(false);
+  });
+
   it("returns MEDIUM when toggle+port listen but lsof can't identify the owner", async () => {
     setBrowserAuthSignalProbesForTest({
       fileProbe: async () => ({
@@ -980,9 +1028,8 @@ describe("probeChromeMcpHealth confidence levels", () => {
     });
 
     const result = await probeChromeMcpHealth("chrome-live", { userDataDir: "/tmp/chrome-fake" });
-    expect(result.level).toBe("low");
+    expect(result.level).toBe("medium");
     expect(result.attached).toBe(false);
-    // toggle on + no port + no owner check possible → contradiction, hold
     expect(result.emptyState).toBe(false);
   });
 

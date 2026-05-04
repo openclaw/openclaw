@@ -1289,6 +1289,16 @@ async function computeBrowserAuthConfidence(
       emptyState: ownerNone && !file.portListening,
     };
   }
+  if (file.port === null) {
+    return {
+      level: "medium",
+      attached: false,
+      port: null,
+      browserUuid: file.browserUuid,
+      reasons,
+      emptyState: false,
+    };
+  }
   if (!file.portListening) {
     return {
       level: "low",
@@ -1309,24 +1319,21 @@ async function computeBrowserAuthConfidence(
       emptyState: false,
     };
   }
-  if (file.port !== null) {
-    const json = await signalProbes.jsonVersionProbe(file.port);
-    reasons.push(`http:${json.reason}`);
-    if (!json.ok && json.reason !== "http-timeout" && json.reason !== "http-error") {
-      // The endpoint replied but did not look like Chrome. Hold at MEDIUM.
-      return {
-        level: "medium",
-        attached: false,
-        port: file.port,
-        browserUuid: file.browserUuid,
-        reasons,
-        emptyState: false,
-      };
-    }
+  const json = await signalProbes.jsonVersionProbe(file.port);
+  reasons.push(`http:${json.reason}`);
+  if (json.ok) {
+    return {
+      level: "high",
+      attached: true,
+      port: file.port,
+      browserUuid: file.browserUuid,
+      reasons,
+      emptyState: false,
+    };
   }
   return {
-    level: "high",
-    attached: true,
+    level: "medium",
+    attached: false,
     port: file.port,
     browserUuid: file.browserUuid,
     reasons,
