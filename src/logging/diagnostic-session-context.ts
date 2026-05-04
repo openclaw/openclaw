@@ -106,11 +106,12 @@ export function readLastAssistantFromSessionFile(filePath: string | undefined): 
     return undefined;
   }
   const tail = readTailText(filePath);
-  if (!tail.text) {
+  if (!tail?.text) {
     return undefined;
   }
-  const lines = tail.text.split(/\r?\n/).filter(Boolean);
-  if (tail.truncated && lines.length > 0) {
+  const { text, truncated } = tail;
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  if (truncated && lines.length > 0) {
     lines.shift();
   }
   for (let index = lines.length - 1; index >= 0; index -= 1) {
