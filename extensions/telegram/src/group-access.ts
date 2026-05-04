@@ -1,22 +1,22 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-types";
 import type {
   TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 import { evaluateMatchedGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { isSenderAllowed, type NormalizedAllowFrom } from "./bot-access.js";
 import { firstDefined } from "./bot-access.js";
 
-export type TelegramGroupBaseBlockReason =
+type TelegramGroupBaseBlockReason =
   | "group-disabled"
   | "topic-disabled"
   | "group-override-unauthorized";
 
-export type TelegramGroupBaseAccessResult =
+type TelegramGroupBaseAccessResult =
   | { allowed: true }
   | { allowed: false; reason: TelegramGroupBaseBlockReason };
 
@@ -91,14 +91,14 @@ export const evaluateTelegramGroupBaseAccess = (params: {
   return { allowed: true };
 };
 
-export type TelegramGroupPolicyBlockReason =
+type TelegramGroupPolicyBlockReason =
   | "group-policy-disabled"
   | "group-policy-allowlist-no-sender"
   | "group-policy-allowlist-empty"
   | "group-policy-allowlist-unauthorized"
   | "group-chat-not-allowed";
 
-export type TelegramGroupPolicyAccessResult =
+type TelegramGroupPolicyAccessResult =
   | { allowed: true; groupPolicy: "open" | "disabled" | "allowlist" }
   | {
       allowed: false;

@@ -8,6 +8,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 
 // ---------------------------------------------------------------------------
 // Mocks (hoisted to module top level)
@@ -17,6 +18,7 @@ const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((_opts?: unknown)
 const listChatChannels = vi.hoisted(() => vi.fn((): unknown[] => []));
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
+const loadPluginRegistrySnapshotWithMetadata = vi.hoisted(() => vi.fn());
 const listPluginContributionIds = vi.hoisted(() => vi.fn((_params?: unknown): string[] => []));
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn(({ config }: { config: unknown }) => ({
@@ -34,6 +36,7 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
 }));
 vi.mock("../../channels/registry.js", () => ({
   listChatChannels: () => listChatChannels(),
+  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
 }));
 vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...a: unknown[]) => loadPluginManifestRegistry(...a),
@@ -42,6 +45,8 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
     loadPluginManifestRegistry(...args),
   loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
+  loadPluginRegistrySnapshotWithMetadata: (...args: unknown[]) =>
+    loadPluginRegistrySnapshotWithMetadata(...args),
   listPluginContributionIds: (...args: unknown[]) => listPluginContributionIds(...args),
 }));
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -71,6 +76,11 @@ beforeEach(() => {
     plugins: [],
     diagnostics: [],
   });
+  loadPluginRegistrySnapshotWithMetadata.mockImplementation((...args: unknown[]) => ({
+    snapshot: loadPluginRegistrySnapshot(...args),
+    source: "derived",
+    diagnostics: [],
+  }));
   listPluginContributionIds.mockReturnValue([]);
   listChatChannels.mockReturnValue([]);
 });
@@ -89,6 +99,21 @@ function createWorkspaceCatalogEntry(id: string, label: string) {
       order: 1,
     },
     install: { npmSpec: id },
+  };
+}
+
+function createManifestChannelPlugin(id: string, channels: string[]): PluginManifestRecord {
+  return {
+    id,
+    channels,
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: "workspace",
+    rootDir: `/tmp/openclaw-test/${id}`,
+    source: `/tmp/openclaw-test/${id}/index.ts`,
+    manifestPath: `/tmp/openclaw-test/${id}/openclaw.plugin.json`,
   };
 }
 
@@ -190,7 +215,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
     };
     listChannelPluginCatalogEntries.mockReturnValue([workspaceEntry]);
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "trusted-telegram-shadow", channels: ["telegram"] }],
+      plugins: [createManifestChannelPlugin("trusted-telegram-shadow", ["telegram"])],
       diagnostics: [],
     });
     listPluginContributionIds.mockReturnValue(["telegram"]);
@@ -241,7 +266,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       },
     }));
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "trusted-telegram-shadow", channels: ["telegram"] }],
+      plugins: [createManifestChannelPlugin("trusted-telegram-shadow", ["telegram"])],
       diagnostics: [],
     });
     listPluginContributionIds.mockReturnValue(["telegram"]);
@@ -286,7 +311,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       autoEnabledReasons: {},
     }));
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "my-cool-plugin", channels: ["my-cool-plugin"] }],
+      plugins: [createManifestChannelPlugin("my-cool-plugin", ["my-cool-plugin"])],
       diagnostics: [],
     });
     listPluginContributionIds.mockReturnValue(["my-cool-plugin"]);

@@ -9,13 +9,17 @@
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolvePluginTools } from "../plugins/tools.js";
+import { routeLogsToStderr } from "../logging/console.js";
+import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
 function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
+  ensureStandalonePluginToolRegistryLoaded({
+    context: { config },
+  });
   return resolvePluginTools({
     context: { config },
     suppressNameConflicts: true,
@@ -28,13 +32,17 @@ export function createPluginToolsMcpServer(
     tools?: AnyAgentTool[];
   } = {},
 ): Server {
-  const cfg = params.config ?? loadConfig();
+  const cfg = params.config ?? getRuntimeConfig();
   const tools = params.tools ?? resolveTools(cfg);
   return createToolsMcpServer({ name: "openclaw-plugin-tools", tools });
 }
 
 export async function servePluginToolsMcp(): Promise<void> {
-  const config = loadConfig();
+  // MCP stdio requires stdout to stay protocol-only, including during plugin
+  // tool discovery before the transport is connected.
+  routeLogsToStderr();
+
+  const config = getRuntimeConfig();
   const tools = resolveTools(config);
   const server = createPluginToolsMcpServer({ config, tools });
   if (tools.length === 0) {

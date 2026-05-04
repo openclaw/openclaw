@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -14,33 +15,31 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
-let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
-let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
-  null;
-let channelPluginRuntimePromise: Promise<typeof import("../../channels/plugins/index.js")> | null =
-  null;
-let messageActionRuntimePromise: Promise<
-  typeof import("../../infra/outbound/message-action-runner.js")
-> | null = null;
+const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
+const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-tts.runtime.js"),
+);
+const channelPluginRuntimeLoader = createLazyImportLoader(
+  () => import("../../channels/plugins/index.js"),
+);
+const messageActionRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/message-action-runner.js"),
+);
 
 function loadRouteReplyRuntime() {
-  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
-  return routeReplyRuntimePromise;
+  return routeReplyRuntimeLoader.load();
 }
 
 function loadDispatchAcpTtsRuntime() {
-  dispatchAcpTtsRuntimePromise ??= import("./dispatch-acp-tts.runtime.js");
-  return dispatchAcpTtsRuntimePromise;
+  return dispatchAcpTtsRuntimeLoader.load();
 }
 
 function loadChannelPluginRuntime() {
-  channelPluginRuntimePromise ??= import("../../channels/plugins/index.js");
-  return channelPluginRuntimePromise;
+  return channelPluginRuntimeLoader.load();
 }
 
 function loadMessageActionRuntime() {
-  messageActionRuntimePromise ??= import("../../infra/outbound/message-action-runner.js");
-  return messageActionRuntimePromise;
+  return messageActionRuntimeLoader.load();
 }
 
 export type AcpDispatchDeliveryMeta = {
@@ -91,6 +90,7 @@ async function maybeApplyAcpTts(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   channel?: string;
+  accountId?: string;
   kind: ReplyDispatchKind;
   inboundAudio: boolean;
   ttsAuto?: TtsAutoMode;
@@ -103,6 +103,8 @@ async function maybeApplyAcpTts(params: {
     cfg: params.cfg,
     sessionAuto: params.ttsAuto,
     agentId: params.agentId,
+    channelId: params.channel,
+    accountId: params.accountId,
   });
   if (!ttsStatus) {
     return params.payload;
@@ -110,7 +112,14 @@ async function maybeApplyAcpTts(params: {
   if (ttsStatus.autoMode === "inbound" && !params.inboundAudio) {
     return params.payload;
   }
-  if (params.kind !== "final" && resolveConfiguredTtsMode(params.cfg, params.agentId) === "final") {
+  if (
+    params.kind !== "final" &&
+    resolveConfiguredTtsMode(params.cfg, {
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId,
+    }) === "final"
+  ) {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
@@ -122,6 +131,7 @@ async function maybeApplyAcpTts(params: {
     inboundAudio: params.inboundAudio,
     ttsAuto: params.ttsAuto,
     agentId: params.agentId,
+    accountId: params.accountId,
   });
 }
 
@@ -170,11 +180,23 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  suppressReplyLifecycle?: boolean;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
 }): AcpDispatchDeliveryCoordinator {
+  const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
+  const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
+  const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
+  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const resolvedAccountId =
+    explicitAccountId ??
+    normalizeOptionalString(
+      (
+        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
+      )?.[routedChannel ?? directChannel ?? ""]?.defaultAccount,
+    );
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
@@ -184,6 +206,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       cfg: params.cfg,
       ttsAuto: params.sessionTtsAuto,
       agentId: params.agentId,
+      channelId: params.ttsChannel,
+      accountId: resolvedAccountId,
     })
       ? createTtsDirectiveTextStreamCleaner()
       : undefined,
@@ -200,18 +224,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
-  const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
-  const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
-  const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
-  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
-  const resolvedAccountId =
-    explicitAccountId ??
-    normalizeOptionalString(
-      (
-        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-      )?.[routedChannel ?? directChannel ?? ""]?.defaultAccount,
-    );
-
   const settleDirectVisibleText = async () => {
     if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
       return;
@@ -233,11 +245,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     state.startedReplyLifecycle = true;
-    // When delivery is suppressed (e.g. sendPolicy: "deny"), do not fire the
-    // onReplyStart callback — channels wire it to typing indicators / lifecycle
-    // notifications that should not leak outbound events while the session is
-    // under a deny policy. See #53328.
-    if (params.suppressUserDelivery) {
+    // Delivery and lifecycle suppression are separate: message-tool-only turns
+    // suppress automatic user delivery but still need typing/lifecycle signals.
+    if (params.suppressReplyLifecycle) {
       return;
     }
     void Promise.resolve(params.onReplyStart?.()).catch((error) => {
@@ -336,6 +346,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       channel: params.ttsChannel,
+      accountId: resolvedAccountId,
       kind,
       inboundAudio: params.inboundAudio,
       ttsAuto: params.sessionTtsAuto,

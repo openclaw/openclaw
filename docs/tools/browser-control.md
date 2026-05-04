@@ -21,6 +21,7 @@ For local integrations only, the Gateway exposes a small loopback HTTP API:
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
+- Permissions: `POST /permissions/grant`
 - Debugging: `GET /console`, `POST /pdf`
 - Debugging: `GET /errors`, `GET /requests`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
 - Network: `POST /response/body`
@@ -95,10 +96,10 @@ What still needs Playwright:
 Element screenshots also reject `--full-page`; the route returns `fullPage is
 not supported for element screenshots`.
 
-If you see `Playwright is not available in this gateway build`, repair the
-bundled browser plugin runtime dependencies so `playwright-core` is installed,
-then restart the gateway. For packaged installs, run `openclaw doctor --fix`.
-For Docker, also install the Chromium browser binaries as shown below.
+If you see `Playwright is not available in this gateway build`, the packaged
+Gateway is missing the core browser runtime dependency. Reinstall or update
+OpenClaw, then restart the gateway. For Docker, also install the Chromium
+browser binaries as shown below.
 
 #### Docker Playwright install
 

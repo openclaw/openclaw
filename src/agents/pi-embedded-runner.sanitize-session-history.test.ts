@@ -30,9 +30,7 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => ({
   __testing: {},
-  clearProviderRuntimeHookCache: vi.fn(),
   prepareProviderExtraParams: vi.fn(() => undefined),
-  resetProviderRuntimeHookCacheForTest: vi.fn(),
   resolveProviderHookPlugin: vi.fn(() => undefined),
   resolveProviderPluginsForHooks: vi.fn(() => []),
   resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
@@ -1130,6 +1128,122 @@ describe("sanitizeSessionHistory", () => {
 
     expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
       { type: "text", text: "Pong" },
+    ]);
+  });
+
+  it("drops metadata-only assistant replay turns before provider validation", async () => {
+    setNonGoogleModelApi();
+
+    const metadataOnlyText = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"channel:123","sender":"OpenClaw"}',
+      "```",
+    ].join("\n");
+    const messages = castAgentMessages([
+      makeUserMessage("First"),
+      makeAssistantMessage([{ type: "text", text: metadataOnlyText }]),
+      makeUserMessage("Second"),
+    ]);
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(sanitized.map((msg) => msg.role)).toEqual(["user", "user"]);
+    expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
+
+    const validated = await validateReplayTurns({
+      messages: sanitized,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(validated).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "First" },
+          { type: "text", text: "Second" },
+        ],
+        timestamp: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("strips prior assistant reasoning for Gemma 4 OpenAI-compatible replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "private reasoning",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "visible answer" },
+      ]),
+      makeUserMessage("second"),
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "lmstudio",
+      modelId: "google/gemma-4-26b-a4b-it",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "text", text: "visible answer" },
+    ]);
+  });
+
+  it("preserves current Gemma 4 tool-call reasoning during tool continuation replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("look up the answer"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "call the tool",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "toolCall", id: "call123456", name: "lookup", arguments: {} },
+      ]),
+      {
+        role: "toolResult",
+        toolCallId: "call123456",
+        toolName: "lookup",
+        content: "42",
+        timestamp: nextTimestamp(),
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "lmstudio",
+      modelId: "google/gemma-4-26b-a4b-it",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      {
+        type: "thinking",
+        thinking: "call the tool",
+        thinkingSignature: "reasoning_content",
+      },
+      { type: "toolCall", id: "call123456", name: "lookup", arguments: {} },
     ]);
   });
 

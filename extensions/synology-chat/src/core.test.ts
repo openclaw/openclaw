@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
@@ -317,7 +317,12 @@ describe("synology-chat security helpers", () => {
     expect(checkUserAllowed("user1", ["user1", "user2"])).toBe(true);
     expect(checkUserAllowed("user3", ["user1", "user2"])).toBe(false);
 
-    expect(authorizeUserForDm("user1", "open", [])).toEqual({ allowed: true });
+    expect(authorizeUserForDm("user1", "open", [])).toEqual({
+      allowed: false,
+      reason: "not-allowlisted",
+    });
+    expect(authorizeUserForDm("user1", "open", ["*"])).toEqual({ allowed: true });
+    expect(authorizeUserForDm("user1", "open", ["user1"])).toEqual({ allowed: true });
     expect(authorizeUserForDm("user1", "disabled", ["user1"])).toEqual({
       allowed: false,
       reason: "disabled",

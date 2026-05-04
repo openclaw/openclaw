@@ -5,6 +5,8 @@ import { registerModelsCli } from "./models-cli.js";
 
 const mocks = vi.hoisted(() => ({
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
+  modelsSetCommand: vi.fn().mockResolvedValue(undefined),
+  modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
   modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
@@ -17,36 +19,15 @@ const {
   modelsAuthLoginCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  modelsSetCommand,
+  modelsSetImageCommand,
   modelsStatusCommand,
 } = mocks;
 
-vi.mock("../commands/models.js", () => ({
-  modelsStatusCommand: mocks.modelsStatusCommand,
-  modelsAliasesAddCommand: mocks.noopAsync,
-  modelsAliasesListCommand: mocks.noopAsync,
-  modelsAliasesRemoveCommand: mocks.noopAsync,
-  modelsAuthAddCommand: mocks.noopAsync,
-  modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
-  modelsAuthOrderClearCommand: mocks.noopAsync,
-  modelsAuthOrderGetCommand: mocks.noopAsync,
-  modelsAuthOrderSetCommand: mocks.noopAsync,
-  modelsAuthPasteTokenCommand: mocks.noopAsync,
-  modelsAuthSetupTokenCommand: mocks.noopAsync,
-  modelsFallbacksAddCommand: mocks.noopAsync,
-  modelsFallbacksClearCommand: mocks.noopAsync,
-  modelsFallbacksListCommand: mocks.noopAsync,
-  modelsFallbacksRemoveCommand: mocks.noopAsync,
-  modelsImageFallbacksAddCommand: mocks.noopAsync,
-  modelsImageFallbacksClearCommand: mocks.noopAsync,
-  modelsImageFallbacksListCommand: mocks.noopAsync,
-  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
+vi.mock("../commands/models/list.list-command.js", () => ({
   modelsListCommand: mocks.noopAsync,
-  modelsScanCommand: mocks.noopAsync,
-  modelsSetCommand: mocks.noopAsync,
-  modelsSetImageCommand: mocks.noopAsync,
 }));
-vi.mock("../commands/models/list.js", () => ({
-  modelsListCommand: mocks.noopAsync,
+vi.mock("../commands/models/list.status-command.js", () => ({
   modelsStatusCommand: mocks.modelsStatusCommand,
 }));
 vi.mock("../commands/models/auth.js", () => ({
@@ -81,10 +62,10 @@ vi.mock("../commands/models/scan.js", () => ({
   modelsScanCommand: mocks.noopAsync,
 }));
 vi.mock("../commands/models/set.js", () => ({
-  modelsSetCommand: mocks.noopAsync,
+  modelsSetCommand: mocks.modelsSetCommand,
 }));
 vi.mock("../commands/models/set-image.js", () => ({
-  modelsSetImageCommand: mocks.noopAsync,
+  modelsSetImageCommand: mocks.modelsSetImageCommand,
 }));
 
 describe("models cli", () => {
@@ -93,6 +74,8 @@ describe("models cli", () => {
     modelsAuthLoginCommand.mockClear();
     modelsAuthPasteTokenCommand.mockClear();
     modelsAuthSetupTokenCommand.mockClear();
+    modelsSetCommand.mockClear();
+    modelsSetImageCommand.mockClear();
     modelsStatusCommand.mockClear();
   });
 
@@ -183,6 +166,23 @@ describe("models cli", () => {
     await runModelsCommand(args);
 
     expect(command).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Object));
+  });
+
+  it.each([
+    {
+      label: "set",
+      args: ["models", "--agent", "poe", "set", "anthropic/claude-sonnet-4-6"],
+      command: modelsSetCommand,
+    },
+    {
+      label: "set-image",
+      args: ["models", "--agent", "poe", "set-image", "openai/gpt-image-1"],
+      command: modelsSetImageCommand,
+    },
+  ])("rejects parent --agent for models $label", async ({ args, command }) => {
+    await expect(runModelsCommand(args)).rejects.toThrow("does not support `--agent`");
+
+    expect(command).not.toHaveBeenCalled();
   });
 
   it("shows help for models auth without error exit", async () => {

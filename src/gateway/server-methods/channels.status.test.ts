@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   applyPluginAutoEnable: vi.fn(),
   listChannelPlugins: vi.fn(),
   buildChannelUiCatalog: vi.fn(),
@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+  getRuntimeConfig: mocks.getRuntimeConfig,
   readConfigFileSnapshot: vi.fn(async () => ({
     config: {},
     path: "openclaw.config.json",
@@ -55,6 +55,7 @@ function createOptions(
     isWebchatConnect: () => false,
     respond: vi.fn(),
     context: {
+      getRuntimeConfig: mocks.getRuntimeConfig,
       getRuntimeSnapshot: () => ({
         channels: {},
         channelAccounts: {},
@@ -67,7 +68,7 @@ function createOptions(
 describe("channelsHandlers channels.status", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.buildChannelUiCatalog.mockReturnValue({
       order: ["whatsapp"],
@@ -160,6 +161,62 @@ describe("channelsHandlers channels.status", () => {
         timeoutMs: 30_000,
         cfg: autoEnabledConfig,
       }),
+    );
+  });
+
+  it("annotates unhealthy channel snapshots and includes event-loop health", async () => {
+    const now = Date.now();
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      lastStartAt: now - 60 * 60_000,
+      lastTransportActivityAt: now - 40 * 60_000,
+    });
+    const eventLoop = {
+      degraded: true,
+      reasons: ["event_loop_delay"],
+      intervalMs: 62_000,
+      delayP99Ms: 62_000,
+      delayMaxMs: 62_000,
+      utilization: 1,
+      cpuCoreRatio: 1,
+    };
+    const respond = vi.fn();
+
+    await channelsHandlers["channels.status"](
+      createOptions(
+        { probe: false, timeoutMs: 2000 },
+        {
+          respond,
+          context: {
+            getRuntimeConfig: mocks.getRuntimeConfig,
+            getRuntimeSnapshot: () => ({
+              channels: {},
+              channelAccounts: {},
+            }),
+            getEventLoopHealth: () => eventLoop,
+          } as never,
+        },
+      ),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        eventLoop,
+        channelAccounts: {
+          whatsapp: [
+            expect.objectContaining({
+              healthState: "stale-socket",
+            }),
+          ],
+        },
+      }),
+      undefined,
     );
   });
 });

@@ -26,8 +26,10 @@ Primary goals:
 default. For heavy or repetitive tasks, set a cheaper model for sub-agents
 and keep your main agent on a higher-quality model. Configure via
 `agents.defaults.subagents.model` or per-agent overrides. When a child
-genuinely needs the requester's current transcript, the agent can request
-`context: "fork"` on that one spawn.
+    genuinely needs the requester's current transcript, the agent can request
+    `context: "fork"` on that one spawn. Thread-bound subagent sessions default
+    to `context: "fork"` because they branch the current conversation into a
+    follow-up thread.
 </Note>
 
 ## Slash command
@@ -44,6 +46,8 @@ session**:
 /subagents steer <id|#> <message>
 /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]
 ```
+
+Use top-level [`/steer <message>`](/tools/steer) to steer the current requester session's active run. Use `/subagents steer <id|#> <message>` when the target is a child run.
 
 `/subagents info` shows run metadata (status, timestamps, session id,
 transcript path, cleanup). Use `sessions_history` for a bounded,
@@ -75,12 +79,14 @@ requester chat when the run finishes.
     - On completion, the sub-agent announces a summary/result message back to the requester chat channel.
     - Completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; inspect status only on-demand for debugging or intervention.
     - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
+
   </Accordion>
   <Accordion title="Manual-spawn delivery resilience">
     - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
     - If direct delivery fails, it falls back to queue routing.
     - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
     - Completion delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available; if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
+
   </Accordion>
   <Accordion title="Completion handoff metadata">
     The completion handoff to the requester session is runtime-generated
@@ -98,6 +104,7 @@ requester chat when the run finishes.
     - `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
     - For ACP harness sessions (Claude Code, Gemini CLI, OpenCode, or explicit Codex ACP/acpx), use `sessions_spawn` with `runtime: "acp"` when the tool advertises that runtime. See [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. When the `codex` plugin is enabled, Codex chat/thread control should prefer `/codex ...` over ACP unless the user explicitly asks for ACP/acpx.
     - OpenClaw hides `runtime: "acp"` until ACP is enabled, the requester is not sandboxed, and a backend plugin such as `acpx` is loaded. `runtime: "acp"` expects an external ACP harness id, or an `agents.list[]` entry with `runtime.type="acp"`; use the default sub-agent runtime for normal OpenClaw config agents from `agents_list`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -120,6 +127,14 @@ Starts a sub-agent run with `deliver: false` on the global `subagent` lane,
 then runs an announce step and posts the announce reply to the requester
 chat channel.
 
+Availability depends on the caller's effective tool policy. The `coding` and
+`full` profiles expose `sessions_spawn` by default. The `messaging` profile
+does not; add `tools.alsoAllow: ["sessions_spawn", "sessions_yield",
+"subagents"]` or use `tools.profile: "coding"` for agents that should delegate
+work. Channel/group, provider, sandbox, and per-agent allow/deny policies can
+still remove the tool after the profile stage. Use `/tools` from the same
+session to confirm the effective tool list.
+
 **Defaults:**
 
 - **Model:** inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
@@ -139,6 +154,12 @@ chat channel.
 </ParamField>
 <ParamField path="runtime" type='"subagent" | "acp"' default="subagent">
   `acp` is only for external ACP harnesses (`claude`, `droid`, `gemini`, `opencode`, or explicitly requested Codex ACP/acpx) and for `agents.list[]` entries whose `runtime.type` is `acp`.
+</ParamField>
+<ParamField path="resumeSessionId" type="string">
+  ACP-only. Resumes an existing ACP harness session when `runtime: "acp"`; ignored for native sub-agent spawns.
+</ParamField>
+<ParamField path="streamTo" type='"parent"'>
+  ACP-only. Streams ACP run output to the parent session when `runtime: "acp"`; omit for native sub-agent spawns.
 </ParamField>
 <ParamField path="model" type="string">
   Override the sub-agent model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
@@ -162,7 +183,7 @@ chat channel.
   `require` rejects spawn unless the target child runtime is sandboxed.
 </ParamField>
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
-  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Use `fork` only when the child needs the current transcript.
+  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
 </ParamField>
 
 <Warning>
@@ -186,7 +207,7 @@ persistent thread-bound subagent sessions (`sessions_spawn` with
 `channels.discord.threadBindings.enabled`,
 `channels.discord.threadBindings.idleHours`,
 `channels.discord.threadBindings.maxAgeHours`, and
-`channels.discord.threadBindings.spawnSubagentSessions`.
+`channels.discord.threadBindings.spawnSessions`.
 
 ### Quick flow
 
@@ -230,7 +251,7 @@ See [Configuration reference](/gateway/configuration-reference) and
 ### Allowlist
 
 <ParamField path="agents.list[].subagents.allowAgents" type="string[]">
-  List of agent ids that can be targeted via `agentId` (`["*"]` allows any). Default: only the requester agent.
+  List of agent ids that can be targeted via explicit `agentId` (`["*"]` allows any). Default: only the requester agent. If you set a list and still want the requester to spawn itself with `agentId`, include the requester id in the list.
 </ParamField>
 <ParamField path="agents.defaults.subagents.allowAgents" type="string[]">
   Default target-agent allowlist used when the requester agent does not set its own `subagents.allowAgents`.
@@ -494,6 +515,14 @@ their child session is marked `abortedLastRun: true`. Those
 restart-aborted child sessions remain recoverable through the sub-agent
 orphan recovery flow, which sends a synthetic resume message before
 clearing the aborted marker.
+
+Automatic restart recovery is bounded per child session. If the same
+sub-agent child is accepted for orphan recovery repeatedly inside the
+rapid re-wedge window, OpenClaw persists a recovery tombstone on that
+session and stops auto-resuming it on later restarts. Run
+`openclaw tasks maintenance --apply` to reconcile the task record, or
+`openclaw doctor --fix` to clear stale aborted recovery flags on
+tombstoned sessions.
 
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /

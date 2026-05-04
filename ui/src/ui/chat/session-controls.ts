@@ -6,6 +6,8 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
+import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
+import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { parseAgentSessionKey } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
@@ -70,7 +72,6 @@ export function renderChatSessionSelect(
 }
 
 async function refreshSessionOptions(state: AppViewState) {
-  const { loadSessions } = await import("../controllers/sessions.ts");
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     activeMinutes: 0,
     limit: 0,
@@ -80,8 +81,6 @@ async function refreshSessionOptions(state: AppViewState) {
 }
 
 async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewState) {
-  const { refreshVisibleToolsEffectiveForCurrentSession } =
-    await import("../controllers/agents.ts");
   return refreshVisibleToolsEffectiveForCurrentSession(state);
 }
 
@@ -183,12 +182,17 @@ function resolveThinkingLevelOptions(
   if (activeRow?.thinkingLevels?.length) {
     return activeRow.thinkingLevels;
   }
-  if (defaults?.thinkingLevels?.length) {
+  const sessionModelMatchesDefaults =
+    (!activeRow?.modelProvider || activeRow.modelProvider === defaults?.modelProvider) &&
+    (!activeRow?.model || activeRow.model === defaults?.model);
+  if (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length) {
     return defaults.thinkingLevels;
   }
   const labels =
-    activeRow?.thinkingOptions ??
-    defaults?.thinkingOptions ??
+    (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
+    (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+      ? defaults.thinkingOptions
+      : null) ??
     (provider && model ? listThinkingLevelLabels(provider, model) : listThinkingLevelLabels());
   return labels.map((label) => ({
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),

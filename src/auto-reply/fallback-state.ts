@@ -9,7 +9,14 @@ export {
 } from "../status/fallback-notice-state.js";
 
 const FALLBACK_REASON_PART_MAX = 80;
-const TRANSIENT_FALLBACK_REASONS = new Set(["rate_limit", "overloaded", "timeout"]);
+const TRANSIENT_FALLBACK_REASONS = new Set([
+  "rate_limit",
+  "overloaded",
+  "timeout",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+]);
 const TRANSIENT_ERROR_DETAIL_HINT_RE =
   /\b(?:429|5\d\d|too many requests|usage limit|quota|try again in|retry[- ]after|seconds?|minutes?|hours?|temporarily unavailable|overloaded|service unavailable|throttl)\b/i;
 
@@ -42,7 +49,7 @@ function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): str
   return formatted;
 }
 
-export function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
+function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
   const errorPreview = formatFallbackAttemptErrorPreview(attempt);
   if (errorPreview) {
     return errorPreview;
@@ -65,7 +72,7 @@ function formatFallbackAttemptSummary(attempt: RuntimeFallbackAttempt): string {
   return `${formatProviderModelRef(attempt.provider, attempt.model)} ${formatFallbackAttemptReason(attempt)}`;
 }
 
-export function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
+function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
   const firstAttempt = attempts[0];
   const firstReason = firstAttempt
     ? formatFallbackAttemptReason(firstAttempt)
@@ -74,7 +81,7 @@ export function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): 
   return `${truncateFallbackReasonPart(firstReason)}${moreAttempts}`;
 }
 
-export function buildFallbackAttemptSummaries(attempts: RuntimeFallbackAttempt[]): string[] {
+function buildFallbackAttemptSummaries(attempts: RuntimeFallbackAttempt[]): string[] {
   return attempts.map((attempt) =>
     truncateFallbackReasonPart(formatFallbackAttemptSummary(attempt)),
   );
@@ -109,7 +116,7 @@ export function buildFallbackClearedNotice(params: {
   return `↪️ Model Fallback cleared: ${selected}`;
 }
 
-export type ResolvedFallbackTransition = {
+type ResolvedFallbackTransition = {
   selectedModelRef: string;
   activeModelRef: string;
   fallbackActive: boolean;

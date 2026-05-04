@@ -2,6 +2,7 @@
 summary: "CLI reference for `openclaw update` (safe-ish source update + gateway auto-restart)"
 read_when:
   - You want to update a source checkout safely
+  - You are debugging `openclaw update` output or options
   - You need to understand `--update` shorthand behavior
 title: "Update"
 ---
@@ -39,10 +40,20 @@ openclaw --update
 - `--json`: print machine-readable `UpdateRunResult` JSON, including
   `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is
   detected during post-update plugin sync.
-- `--timeout <seconds>`: per-step timeout (default is 1200s).
-- `--yes`: skip confirmation prompts (for example downgrade confirmation)
+- `--timeout <seconds>`: per-step timeout (default is 1800s).
+- `--yes`: skip confirmation prompts (for example downgrade confirmation).
 
-Note: downgrades require confirmation because older versions can break configuration.
+`openclaw update` does not have a `--verbose` flag. Use `--dry-run` to preview
+the planned channel/tag/install/restart actions, `--json` for machine-readable
+results, and `openclaw update status --json` when you only need channel and
+availability details. If you are debugging Gateway logs around an update,
+console verbosity and file log level are separate: Gateway `--verbose` affects
+terminal/WebSocket output, while file logs require `logging.level: "debug"` or
+`"trace"` in config. See [Gateway logging](/gateway/logging).
+
+<Warning>
+Downgrades require confirmation because older versions can break configuration.
+</Warning>
 
 ## `update status`
 
@@ -67,7 +78,7 @@ offers to create one.
 
 Options:
 
-- `--timeout <seconds>`: timeout for each update step (default `1200`)
+- `--timeout <seconds>`: timeout for each update step (default `1800`)
 
 ## What it does
 
@@ -80,41 +91,97 @@ install method aligned:
 - `beta` → prefers npm dist-tag `beta`, but falls back to `latest` when beta is
   missing or older than the current stable release.
 
-The Gateway core auto-updater (when enabled via config) reuses this same update path.
+The Gateway core auto-updater (when enabled via config) launches the CLI update path
+outside the live Gateway request handler. Control-plane `update.run` package-manager
+updates force a non-deferred, no-cooldown update restart after the package swap,
+because the old Gateway process may still have in-memory chunks that point at
+files removed by the new package.
 
 For package-manager installs, `openclaw update` resolves the target package
-version before invoking the package manager. If the installed version exactly
-matches the target and no update-channel change needs to be persisted, the
-command exits as skipped before package install, plugin sync, completion refresh,
-or gateway restart work.
+version before invoking the package manager. npm global installs use a staged
+install: OpenClaw installs the new package into a temporary npm prefix, verifies
+the packaged `dist` inventory there, then swaps that clean package tree into the
+real global prefix. If verification fails, post-update doctor, plugin sync, and
+restart work do not run from the suspect tree. Even when the installed version
+already matches the target, the command refreshes the global package install,
+then runs plugin sync, a core-command completion refresh, and restart work. This
+keeps packaged sidecars and channel-owned plugin records aligned with the
+installed OpenClaw build while leaving full plugin-command completion rebuilds to
+explicit `openclaw completion --write-state` runs.
+
+When a local managed Gateway service is installed and restart is enabled,
+package-manager updates stop the running service before replacing the package
+tree, then refresh the service metadata from the updated install, restart the
+service, and verify the restarted Gateway reports the expected version before
+reporting success. On macOS, the post-update check also verifies the LaunchAgent
+is loaded/running for the active profile and the configured loopback port is
+healthy. If the plist is installed but launchd is not supervising it, OpenClaw
+re-bootstraps the LaunchAgent automatically, then reruns the
+health/version/channel readiness checks. A fresh bootstrap loads the RunAtLoad
+job directly, so update recovery does not immediately `kickstart -k` the newly
+spawned Gateway. If the Gateway still does not become healthy, the command exits
+non-zero and prints the restart log path plus explicit restart, reinstall, and
+package rollback instructions. With `--no-restart`,
+package replacement still runs but the managed service is not stopped or
+restarted, so the running Gateway may keep old code until you restart it
+manually.
 
 ## Git checkout flow
 
-Channels:
+### Channel selection
 
-- `stable`: checkout the latest non-beta tag, then build + doctor.
-- `beta`: prefer the latest `-beta` tag, but fall back to the latest stable tag
-  when beta is missing or older.
-- `dev`: checkout `main`, then fetch + rebase.
+- `stable`: checkout the latest non-beta tag, then build and doctor.
+- `beta`: prefer the latest `-beta` tag, but fall back to the latest stable tag when beta is missing or older.
+- `dev`: checkout `main`, then fetch and rebase.
 
-High-level:
+### Update steps
 
-1. Requires a clean worktree (no uncommitted changes).
-2. Switches to the selected channel (tag or branch).
-3. Fetches upstream (dev only).
-4. Dev only: preflight lint + TypeScript build in a temp worktree; if the tip fails, walks back up to 10 commits to find the newest clean build.
-5. Rebases onto the selected commit (dev only).
-6. Installs deps with the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary `npm install pnpm@10` fallback) instead of running `npm run build` inside a pnpm workspace.
-7. Builds + builds the Control UI.
-8. Runs `openclaw doctor` as the final “safe update” check.
-9. Syncs plugins to the active channel (dev uses bundled plugins; stable/beta uses npm) and updates npm-installed plugins.
+<Steps>
+  <Step title="Verify clean worktree">
+    Requires no uncommitted changes.
+  </Step>
+  <Step title="Switch channel">
+    Switches to the selected channel (tag or branch).
+  </Step>
+  <Step title="Fetch upstream">
+    Dev only.
+  </Step>
+  <Step title="Preflight build (dev only)">
+    Runs lint and TypeScript build in a temp worktree. If the tip fails, walks back up to 10 commits to find the newest clean build.
+  </Step>
+  <Step title="Rebase">
+    Rebases onto the selected commit (dev only).
+  </Step>
+  <Step title="Install dependencies">
+    Uses the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary `npm install pnpm@10` fallback) instead of running `npm run build` inside a pnpm workspace.
+  </Step>
+  <Step title="Build Control UI">
+    Builds the gateway and the Control UI.
+  </Step>
+  <Step title="Run doctor">
+    `openclaw doctor` runs as the final safe-update check.
+  </Step>
+  <Step title="Sync plugins">
+    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm. Updates tracked plugin installs.
+  </Step>
+</Steps>
 
-If an exact pinned npm plugin update resolves to an artifact whose integrity
-differs from the stored install record, `openclaw update` aborts that plugin
-artifact update instead of installing it. Reinstall or update the plugin
-explicitly only after verifying that you trust the new artifact.
+On the beta update channel, tracked npm and ClawHub plugin installs that follow
+the default/latest line try a plugin `@beta` release first. If the plugin has no
+beta release, OpenClaw falls back to the recorded default/latest spec. Exact
+versions and explicit tags are not rewritten.
 
-If pnpm bootstrap still fails, the updater now stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
+<Warning>
+If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying that you trust the new artifact.
+</Warning>
+
+<Note>
+Post-update plugin sync failures fail the update result and stop restart follow-up work. Fix the plugin install or update error, then rerun `openclaw update`.
+
+When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts bypass the normal idle deferral and restart cooldown after the package tree has been swapped, so the old process cannot keep lazy-loading removed chunks.
+
+If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
+</Note>
 
 ## `--update` shorthand
 

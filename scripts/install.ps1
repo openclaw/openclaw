@@ -3,6 +3,7 @@
 # Or: & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -NoOnboard
 
 param(
+    [ValidateSet("npm", "git")]
     [string]$InstallMethod = "npm",
     [string]$Tag = "latest",
     [string]$GitDir = "$env:USERPROFILE\openclaw",
@@ -17,7 +18,7 @@ $ErrorActionPreference = "Stop"
 $ACCENT = "`e[38;2;255;77;77m"    # coral-bright
 $SUCCESS = "`e[38;2;0;229;204m"    # cyan-bright
 $WARN = "`e[38;2;255;176;32m"     # amber
-$ERROR = "`e[38;2;230;57;70m"     # coral-mid
+$ERROR_COLOR = "`e[38;2;230;57;70m"     # coral-mid
 $MUTED = "`e[38;2;90;100;128m"    # text-muted
 $NC = "`e[0m"                     # No Color
 
@@ -26,7 +27,7 @@ function Write-Host {
     $msg = switch ($Level) {
         "success" { "$SUCCESS✓$NC $Message" }
         "warn" { "$WARN!$NC $Message" }
-        "error" { "$ERROR✗$NC $Message" }
+        "error" { "$ERROR_COLOR✗$NC $Message" }
         default { "$MUTED·$NC $Message" }
     }
     Microsoft.PowerShell.Utility\Write-Host $msg
@@ -219,7 +220,8 @@ function Invoke-NativeCommandCapture {
     param(
         [Parameter(Mandatory = $true)]
         [string]$FilePath,
-        [string[]]$Arguments = @()
+        [string[]]$Arguments = @(),
+        [string]$WorkingDirectory = ""
     )
 
     $stdoutPath = [System.IO.Path]::GetTempFileName()
@@ -252,12 +254,19 @@ function Invoke-NativeCommandCapture {
             )
         }
 
-        $process = Start-Process -FilePath $startFilePath `
-            -ArgumentList $startArguments `
-            -Wait `
-            -PassThru `
-            -RedirectStandardOutput $stdoutPath `
-            -RedirectStandardError $stderrPath
+        $startProcessArgs = @{
+            FilePath = $startFilePath
+            ArgumentList = $startArguments
+            Wait = $true
+            PassThru = $true
+            RedirectStandardOutput = $stdoutPath
+            RedirectStandardError = $stderrPath
+        }
+        if (![string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+            $startProcessArgs.WorkingDirectory = $WorkingDirectory
+        }
+
+        $process = Start-Process @startProcessArgs
 
         return @{
             ExitCode = $process.ExitCode
@@ -267,6 +276,12 @@ function Invoke-NativeCommandCapture {
     } finally {
         Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Get-NpmWorkingDirectory {
+    $workingDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-installer"
+    New-Item -ItemType Directory -Path $workingDirectory -Force | Out-Null
+    return $workingDirectory
 }
 
 function Install-OpenClawNpm {
@@ -285,12 +300,12 @@ function Install-OpenClawNpm {
             $installSpec,
             "--no-fund",
             "--no-audit"
-        )
+        ) -WorkingDirectory (Get-NpmWorkingDirectory)
         if ($installResult.Stdout) {
-            Microsoft.PowerShell.Utility\Write-Output $installResult.Stdout
+            Microsoft.PowerShell.Utility\Write-Host $installResult.Stdout
         }
         if ($installResult.Stderr) {
-            Microsoft.PowerShell.Utility\Write-Output $installResult.Stderr
+            Microsoft.PowerShell.Utility\Write-Host $installResult.Stderr
         }
         if ($installResult.ExitCode -ne 0) {
             Write-Host "npm install failed with exit code $($installResult.ExitCode)" -Level error
@@ -336,11 +351,13 @@ function Install-OpenClawGit {
     if (!(Test-Path $wrapperDir)) {
         New-Item -ItemType Directory -Path $wrapperDir -Force | Out-Null
     }
-    
+
+    $entryPath = Join-Path $RepoDir "dist\entry.js"
     @"
 @echo off
-node "%~dp0..\openclaw\dist\entry.js" %*
+node "$entryPath" %*
 "@ | Out-File -FilePath "$wrapperDir\openclaw.cmd" -Encoding ASCII -Force
+    Add-ToPath -Path $wrapperDir
     
     Write-Host "OpenClaw installed" -Level success
     return $true
@@ -432,7 +449,12 @@ function Main {
         if ($DryRun) {
             Write-Host "[DRY RUN] Would install OpenClaw from git to $GitDir" -Level info
         } else {
-            Install-OpenClawGit -RepoDir $GitDir -Update:(-not $NoGitUpdate)
+            try {
+                npm uninstall -g openclaw 2>$null | Out-Null
+            } catch { }
+            if (!(Install-OpenClawGit -RepoDir $GitDir -Update:(-not $NoGitUpdate))) {
+                return (Fail-Install)
+            }
         }
     } else {
         # npm method
@@ -443,6 +465,11 @@ function Main {
         if ($DryRun) {
             Write-Host "[DRY RUN] Would install OpenClaw via npm ($((Resolve-PackageInstallSpec -Target $Tag)))" -Level info
         } else {
+            $gitWrapper = "$env:USERPROFILE\.local\bin\openclaw.cmd"
+            if (Test-Path $gitWrapper) {
+                Remove-Item -Force $gitWrapper
+                Write-Host "Removed git wrapper (switching to npm)" -Level info
+            }
             if (!(Install-OpenClawNpm -Target $Tag)) {
                 return (Fail-Install)
             }
@@ -455,7 +482,7 @@ function Main {
             "config",
             "get",
             "prefix"
-        )
+        ) -WorkingDirectory (Get-NpmWorkingDirectory)
         $npmPrefix = $prefixResult.Stdout
         if ($prefixResult.ExitCode -eq 0 -and $npmPrefix) {
             Add-ToPath -Path "$npmPrefix"
@@ -472,5 +499,6 @@ function Main {
     return $true
 }
 
-$installSucceeded = Main
+$mainResults = @(Main)
+$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true
 Complete-Install -Succeeded:$installSucceeded

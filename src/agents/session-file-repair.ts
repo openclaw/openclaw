@@ -2,26 +2,27 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 
+/** Placeholder for blank user messages — preserves the user turn so strict
+ * providers that require at least one user message don't reject the transcript. */
+export const BLANK_USER_FALLBACK_TEXT = "(continue)";
+
 type RepairReport = {
   repaired: boolean;
   droppedLines: number;
   rewrittenAssistantMessages?: number;
+  droppedBlankUserMessages?: number;
+  rewrittenUserMessages?: number;
   backupPath?: string;
   reason?: string;
 };
 
-// Persisted assistant entries with `content: []` (written by older builds when
-// a stream/provider error fired before any block was produced) are valid JSON
-// but not valid for AWS Bedrock Converse replay; rewriting them on disk lets a
-// poisoned session recover across gateway restarts instead of needing a fresh
-// session. The sentinel text is shared with stream-message-shared.ts and
-// replay-history.ts so a session repaired offline reads byte-identically to a
-// live stream-error turn — that byte-identity is what makes the repair pass
-// idempotent (a healed entry is then indistinguishable from a fresh one).
+// The sentinel text is shared with stream-message-shared.ts and
+// replay-history.ts so a repaired entry is byte-identical to a live
+// stream-error turn, keeping the repair pass idempotent.
 
 type SessionMessageEntry = {
   type: "message";
-  message: { role: "assistant"; content: unknown[] } & Record<string, unknown>;
+  message: { role: string; content?: unknown } & Record<string, unknown>;
 } & Record<string, unknown>;
 
 function isSessionHeader(entry: unknown): entry is { type: string; id: string } {
@@ -51,11 +52,8 @@ function isAssistantEntryWithEmptyContent(entry: unknown): entry is SessionMessa
   if (!Array.isArray(message.content) || message.content.length !== 0) {
     return false;
   }
-  // Only error turns are eligible for on-disk rewrite. A clean stop with
-  // empty content (silent-reply / NO_REPLY path documented in
-  // run.empty-error-retry.test.ts) is a valid historical assistant turn —
-  // mutating it into a synthetic failure message would permanently corrupt
-  // the transcript and replay fabricated failure text on future requests.
+  // Only error stops — clean stops with empty content (NO_REPLY path) are
+  // valid silent replies that must not be overwritten with synthetic text.
   return message.stopReason === "error";
 }
 
@@ -69,21 +67,99 @@ function rewriteAssistantEntryWithEmptyContent(entry: SessionMessageEntry): Sess
   };
 }
 
-function buildRepairSummaryParts(droppedLines: number, rewrittenAssistantMessages: number): string {
+type UserEntryRepair =
+  | { kind: "drop" }
+  | { kind: "rewrite"; entry: SessionMessageEntry }
+  | { kind: "keep" };
+
+function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEntryRepair {
+  const content = entry.message.content;
+  if (typeof content === "string") {
+    if (content.trim()) {
+      return { kind: "keep" };
+    }
+    return {
+      kind: "rewrite",
+      entry: {
+        ...entry,
+        message: {
+          ...entry.message,
+          content: BLANK_USER_FALLBACK_TEXT,
+        },
+      },
+    };
+  }
+  if (!Array.isArray(content)) {
+    return { kind: "keep" };
+  }
+
+  let touched = false;
+  const nextContent = content.filter((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    if ((block as { type?: unknown }).type !== "text") {
+      return true;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text !== "string" || text.trim().length > 0) {
+      return true;
+    }
+    touched = true;
+    return false;
+  });
+  if (nextContent.length === 0) {
+    return {
+      kind: "rewrite",
+      entry: {
+        ...entry,
+        message: {
+          ...entry.message,
+          content: [{ type: "text", text: BLANK_USER_FALLBACK_TEXT }],
+        },
+      },
+    };
+  }
+  if (!touched) {
+    return { kind: "keep" };
+  }
+  return {
+    kind: "rewrite",
+    entry: {
+      ...entry,
+      message: {
+        ...entry.message,
+        content: nextContent,
+      },
+    },
+  };
+}
+
+function buildRepairSummaryParts(params: {
+  droppedLines: number;
+  rewrittenAssistantMessages: number;
+  droppedBlankUserMessages: number;
+  rewrittenUserMessages: number;
+}): string {
   const parts: string[] = [];
-  if (droppedLines > 0) {
-    parts.push(`dropped ${droppedLines} malformed line(s)`);
+  if (params.droppedLines > 0) {
+    parts.push(`dropped ${params.droppedLines} malformed line(s)`);
   }
-  if (rewrittenAssistantMessages > 0) {
-    parts.push(`rewrote ${rewrittenAssistantMessages} assistant message(s)`);
+  if (params.rewrittenAssistantMessages > 0) {
+    parts.push(`rewrote ${params.rewrittenAssistantMessages} assistant message(s)`);
   }
-  // Caller only invokes this once at least one counter is non-zero, so the
-  // empty-array branch is unreachable in production. Kept for defensive output.
+  if (params.droppedBlankUserMessages > 0) {
+    parts.push(`dropped ${params.droppedBlankUserMessages} blank user message(s)`);
+  }
+  if (params.rewrittenUserMessages > 0) {
+    parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
+  }
   return parts.length > 0 ? parts.join(", ") : "no changes";
 }
 
 export async function repairSessionFileIfNeeded(params: {
   sessionFile: string;
+  debug?: (message: string) => void;
   warn?: (message: string) => void;
 }): Promise<RepairReport> {
   const sessionFile = params.sessionFile.trim();
@@ -108,6 +184,8 @@ export async function repairSessionFileIfNeeded(params: {
   const entries: unknown[] = [];
   let droppedLines = 0;
   let rewrittenAssistantMessages = 0;
+  let droppedBlankUserMessages = 0;
+  let rewrittenUserMessages = 0;
 
   for (const line of lines) {
     if (!line.trim()) {
@@ -119,6 +197,24 @@ export async function repairSessionFileIfNeeded(params: {
         entries.push(rewriteAssistantEntryWithEmptyContent(entry));
         rewrittenAssistantMessages += 1;
         continue;
+      }
+      if (
+        entry &&
+        typeof entry === "object" &&
+        (entry as { type?: unknown }).type === "message" &&
+        typeof (entry as { message?: unknown }).message === "object" &&
+        ((entry as { message: { role?: unknown } }).message?.role ?? undefined) === "user"
+      ) {
+        const repairedUser = repairUserEntryWithBlankTextContent(entry as SessionMessageEntry);
+        if (repairedUser.kind === "drop") {
+          droppedBlankUserMessages += 1;
+          continue;
+        }
+        if (repairedUser.kind === "rewrite") {
+          entries.push(repairedUser.entry);
+          rewrittenUserMessages += 1;
+          continue;
+        }
       }
       entries.push(entry);
     } catch {
@@ -137,7 +233,12 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
-  if (droppedLines === 0 && rewrittenAssistantMessages === 0) {
+  if (
+    droppedLines === 0 &&
+    rewrittenAssistantMessages === 0 &&
+    droppedBlankUserMessages === 0 &&
+    rewrittenUserMessages === 0
+  ) {
     return { repaired: false, droppedLines: 0 };
   }
 
@@ -169,15 +270,26 @@ export async function repairSessionFileIfNeeded(params: {
       repaired: false,
       droppedLines,
       rewrittenAssistantMessages,
+      droppedBlankUserMessages,
+      rewrittenUserMessages,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
   }
 
-  params.warn?.(
-    `session file repaired: ${buildRepairSummaryParts(
+  params.debug?.(
+    `session file repaired: ${buildRepairSummaryParts({
       droppedLines,
       rewrittenAssistantMessages,
-    )} (${path.basename(sessionFile)})`,
+      droppedBlankUserMessages,
+      rewrittenUserMessages,
+    })} (${path.basename(sessionFile)})`,
   );
-  return { repaired: true, droppedLines, rewrittenAssistantMessages, backupPath };
+  return {
+    repaired: true,
+    droppedLines,
+    rewrittenAssistantMessages,
+    droppedBlankUserMessages,
+    rewrittenUserMessages,
+    backupPath,
+  };
 }

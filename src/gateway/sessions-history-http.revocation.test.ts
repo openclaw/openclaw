@@ -18,7 +18,7 @@ let gatewayConfig: {
 let authCheckCalls = 0;
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
+  getRuntimeConfig: () => ({
     gateway: gatewayConfig,
   }),
 }));
@@ -91,7 +91,7 @@ vi.mock("./session-utils.js", () => ({
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
   }),
-  readSessionMessages: () => [],
+  readSessionMessagesAsync: async () => [],
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
@@ -107,7 +107,7 @@ vi.mock("./session-history-state.js", () => ({
         messageSeq: 1,
         messageId,
       }),
-      refresh: () => ({ items: [], nextCursor: null, messages: [] }),
+      refreshAsync: async () => ({ items: [], nextCursor: null, messages: [] }),
     }),
   },
 }));

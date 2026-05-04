@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatDiagnosticTraceparent,
+  getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -123,13 +124,43 @@ export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   queueDepth?: number;
 };
 
-export type DiagnosticSessionStuckEvent = DiagnosticBaseEvent & {
-  type: "session.stuck";
+export type DiagnosticSessionActiveWorkKind = "embedded_run" | "model_call" | "tool_call";
+
+export type DiagnosticSessionAttentionClassification =
+  | "long_running"
+  | "blocked_tool_call"
+  | "stalled_agent_run"
+  | "stale_session_state";
+
+type DiagnosticSessionAttentionBaseEvent = DiagnosticBaseEvent & {
   sessionKey?: string;
   sessionId?: string;
   state: DiagnosticSessionState;
   ageMs: number;
   queueDepth?: number;
+  reason?: string;
+  classification: DiagnosticSessionAttentionClassification;
+  activeWorkKind?: DiagnosticSessionActiveWorkKind;
+  lastProgressAgeMs?: number;
+  lastProgressReason?: string;
+  activeToolName?: string;
+  activeToolCallId?: string;
+  activeToolAgeMs?: number;
+};
+
+export type DiagnosticSessionLongRunningEvent = DiagnosticSessionAttentionBaseEvent & {
+  type: "session.long_running";
+  classification: "long_running";
+};
+
+export type DiagnosticSessionStalledEvent = DiagnosticSessionAttentionBaseEvent & {
+  type: "session.stalled";
+  classification: "blocked_tool_call" | "stalled_agent_run";
+};
+
+export type DiagnosticSessionStuckEvent = DiagnosticSessionAttentionBaseEvent & {
+  type: "session.stuck";
+  classification: "stale_session_state";
 };
 
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
@@ -153,6 +184,14 @@ export type DiagnosticRunAttemptEvent = DiagnosticBaseEvent & {
   attempt: number;
 };
 
+export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
+  type: "run.progress";
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  reason: string;
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -160,6 +199,24 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
     processed: number;
     errors: number;
   };
+  active: number;
+  waiting: number;
+  queued: number;
+};
+
+export type DiagnosticLivenessWarningReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
+
+export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
+  type: "diagnostic.liveness.warning";
+  reasons: DiagnosticLivenessWarningReason[];
+  intervalMs: number;
+  eventLoopDelayP99Ms?: number;
+  eventLoopDelayMaxMs?: number;
+  eventLoopUtilization?: number;
+  cpuUserMs?: number;
+  cpuSystemMs?: number;
+  cpuTotalMs?: number;
+  cpuCoreRatio?: number;
   active: number;
   waiting: number;
   queued: number;
@@ -214,6 +271,12 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   errorCode?: string;
 };
 
+export type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.blocked";
+  deniedReason: string;
+  reason: string;
+};
+
 export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
   type: "exec.process.completed";
   sessionKey?: string;
@@ -256,6 +319,47 @@ export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
   errorCategory?: string;
 };
 
+export type DiagnosticHarnessRunPhase = "prepare" | "start" | "send" | "resolve" | "cleanup";
+export type DiagnosticHarnessRunOutcome = "completed" | "aborted" | "timed_out" | "error";
+
+type DiagnosticHarnessRunBaseEvent = DiagnosticBaseEvent & {
+  type: "harness.run.started" | "harness.run.completed" | "harness.run.error";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  trigger?: string;
+  channel?: string;
+  harnessId: string;
+  pluginId?: string;
+};
+
+export type DiagnosticHarnessRunStartedEvent = DiagnosticHarnessRunBaseEvent & {
+  type: "harness.run.started";
+};
+
+export type DiagnosticHarnessRunCompletedEvent = DiagnosticHarnessRunBaseEvent & {
+  type: "harness.run.completed";
+  durationMs: number;
+  outcome: DiagnosticHarnessRunOutcome;
+  resultClassification?: "empty" | "reasoning-only" | "planning-only";
+  yieldDetected?: boolean;
+  itemLifecycle?: {
+    startedCount: number;
+    completedCount: number;
+    activeCount: number;
+  };
+};
+
+export type DiagnosticHarnessRunErrorEvent = DiagnosticHarnessRunBaseEvent & {
+  type: "harness.run.error";
+  durationMs: number;
+  phase: DiagnosticHarnessRunPhase;
+  errorCategory: string;
+  cleanupFailed?: boolean;
+};
+
 type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   type: "model.call.started" | "model.call.completed" | "model.call.error";
   runId: string;
@@ -276,12 +380,20 @@ export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
 export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.completed";
   durationMs: number;
+  requestPayloadBytes?: number;
+  responseStreamBytes?: number;
+  timeToFirstByteMs?: number;
 };
 
 export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.error";
   durationMs: number;
   errorCategory: string;
+  failureKind?: "aborted" | "connection_closed" | "connection_reset" | "terminated" | "timeout";
+  memory?: DiagnosticMemoryUsage;
+  requestPayloadBytes?: number;
+  responseStreamBytes?: number;
+  timeToFirstByteMs?: number;
 };
 
 export type DiagnosticContextAssembledEvent = DiagnosticBaseEvent & {
@@ -380,18 +492,26 @@ export type DiagnosticEventPayload =
   | DiagnosticMessageDeliveryCompletedEvent
   | DiagnosticMessageDeliveryErrorEvent
   | DiagnosticSessionStateEvent
+  | DiagnosticSessionLongRunningEvent
+  | DiagnosticSessionStalledEvent
   | DiagnosticSessionStuckEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
+  | DiagnosticRunProgressEvent
   | DiagnosticHeartbeatEvent
+  | DiagnosticLivenessWarningEvent
   | DiagnosticToolLoopEvent
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
   | DiagnosticToolExecutionErrorEvent
+  | DiagnosticToolExecutionBlockedEvent
   | DiagnosticExecProcessCompletedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
+  | DiagnosticHarnessRunStartedEvent
+  | DiagnosticHarnessRunCompletedEvent
+  | DiagnosticHarnessRunErrorEvent
   | DiagnosticModelCallStartedEvent
   | DiagnosticModelCallCompletedEvent
   | DiagnosticModelCallErrorEvent
@@ -446,6 +566,10 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "run.progress",
+  "harness.run.started",
+  "harness.run.completed",
+  "harness.run.error",
   "context.assembled",
   "log.record",
 ]);
@@ -606,6 +730,7 @@ function enrichDiagnosticEvent(
     }
     enriched[key] = value;
   }
+  enriched.trace ??= getActiveDiagnosticTraceContext();
   state.seq += 1;
   enriched.seq = state.seq;
   enriched.ts = Date.now();

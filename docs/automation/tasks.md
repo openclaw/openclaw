@@ -9,7 +9,7 @@ sidebarTitle: "Background tasks"
 ---
 
 <Note>
-Looking for scheduling? See [Automation & Tasks](/automation) for choosing the right mechanism. This page covers **tracking** background work, not scheduling it.
+Looking for scheduling? See [Automation and tasks](/automation) for choosing the right mechanism. This page is the activity ledger for background work, not the scheduler.
 </Note>
 
 Background tasks track work that runs **outside your main conversation session**: ACP runs, subagent spawns, isolated cron job executions, and CLI-initiated operations.
@@ -96,13 +96,13 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 | Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`               | `done_only`           |
 | Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)       | `silent`              |
 | CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `silent`              |
-| Agent media jobs       | `cli`        | Session-backed `video_generate` runs                   | `silent`              |
+| Agent media jobs       | `cli`        | Session-backed `music_generate`/`video_generate` runs  | `silent`              |
 
 <AccordionGroup>
   <Accordion title="Notify defaults for cron and media">
     Main-session cron tasks use `silent` notify policy by default — they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
 
-    Session-backed `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished video itself. If you opt into `tools.media.asyncCompletion.directSend`, async `music_generate` and `video_generate` completions try direct channel delivery first before falling back to the requester-session wake path.
+    Session-backed `music_generate` and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished media itself. If you opt into `tools.media.asyncCompletion.directSend`, async `video_generate` completions can try direct channel delivery first; async `music_generate` completions stay on the requester-session wake path.
 
   </Accordion>
   <Accordion title="Concurrent video_generate guardrail">
@@ -112,6 +112,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
     - Heartbeat turns — main-session; see [Heartbeat](/gateway/heartbeat)
     - Normal interactive chat turns
     - Direct `/command` responses
+
   </Accordion>
 </AccordionGroup>
 
@@ -246,6 +247,7 @@ openclaw tasks notify <lookup> state_changes
     Reconciliation is runtime-aware:
 
     - ACP/subagent tasks check their backing child session.
+    - Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
     - Cron tasks check whether the cron runtime still owns the job, then recover terminal status from persisted cron run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory cron active-job set; offline CLI audit uses durable history but does not mark a cron task lost solely because that local Set is empty.
     - Chat-backed CLI tasks check the owning live run context, not just the chat session row.
 
@@ -305,14 +307,19 @@ $OPENCLAW_STATE_DIR/tasks/runs.sqlite
 ```
 
 The registry loads into memory at gateway start and syncs writes to SQLite for durability across restarts.
+The Gateway keeps the SQLite write-ahead log bounded by using SQLite's default
+autocheckpoint threshold plus periodic and shutdown `TRUNCATE` checkpoints.
 
 ### Automatic maintenance
 
-A sweeper runs every **60 seconds** and handles three things:
+A sweeper runs every **60 seconds** and handles four things:
 
 <Steps>
   <Step title="Reconciliation">
     Checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and chat-backed CLI tasks use the owning run context. If that backing state is gone for more than 5 minutes, the task is marked `lost`.
+  </Step>
+  <Step title="ACP session repair">
+    Closes terminal or orphaned parent-owned one-shot ACP sessions, and closes stale terminal or orphaned persistent ACP sessions only when no active conversation binding remains.
   </Step>
   <Step title="Cleanup stamping">
     Sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days). During retention, lost tasks still appear in audit as warnings; after `cleanupAfter` expires or when cleanup metadata is missing, they are errors.

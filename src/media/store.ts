@@ -34,6 +34,39 @@ function formatMediaLimitMb(maxBytes: number): string {
   return `${(maxBytes / (1024 * 1024)).toFixed(0)}MB`;
 }
 
+function resolveMediaSubdir(subdir: string, caller: string): string {
+  if (typeof subdir !== "string") {
+    throw new Error(`${caller}: unsafe media subdir: ${JSON.stringify(subdir)}`);
+  }
+  if (!subdir || subdir === ".") {
+    return "";
+  }
+  if (
+    subdir.includes("\0") ||
+    path.isAbsolute(subdir) ||
+    path.posix.isAbsolute(subdir) ||
+    path.win32.isAbsolute(subdir)
+  ) {
+    throw new Error(`${caller}: unsafe media subdir: ${JSON.stringify(subdir)}`);
+  }
+  const segments = subdir.split(/[\\/]+/u);
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new Error(`${caller}: unsafe media subdir: ${JSON.stringify(subdir)}`);
+  }
+  return path.join(...segments);
+}
+
+function resolveMediaScopedDir(subdir: string, caller: string): string {
+  const mediaDir = resolveMediaDir();
+  const safeSubdir = resolveMediaSubdir(subdir, caller);
+  const dir = safeSubdir ? path.join(mediaDir, safeSubdir) : mediaDir;
+  const relative = path.relative(mediaDir, dir);
+  if (relative && (relative === ".." || relative.startsWith(`..${path.sep}`))) {
+    throw new Error(`${caller}: media subdir escapes media directory: ${JSON.stringify(subdir)}`);
+  }
+  return dir;
+}
+
 let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
 let httpsRequestImpl: RequestImpl = defaultHttpsRequestImpl;
 let resolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = defaultResolvePinnedHostnameImpl;
@@ -284,6 +317,14 @@ function buildSavedMediaId(params: {
     : `${params.baseId}${params.ext}`;
 }
 
+function safeOriginalFilenameExtension(originalFilename?: string): string | undefined {
+  if (!originalFilename) {
+    return undefined;
+  }
+  const ext = path.extname(originalFilename).toLowerCase();
+  return /^\.[a-z0-9]{1,16}$/.test(ext) ? ext : undefined;
+}
+
 function buildSavedMediaResult(params: {
   dir: string;
   id: string;
@@ -304,9 +345,22 @@ async function writeSavedMediaBuffer(params: {
   buffer: Buffer;
 }): Promise<string> {
   const dest = path.join(params.dir, params.id);
-  await retryAfterRecreatingDir(params.dir, () =>
-    fs.writeFile(dest, params.buffer, { mode: MEDIA_FILE_MODE }),
-  );
+  await retryAfterRecreatingDir(params.dir, async () => {
+    const tempDest = path.join(params.dir, `.${params.id}.${crypto.randomUUID()}.tmp`);
+    try {
+      await fs.writeFile(tempDest, params.buffer, { mode: MEDIA_FILE_MODE });
+      const handle = await fs.open(tempDest, "r");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await fs.rename(tempDest, dest);
+    } catch (err) {
+      await fs.rm(tempDest, { force: true }).catch(() => {});
+      throw err;
+    }
+  });
   return dest;
 }
 
@@ -368,8 +422,7 @@ export async function saveMediaSource(
   subdir = "",
   maxBytes = MAX_BYTES,
 ): Promise<SavedMedia> {
-  const baseDir = resolveMediaDir();
-  const dir = subdir ? path.join(baseDir, subdir) : baseDir;
+  const dir = resolveMediaScopedDir(subdir, "saveMediaSource");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await cleanOldMedia(DEFAULT_TTL_MS, { recursive: false });
   const baseId = crypto.randomUUID();
@@ -414,12 +467,13 @@ export async function saveMediaBuffer(
   if (buffer.byteLength > maxBytes) {
     throw new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`);
   }
-  const dir = path.join(resolveMediaDir(), subdir);
+  const dir = resolveMediaScopedDir(subdir, "saveMediaBuffer");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const uuid = crypto.randomUUID();
   const headerExt = extensionForMime(normalizeOptionalString(contentType?.split(";")[0]));
   const mime = await detectMime({ buffer, headerMime: contentType });
-  const ext = headerExt ?? extensionForMime(mime) ?? "";
+  const ext =
+    headerExt ?? extensionForMime(mime) ?? safeOriginalFilenameExtension(originalFilename) ?? "";
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
   await writeSavedMediaBuffer({ dir, id, buffer });
   return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
@@ -433,8 +487,8 @@ export async function saveMediaBuffer(
  * Gateway's claim-check offload path.
  *
  * Security:
- * - Rejects IDs containing path separators, "..", or null bytes to prevent
- *   directory traversal and path injection outside the resolved subdir.
+ * - Rejects IDs and subdirs containing path traversal, absolute paths, empty
+ *   segments, or null bytes to prevent path injection outside the media root.
  * - Verifies the resolved path is a regular file (not a symlink or directory)
  *   before returning it, matching the write-side MEDIA_FILE_MODE policy.
  *
@@ -446,10 +500,7 @@ export async function saveMediaBuffer(
  * @throws        If the ID is unsafe, the file does not exist, or is not a
  *                regular file.
  */
-export async function resolveMediaBufferPath(
-  id: string,
-  subdir: "inbound" = "inbound",
-): Promise<string> {
+export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Promise<string> {
   // Guard against path traversal and null-byte injection.
   //
   // - Separator checks: reject any ID containing "/" or "\" (covers all
@@ -468,7 +519,7 @@ export async function resolveMediaBufferPath(
     throw new Error(`resolveMediaBufferPath: unsafe media ID: ${JSON.stringify(id)}`);
   }
 
-  const dir = path.join(resolveMediaDir(), subdir);
+  const dir = resolveMediaScopedDir(subdir, "resolveMediaBufferPath");
   const resolved = path.join(dir, id);
 
   // Double-check that path.join didn't escape the intended directory.

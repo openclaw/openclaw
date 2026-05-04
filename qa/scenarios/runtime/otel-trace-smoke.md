@@ -13,6 +13,7 @@ objective: Verify a QA-lab gateway run emits bounded OpenTelemetry trace spans t
 successCriteria:
   - The diagnostics-otel plugin starts with trace export enabled.
   - A minimal QA-channel agent turn completes.
+  - The trace includes the selected agent harness lifecycle span.
   - The run emits low-cardinality OpenTelemetry trace spans without content or raw diagnostic identifiers.
 plugins:
   - diagnostics-otel
@@ -33,6 +34,7 @@ docsRefs:
   - docs/concepts/qa-e2e-automation.md
 codeRefs:
   - extensions/diagnostics-otel/src/service.ts
+  - src/agents/harness/v2.ts
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow

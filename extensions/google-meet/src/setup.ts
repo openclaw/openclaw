@@ -1,15 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { GoogleMeetConfig } from "./config.js";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 
-export type SetupCheck = {
+type SetupCheck = {
   id: string;
   ok: boolean;
   message: string;
 };
 
-export type GoogleMeetSetupStatus = {
+type GoogleMeetSetupStatus = {
   ok: boolean;
   checks: SetupCheck[];
 };
@@ -24,6 +25,57 @@ function resolveUserPath(input: string): string {
   return input;
 }
 
+function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
+  try {
+    const parsed = new URL(webhookUrl);
+    return isBlockedHostnameOrIp(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function getVoiceCallWebhookExposureCheck(voiceCallConfig: Record<string, unknown>): SetupCheck {
+  const publicUrl = normalizeOptionalString(voiceCallConfig.publicUrl);
+  const tunnel = asRecord(voiceCallConfig.tunnel);
+  const tailscale = asRecord(voiceCallConfig.tailscale);
+  const tunnelProvider = normalizeOptionalString(tunnel.provider);
+  const tailscaleMode = normalizeOptionalString(tailscale.mode);
+
+  if (publicUrl) {
+    const ok = !isProviderUnreachableWebhookUrl(publicUrl);
+    return {
+      id: "twilio-voice-call-webhook",
+      ok,
+      message: ok
+        ? `Voice-call public webhook URL configured: ${publicUrl}`
+        : `Voice-call publicUrl is local/private and cannot be reached by Twilio: ${publicUrl}`,
+    };
+  }
+
+  if (tunnelProvider && tunnelProvider !== "none") {
+    return {
+      id: "twilio-voice-call-webhook",
+      ok: true,
+      message: "Voice-call webhook exposure configured through tunnel",
+    };
+  }
+
+  if (tailscaleMode && tailscaleMode !== "off") {
+    return {
+      id: "twilio-voice-call-webhook",
+      ok: true,
+      message: "Voice-call webhook exposure configured through Tailscale",
+    };
+  }
+
+  return {
+    id: "twilio-voice-call-webhook",
+    ok: false,
+    message:
+      "Set plugins.entries.voice-call.config.publicUrl or configure voice-call tunnel/tailscale exposure for Twilio dialing",
+  };
+}
+
 export function getGoogleMeetSetupStatus(config: GoogleMeetConfig): {
   ok: boolean;
   checks: SetupCheck[];
@@ -33,6 +85,9 @@ export function getGoogleMeetSetupStatus(
   options?: {
     env?: NodeJS.ProcessEnv;
     fullConfig?: unknown;
+    mode?: GoogleMeetMode;
+    transport?: GoogleMeetTransport;
+    twilioDialInNumber?: string;
   },
 ): {
   ok: boolean;
@@ -43,11 +98,18 @@ export function getGoogleMeetSetupStatus(
   options?: {
     env?: NodeJS.ProcessEnv;
     fullConfig?: unknown;
+    mode?: GoogleMeetMode;
+    transport?: GoogleMeetTransport;
+    twilioDialInNumber?: string;
   },
 ) {
   const checks: SetupCheck[] = [];
   const env = options?.env ?? process.env;
   const fullConfig = asRecord(options?.fullConfig);
+  const mode = options?.mode ?? config.defaultMode;
+  const transport = options?.transport ?? config.defaultTransport;
+  const needsChromeRealtimeAudio =
+    mode === "realtime" && (transport === "chrome" || transport === "chrome-node");
   const pluginEntries = asRecord(asRecord(fullConfig.plugins).entries);
   const pluginAllow = asRecord(fullConfig.plugins).allow;
   const voiceCallEntry = asRecord(pluginEntries["voice-call"]);
@@ -71,42 +133,34 @@ export function getGoogleMeetSetupStatus(
     });
   }
 
-  if (config.chrome.browserProfile) {
-    const profilePath = path.join(
-      os.homedir(),
-      "Library",
-      "Application Support",
-      "Google",
-      "Chrome",
-      config.chrome.browserProfile,
-    );
+  checks.push({
+    id: "chrome-profile",
+    ok: true,
+    message: config.chrome.browserProfile
+      ? "Local Chrome uses the OpenClaw browser profile; chrome.browserProfile is passed to chrome-node hosts"
+      : "Local Chrome uses the OpenClaw browser profile; configure browser.defaultProfile to choose another profile",
+  });
+
+  if (needsChromeRealtimeAudio) {
     checks.push({
-      id: "chrome-profile",
-      ok: fs.existsSync(profilePath),
-      message: fs.existsSync(profilePath)
-        ? "Chrome profile found"
-        : `Chrome profile missing: ${config.chrome.browserProfile}`,
+      id: "audio-bridge",
+      ok: Boolean(
+        config.chrome.audioBridgeCommand ||
+        (config.chrome.audioInputCommand && config.chrome.audioOutputCommand),
+      ),
+      message: config.chrome.audioBridgeCommand
+        ? "Chrome audio bridge command configured"
+        : config.chrome.audioInputCommand && config.chrome.audioOutputCommand
+          ? `Chrome command-pair realtime audio bridge configured (${config.chrome.audioFormat})`
+          : "Chrome realtime audio bridge not configured",
     });
-  } else {
+  } else if (transport === "chrome" || transport === "chrome-node") {
     checks.push({
-      id: "chrome-profile",
+      id: "audio-bridge",
       ok: true,
-      message: "Chrome profile not pinned; default signed-in profile will be used",
+      message: "Chrome observe-only mode does not require a realtime audio bridge",
     });
   }
-
-  checks.push({
-    id: "audio-bridge",
-    ok: Boolean(
-      config.chrome.audioBridgeCommand ||
-      (config.chrome.audioInputCommand && config.chrome.audioOutputCommand),
-    ),
-    message: config.chrome.audioBridgeCommand
-      ? "Chrome audio bridge command configured"
-      : config.chrome.audioInputCommand && config.chrome.audioOutputCommand
-        ? "Chrome command-pair realtime audio bridge configured"
-        : "Chrome realtime audio bridge not configured",
-  });
 
   checks.push({
     id: "guest-join-defaults",
@@ -130,18 +184,35 @@ export function getGoogleMeetSetupStatus(
           : "Chrome node not pinned; automatic selection works when exactly one capable node is connected",
   });
 
-  checks.push({
-    id: "intro-after-in-call",
-    ok: config.chrome.waitForInCallMs > 0,
-    message:
-      config.chrome.waitForInCallMs > 0
-        ? `Realtime intro waits up to ${config.chrome.waitForInCallMs}ms for the Meet tab to be in-call`
-        : "Set chrome.waitForInCallMs to delay realtime intro until the Meet tab is in-call",
-  });
+  if (needsChromeRealtimeAudio) {
+    checks.push({
+      id: "intro-after-in-call",
+      ok: config.chrome.waitForInCallMs > 0,
+      message:
+        config.chrome.waitForInCallMs > 0
+          ? `Realtime intro waits up to ${config.chrome.waitForInCallMs}ms for the Meet tab to be in-call`
+          : "Set chrome.waitForInCallMs to delay realtime intro until the Meet tab is in-call",
+    });
+  }
+
+  if (transport === "twilio") {
+    const hasRequestDialPlan = Boolean(options?.twilioDialInNumber);
+    const hasDefaultDialPlan = Boolean(config.twilio.defaultDialInNumber);
+    const hasDialPlan = hasRequestDialPlan || hasDefaultDialPlan;
+    checks.push({
+      id: "twilio-dial-plan",
+      ok: hasDialPlan,
+      message: hasRequestDialPlan
+        ? "Twilio request includes a Meet dial-in number"
+        : hasDefaultDialPlan
+          ? "Twilio default Meet dial-in number is configured"
+          : "Twilio joins require a Meet dial-in phone number; pass dialInNumber with optional pin/dtmfSequence or configure twilio.defaultDialInNumber",
+    });
+  }
 
   const shouldCheckTwilioDelegation =
     config.voiceCall.enabled &&
-    (config.defaultTransport === "twilio" ||
+    (transport === "twilio" ||
       Boolean(config.twilio.defaultDialInNumber) ||
       Object.hasOwn(pluginEntries, "voice-call"));
   if (shouldCheckTwilioDelegation) {
@@ -173,6 +244,7 @@ export function getGoogleMeetSetupStatus(
           ? "Twilio voice-call credentials are configured"
           : "Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER or configure voice-call Twilio credentials",
       });
+      checks.push(getVoiceCallWebhookExposureCheck(voiceCallConfig));
     }
   }
 

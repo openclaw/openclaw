@@ -67,13 +67,14 @@ describe("status-runtime-shared", () => {
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
       plugins: expect.any(Array),
     });
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
       { gateway: {} },
       {
         activationSourceConfig: { gateway: {} },
-        includeSetupRuntimeFallback: false,
+        includeSetupFallbackPlugins: false,
       },
     );
   });
@@ -96,6 +97,7 @@ describe("status-runtime-shared", () => {
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
     });
   });
 
@@ -283,6 +285,7 @@ describe("status-runtime-shared", () => {
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
       plugins: expect.any(Array),
     });
   });

@@ -8,7 +8,7 @@ title: "Text-to-speech"
 sidebarTitle: "Text to speech (TTS)"
 ---
 
-OpenClaw can convert outbound replies into audio across **13 speech providers**
+OpenClaw can convert outbound replies into audio across **14 speech providers**
 and deliver native voice messages on Feishu, Matrix, Telegram, and WhatsApp,
 audio attachments everywhere else, and PCM/Ulaw streams for telephony and Talk.
 
@@ -48,6 +48,9 @@ audio attachments everywhere else, and PCM/Ulaw streams for telephony and Talk.
 <Note>
 Auto-TTS is **off** by default. When `messages.tts.provider` is unset,
 OpenClaw picks the first configured provider in registry auto-select order.
+The built-in `tts` agent tool is explicit-intent only: ordinary chat stays
+text unless the user asks for audio, uses `/tts`, or enables Auto-TTS/directive
+speech.
 </Note>
 
 ## Supported providers
@@ -55,6 +58,7 @@ OpenClaw picks the first configured provider in registry auto-select order.
 | Provider          | Auth                                                                                                             | Notes                                                                   |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | **Azure Speech**  | `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` (also `AZURE_SPEECH_API_KEY`, `SPEECH_KEY`, `SPEECH_REGION`)          | Native Ogg/Opus voice-note output and telephony.                        |
+| **DeepInfra**     | `DEEPINFRA_API_KEY`                                                                                              | OpenAI-compatible TTS. Defaults to `hexgrad/Kokoro-82M`.                |
 | **ElevenLabs**    | `ELEVENLABS_API_KEY` or `XI_API_KEY`                                                                             | Voice cloning, multilingual, deterministic via `seed`.                  |
 | **Google Gemini** | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                                                                             | Gemini API TTS; persona-aware via `promptTemplate: "audio-profile-v1"`. |
 | **Gradium**       | `GRADIUM_API_KEY`                                                                                                | Voice-note and telephony output.                                        |
@@ -403,8 +407,41 @@ Precedence order for automatic replies, `/tts audio`, `/tts status`, and the
 
 1. `messages.tts`
 2. active `agents.list[].tts`
-3. local `/tts` preferences for this host
-4. inline `[[tts:...]]` directives when [model overrides](#model-driven-directives) are enabled
+3. channel override, when the channel supports `channels.<channel>.tts`
+4. account override, when the channel passes `channels.<channel>.accounts.<id>.tts`
+5. local `/tts` preferences for this host
+6. inline `[[tts:...]]` directives when [model overrides](#model-driven-directives) are enabled
+
+Channel and account overrides use the same shape as `messages.tts` and
+deep-merge over the earlier layers, so shared provider credentials can stay in
+`messages.tts` while a channel or bot account changes only voice, model, persona,
+or auto mode:
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "openai",
+      providers: {
+        openai: { apiKey: "${OPENAI_API_KEY}", model: "gpt-4o-mini-tts" },
+      },
+    },
+  },
+  channels: {
+    feishu: {
+      accounts: {
+        english: {
+          tts: {
+            providers: {
+              openai: { voice: "shimmer" },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
 
 ## Personas
 
@@ -815,11 +852,14 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
   </Accordion>
 
   <Accordion title="Inworld">
+    ### Inworld primary
+
     <ParamField path="apiKey" type="string">Env: `INWORLD_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.inworld.ai`.</ParamField>
     <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
     <ParamField path="voiceId" type="string">Default `Sarah`.</ParamField>
     <ParamField path="temperature" type="number">Sampling temperature `0..2`.</ParamField>
+
   </Accordion>
 
   <Accordion title="Local CLI (tts-local-cli)">
@@ -858,6 +898,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="model" type="string">OpenAI TTS model id (e.g. `gpt-4o-mini-tts`).</ParamField>
     <ParamField path="voice" type="string">Voice name (e.g. `alloy`, `cedar`).</ParamField>
     <ParamField path="instructions" type="string">Explicit OpenAI `instructions` field. When set, persona prompt fields are **not** auto-mapped.</ParamField>
+    <ParamField path="extraBody / extra_body" type="Record<string, unknown>">Extra JSON fields merged into `/audio/speech` request bodies after generated OpenAI TTS fields. Use this for OpenAI-compatible endpoints such as Kokoro that require provider-specific keys like `lang`; unsafe prototype keys are ignored.</ParamField>
     <ParamField path="baseUrl" type="string">
       Override the OpenAI TTS endpoint. Resolution order: config → `OPENAI_TTS_BASE_URL` → `https://api.openai.com/v1`. Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted.
     </ParamField>

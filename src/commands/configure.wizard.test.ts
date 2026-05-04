@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
     clackText: vi.fn(),
     clackConfirm: vi.fn(),
     resolveSearchProviderOptions: vi.fn(),
+    resolvePluginContributionOwners: vi.fn(),
     setupSearch: vi.fn(),
     readConfigFileSnapshot: vi.fn(),
     writeConfigFile,
@@ -25,6 +26,10 @@ const mocks = vi.hoisted(() => {
     waitForGatewayReachable: vi.fn(),
     resolveControlUiLinks: vi.fn(),
     summarizeExistingConfig: vi.fn(),
+    promptRemoteGatewayConfig: vi.fn(async (cfg: OpenClawConfig) => ({
+      ...cfg,
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
+    })),
     isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
       Boolean(config.auth?.profiles?.["openai-codex:default"]),
     ),
@@ -97,7 +102,7 @@ vi.mock("./configure.daemon.js", () => ({
 }));
 
 vi.mock("./onboard-remote.js", () => ({
-  promptRemoteGatewayConfig: vi.fn(),
+  promptRemoteGatewayConfig: mocks.promptRemoteGatewayConfig,
 }));
 
 vi.mock("./onboard-skills.js", () => ({
@@ -111,6 +116,10 @@ vi.mock("./onboard-channels.js", () => ({
 vi.mock("./onboard-search.js", () => ({
   resolveSearchProviderOptions: mocks.resolveSearchProviderOptions,
   setupSearch: mocks.setupSearch,
+}));
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  resolvePluginContributionOwners: mocks.resolvePluginContributionOwners,
 }));
 
 vi.mock("../agents/codex-native-web-search.js", () => ({
@@ -210,6 +219,7 @@ describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
+    mocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
     mocks.resolveSearchProviderOptions.mockReturnValue([
       {
         id: "firecrawl",
@@ -241,7 +251,6 @@ describe("runConfigureWizard", () => {
       }),
     );
   });
-
   it("keeps startup gateway hint probes bounded", async () => {
     setupBaseWizardState({
       gateway: {
@@ -358,6 +367,25 @@ describe("runConfigureWizard", () => {
         }),
       }),
     );
+  });
+
+  it("does not load managed search provider options when web search is disabled", async () => {
+    setupBaseWizardState();
+    queueWizardPrompts({
+      select: ["local"],
+      confirm: [false, true],
+    });
+
+    await runWebConfigureWizard();
+
+    expect(mocks.resolvePluginContributionOwners).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contribution: "contracts",
+        matches: "webSearchProviders",
+      }),
+    );
+    expect(mocks.resolveSearchProviderOptions).not.toHaveBeenCalled();
+    expect(mocks.setupSearch).not.toHaveBeenCalled();
   });
 
   it("defers channel status checks until a channel is selected", async () => {

@@ -145,8 +145,17 @@ const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i
 const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
-const QA_QUIET_STREAMING_PROMPT_RE = /quiet streaming qa check/i;
+const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
+const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
+const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
+const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
+  /qa group message unavailable fallback check/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+const QA_IMAGE_GENERATION_PROMPT_RE = /image generation check|capability flip image check/i;
 const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
@@ -526,6 +535,16 @@ function extractLastCapture(text: string, pattern: RegExp) {
   return lastMatch?.[1]?.trim() || null;
 }
 
+function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
+  for (let index = texts.length - 1; index >= 0; index -= 1) {
+    const text = texts[index] ?? "";
+    if (pattern.test(text)) {
+      return text;
+    }
+  }
+  return "";
+}
+
 function extractExactReplyDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
   if (backtickedMatch) {
@@ -543,11 +562,14 @@ function extractFinishExactlyDirective(text: string) {
 }
 
 function extractExactMarkerDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
+  const backtickedMatch = extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
   if (backtickedMatch) {
     return backtickedMatch;
   }
-  return extractLastCapture(text, /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
+  return extractLastCapture(
+    text,
+    /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
+  );
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {
@@ -638,6 +660,19 @@ function extractToolErrorForNamedCall(params: {
   return undefined;
 }
 
+function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput: string) {
+  if (typeof toolJson?.error === "string" && toolJson.error.trim()) {
+    return true;
+  }
+  if (
+    typeof toolJson?.status === "string" &&
+    /\b(?:error|failed|failure)\b/i.test(toolJson.status)
+  ) {
+    return true;
+  }
+  return /\b(?:error|failed|failure|not found|no such file|enoent)\b/i.test(toolOutput);
+}
+
 function isHeartbeatPrompt(text: string) {
   const trimmed = text.trim();
   if (!trimmed || /remember this fact/i.test(trimmed)) {
@@ -668,10 +703,10 @@ function buildAssistantText(
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
-  const finishExactlyDirective =
-    extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+  const finishExactlyDirective =
+    extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const imageInputCount = countImageInputs(input);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
@@ -700,10 +735,10 @@ function buildAssistantText(
   if (isHeartbeatPrompt(prompt)) {
     return "HEARTBEAT_OK";
   }
-  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return exactReplyDirective;
   }
-  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
+  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return exactMarkerDirective;
   }
   if (/visible skill marker/i.test(prompt)) {
@@ -744,13 +779,13 @@ function buildAssistantText(
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
   }
-  if (/thread memory check/i.test(prompt) && orbitCode) {
+  if (/thread memory check/i.test(allInputText) && orbitCode) {
     return `Protocol note: I checked memory in-thread and the hidden thread codename is ${orbitCode}.`;
   }
   if (/switch(?:ing)? models?/i.test(prompt)) {
     return `Protocol note: model switch acknowledged. Continuing on ${model || "the requested model"}.`;
   }
-  if (/(image generation check|capability flip image check)/i.test(prompt) && mediaPath) {
+  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && mediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
   }
   if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
@@ -784,11 +819,16 @@ function buildAssistantText(
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
   }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
+    return QA_SUBAGENT_DIRECT_FALLBACK_MARKER;
+  }
   if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
     return "FORKED-CONTEXT-ALPHA";
   }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+  const isFanoutCompletionTurn =
+    /subagent fanout synthesis check/i.test(allInputText) || /^continue\.?$/i.test(prompt.trim());
+  if (scenarioState.subagentFanoutPhase === 2 && prompt && isFanoutCompletionTurn) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
   }
@@ -1140,6 +1180,8 @@ async function buildResponsesPayload(
   const allInputText = extractAllRequestTexts(input, body);
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const exactMarkerDirective =
+    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const firstExactMarkerDirective = extractLabeledMarkerDirective(
     allInputText,
     "first exact marker",
@@ -1153,11 +1195,46 @@ async function buildResponsesPayload(
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
+  const canCallSessionsYield = hasDeclaredTool(body, "sessions_yield");
+  const buildToolProgressReadEvents = (pattern: RegExp) => {
+    const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
+    return buildToolCallEventsWithArgs("read", {
+      path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
+    });
+  };
+  if (
+    allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
+    /Internal task completion event/i.test(allInputText)
+  ) {
+    return buildAssistantEvents("");
+  }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: `Subagent direct fallback worker: finish with exactly ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
+        label: "qa-direct-fallback-worker",
+        thread: false,
+        mode: "run",
+        runTimeoutSeconds: 30,
+      });
+    }
+    if (toolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: `Waiting for ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
+      });
+    }
+  }
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
+  }
+  if (/fanout worker alpha/i.test(prompt)) {
+    return buildAssistantEvents("ALPHA-OK");
+  }
+  if (/fanout worker beta/i.test(prompt)) {
+    return buildAssistantEvents("BETA-OK");
   }
   if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!toolOutput) {
@@ -1210,7 +1287,7 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents("");
   }
-  if (QA_QUIET_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (QA_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
     return buildAssistantEvents([
       {
         id: "msg_mock_quiet_stream",
@@ -1219,6 +1296,23 @@ async function buildResponsesPayload(
         text: exactReplyDirective,
       },
     ]);
+  }
+  const toolProgressReplyDirective = exactReplyDirective ?? exactMarkerDirective;
+  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
+    if (!toolOutput) {
+      return buildToolProgressReadEvents(QA_TOOL_PROGRESS_ERROR_PROMPT_RE);
+    }
+    return buildAssistantEvents(
+      hasToolErrorOutput(toolJson, toolOutput)
+        ? toolProgressReplyDirective
+        : "BUG-TOOL-DID-NOT-FAIL",
+    );
+  }
+  if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
+    if (!toolOutput) {
+      return buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE);
+    }
+    return buildAssistantEvents(toolProgressReplyDirective);
   }
   if (
     QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) &&
@@ -1239,6 +1333,27 @@ async function buildResponsesPayload(
         text: secondExactMarkerDirective,
       },
     ]);
+  }
+  if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
+    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: marker,
+      });
+    }
+    return buildAssistantEvents("");
+  }
+  if (QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE.test(allInputText)) {
+    return buildAssistantEvents(
+      exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-FALLBACK-OK",
+    );
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents(exactReplyDirective);
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
+    return buildAssistantEvents(exactMarkerDirective);
   }
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(
@@ -1356,19 +1471,42 @@ async function buildResponsesPayload(
     /silent snack recall check/i.test(allInputText)
   ) {
     if (!toolOutput) {
-      return buildToolCallEventsWithArgs("memory_search", {
+      if (!hasDeclaredTool(body, "memory_recall")) {
+        return buildToolCallEventsWithArgs("memory_search", {
+          query: "QA movie night snack lemon pepper wings blue cheese",
+          maxResults: 3,
+        });
+      }
+      return buildToolCallEventsWithArgs("memory_recall", {
         query: "QA movie night snack lemon pepper wings blue cheese",
-        maxResults: 3,
+        limit: 3,
       });
+    }
+    const memoryText =
+      typeof toolJson?.text === "string"
+        ? toolJson.text
+        : Array.isArray(toolJson?.content)
+          ? toolJson.content
+              .map((item) =>
+                typeof item === "object" && item && "text" in item && typeof item.text === "string"
+                  ? item.text
+                  : "",
+              )
+              .filter(Boolean)
+              .join("\n")
+          : undefined;
+    if (memoryText) {
+      const snackPreference = extractSnackPreference(memoryText);
+      if (snackPreference) {
+        return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
+      }
+      return buildAssistantEvents("NONE");
     }
     const results = Array.isArray(toolJson?.results)
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
-    if (
-      typeof first?.path === "string" &&
-      (typeof first.startLine === "number" || typeof first.endLine === "number")
-    ) {
+    if (typeof first?.path === "string") {
       const from =
         typeof first.startLine === "number"
           ? Math.max(1, first.startLine)
@@ -1381,12 +1519,9 @@ async function buildResponsesPayload(
         lines: 4,
       });
     }
-    const memorySnippet =
-      typeof toolJson?.text === "string"
-        ? toolJson.text
-        : Array.isArray(toolJson?.results)
-          ? JSON.stringify(toolJson.results)
-          : toolOutput;
+    const memorySnippet = Array.isArray(toolJson?.results)
+      ? JSON.stringify(toolJson.results)
+      : toolOutput;
     const snackPreference = extractSnackPreference(memorySnippet);
     if (snackPreference) {
       return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
@@ -1428,7 +1563,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/thread memory check/i.test(prompt)) {
+  if (/thread memory check/i.test(allInputText)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "hidden thread codename ORBIT-22",
@@ -1456,7 +1591,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/(image generation check|capability flip image check)/i.test(prompt) && !toolOutput) {
+  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && !toolOutput) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       filename: "qa-lighthouse.png",

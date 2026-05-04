@@ -276,6 +276,9 @@ describe("TelegramPollingSession", () => {
     await session.runUntilAbort();
 
     expect(runMock).toHaveBeenCalledTimes(2);
+    expect(createTelegramBotMock).toHaveBeenCalledWith(
+      expect.objectContaining({ minimumClientTimeoutSeconds: 45 }),
+    );
     expect(computeBackoffMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
   });
@@ -567,6 +570,30 @@ describe("TelegramPollingSession", () => {
 
     expectTelegramBotTransportSequence(transport1, transport2);
     expect(createTelegramTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts polling when webhook cleanup times out during startup", async () => {
+    const abort = new AbortController();
+    const cleanupError = new Error("Telegram deleteWebhook timed out after 15000ms");
+    const bot = makeBot();
+    bot.api.deleteWebhook.mockRejectedValueOnce(cleanupError);
+    createTelegramBotMock.mockReturnValueOnce(bot);
+    runMock.mockReturnValueOnce({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    await session.runUntilAbort();
+
+    expect(bot.api.deleteWebhook).toHaveBeenCalledTimes(1);
+    expect(runMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not trigger stall restart shortly after a getUpdates error", async () => {

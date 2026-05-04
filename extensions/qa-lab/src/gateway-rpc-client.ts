@@ -1,13 +1,13 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
-import { callGatewayFromCli } from "./runtime-api.js";
 
 type QaGatewayRpcRequestOptions = {
   expectFinal?: boolean;
   timeoutMs?: number;
 };
 
-export type QaGatewayRpcClient = {
+type QaGatewayRpcClient = {
   request(method: string, rpcParams?: unknown, opts?: QaGatewayRpcRequestOptions): Promise<unknown>;
   stop(): Promise<void>;
 };
@@ -55,8 +55,12 @@ export async function startQaGatewayRpcClient(params: {
               },
               rpcParams ?? {},
               {
+                clientName: "gateway-client",
+                deviceIdentity: null,
                 expectFinal: opts?.expectFinal,
+                mode: "backend",
                 progress: false,
+                scopes: ["operator.admin"],
               },
             ),
         );

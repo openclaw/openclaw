@@ -1,8 +1,18 @@
+import {
+  createChannelProgressDraftGate,
+  formatChannelProgressDraftLine,
+  formatChannelProgressDraftText,
+  isChannelProgressDraftWorkToolName,
+  resolveChannelProgressDraftMaxLines,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-gating";
 import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
+import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -10,6 +20,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CoreConfig,
+  MatrixConfig,
   MatrixRoomConfig,
   MatrixStreamingMode,
   ReplyToMode,
@@ -36,7 +47,7 @@ import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
-import { resolveMatrixAllowListMatch } from "./allowlist.js";
+import { normalizeMatrixUserId, resolveMatrixAllowListMatch } from "./allowlist.js";
 import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
@@ -76,6 +87,7 @@ import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
+const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 let matrixSendModulePromise: Promise<typeof import("../send.js")> | undefined;
 let acpBindingRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/acp-binding-runtime")>
@@ -153,6 +165,7 @@ export type MatrixMonitorHandlerParams = {
   core: PluginRuntime;
   cfg: CoreConfig;
   accountId: string;
+  accountConfig?: MatrixConfig;
   runtime: RuntimeEnv;
   logger: RuntimeLogger;
   logVerboseMessage: (message: string) => void;
@@ -171,6 +184,7 @@ export type MatrixMonitorHandlerParams = {
   /** DM session grouping behavior. */
   dmSessionScope?: "per-user" | "per-room";
   streaming: MatrixStreamingMode;
+  previewToolProgressEnabled: boolean;
   blockStreamingEnabled: boolean;
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
@@ -354,6 +368,15 @@ function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBo
   return "off";
 }
 
+function formatMatrixToolProgressMarkdownCode(text: string): string {
+  const clipped =
+    text.length <= MATRIX_TOOL_PROGRESS_MAX_CHARS
+      ? text
+      : `${text.slice(0, MATRIX_TOOL_PROGRESS_MAX_CHARS - 1).trimEnd()}...`;
+  const safe = clipped.replaceAll("`", "'");
+  return `\`${safe}\``;
+}
+
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
   const {
     client,
@@ -374,6 +397,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     dmThreadReplies,
     dmSessionScope,
     streaming,
+    previewToolProgressEnabled,
     blockStreamingEnabled,
     dmEnabled,
     dmPolicy,
@@ -671,9 +695,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           senderNamePromise ??= getMemberDisplayName(roomId, senderId).catch(() => senderId);
           return await senderNamePromise;
         };
-        const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
+        const storeAllowFrom =
+          isDirectMessage && dmPolicy !== "allowlist" && dmPolicy !== "open"
+            ? await readStoreAllowFrom()
+            : [];
         const roomUsers = roomConfig?.users ?? [];
-        const liveCfg = core.config.loadConfig() as CoreConfig;
+        const liveCfg = core.config.current() as CoreConfig;
         const liveAccountAllowlists = resolveMatrixAccountAllowlistConfig({
           cfg: liveCfg,
           accountId,
@@ -699,12 +726,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const accessState = resolveMatrixMonitorAccessState({
           allowFrom: liveDmAllowFrom,
           storeAllowFrom,
+          dmPolicy,
           groupAllowFrom: liveGroupAllowFrom,
           roomUsers,
           senderId,
           isRoom,
         });
         const {
+          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
           groupAllowConfigured,
@@ -719,63 +748,59 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             await commitInboundEventIfClaimed();
             return undefined;
           }
-          if (dmPolicy !== "open") {
-            const allowMatchMeta = formatAllowlistMatchMeta(directAllowMatch);
-            if (!directAllowMatch.allowed) {
-              if (!isReactionEvent && dmPolicy === "pairing") {
-                const senderName = await getSenderName();
-                const { code, created } = await core.channel.pairing.upsertPairingRequest({
+          const allowMatchMeta = formatAllowlistMatchMeta(directAllowMatch);
+          if (!directAllowMatch.allowed) {
+            if (!isReactionEvent && dmPolicy === "pairing") {
+              const senderName = await getSenderName();
+              const { code, created } = await core.channel.pairing.upsertPairingRequest({
+                channel: "matrix",
+                id: senderId,
+                accountId,
+                meta: { name: senderName },
+              });
+              if (shouldSendPairingReply(senderId, created)) {
+                const pairingReply = core.channel.pairing.buildPairingReply({
                   channel: "matrix",
-                  id: senderId,
-                  accountId,
-                  meta: { name: senderName },
+                  idLine: `Your Matrix user id: ${senderId}`,
+                  code,
                 });
-                if (shouldSendPairingReply(senderId, created)) {
-                  const pairingReply = core.channel.pairing.buildPairingReply({
-                    channel: "matrix",
-                    idLine: `Your Matrix user id: ${senderId}`,
-                    code,
-                  });
-                  logVerboseMessage(
+                logVerboseMessage(
+                  created
+                    ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`
+                    : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
+                );
+                try {
+                  const { sendMessageMatrix } = await loadMatrixSendModule();
+                  await sendMessageMatrix(
+                    `room:${roomId}`,
                     created
-                      ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`
-                      : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
-                  );
-                  try {
-                    const { sendMessageMatrix } = await loadMatrixSendModule();
-                    await sendMessageMatrix(
-                      `room:${roomId}`,
-                      created
-                        ? pairingReply
-                        : `${pairingReply}\n\nPairing request is still pending approval. Reusing existing code.`,
-                      {
-                        client,
-                        cfg,
-                        accountId,
-                      },
-                    );
-                    await commitInboundEventIfClaimed();
-                  } catch (err) {
-                    logVerboseMessage(
-                      `matrix pairing reply failed for ${senderId}: ${String(err)}`,
-                    );
-                    return undefined;
-                  }
-                } else {
-                  logVerboseMessage(
-                    `matrix pairing reminder suppressed sender=${senderId} (cooldown)`,
+                      ? pairingReply
+                      : `${pairingReply}\n\nPairing request is still pending approval. Reusing existing code.`,
+                    {
+                      client,
+                      cfg,
+                      accountId,
+                    },
                   );
                   await commitInboundEventIfClaimed();
+                } catch (err) {
+                  logVerboseMessage(`matrix pairing reply failed for ${senderId}: ${String(err)}`);
+                  return undefined;
                 }
-              }
-              if (isReactionEvent || dmPolicy !== "pairing") {
+              } else {
                 logVerboseMessage(
-                  `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+                  `matrix pairing reminder suppressed sender=${senderId} (cooldown)`,
                 );
                 await commitInboundEventIfClaimed();
               }
-              return undefined;
             }
+            if (isReactionEvent || dmPolicy !== "pairing") {
+              logVerboseMessage(
+                `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+              );
+              await commitInboundEventIfClaimed();
+            }
+            return undefined;
           }
         }
 
@@ -1117,6 +1142,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           triggerSnapshot,
           threadRootId: _threadRootId,
           thread,
+          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
         };
@@ -1171,6 +1197,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         triggerSnapshot,
         threadRootId: _threadRootId,
         thread,
+        effectiveAllowFrom,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
       } = resolvedIngressResult;
@@ -1322,40 +1349,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         OriginatingTo: `room:${roomId}`,
       });
 
-      await core.channel.session.recordInboundSession({
-        storePath,
-        sessionKey: ctxPayload.SessionKey ?? _route.sessionKey,
-        ctx: ctxPayload,
-        updateLastRoute: isDirectMessage
-          ? {
-              sessionKey: _route.mainSessionKey,
-              channel: "matrix",
-              to: `room:${roomId}`,
-              accountId: _route.accountId,
-            }
-          : undefined,
-        onRecordError: (err) => {
-          logger.warn("failed updating session meta", {
-            error: String(err),
-            storePath,
-            sessionKey: ctxPayload.SessionKey ?? _route.sessionKey,
-          });
-        },
-      });
-
-      if (sharedDmContextNotice && markTrackedRoomIfFirst(sharedDmContextNoticeRooms, roomId)) {
-        client
-          .sendMessage(roomId, {
-            msgtype: "m.notice",
-            body: sharedDmContextNotice,
-          })
-          .catch((err) => {
-            logVerboseMessage(
-              `matrix: failed sending shared DM session notice room=${roomId}: ${String(err)}`,
-            );
-          });
-      }
-
       const preview = bodyText.slice(0, 200).replace(/\n/g, "\\n");
       logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} preview="${preview}"`);
 
@@ -1448,7 +1441,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
       });
       const draftStreamingEnabled = streaming !== "off";
-      const quietDraftStreaming = streaming === "quiet";
+      const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
+      const progressDraftStreaming = streaming === "progress";
       const draftReplyToId = replyToMode !== "off" && !threadTarget ? _messageId : undefined;
       const draftStream: MatrixDraftStreamHandle | undefined = draftStreamingEnabled
         ? await loadMatrixDraftStream().then(({ createMatrixDraftStream }) =>
@@ -1466,6 +1460,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           )
         : undefined;
       draftStreamRef = draftStream;
+      const shouldStreamPreviewToolProgress = Boolean(draftStream) && previewToolProgressEnabled;
+      const shouldSuppressDefaultToolProgressMessages =
+        Boolean(draftStream) &&
+        (shouldStreamPreviewToolProgress || params.streaming === "progress");
       type PendingDraftBoundary = {
         messageGeneration: number;
         endOffset: number;
@@ -1479,8 +1477,196 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const pendingDraftBoundaries: PendingDraftBoundary[] = [];
       const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
       let currentDraftReplyToId = draftReplyToId;
+      let previewToolProgressSuppressed = false;
+      let previewToolProgressLines: string[] = [];
+      const progressConfigEntry = params.accountConfig ?? cfg.channels?.matrix;
+      const progressSeed = `${_route.accountId}:${roomId}`;
       // Set after the first final payload consumes or discards the draft event
       // so subsequent finals go through normal delivery.
+
+      const renderProgressDraft = () => {
+        if (!draftStream || !progressDraftStreaming) {
+          return;
+        }
+        const previewText = formatChannelProgressDraftText({
+          entry: progressConfigEntry,
+          lines: previewToolProgressLines,
+          seed: progressSeed,
+          formatLine: formatMatrixToolProgressMarkdownCode,
+          bullet: "-",
+        });
+        if (!previewText) {
+          return;
+        }
+        draftStream.update(previewText);
+      };
+      const progressDraftGate = createChannelProgressDraftGate({
+        onStart: renderProgressDraft,
+      });
+
+      const pushPreviewToolProgress = async (line?: string, options?: { toolName?: string }) => {
+        if (!draftStream) {
+          return;
+        }
+        if (
+          options?.toolName !== undefined &&
+          !isChannelProgressDraftWorkToolName(options.toolName)
+        ) {
+          return;
+        }
+        const normalized = line?.replace(/\s+/g, " ").trim();
+        if (!progressDraftStreaming) {
+          if (!shouldStreamPreviewToolProgress || previewToolProgressSuppressed || !normalized) {
+            return;
+          }
+          const previous = previewToolProgressLines.at(-1);
+          if (previous === normalized) {
+            return;
+          }
+          previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+            -resolveChannelProgressDraftMaxLines(progressConfigEntry),
+          );
+          draftStream.update(
+            formatChannelProgressDraftText({
+              entry: progressConfigEntry,
+              lines: previewToolProgressLines,
+              seed: progressSeed,
+              formatLine: formatMatrixToolProgressMarkdownCode,
+              bullet: "-",
+            }),
+          );
+          return;
+        }
+        if (shouldStreamPreviewToolProgress && !previewToolProgressSuppressed && normalized) {
+          const previous = previewToolProgressLines.at(-1);
+          if (previous !== normalized) {
+            previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+              -resolveChannelProgressDraftMaxLines(progressConfigEntry),
+            );
+          }
+        }
+        const alreadyStarted = progressDraftGate.hasStarted;
+        await progressDraftGate.noteWork();
+        if (alreadyStarted && progressDraftGate.hasStarted) {
+          renderProgressDraft();
+        }
+      };
+
+      const suppressPreviewToolProgressForAnswerText = (text: string | undefined) => {
+        if (!text?.trim()) {
+          return;
+        }
+        previewToolProgressSuppressed = true;
+        previewToolProgressLines = [];
+      };
+
+      const resetPreviewToolProgress = () => {
+        previewToolProgressSuppressed = false;
+        previewToolProgressLines = [];
+      };
+
+      const buildPreviewToolProgressReplyOptions = (): Partial<GetReplyOptions> => {
+        if (!shouldSuppressDefaultToolProgressMessages) {
+          return {};
+        }
+        const options: Partial<GetReplyOptions> = {
+          suppressDefaultToolProgressMessages: true,
+        };
+        if (!shouldStreamPreviewToolProgress) {
+          return options;
+        }
+        return {
+          ...options,
+          onToolStart: async (payload) => {
+            const toolName = payload.name?.trim();
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "tool",
+                name: toolName,
+                phase: payload.phase,
+                args: payload.args,
+              }),
+              { toolName },
+            );
+          },
+          onItemEvent: async (payload) => {
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "item",
+                itemKind: payload.kind,
+                title: payload.title,
+                name: payload.name,
+                phase: payload.phase,
+                status: payload.status,
+                summary: payload.summary,
+                progressText: payload.progressText,
+                meta: payload.meta,
+              }),
+            );
+          },
+          onPlanUpdate: async (payload) => {
+            if (payload.phase !== "update") {
+              return;
+            }
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "plan",
+                phase: payload.phase,
+                title: payload.title,
+                explanation: payload.explanation,
+                steps: payload.steps,
+              }),
+            );
+          },
+          onApprovalEvent: async (payload) => {
+            if (payload.phase !== "requested") {
+              return;
+            }
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "approval",
+                phase: payload.phase,
+                title: payload.title,
+                command: payload.command,
+                reason: payload.reason,
+                message: payload.message,
+              }),
+            );
+          },
+          onCommandOutput: async (payload) => {
+            if (payload.phase !== "end") {
+              return;
+            }
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "command-output",
+                phase: payload.phase,
+                title: payload.title,
+                name: payload.name,
+                status: payload.status,
+                exitCode: payload.exitCode,
+              }),
+            );
+          },
+          onPatchSummary: async (payload) => {
+            if (payload.phase !== "end") {
+              return;
+            }
+            await pushPreviewToolProgress(
+              formatChannelProgressDraftLine({
+                event: "patch",
+                phase: payload.phase,
+                title: payload.title,
+                name: payload.name,
+                added: payload.added,
+                modified: payload.modified,
+                deleted: payload.deleted,
+                summary: payload.summary,
+              }),
+            );
+          },
+        };
+      };
 
       const getDisplayableDraftText = () => {
         const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
@@ -1748,56 +1934,157 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onReplyStart: typingCallbacks.onReplyStart,
           onIdle: typingCallbacks.onIdle,
         });
+      const pinnedMainDmOwner = isDirectMessage
+        ? resolvePinnedMainDmOwnerFromAllowlist({
+            dmScope: cfg.session?.dmScope,
+            allowFrom: effectiveAllowFrom,
+            normalizeEntry: normalizeMatrixUserId,
+          })
+        : null;
 
-      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
-        dispatcher,
-        onSettled: () => {
-          markDispatchIdle();
-        },
-        run: async () => {
-          try {
-            return await core.channel.reply.dispatchReplyFromConfig({
-              ctx: ctxPayload,
-              cfg,
-              dispatcher,
-              replyOptions: {
-                ...replyOptions,
-                skillFilter: roomConfig?.skills,
-                // Keep block streaming enabled when explicitly requested, even
-                // with draft previews on. The draft remains the live preview
-                // for the current assistant block, while block deliveries
-                // finalize completed blocks into their own preserved events.
-                disableBlockStreaming: !blockStreamingEnabled,
-                onPartialReply: draftStream
-                  ? (payload) => {
-                      latestDraftFullText = payload.text ?? "";
-                      updateDraftFromLatestFullText();
-                    }
-                  : undefined,
-                onBlockReplyQueued: draftStream
-                  ? (payload, context) => {
-                      if (payload.isCompactionNotice === true) {
-                        return;
-                      }
-                      queueDraftBlockBoundary(payload, context);
-                    }
-                  : undefined,
-                // Reset draft boundary bookkeeping on assistant message
-                // boundaries so post-tool blocks stream from a fresh
-                // cumulative payload (payload.text resets upstream).
-                onAssistantMessageStart: draftStream
-                  ? () => {
-                      resetDraftBlockOffsets();
-                    }
-                  : undefined,
-                onModelSelected,
+      const turnResult = await core.channel.turn.run({
+        channel: "matrix",
+        accountId: _route.accountId,
+        raw: event,
+        adapter: {
+          ingest: () => ({
+            id: _messageId,
+            rawText: bodyText,
+            textForAgent: ctxPayload.BodyForAgent,
+            textForCommands: ctxPayload.CommandBody,
+            raw: event,
+          }),
+          resolveTurn: () => ({
+            channel: "matrix",
+            accountId: _route.accountId,
+            routeSessionKey: _route.sessionKey,
+            storePath,
+            ctxPayload,
+            recordInboundSession: core.channel.session.recordInboundSession,
+            record: {
+              updateLastRoute: isDirectMessage
+                ? {
+                    sessionKey: _route.mainSessionKey,
+                    channel: "matrix",
+                    to: `room:${roomId}`,
+                    accountId: _route.accountId,
+                    mainDmOwnerPin: pinnedMainDmOwner
+                      ? {
+                          ownerRecipient: pinnedMainDmOwner,
+                          senderRecipient: normalizeMatrixUserId(senderId),
+                          onSkip: ({
+                            ownerRecipient,
+                            senderRecipient,
+                          }: {
+                            ownerRecipient: string;
+                            senderRecipient: string;
+                          }) => {
+                            logVerboseMessage(
+                              `matrix: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                            );
+                          },
+                        }
+                      : undefined,
+                  }
+                : undefined,
+              onRecordError: (err) => {
+                logger.warn("failed updating session meta", {
+                  error: String(err),
+                  storePath,
+                  sessionKey: ctxPayload.SessionKey ?? _route.sessionKey,
+                });
               },
-            });
-          } finally {
-            markRunComplete();
-          }
+            },
+            onPreDispatchFailure: () =>
+              core.channel.reply.settleReplyDispatcher({
+                dispatcher,
+                onSettled: () => {
+                  markRunComplete();
+                  markDispatchIdle();
+                },
+              }),
+            runDispatch: async () => {
+              if (
+                sharedDmContextNotice &&
+                markTrackedRoomIfFirst(sharedDmContextNoticeRooms, roomId)
+              ) {
+                client
+                  .sendMessage(roomId, {
+                    msgtype: "m.notice",
+                    body: sharedDmContextNotice,
+                  })
+                  .catch((err) => {
+                    logVerboseMessage(
+                      `matrix: failed sending shared DM session notice room=${roomId}: ${String(err)}`,
+                    );
+                  });
+              }
+
+              return await core.channel.reply.withReplyDispatcher({
+                dispatcher,
+                onSettled: () => {
+                  markDispatchIdle();
+                },
+                run: async () => {
+                  try {
+                    return await core.channel.reply.dispatchReplyFromConfig({
+                      ctx: ctxPayload,
+                      cfg,
+                      dispatcher,
+                      replyOptions: {
+                        ...replyOptions,
+                        skillFilter: roomConfig?.skills,
+                        // Keep block streaming enabled when explicitly requested, even
+                        // with draft previews on. The draft remains the live preview
+                        // for the current assistant block, while block deliveries
+                        // finalize completed blocks into their own preserved events.
+                        disableBlockStreaming: !blockStreamingEnabled,
+                        onPartialReply: draftStream
+                          ? (payload) => {
+                              if (progressDraftStreaming) {
+                                return;
+                              }
+                              latestDraftFullText = payload.text ?? "";
+                              suppressPreviewToolProgressForAnswerText(latestDraftFullText);
+                              updateDraftFromLatestFullText();
+                            }
+                          : undefined,
+                        onBlockReplyQueued: draftStream
+                          ? (payload, context) => {
+                              if (payload.isCompactionNotice === true) {
+                                return;
+                              }
+                              queueDraftBlockBoundary(payload, context);
+                            }
+                          : undefined,
+                        // Reset draft boundary bookkeeping on assistant message
+                        // boundaries so post-tool blocks stream from a fresh
+                        // cumulative payload (payload.text resets upstream).
+                        onAssistantMessageStart: draftStream
+                          ? () => {
+                              resetDraftBlockOffsets();
+                              resetPreviewToolProgress();
+                            }
+                          : undefined,
+                        ...buildPreviewToolProgressReplyOptions(),
+                        onModelSelected,
+                      },
+                    });
+                  } finally {
+                    progressDraftGate.cancel();
+                    markRunComplete();
+                  }
+                },
+              });
+            },
+          }),
         },
       });
+      if (!turnResult.dispatched) {
+        return;
+      }
+      const { dispatchResult } = turnResult;
+      const { queuedFinal, counts } = dispatchResult;
       if (finalReplyDeliveryFailed) {
         if (retryableReplyDeliveryFailed) {
           logVerboseMessage(
@@ -1832,7 +2119,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (isRoom && triggerSnapshot) {
         roomHistoryTracker.consumeHistory(_route.agentId, roomId, triggerSnapshot, _messageId);
       }
-      if (!queuedFinal) {
+      if (!hasFinalInboundReplyDispatch({ queuedFinal, counts })) {
         await commitInboundEventIfClaimed();
         return;
       }

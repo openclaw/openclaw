@@ -7,7 +7,11 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
-import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
+import {
+  getRuntimeConfig,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+} from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -115,7 +119,7 @@ function formatResolveResult(result: ResolveResult): string {
 
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
-  const loadedRaw = loadConfig();
+  const loadedRaw = getRuntimeConfig();
   let { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
     config: loadedRaw,
     commandName: "channels resolve",
@@ -135,10 +139,15 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
         cfg,
         runtime,
         rawChannel: explicitChannel,
-        allowInstall: true,
+        allowInstall: false,
         supports: (plugin) => Boolean(plugin.resolver?.resolveTargets),
       })
     : null;
+  if (explicitChannel && resolvedExplicit?.catalogEntry && !resolvedExplicit.plugin) {
+    throw new Error(
+      `Channel plugin "${resolvedExplicit.catalogEntry.id}" is not installed. Run "openclaw channels add --channel ${resolvedExplicit.catalogEntry.id}" first.`,
+    );
+  }
   if (resolvedExplicit?.configChanged) {
     cfg = resolvedExplicit.cfg;
     const shouldMovePluginInstalls = Boolean(

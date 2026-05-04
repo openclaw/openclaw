@@ -49,8 +49,10 @@ Notes:
 - The device pairing record is the durable approved-role contract. Token
   rotation stays inside that contract; it cannot upgrade a paired node into a
   different role that pairing approval never granted.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/rename`) is a separate gateway-owned
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
+- `openclaw nodes remove --node <id|name|ip>` deletes stale entries from that
+  separate gateway-owned node pairing store.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
@@ -185,6 +187,29 @@ openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"ja
 ```
 
 Higher-level helpers exist for the common “give the agent a MEDIA attachment” workflows.
+
+## Command policy
+
+Node commands must pass two gates before they can be invoked:
+
+1. The node must declare the command in its WebSocket `connect.commands` list.
+2. The gateway's platform policy must allow the declared command.
+
+Windows and macOS companion nodes allow safe declared commands such as
+`canvas.*`, `camera.list`, `location.get`, and `screen.snapshot` by default.
+Dangerous or privacy-heavy commands such as `camera.snap`, `camera.clip`, and
+`screen.record` still require explicit opt-in with
+`gateway.nodes.allowCommands`. `gateway.nodes.denyCommands` always wins over
+defaults and extra allowlist entries.
+
+Plugin-owned node commands can add a Gateway node-invoke policy. That policy
+runs after the allowlist check and before forwarding to the node, so raw
+`node.invoke`, CLI helpers, and dedicated agent tools share the same plugin
+permission boundary. Dangerous plugin node commands still require explicit
+`gateway.nodes.allowCommands` opt-in.
+
+After a node changes its declared command list, reject the old device pairing
+and approve the new request so the gateway stores the updated command snapshot.
 
 ## Screenshots (canvas snapshots)
 

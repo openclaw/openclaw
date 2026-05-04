@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { normalizeAssistantReplayContent } from "./replay-history.js";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
+const COPIED_INBOUND_METADATA_ONLY_TEXT = `Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"msg-abc","sender":"+1555000"}
+\`\`\``;
 
 function bedrockAssistant(
   content: unknown,
@@ -62,6 +66,35 @@ describe("normalizeAssistantReplayContent", () => {
     expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
   });
 
+  it("drops blank user text messages from replay", () => {
+    const messages = [
+      userMessage("before"),
+      {
+        role: "user",
+        content: [{ type: "text", text: "" }],
+        timestamp: 0,
+      } as unknown as AgentMessage,
+      userMessage("after"),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    expect(out).toEqual([messages[0], messages[2]]);
+  });
+
+  it("removes blank user text blocks while preserving non-text content", () => {
+    const imageBlock = { type: "image", data: "AA==", mimeType: "image/png" };
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "   " }, imageBlock],
+        timestamp: 0,
+      } as unknown as AgentMessage,
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    expect((out[0] as { content: unknown[] }).content).toEqual([imageBlock]);
+  });
+
   it("preserves nonzero-usage silent-reply turns (stopReason=stop, content=[]) untouched", () => {
     // run.empty-error-retry.test.ts treats `stopReason:"stop"` + `content:[]`
     // as a legitimate NO_REPLY / silent-reply, NOT a crash. Substituting the
@@ -103,6 +136,33 @@ describe("normalizeAssistantReplayContent", () => {
     const out = normalizeAssistantReplayContent(messages);
     const wrapped = out[1] as AgentMessage & { content: { type: string; text: string }[] };
     expect(wrapped.content).toEqual([{ type: "text", text: "plain string content" }]);
+  });
+
+  it("drops metadata-only legacy string assistant content from replay", () => {
+    const messages = [
+      userMessage("first"),
+      bedrockAssistant(COPIED_INBOUND_METADATA_ONLY_TEXT),
+      userMessage("second"),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toEqual([messages[0], messages[2]]);
+    expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
+  });
+
+  it("drops metadata-only assistant text blocks without fabricating placeholder output", () => {
+    const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant([
+        { type: "text", text: COPIED_INBOUND_METADATA_ONLY_TEXT },
+        { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nVisible reply` },
+        toolCall,
+      ]),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    const normalized = out[1] as AgentMessage & { content: unknown[] };
+    expect(normalized.content).toEqual([{ type: "text", text: "Visible reply" }, toolCall]);
+    expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
   });
 
   it("filters openclaw delivery-mirror and gateway-injected assistant messages from replay", () => {

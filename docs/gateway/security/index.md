@@ -92,6 +92,8 @@ Treat Gateway and node as one operator trust domain, with different roles:
 - **Gateway** is the control plane and policy surface (`gateway.auth`, tool policy, routing).
 - **Node** is remote execution surface paired to that Gateway (commands, device actions, host-local capabilities).
 - A caller authenticated to the Gateway is trusted at Gateway scope. After pairing, node actions are trusted operator actions on that node.
+- Operator scope levels and approval-time checks are summarized in
+  [Operator scopes](/gateway/operator-scopes).
 - Direct loopback backend clients authenticated with the shared gateway
   token/password can make internal control-plane RPCs without presenting a user
   device identity. This is not a remote or browser pairing bypass: network
@@ -144,7 +146,7 @@ a real boundary bypass is demonstrated:
   explicit CIDR/IP entries, only applies to first-time `role: node` pairing with
   no requested scopes, and does not auto-approve operator/browser/Control UI,
   WebChat, role upgrades, scope upgrades, metadata changes, public-key changes,
-  or same-host loopback trusted-proxy header paths.
+  or same-host loopback trusted-proxy header paths unless loopback trusted-proxy auth was explicitly enabled.
 - "Missing per-user authorization" findings that treat `sessionKey` as an
   auth token.
 
@@ -236,6 +238,7 @@ Use this when auditing access or deciding what to back up:
   - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
   - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- **Codex runtime state**: `~/.openclaw/agents/<agentId>/agent/codex-home/`
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
 
@@ -303,6 +306,7 @@ production.
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
     - `tools.exec.applyPatch.workspaceOnly=false`
     - `plugins.entries.acpx.config.permissionMode=approve-all`
+
   </Accordion>
 
   <Accordion title="All `dangerous*` / `dangerously*` keys in the config schema">
@@ -347,9 +351,9 @@ When the Gateway detects proxy headers from an address that is **not** in `trust
 
 `gateway.trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, but that auth mode is stricter:
 
-- trusted-proxy auth **fails closed on loopback-source proxies**
-- same-host loopback reverse proxies can still use `gateway.trustedProxies` for local-client detection and forwarded IP handling
-- for same-host loopback reverse proxies, use token/password auth instead of `gateway.auth.mode: "trusted-proxy"`
+- trusted-proxy auth **fails closed on loopback-source proxies by default**
+- same-host loopback reverse proxies can use `gateway.trustedProxies` for local-client detection and forwarded IP handling
+- same-host loopback reverse proxies can satisfy `gateway.auth.mode: "trusted-proxy"` only when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth
 
 ```yaml
 gateway:
@@ -369,7 +373,7 @@ Trusted proxy headers do not make node device pairing automatically trusted.
 `gateway.nodes.pairing.autoApproveCidrs` is a separate, disabled-by-default
 operator policy. Even when enabled, loopback-source trusted-proxy header paths
 are excluded from node auto-approval because local callers can forge those
-headers.
+headers, including when loopback trusted-proxy auth is explicitly enabled.
 
 Good reverse proxy behavior (overwrite incoming forwarding headers):
 
@@ -509,7 +513,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - If you install or update plugins (`openclaw plugins install <package>`, `openclaw plugins update <id>`), treat it like running untrusted code:
   - The install path is the per-plugin directory under the active plugin install root.
   - OpenClaw runs a built-in dangerous-code scan before install/update. `critical` findings block by default.
-  - OpenClaw uses `npm pack`, then runs a project-local `npm install --omit=dev --ignore-scripts` in that directory. Inherited global npm install settings are ignored so dependencies stay under the plugin install path.
+  - npm and git plugin installs run package-manager dependency convergence only during the explicit install/update flow. Local paths and archives are treated as self-contained plugin packages; OpenClaw copies/references them without running `npm install`.
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
   - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives on plugin install/update flows. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
   - Gateway-backed skill dependency installs follow the same dangerous/suspicious split: built-in `critical` findings block unless the caller explicitly sets `dangerouslyForceUnsafeInstall`, while suspicious findings still warn only. `openclaw skills install` remains the separate ClawHub skill download/install flow.
@@ -607,7 +611,7 @@ Why:
 
 - OpenAI-compatible backends that front self-hosted models sometimes preserve special tokens that appear in user text, instead of masking them. An attacker who can write into inbound external content (a fetched page, an email body, a file contents tool output) could otherwise inject a synthetic `assistant` or `system` role boundary and escape the wrapped-content guardrails.
 - Sanitization happens at the external-content wrapping layer, so it applies uniformly across fetch/read tools and inbound channel content rather than being per-provider.
-- Outbound model responses already have a separate sanitizer that strips leaked `<tool_call>`, `<function_calls>`, and similar scaffolding from user-visible replies. The external-content sanitizer is the inbound counterpart.
+- Outbound model responses already have a separate sanitizer that strips leaked `<tool_call>`, `<function_calls>`, `<system-reminder>`, `<previous_response>`, and similar internal runtime scaffolding from user-visible replies at the final channel delivery boundary. The external-content sanitizer is the inbound counterpart.
 
 This does not replace the other hardening on this page — `dmPolicy`, allowlists, exec approvals, sandboxing, and `contextVisibility` still do the primary work. It closes one specific tokenizer-layer bypass against self-hosted stacks that forward user text with special tokens intact.
 
@@ -733,7 +737,7 @@ If you load canvas content in a normal browser, treat it like any other untruste
 Bind mode controls where the Gateway listens:
 
 - `gateway.bind: "loopback"` (default): only local clients can connect.
-- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with gateway auth (shared token/password or a correctly configured non-loopback trusted proxy) and a real firewall.
+- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with gateway auth (shared token/password or a correctly configured trusted proxy) and a real firewall.
 
 Rules of thumb:
 
@@ -792,7 +796,7 @@ setups: SSH + your reverse proxy ports).
 
 ### mDNS/Bonjour discovery
 
-The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) for local device discovery. In full mode, this includes TXT records that may expose operational details:
+When the bundled `bonjour` plugin is enabled, the Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) for local device discovery. In full mode, this includes TXT records that may expose operational details:
 
 - `cliPath`: full filesystem path to the CLI binary (reveals username and install location)
 - `sshPort`: advertises SSH availability on the host
@@ -802,7 +806,9 @@ The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) 
 
 **Recommendations:**
 
-1. **Minimal mode** (default, recommended for exposed gateways): omit sensitive fields from mDNS broadcasts:
+1. **Keep Bonjour disabled unless LAN discovery is needed.** Bonjour auto-starts on macOS hosts and is opt-in elsewhere; direct Gateway URLs, Tailnet, SSH, or wide-area DNS-SD avoid local multicast.
+
+2. **Minimal mode** (default when Bonjour is enabled, recommended for exposed gateways): omit sensitive fields from mDNS broadcasts:
 
    ```json5
    {
@@ -812,7 +818,7 @@ The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) 
    }
    ```
 
-2. **Disable entirely** if you don't need local device discovery:
+3. **Disable mDNS mode** if you want to keep the plugin enabled but suppress local device discovery:
 
    ```json5
    {
@@ -822,7 +828,7 @@ The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) 
    }
    ```
 
-3. **Full mode** (opt-in): include `cliPath` + `sshPort` in TXT records:
+4. **Full mode** (opt-in): include `cliPath` + `sshPort` in TXT records:
 
    ```json5
    {
@@ -832,9 +838,9 @@ The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) 
    }
    ```
 
-4. **Environment variable** (alternative): set `OPENCLAW_DISABLE_BONJOUR=1` to disable mDNS without config changes.
+5. **Environment variable** (alternative): set `OPENCLAW_DISABLE_BONJOUR=1` to disable mDNS without config changes.
 
-In minimal mode, the Gateway still broadcasts enough for device discovery (`role`, `gatewayPort`, `transport`) but omits `cliPath` and `sshPort`. Apps that need CLI path information can fetch it via the authenticated WebSocket connection instead.
+When Bonjour is enabled in minimal mode, the Gateway broadcasts enough for device discovery (`role`, `gatewayPort`, `transport`) but omits `cliPath` and `sshPort`. Apps that need CLI path information can fetch it via the authenticated WebSocket connection instead.
 
 ### Lock down the Gateway WebSocket (local auth)
 
@@ -856,12 +862,9 @@ Set a token so **all** WS clients must authenticate:
 
 Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 
-Note: `gateway.remote.token` / `.password` are client credential sources. They
-do **not** protect local WS access by themselves.
-Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*`
-is unset.
-If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via
-SecretRef and unresolved, resolution fails closed (no remote fallback masking).
+<Note>
+`gateway.remote.token` and `gateway.remote.password` are client credential sources. They do **not** protect local WS access by themselves. Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset. If `gateway.auth.token` or `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
+</Note>
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
 Plaintext `ws://` is loopback-only by default. For trusted private-network
 paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
@@ -967,6 +970,7 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 - `openclaw.json`: config may include tokens (gateway, remote gateway), provider settings, and allowlists.
 - `credentials/**`: channel credentials (example: WhatsApp creds), pairing allowlists, legacy OAuth imports.
 - `agents/<agentId>/agent/auth-profiles.json`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
+- `agents/<agentId>/agent/codex-home/**`: per-agent Codex app-server account, config, skills, plugins, native thread state, and diagnostics.
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
 - `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) + routing metadata (`sessions.json`) that can contain private messages and tool output.
@@ -999,7 +1003,7 @@ Logs and transcripts can leak sensitive info even when access controls are corre
 
 Recommendations:
 
-- Keep tool summary redaction on (`logging.redactSensitive: "tools"`; default).
+- Keep log and transcript redaction on (`logging.redactSensitive: "tools"`; default).
 - Add custom patterns for your environment via `logging.redactPatterns` (tokens, hostnames, internal URLs).
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
 - Prune old session transcripts and log files if you don’t need long retention.
@@ -1092,9 +1096,9 @@ Two complementary approaches:
 - **Run the full Gateway in Docker** (container boundary): [Docker](/install/docker)
 - **Tool sandbox** (`agents.defaults.sandbox`, host gateway + sandbox-isolated tools; Docker is the default backend): [Sandboxing](/gateway/sandboxing)
 
-Note: to prevent cross-agent access, keep `agents.defaults.sandbox.scope` at `"agent"` (default)
-or `"session"` for stricter per-session isolation. `scope: "shared"` uses a
-single container/workspace.
+<Note>
+To prevent cross-agent access, keep `agents.defaults.sandbox.scope` at `"agent"` (default) or `"session"` for stricter per-session isolation. `scope: "shared"` uses a single container or workspace.
+</Note>
 
 Also consider agent workspace access inside the sandbox:
 
@@ -1103,7 +1107,9 @@ Also consider agent workspace access inside the sandbox:
 - `agents.defaults.sandbox.workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
 - Extra `sandbox.docker.binds` are validated against normalized and canonicalized source paths. Parent-symlink tricks and canonical home aliases still fail closed if they resolve into blocked roots such as `/etc`, `/var/run`, or credential directories under the OS home.
 
-Important: `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
+<Warning>
+`tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated mode](/tools/elevated).
+</Warning>
 
 ### Sub-agent delegation guardrail
 
@@ -1291,38 +1297,14 @@ If your AI does something bad:
 - What the attacker sent + what the agent did
 - Whether the Gateway was exposed beyond loopback (LAN/Tailscale Funnel/Serve)
 
-## Secret scanning with detect-secrets
+## Secret scanning
 
-CI runs the `detect-secrets` pre-commit hook in the `secrets` job.
-Pushes to `main` always run an all-files scan. Pull requests use a changed-file
-fast path when a base commit is available, and fall back to an all-files scan
-otherwise. If it fails, there are new candidates not yet in the baseline.
+CI runs the pre-commit `detect-private-key` hook over the repository. If it
+fails, remove or rotate the committed key material, then reproduce locally:
 
-### If CI fails
-
-1. Reproduce locally:
-
-   ```bash
-   pre-commit run --all-files detect-secrets
-   ```
-
-2. Understand the tools:
-   - `detect-secrets` in pre-commit runs `detect-secrets-hook` with the repo's
-     baseline and excludes.
-   - `detect-secrets audit` opens an interactive review to mark each baseline
-     item as real or false positive.
-3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.
-4. For false positives: run the interactive audit and mark them as false:
-
-   ```bash
-   detect-secrets audit .secrets.baseline
-   ```
-
-5. If you need new excludes, add them to `.detect-secrets.cfg` and regenerate the
-   baseline with matching `--exclude-files` / `--exclude-lines` flags (the config
-   file is reference-only; detect-secrets doesn’t read it automatically).
-
-Commit the updated `.secrets.baseline` once it reflects the intended state.
+```bash
+pre-commit run --all-files detect-private-key
+```
 
 ## Reporting security issues
 

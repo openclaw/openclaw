@@ -4,8 +4,9 @@ import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderAuthAliasLookupParams = {
@@ -26,6 +27,29 @@ const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>
   global: 2,
   workspace: 3,
 };
+let providerAuthAliasMapCache = new WeakMap<
+  NodeJS.ProcessEnv,
+  Map<string, Record<string, string>>
+>();
+
+function buildProviderAuthAliasMapCacheKey(
+  params: ProviderAuthAliasLookupParams | undefined,
+  env: NodeJS.ProcessEnv,
+): string {
+  return JSON.stringify({
+    pluginControlPlane: resolvePluginControlPlaneFingerprint({
+      config: params?.config,
+      env,
+      workspaceDir: params?.workspaceDir,
+    }),
+    includeUntrustedWorkspacePlugins: params?.includeUntrustedWorkspacePlugins === true,
+    plugins: params?.config?.plugins ?? null,
+  });
+}
+
+export function resetProviderAuthAliasMapCacheForTest(): void {
+  providerAuthAliasMapCache = new WeakMap<NodeJS.ProcessEnv, Map<string, Record<string, string>>>();
+}
 
 function resolveProviderAuthAliasOriginPriority(origin: PluginOrigin | undefined): number {
   if (!origin) {
@@ -83,15 +107,25 @@ function setPreferredAlias(params: {
 export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
 ): Record<string, string> {
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: params?.config,
+  const env = params?.env ?? process.env;
+  const cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
+  let envCache = providerAuthAliasMapCache.get(env);
+  if (!envCache) {
+    envCache = new Map<string, Record<string, string>>();
+    providerAuthAliasMapCache.set(env, envCache);
+  }
+  const cached = envCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const snapshot = loadPluginMetadataSnapshot({
+    config: params?.config ?? {},
     workspaceDir: params?.workspaceDir,
-    env: params?.env,
-    includeDisabled: true,
+    env,
   });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const plugin of registry.plugins) {
+  for (const plugin of snapshot.plugins) {
     if (!shouldUsePluginAuthAliases(plugin, params)) {
       continue;
     }
@@ -119,6 +153,7 @@ export function resolveProviderAuthAliasMap(
   for (const [alias, candidate] of preferredAliases) {
     aliases[alias] = candidate.target;
   }
+  envCache.set(cacheKey, aliases);
   return aliases;
 }
 

@@ -20,6 +20,23 @@ const FeishuDomainSchema = z.union([
   z.string().url().startsWith("https://"),
 ]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
+const TtsOverrideSchema = z
+  .object({
+    auto: z.enum(["off", "always", "inbound", "tagged"]).optional(),
+    enabled: z.boolean().optional(),
+    mode: z.enum(["final", "all"]).optional(),
+    provider: z.string().optional(),
+    persona: z.string().optional(),
+    personas: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+    summaryModel: z.string().optional(),
+    modelOverrides: z.record(z.string(), z.unknown()).optional(),
+    providers: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+    prefsPath: z.string().optional(),
+    maxTextLength: z.number().int().min(1).optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  })
+  .strict()
+  .optional();
 
 const ToolPolicySchema = z
   .object({
@@ -51,6 +68,7 @@ const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 // Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
 // for incremental text display with a "Thinking..." placeholder
 const StreamingModeSchema = z.boolean().optional();
+const BlockStreamingSchema = z.boolean().optional();
 
 const BlockStreamingCoalesceSchema = z
   .object({
@@ -171,6 +189,7 @@ const FeishuSharedConfigShape = {
   dms: z.record(z.string(), DmConfigSchema).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
+  blockStreaming: BlockStreamingSchema,
   blockStreamingCoalesce: BlockStreamingCoalesceSchema,
   mediaMaxMb: z.number().positive().optional(),
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
@@ -183,6 +202,7 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  tts: TtsOverrideSchema,
 };
 
 /**

@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { modelsListCommand, modelsStatusCommand } from "../commands/models/list.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -7,6 +6,16 @@ import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js"
 
 function runModelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
+}
+
+function rejectAgentScopedModelWrite(command: Command, commandName: "set" | "set-image"): void {
+  const agent = resolveOptionFromCommand<string>(command, "agent");
+  if (!agent) {
+    return;
+  }
+  throw new Error(
+    `\`openclaw models ${commandName}\` does not support \`--agent\`; it only updates global model defaults. Remove \`--agent\` or use agent config to set a per-agent model override.`,
+  );
 }
 
 export function registerModelsCli(program: Command) {
@@ -35,6 +44,7 @@ export function registerModelsCli(program: Command) {
     .option("--plain", "Plain line output", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
+        const { modelsListCommand } = await import("../commands/models/list.list-command.js");
         await modelsListCommand(opts, defaultRuntime);
       });
     });
@@ -71,6 +81,7 @@ export function registerModelsCli(program: Command) {
       const agent =
         resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
       await runModelsCommand(async () => {
+        const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
         await modelsStatusCommand(
           {
             json: Boolean(opts.json),
@@ -93,7 +104,8 @@ export function registerModelsCli(program: Command) {
     .command("set")
     .description("Set the default model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .action(async (model: string, _opts: unknown, command: Command) => {
+      rejectAgentScopedModelWrite(command, "set");
       await runModelsCommand(async () => {
         const { modelsSetCommand } = await import("../commands/models/set.js");
         await modelsSetCommand(model, defaultRuntime);
@@ -104,7 +116,8 @@ export function registerModelsCli(program: Command) {
     .command("set-image")
     .description("Set the image model")
     .argument("<model>", "Model id or alias")
-    .action(async (model: string) => {
+    .action(async (model: string, _opts: unknown, command: Command) => {
+      rejectAgentScopedModelWrite(command, "set-image");
       await runModelsCommand(async () => {
         const { modelsSetImageCommand } = await import("../commands/models/set-image.js");
         await modelsSetImageCommand(model, defaultRuntime);
@@ -270,6 +283,7 @@ export function registerModelsCli(program: Command) {
 
   models.action(async (opts) => {
     await runModelsCommand(async () => {
+      const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
       await modelsStatusCommand(
         {
           json: Boolean(opts?.statusJson),

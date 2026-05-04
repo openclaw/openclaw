@@ -1,15 +1,16 @@
 import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
 import type { PluginLoadOptions } from "./loader.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
-import {
-  createPluginIdScopeSet,
-  normalizePluginIdScope,
-  serializePluginIdScope,
-} from "./plugin-scope.js";
+import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
 export type WebProviderContract = "webSearchProviders" | "webFetchProviders";
 export type WebProviderConfigKey = "webSearch" | "webFetch";
+
+export type WebProviderCandidateResolution = {
+  pluginIds: string[] | undefined;
+  manifestRecords?: readonly PluginManifestRecord[];
+};
 
 type WebProviderSortEntry = {
   id: string;
@@ -65,13 +66,13 @@ function loadInstalledWebProviderManifestRecords(params: {
   env?: PluginLoadOptions["env"];
   pluginIds?: readonly string[];
 }): readonly PluginManifestRecord[] {
-  return loadPluginManifestRegistryForPluginRegistry({
-    config: params.config,
+  const records = loadManifestMetadataSnapshot({
+    config: params.config ?? {},
     workspaceDir: params.workspaceDir,
-    env: params.env,
-    pluginIds: params.pluginIds,
-    includeDisabled: true,
+    env: params.env ?? process.env,
   }).plugins;
+  const pluginIdSet = createPluginIdScopeSet(params.pluginIds);
+  return pluginIdSet ? records.filter((plugin) => pluginIdSet.has(plugin.id)) : records;
 }
 
 export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
@@ -83,17 +84,33 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
 }): string[] | undefined {
+  return resolveManifestDeclaredWebProviderCandidates(params).pluginIds;
+}
+
+export function resolveManifestDeclaredWebProviderCandidates(params: {
+  contract: WebProviderContract;
+  configKey: WebProviderConfigKey;
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: readonly string[];
+  origin?: PluginManifestRecord["origin"];
+  manifestRecords?: readonly PluginManifestRecord[];
+}): WebProviderCandidateResolution {
   const scopedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
   if (scopedPluginIds?.length === 0) {
-    return [];
+    return { pluginIds: [] };
   }
   const onlyPluginIdSet = createPluginIdScopeSet(scopedPluginIds);
-  const ids = loadInstalledWebProviderManifestRecords({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    pluginIds: scopedPluginIds,
-  })
+  const manifestRecords =
+    params.manifestRecords ??
+    loadInstalledWebProviderManifestRecords({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      pluginIds: scopedPluginIds,
+    });
+  const ids = manifestRecords
     .filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
@@ -103,9 +120,12 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
   if (ids.length > 0) {
-    return ids;
+    return { pluginIds: ids, manifestRecords };
   }
-  return undefined;
+  if (params.origin || scopedPluginIds !== undefined) {
+    return { pluginIds: [], manifestRecords };
+  }
+  return { pluginIds: undefined, manifestRecords };
 }
 
 function resolveBundledWebProviderCompatPluginIds(params: {
@@ -140,9 +160,9 @@ export function resolveBundledWebProviderResolutionConfig(params: {
     workspaceDir: params.workspaceDir,
     applyAutoEnable: true,
     compatMode: {
-      allowlist: params.bundledAllowlistCompat,
+      allowlist: params.config === undefined ? false : params.bundledAllowlistCompat,
       enablement: "always",
-      vitest: true,
+      vitest: params.config !== undefined,
     },
     resolveCompatPluginIds: (compatParams) =>
       resolveBundledWebProviderCompatPluginIds({
@@ -156,28 +176,6 @@ export function resolveBundledWebProviderResolutionConfig(params: {
     activationSourceConfig: activation.activationSourceConfig,
     autoEnabledReasons: activation.autoEnabledReasons,
   };
-}
-
-export function buildWebProviderSnapshotCacheKey(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  bundledAllowlistCompat?: boolean;
-  onlyPluginIds?: readonly string[];
-  origin?: PluginManifestRecord["origin"];
-  envKey: string | Record<string, string>;
-}): string {
-  const envKey =
-    typeof params.envKey === "string"
-      ? params.envKey
-      : Object.entries(params.envKey).toSorted(([left], [right]) => left.localeCompare(right));
-  const onlyPluginIds = normalizePluginIdScope(params.onlyPluginIds);
-  return JSON.stringify({
-    workspaceDir: params.workspaceDir ?? "",
-    bundledAllowlistCompat: params.bundledAllowlistCompat === true,
-    origin: params.origin ?? "",
-    onlyPluginIds: serializePluginIdScope(onlyPluginIds),
-    env: envKey,
-  });
 }
 
 export function mapRegistryProviders<TProvider extends { id: string }>(params: {

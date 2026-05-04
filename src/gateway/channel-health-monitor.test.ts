@@ -172,6 +172,25 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("keeps running after a runtime snapshot failure", async () => {
+    const manager = createMockChannelManager({
+      getRuntimeSnapshot: vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error("snapshot failed");
+        })
+        .mockReturnValue({ channels: {}, channelAccounts: {} }),
+    });
+    const monitor = startDefaultMonitor(manager);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
   it("accepts timing.monitorStartupGraceMs", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
@@ -434,6 +453,31 @@ describe("channel-health-monitor", () => {
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(1_001);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
+    monitor.stop();
+  });
+
+  it("counts failed restart attempts toward cooldown and hourly caps", async () => {
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: managedStoppedAccount("keeps crashing"),
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          throw new Error("startup failed");
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 1_000,
+      cooldownCycles: 1,
+      maxRestartsPerHour: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_001);
+
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
     monitor.stop();
   });
 

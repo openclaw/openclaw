@@ -28,6 +28,7 @@ function createHarness(params?: {
   activeChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
   opts?: { local?: boolean };
+  currentSessionId?: string | null;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
@@ -55,6 +56,7 @@ function createHarness(params?: {
   const state = {
     currentAgentId: "main",
     currentSessionKey: "agent:main:main",
+    currentSessionId: params?.currentSessionId ?? null,
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
     isConnected: params?.isConnected ?? true,
@@ -153,6 +155,22 @@ describe("tui command handlers", () => {
       }),
     );
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("passes the current backing session id when sending to the gateway", async () => {
+    const { handleCommand, sendChat } = createHarness({
+      currentSessionId: "session-before-relaunch",
+    });
+
+    await handleCommand("/status");
+
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        sessionId: "session-before-relaunch",
+        message: "/status",
+      }),
+    );
   });
 
   it("opens a context mode selector for /context without sending immediately", async () => {
@@ -293,6 +311,25 @@ describe("tui command handlers", () => {
     expect(sendChat).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "/btw what changed?",
+      }),
+    );
+  });
+
+  it("sends /side without hijacking the active main run", async () => {
+    const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
+      createHarness({
+        activeChatRunId: "run-main",
+      });
+
+    await handleCommand("/side what changed?");
+
+    expect(addUser).not.toHaveBeenCalled();
+    expect(noteLocalRunId).not.toHaveBeenCalled();
+    expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
+    expect(state.activeChatRunId).toBe("run-main");
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "/side what changed?",
       }),
     );
   });

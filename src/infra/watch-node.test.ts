@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeWatchedPaths } from "../../scripts/run-node.mjs";
 import { runWatchMain } from "../../scripts/watch-node.mjs";
-import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const VOICE_CALL_README = bundledPluginFile("voice-call", "README.md");
@@ -201,7 +201,7 @@ describe("watch-node script", () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
 
     const runPromise = runWatch({
-      args: ["gateway", "--force", "--help"],
+      args: ["config", "validate"],
       createWatcher,
       lockDisabled: true,
       process: fakeProcess,
@@ -215,6 +215,66 @@ describe("watch-node script", () => {
     expect(watcher.close).toHaveBeenCalledTimes(1);
     expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("runs doctor once and restarts when gateway exits nonzero", async () => {
+    const gatewayA = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const doctor = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const gatewayB = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(gatewayA)
+      .mockReturnValueOnce(doctor)
+      .mockReturnValueOnce(gatewayB);
+    const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
+
+    gatewayA.emit("exit", 1, null);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(spawn).toHaveBeenNthCalledWith(
+      2,
+      "/usr/local/bin/node",
+      ["scripts/run-node.mjs", "doctor", "--fix", "--non-interactive"],
+      expect.objectContaining({ stdio: "inherit" }),
+    );
+
+    doctor.emit("exit", 0, null);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(spawn).toHaveBeenCalledTimes(3);
+    expect(spawn).toHaveBeenNthCalledWith(
+      3,
+      "/usr/local/bin/node",
+      ["scripts/run-node.mjs", "gateway", "--force"],
+      expect.objectContaining({ stdio: "inherit" }),
+    );
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+    expect(gatewayB.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not run doctor after a gateway failure when auto doctor is disabled", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher,
+      env: { OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR: "0" },
+      lockDisabled: true,
+      process: fakeProcess,
+      spawn,
+    });
+
+    child.emit("exit", 1, null);
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 
   it("restarts when the runner exits with a SIGTERM-derived code unexpectedly", async () => {
@@ -343,6 +403,69 @@ describe("watch-node script", () => {
     expect(exitCode).toBe(1);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("prints recovery guidance when chokidar fails with invalid package config", async () => {
+    const error = Object.assign(
+      new Error(
+        'Invalid package config /tmp/openclaw/.pnpm/chokidar/package.json while importing "chokidar" from /tmp/openclaw/scripts/watch-node.mjs.',
+      ),
+      { code: "ERR_INVALID_PACKAGE_CONFIG" },
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        runWatch({
+          args: ["gateway", "--force"],
+          cwd: "/tmp/openclaw",
+          loadChokidar: vi.fn(async () => {
+            throw error;
+          }),
+          process: createFakeProcess(),
+        }),
+      ).rejects.toBe(error);
+
+      expect(errorSpy.mock.calls).toEqual([
+        [""],
+        [
+          "[openclaw] gateway:watch could not start because a dependency package config looks corrupted.",
+        ],
+        ["[openclaw] Invalid package config: /tmp/openclaw/.pnpm/chokidar/package.json"],
+        ["[openclaw] This usually means a file in node_modules is empty or truncated."],
+        ["[openclaw] Recommended recovery:"],
+        ["[openclaw]   rm -rf node_modules"],
+        ["[openclaw]   pnpm store prune"],
+        ["[openclaw]   pnpm install"],
+        [""],
+        ["[openclaw] Original error:"],
+        [error],
+      ]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("does not log non-package-config chokidar import errors before rethrowing", async () => {
+    const error = Object.assign(new Error("Cannot find package 'chokidar'"), {
+      code: "ERR_MODULE_NOT_FOUND",
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        runWatch({
+          loadChokidar: vi.fn(async () => {
+            throw error;
+          }),
+          process: createFakeProcess(),
+        }),
+      ).rejects.toBe(error);
+
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("replaces an existing watcher lock holder before starting", async () => {

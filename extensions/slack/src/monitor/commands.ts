@@ -1,4 +1,4 @@
-import type { SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-types";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 /**
@@ -12,7 +12,7 @@ export function stripSlackMentionsForCommandDetection(text: string): string {
     .trim();
 }
 
-export function normalizeSlackSlashCommandName(raw: string) {
+function normalizeSlackSlashCommandName(raw: string) {
   return raw.replace(/^\/+/, "");
 }
 

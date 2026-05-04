@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
+import { formatMs } from "./lib/check-timing-summary.mjs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
 import {
   isCiLikeEnv,
@@ -44,7 +45,10 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.gateway-client.config.ts", 178],
   ["test/vitest/vitest.gateway-methods.config.ts", 177],
   ["test/vitest/vitest.commands.config.ts", 175],
-  ["test/vitest/vitest.agents.config.ts", 170],
+  ["test/vitest/vitest.agents-core.config.ts", 170],
+  ["test/vitest/vitest.agents-pi-embedded.config.ts", 169],
+  ["test/vitest/vitest.agents-support.config.ts", 168],
+  ["test/vitest/vitest.agents-tools.config.ts", 167],
   ["test/vitest/vitest.extension-voice-call.config.ts", 169],
   ["test/vitest/vitest.extensions.config.ts", 168],
   ["test/vitest/vitest.extension-provider-openai.config.ts", 167],
@@ -271,11 +275,14 @@ async function runVitestSpecsParallel(specs, concurrency) {
 }
 
 async function main() {
+  const suiteStartedAt = performance.now();
   const args = process.argv.slice(2);
   const baseEnv = resolveLocalVitestEnv(process.env);
   const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
   const changedTargetArgs =
-    targetArgs.length === 0 ? resolveChangedTargetArgs(args, process.cwd()) : null;
+    targetArgs.length === 0
+      ? resolveChangedTargetArgs(args, process.cwd(), undefined, { env: baseEnv })
+      : null;
   const rawRunSpecs =
     targetArgs.length === 0 && changedTargetArgs === null
       ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
@@ -307,6 +314,7 @@ async function main() {
 
   if (runSpecs.length === 0) {
     console.error("[test] no changed test targets; skipping Vitest.");
+    printTestSummary("skipped", 0, performance.now() - suiteStartedAt);
     return;
   }
 
@@ -358,8 +366,11 @@ async function main() {
         concurrency,
       );
       writeShardTimings(timings, process.cwd(), baseEnv);
-      console.error(
-        `[test] completed ${parallelSpecs.length} Vitest shards; Vitest summaries above are per-shard, not aggregate totals.`,
+      printTestSummary(
+        parallelExitCode === 0 ? "passed" : "failed",
+        parallelSpecs.length,
+        performance.now() - suiteStartedAt,
+        "Vitest summaries above are per-shard, not aggregate totals.",
       );
       releaseLockOnce();
       if (parallelExitCode !== 0) {
@@ -376,23 +387,36 @@ async function main() {
     if (!result) {
       return;
     }
+    if (result.timing) {
+      timings.push(result.timing);
+    }
     if (result.code !== 0) {
       exitCode = exitCode || result.code;
       if (spec.continueOnFailure !== true) {
+        printTestSummary("failed", timings.length, performance.now() - suiteStartedAt);
         releaseLockOnce();
         process.exit(result.code);
       }
     }
-    if (result.timing) {
-      timings.push(result.timing);
-    }
   }
   writeShardTimings(timings, process.cwd(), baseEnv);
+  printTestSummary(
+    exitCode === 0 ? "passed" : "failed",
+    timings.length,
+    performance.now() - suiteStartedAt,
+  );
 
   releaseLockOnce();
   if (exitCode !== 0) {
     process.exit(exitCode);
   }
+}
+
+function printTestSummary(status, shardCount, durationMs, detail) {
+  const suffix = detail ? `; ${detail}` : "";
+  console.error(
+    `[test] ${status} ${shardCount} Vitest shard${shardCount === 1 ? "" : "s"} in ${formatMs(durationMs)}${suffix}`,
+  );
 }
 
 main().catch((error) => {

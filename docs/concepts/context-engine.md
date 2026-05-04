@@ -122,7 +122,7 @@ A plugin can register a context engine using the plugin API:
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 
 export default function register(api) {
-  api.registerContextEngine("my-engine", () => ({
+  api.registerContextEngine("my-engine", (ctx) => ({
     info: {
       id: "my-engine",
       name: "My Context Engine",
@@ -153,6 +153,10 @@ export default function register(api) {
   }));
 }
 ```
+
+The factory `ctx` includes optional `config`, `agentDir`, and `workspaceDir`
+values so plugins can initialize per-agent or per-workspace state before the
+first lifecycle hook runs.
 
 Then enable it in config:
 
@@ -193,6 +197,21 @@ Required members:
 <ParamField path="systemPromptAddition" type="string">
   Prepended to the system prompt.
 </ParamField>
+<ParamField path="promptAuthority" type='"assembled" | "preassembly_may_overflow"'>
+  Controls which token estimate the runner uses for preemptive overflow
+  prechecks. Defaults to `"assembled"`, which means only the assembled
+  prompt's estimate is checked — appropriate for engines that return a
+  windowed, self-contained context. Set to `"preassembly_may_overflow"` only
+  when your assembled view can hide overflow risk in the underlying
+  transcript; the runner then takes the maximum of the assembled estimate
+  and the pre-assembly (unwindowed) session-history estimate when deciding
+  whether to preemptively compact. Either way, the messages you return are
+  still what the model sees — `promptAuthority` only affects the precheck.
+</ParamField>
+
+`compact` returns a `CompactResult`. When compaction rotates the active
+transcript, `result.sessionId` and `result.sessionFile` identify the successor
+session that the next retry or turn must use.
 
 Optional members:
 
@@ -251,6 +270,10 @@ A no-op `compact()` is unsafe for an active non-owning engine because it disable
 
 <Note>
 The slot is exclusive at run time — only one registered context engine is resolved for a given run or compaction operation. Other enabled `kind: "context-engine"` plugins can still load and run their registration code; `plugins.slots.contextEngine` only selects which registered engine id OpenClaw resolves when it needs a context engine.
+</Note>
+
+<Note>
+**Plugin uninstall:** when you uninstall the plugin currently selected as `plugins.slots.contextEngine`, OpenClaw resets the slot back to the default (`legacy`). The same reset behavior applies to `plugins.slots.memory`. No manual config edit is required.
 </Note>
 
 ## Relationship to compaction and memory
