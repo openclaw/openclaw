@@ -147,7 +147,8 @@ describe("plugin npm package manifest staging", () => {
     const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
     withAugmentedPluginNpmManifestForPackage({ repoRoot: repoDir, packageDir }, () => {
       const stagedPackageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
-      expect(stagedPackageJson.openclaw.extensions).toEqual(["./index.ts"]);
+      // extensions should be replaced with compiled runtimeExtensions paths for npm publishing
+      expect(stagedPackageJson.openclaw.extensions).toEqual(["./dist/index.js"]);
       expect(stagedPackageJson.openclaw.runtimeExtensions).toEqual(["./dist/index.js"]);
       expect(stagedPackageJson.openclaw.runtimeSetupEntry).toBe("./dist/setup-entry.js");
       expect(stagedPackageJson.files).toContain("dist/**");

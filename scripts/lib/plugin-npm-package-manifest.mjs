@@ -80,6 +80,8 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
     peerDependenciesMeta: plan.packagePeerMetadata.peerDependenciesMeta,
     openclaw: {
       ...plan.packageJson.openclaw,
+      // Replace extensions with compiled runtimeExtensions paths for npm publishing
+      extensions: plan.runtimeExtensions,
       runtimeExtensions: plan.runtimeExtensions,
       ...(plan.runtimeSetupEntry ? { runtimeSetupEntry: plan.runtimeSetupEntry } : {}),
     },
