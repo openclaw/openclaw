@@ -1543,6 +1543,40 @@
   position: relative;
 }
 
+.callout--dismissible {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.callout__content {
+  min-width: 0;
+  flex: 1;
+}
+
+.callout__dismiss {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+}
+
+.callout__dismiss:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.callout__dismiss svg {
+  width: 16px;
+  height: 16px;
+}
+
 .callout.danger {
   border-color: rgba(239, 68, 68, 0.25);
   background: linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(239, 68, 68, 0.04) 100%);

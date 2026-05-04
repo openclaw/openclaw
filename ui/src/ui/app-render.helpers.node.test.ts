@@ -36,6 +36,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 
 import {
   createChatSession,
+  dismissChatError,
   isCronSessionKey,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
@@ -771,6 +772,7 @@ describe("switchChatSession", () => {
       chatRunId: "run-1",
       chatSideResultTerminalRuns: new Set(["btw-run-1"]),
       chatStreamStartedAt: 1,
+      sessionsShowArchived: false,
       settings,
       applySettings(next: typeof settings) {
         state.settings = next;
@@ -902,5 +904,27 @@ describe("switchChatSession", () => {
       client: state.client,
       agentId: undefined,
     });
+  });
+});
+
+describe("dismissChatError", () => {
+  it("clears persistent Talk error state", () => {
+    const state = {
+      lastError: 'Realtime voice provider "openai" is not configured',
+      lastErrorCode: "UNAVAILABLE",
+      realtimeTalkActive: false,
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
+      realtimeTalkTranscript: "partial transcript",
+    } as AppViewState;
+
+    dismissChatError(state);
+
+    expect(state.lastError).toBeNull();
+    expect(state.lastErrorCode).toBeNull();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalkTranscript).toBeNull();
   });
 });

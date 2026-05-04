@@ -619,6 +619,17 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   void refreshSessionOptions(state);
 }
 
+export function dismissChatError(state: AppViewState) {
+  state.lastError = null;
+  state.lastErrorCode = null;
+  if (state.realtimeTalkStatus === "error") {
+    state.realtimeTalkActive = false;
+    state.realtimeTalkStatus = "idle";
+    state.realtimeTalkDetail = null;
+    state.realtimeTalkTranscript = null;
+  }
+}
+
 export async function createChatSession(state: AppViewState) {
   if (!state.client || !state.connected) {
     return;
@@ -650,7 +661,7 @@ export async function createChatSession(state: AppViewState) {
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
-      showArchived: Boolean(state.sessionsShowArchived),
+      showArchived: state.sessionsShowArchived,
     },
   );
   if (
@@ -681,7 +692,7 @@ async function refreshSessionOptions(state: AppViewState) {
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,
-    showArchived: Boolean(state.sessionsShowArchived),
+    showArchived: state.sessionsShowArchived,
   });
 }
 
