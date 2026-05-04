@@ -332,7 +332,7 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
-    test("keeps auth-none control ui first-connect token handoff unchanged", async () => {
+    test("keeps auth-none control ui first-connect token absence unchanged", async () => {
       const ws = await openWs(port, { origin: originForPort(port) });
       try {
         const deviceIdentityPath = path.join(
@@ -353,7 +353,7 @@ describe("gateway auth compatibility baseline", () => {
               };
             }
           | undefined;
-        expect(typeof helloOk?.auth?.deviceToken).toBe("string");
+        expect(helloOk?.auth?.deviceToken).toBeUndefined();
       } finally {
         ws.close();
       }
