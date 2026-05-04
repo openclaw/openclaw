@@ -56,6 +56,13 @@ if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" && -z "${OPENAI_API_KEY:-}" ]]; th
   echo "ERROR: OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key requires OPENAI_API_KEY." >&2
   exit 1
 fi
+if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" && ! -s "$HOME/.codex/auth.json" ]]; then
+  echo "ERROR: OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth requires ~/.codex/auth.json before building the live Docker image." >&2
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    echo "If this is a Testbox/API-key run, set OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key and run through openclaw-testbox-env." >&2
+  fi
+  exit 1
+fi
 
 cleanup_temp_dirs() {
   if ((${#TEMP_DIRS[@]} > 0)); then

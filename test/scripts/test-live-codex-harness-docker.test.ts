@@ -23,4 +23,18 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     expect(script).not.toContain('-v "$CACHE_HOME_DIR":/home/node/.cache');
     expect(script).not.toContain('-v "$CLI_TOOLS_DIR":/home/node/.npm-global');
   });
+
+  it("fails before Docker build when codex-auth has no host auth file", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth requires ~/.codex/auth.json before building the live Docker image",
+    );
+    expect(script).toContain(
+      "If this is a Testbox/API-key run, set OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key and run through openclaw-testbox-env.",
+    );
+    expect(script.indexOf("requires ~/.codex/auth.json before building")).toBeLessThan(
+      script.indexOf('OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR"'),
+    );
+  });
 });
