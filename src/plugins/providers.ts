@@ -255,7 +255,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
-  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledMode === "respect-allow";
+  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery === "allowlist";
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   return listRegistryPluginIds(registry, (plugin) => {
     if (
@@ -313,7 +313,7 @@ export function resolveDiscoverableProviderOwnerPluginIds(params: {
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
-  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledMode === "respect-allow";
+  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery === "allowlist";
   return resolveProviderOwnerPluginIds({
     ...params,
     isEligible: (plugin, normalizedConfig) =>

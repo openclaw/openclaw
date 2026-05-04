@@ -260,15 +260,15 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 }
 ```
 
-| Field            | Description                                               |
-| ---------------- | --------------------------------------------------------- |
-| `enabled`        | Master toggle (default: `true`)                           |
-| `allow`          | Plugin allowlist (optional)                               |
-| `bundledMode`    | Bundled plugin allowlist mode (`compat` by default)       |
-| `deny`           | Plugin denylist (optional; deny wins)                     |
-| `load.paths`     | Extra plugin files/directories                            |
-| `slots`          | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
-| `entries.\<id\>` | Per-plugin toggles + config                               |
+| Field              | Description                                               |
+| ------------------ | --------------------------------------------------------- |
+| `enabled`          | Master toggle (default: `true`)                           |
+| `allow`            | Plugin allowlist (optional)                               |
+| `bundledDiscovery` | Bundled plugin discovery mode (`compat` by default)       |
+| `deny`             | Plugin denylist (optional; deny wins)                     |
+| `load.paths`       | Extra plugin files/directories                            |
+| `slots`            | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
+| `entries.\<id\>`   | Per-plugin toggles + config                               |
 
 `plugins.allow` is exclusive. When it is non-empty, only listed plugins can load
 or expose tools, even if `tools.allow` contains `"*"` or a specific plugin-owned
@@ -276,8 +276,8 @@ tool name. If a tool allowlist references plugin tools, add the owning plugin id
 to `plugins.allow` or remove `plugins.allow`; `openclaw doctor` warns about this
 shape.
 
-`plugins.bundledMode` defaults to `"compat"` so older configs keep legacy
-bundled provider behavior. Set it to `"respect-allow"` when a restrictive
+`plugins.bundledDiscovery` defaults to `"compat"` so older configs keep legacy
+bundled provider behavior. Set it to `"allowlist"` when a restrictive
 `plugins.allow` inventory should also block omitted bundled provider plugins,
 including runtime web-search provider discovery. An empty `plugins.allow` is
 still treated as unset/open.

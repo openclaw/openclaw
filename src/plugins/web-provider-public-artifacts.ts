@@ -26,13 +26,13 @@ type BundledCandidateResolution = {
   manifestRecords?: readonly PluginManifestRecord[];
 };
 
-function filterRespectAllowBundledPluginIds(
+function filterAllowlistedBundledPluginIds(
   config: PluginLoadOptions["config"] | undefined,
   pluginIds: readonly string[],
 ) {
   const allow = config?.plugins?.allow;
   if (
-    config?.plugins?.bundledMode !== "respect-allow" ||
+    config?.plugins?.bundledDiscovery !== "allowlist" ||
     !Array.isArray(allow) ||
     allow.length === 0
   ) {
@@ -57,7 +57,7 @@ function resolveBundledCandidatePluginIds(params: {
       : resolveBundledWebFetchResolutionConfig(params).config;
   if (params.onlyPluginIds && params.onlyPluginIds.length > 0) {
     return {
-      pluginIds: filterRespectAllowBundledPluginIds(resolvedConfig, [
+      pluginIds: filterAllowlistedBundledPluginIds(resolvedConfig, [
         ...new Set(params.onlyPluginIds),
       ]).toSorted((left, right) => left.localeCompare(right)),
     };
@@ -72,7 +72,7 @@ function resolveBundledCandidatePluginIds(params: {
     origin: "bundled",
   });
   return {
-    pluginIds: filterRespectAllowBundledPluginIds(resolvedConfig, candidates.pluginIds ?? []),
+    pluginIds: filterAllowlistedBundledPluginIds(resolvedConfig, candidates.pluginIds ?? []),
     ...(candidates.manifestRecords ? { manifestRecords: candidates.manifestRecords } : {}),
   };
 }

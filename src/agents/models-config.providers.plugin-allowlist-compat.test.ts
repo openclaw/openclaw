@@ -84,13 +84,13 @@ describe("implicit provider plugin allowlist compatibility", () => {
     ).toEqual(["kilocode", "moonshot", "openrouter"]);
   });
 
-  it("respects allowlist for bundled plugins when bundledMode is respect-allow", () => {
+  it("respects allowlist for bundled plugins when bundledDiscovery is allowlist", () => {
     const config = withBundledPluginEnablementCompat({
       config: withBundledPluginAllowlistCompat({
         config: {
           plugins: {
             allow: ["openrouter"],
-            bundledMode: "respect-allow",
+            bundledDiscovery: "allowlist",
           },
         },
         pluginIds: ["kilocode", "moonshot"],

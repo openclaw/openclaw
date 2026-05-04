@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import { collectPluginToolAllowlistWarnings } from "./plugin-tool-allowlist-warnings.js";
+import {
+  collectBundledProviderAllowlistPolicyWarnings,
+  collectPluginToolAllowlistWarnings,
+} from "./plugin-tool-allowlist-warnings.js";
 
 const manifestRegistry: PluginManifestRegistry = {
   diagnostics: [],
@@ -105,6 +108,31 @@ describe("collectPluginToolAllowlistWarnings", () => {
         tools: { allow: ["*"] },
       },
       manifestRegistry,
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns when restrictive plugins.allow leaves bundled provider discovery in compat mode", () => {
+    const warnings = collectBundledProviderAllowlistPolicyWarnings({
+      cfg: {
+        plugins: { allow: ["telegram"] },
+      },
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('set plugins.bundledDiscovery to "allowlist"'),
+    ]);
+  });
+
+  it("does not warn when bundled provider discovery follows the allowlist", () => {
+    const warnings = collectBundledProviderAllowlistPolicyWarnings({
+      cfg: {
+        plugins: {
+          allow: ["telegram"],
+          bundledDiscovery: "allowlist",
+        },
+      },
     });
 
     expect(warnings).toEqual([]);

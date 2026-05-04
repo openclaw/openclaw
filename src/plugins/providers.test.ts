@@ -593,7 +593,7 @@ describe("resolvePluginProviders", () => {
     ).toEqual(["legacy-auth-owner"]);
   });
 
-  it("filters bundled provider plugins by allowlist when bundledMode is respect-allow", () => {
+  it("filters bundled provider plugins by allowlist when bundledDiscovery is allowlist", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "kilocode",
@@ -619,7 +619,7 @@ describe("resolvePluginProviders", () => {
       config: {
         plugins: {
           allow: ["openrouter"],
-          bundledMode: "respect-allow",
+          bundledDiscovery: "allowlist",
         },
       },
       env: {} as NodeJS.ProcessEnv,
