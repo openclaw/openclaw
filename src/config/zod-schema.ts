@@ -694,6 +694,13 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    tasks: z
+      .object({
+        retentionMs: z.number().int().positive().optional(),
+        sweepIntervalMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     commitments: CommitmentsSchema,
     hooks: z
       .object({
