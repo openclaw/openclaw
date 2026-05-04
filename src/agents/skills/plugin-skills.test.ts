@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { __testing } from "./plugin-skills.js";
 
 const hoisted = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -335,5 +337,154 @@ describe("resolvePluginSkillDirs", () => {
     });
 
     expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
+  });
+});
+
+describe("publishPluginSkillsToManagedSkillsDir", () => {
+  const { publishPluginSkillsToManagedSkillsDir } = __testing;
+
+  async function writeSkillDir(
+    parentDir: string,
+    name: string,
+    description = `${name} description`,
+  ) {
+    const dir = path.join(parentDir, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "SKILL.md"),
+      `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`,
+    );
+    return dir;
+  }
+
+  it("creates symlinks for each plugin skill dir", async () => {
+    const skillParent = await tempDirs.make("plugin-skills-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const dirA = await writeSkillDir(skillParent, "skill-a");
+    const dirB = await writeSkillDir(skillParent, "skill-b");
+
+    publishPluginSkillsToManagedSkillsDir([dirA, dirB], {
+      managedSkillsDir: managedDir,
+    });
+
+    const linkA = path.join(managedDir, "skill-a");
+    const linkB = path.join(managedDir, "skill-b");
+    expect(fsSync.readlinkSync(linkA)).toBe(dirA);
+    expect(fsSync.readlinkSync(linkB)).toBe(dirB);
+  });
+
+  it("is idempotent: skips symlinks that already point to the same target", async () => {
+    const skillParent = await tempDirs.make("plugin-skills-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const dir = await writeSkillDir(skillParent, "my-skill");
+
+    publishPluginSkillsToManagedSkillsDir([dir], { managedSkillsDir: managedDir });
+    const mtimeAfterFirst = (await fs.lstat(path.join(managedDir, "my-skill"))).mtimeMs;
+
+    // Second call with same input should preserve the existing symlink.
+    publishPluginSkillsToManagedSkillsDir([dir], { managedSkillsDir: managedDir });
+    const mtimeAfterSecond = (await fs.lstat(path.join(managedDir, "my-skill"))).mtimeMs;
+
+    expect(mtimeAfterSecond).toBe(mtimeAfterFirst);
+    expect(fsSync.readlinkSync(path.join(managedDir, "my-skill"))).toBe(dir);
+  });
+
+  it("replaces a symlink that points to a different target", async () => {
+    const skillParent = await tempDirs.make("plugin-skills-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const dir1 = await writeSkillDir(skillParent, "skill-v1", "old");
+    const dir2 = await writeSkillDir(skillParent, "my-skill", "new");
+
+    // Manually create a symlink to dir1 under the same name as dir2's basename.
+    fsSync.symlinkSync(dir1, path.join(managedDir, "my-skill"), "dir");
+
+    // Now publish dir2 (basename "my-skill"); should replace the symlink.
+    publishPluginSkillsToManagedSkillsDir([dir2], { managedSkillsDir: managedDir });
+
+    expect(fsSync.readlinkSync(path.join(managedDir, "my-skill"))).toBe(dir2);
+  });
+
+  it("cleans up stale symlinks whose targets no longer exist", async () => {
+    const skillParent = await tempDirs.make("plugin-skills-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const dir = await writeSkillDir(skillParent, "current-skill");
+    const staleDir = path.join(skillParent, "stale-skill");
+    await fs.mkdir(staleDir, { recursive: true });
+
+    // Create a stale symlink pointing to a directory we'll delete.
+    fsSync.symlinkSync(staleDir, path.join(managedDir, "stale-skill"), "dir");
+    await fs.rm(staleDir, { recursive: true, force: true });
+
+    // Publish only the current skill; stale should be cleaned up.
+    publishPluginSkillsToManagedSkillsDir([dir], { managedSkillsDir: managedDir });
+
+    expect(fsSync.existsSync(path.join(managedDir, "current-skill"))).toBe(true);
+    // Stale symlink pointing to nonexistent target should be removed.
+    expect(fsSync.existsSync(path.join(managedDir, "stale-skill"))).toBe(false);
+  });
+
+  it("cleans up broken symlinks (dangling)", async () => {
+    const skillParent = await tempDirs.make("plugin-skills-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const dir = await writeSkillDir(skillParent, "current-skill");
+    const nonexistentDir = path.join(skillParent, "nonexistent");
+
+    // Create a symlink to a nonexistent directory.
+    fsSync.symlinkSync(nonexistentDir, path.join(managedDir, "broken-skill"), "dir");
+
+    publishPluginSkillsToManagedSkillsDir([dir], { managedSkillsDir: managedDir });
+
+    expect(fsSync.existsSync(path.join(managedDir, "current-skill"))).toBe(true);
+    // Broken symlink pointing to nonexistent target should be removed.
+    expect(fsSync.existsSync(path.join(managedDir, "broken-skill"))).toBe(false);
+  });
+
+  it("does not create managed skills dir when skill dirs list is empty", async () => {
+    const parent = await tempDirs.make("parent-");
+    const managedDir = path.join(parent, "does-not-exist");
+    publishPluginSkillsToManagedSkillsDir([], { managedSkillsDir: managedDir });
+    expect(fsSync.existsSync(managedDir)).toBe(false);
+  });
+
+  it("skips directories that do not contain a SKILL.md", async () => {
+    const skillParent = await tempDirs.make("plugin-skills-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    // Create a dir without SKILL.md – should be skipped.
+    const emptyDir = path.join(skillParent, "empty-dir");
+    await fs.mkdir(emptyDir, { recursive: true });
+
+    publishPluginSkillsToManagedSkillsDir([emptyDir], {
+      managedSkillsDir: managedDir,
+    });
+
+    expect(fsSync.existsSync(path.join(managedDir, "empty-dir"))).toBe(false);
+  });
+
+  it("handles empty skill dirs list without error", async () => {
+    const managedDir = await tempDirs.make("managed-skills-");
+    publishPluginSkillsToManagedSkillsDir([], { managedSkillsDir: managedDir });
+    // No error expected. The managed dir may or may not be created.
+  });
+
+  it("handles collision: same basename from different plugins uses first one", async () => {
+    const skillParent1 = await tempDirs.make("plugin-skills-1-");
+    const skillParent2 = await tempDirs.make("plugin-skills-2-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const dir1 = await writeSkillDir(skillParent1, "shared-name", "first");
+    const dir2 = await writeSkillDir(skillParent2, "shared-name", "second");
+
+    publishPluginSkillsToManagedSkillsDir([dir1, dir2], {
+      managedSkillsDir: managedDir,
+    });
+
+    // First one wins.
+    expect(fsSync.readlinkSync(path.join(managedDir, "shared-name"))).toBe(dir1);
   });
 });

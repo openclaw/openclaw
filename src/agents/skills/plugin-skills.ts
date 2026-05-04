@@ -11,12 +11,15 @@ import {
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
+import { CONFIG_DIR } from "../../utils.js";
 
 const log = createSubsystemLogger("skills");
 
 export function resolvePluginSkillDirs(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
+  /** Override the managed skills directory for testing. */
+  managedSkillsDir?: string;
 }): string[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
@@ -93,5 +96,120 @@ export function resolvePluginSkillDirs(params: {
     }
   }
 
+  publishPluginSkillsToManagedSkillsDir(resolved, {
+    managedSkillsDir: params.managedSkillsDir,
+  });
+
   return resolved;
 }
+
+function resolveDefaultManagedSkillsDir(): string {
+  return path.join(CONFIG_DIR, "skills");
+}
+
+/**
+ * Creates symlinks from each resolved plugin skill directory into the
+ * managed skills directory (~/.openclaw/skills/) so the agent SDK can
+ * discover them at the conventional file-system path.
+ */
+function publishPluginSkillsToManagedSkillsDir(
+  skillDirs: string[],
+  opts?: { managedSkillsDir?: string },
+): void {
+  const managedSkillsDir = opts?.managedSkillsDir ?? resolveDefaultManagedSkillsDir();
+  const managedTargets = new Map<string, string>();
+
+  // Collect basename → target mappings, reporting collisions.
+  // Only publish directories that contain a SKILL.md (actual skill dirs,
+  // not parent containers like ./skills/ that hold multiple skills).
+  for (const dir of skillDirs) {
+    if (!fs.existsSync(path.join(dir, "SKILL.md"))) {
+      continue;
+    }
+    const basename = path.basename(dir);
+    const existing = managedTargets.get(basename);
+    if (existing) {
+      log.warn(
+        `plugin skill name collision: "${basename}" resolves to both ${existing} and ${dir}; ` +
+          `only the first will be published to managed skills`,
+      );
+      continue;
+    }
+    managedTargets.set(basename, dir);
+  }
+
+  // Create or update symlinks.
+  for (const [name, target] of managedTargets) {
+    const linkPath = path.join(managedSkillsDir, name);
+    try {
+      fs.mkdirSync(managedSkillsDir, { recursive: true });
+    } catch {
+      // best-effort; symlink will fail below if dir is truly unusable
+    }
+    try {
+      const existingTarget = fs.readlinkSync(linkPath);
+      if (existingTarget === target) {
+        continue;
+      }
+      log.warn(
+        `managed skill symlink "${linkPath}" points to ${existingTarget}, replacing with ${target}`,
+      );
+      fs.unlinkSync(linkPath);
+    } catch (err) {
+      if (!isNotFoundError(err)) {
+        log.warn(`failed to inspect managed skill symlink "${linkPath}": ${String(err)}`);
+        continue;
+      }
+    }
+    try {
+      fs.symlinkSync(target, linkPath, "dir");
+    } catch (err) {
+      log.warn(
+        `failed to create managed skill symlink "${linkPath}" → "${target}": ${String(err)}`,
+      );
+    }
+  }
+
+  // Clean up stale symlinks for plugin skills that are no longer active.
+  let managedEntries: fs.Dirent[];
+  try {
+    managedEntries = fs.readdirSync(managedSkillsDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of managedEntries) {
+    if (!entry.isSymbolicLink()) {
+      continue;
+    }
+    if (managedTargets.has(entry.name)) {
+      continue;
+    }
+    const linkPath = path.join(managedSkillsDir, entry.name);
+    try {
+      const target = fs.readlinkSync(linkPath);
+      // Only remove symlinks that point to directories that no longer exist.
+      if (!fs.existsSync(target)) {
+        fs.unlinkSync(linkPath);
+      }
+    } catch {
+      // Broken symlink or other issue — best-effort cleanup.
+      try {
+        fs.unlinkSync(linkPath);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+function isNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const code = (err as Record<string, unknown>).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+export const __testing = {
+  publishPluginSkillsToManagedSkillsDir,
+};
