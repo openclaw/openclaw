@@ -289,11 +289,60 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 
-  it("starts accepted typing feedback for guild messages", async () => {
+  it.each(["message", "thinking"] as const)(
+    "creates and carries accepted typing feedback without pre-starting for %s mode",
+    async (typingMode) => {
+      preflightDiscordMessageMock.mockReset();
+      processDiscordMessageMock.mockReset();
+      const replyTypingFeedback = createReplyTypingFeedbackMock("dm-1");
+      const createReplyTypingFeedback = vi.fn(() => replyTypingFeedback);
+      preflightDiscordMessageMock.mockResolvedValue(
+        createAcceptedDmPreflightContext({
+          cfg: {
+            ...createPreflightContext().cfg,
+            agents: {
+              defaults: {
+                typingMode,
+              },
+            },
+          },
+        }),
+      );
+      processDiscordMessageMock.mockResolvedValue(undefined);
+
+      const handler = createDiscordMessageHandler({
+        ...createDiscordHandlerParams(),
+        __testing: { createReplyTypingFeedback },
+      });
+      await expect(
+        handler(createMessageData(`m-${typingMode}-mode`, "dm-1") as never, {} as never),
+      ).resolves.toBeUndefined();
+
+      await flushQueueWork();
+
+      expect(createReplyTypingFeedback).toHaveBeenCalledWith(
+        expect.objectContaining({ channelId: "dm-1" }),
+      );
+      expect(replyTypingFeedback.onReplyStart).not.toHaveBeenCalled();
+      expect(processDiscordMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({ replyTypingFeedback }),
+      );
+    },
+  );
+
+  it("pre-starts accepted typing feedback for guild messages in instant typing mode", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
     preflightDiscordMessageMock.mockResolvedValue(
       createAcceptedDmPreflightContext({
+        cfg: {
+          ...createPreflightContext().cfg,
+          agents: {
+            defaults: {
+              typingMode: "instant",
+            },
+          },
+        },
         isDirectMessage: false,
         isGuildMessage: true,
         messageChannelId: "guild-channel",
@@ -335,7 +384,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     );
   });
 
-  it("starts accepted typing feedback once and carries it into the queued run", async () => {
+  it("creates accepted typing feedback once and carries it into the queued run", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
     installDefaultDiscordPreflight();
@@ -353,7 +402,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(createReplyTypingFeedback).toHaveBeenCalledWith(
       expect.objectContaining({ channelId: "ch-1" }),
     );
-    expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
+    expect(replyTypingFeedback.onReplyStart).not.toHaveBeenCalled();
     expect(processDiscordMessageMock).toHaveBeenCalledWith(
       expect.objectContaining({ replyTypingFeedback }),
     );

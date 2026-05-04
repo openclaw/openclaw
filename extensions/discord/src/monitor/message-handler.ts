@@ -38,6 +38,7 @@ import type { DiscordMonitorStatusSink } from "./status.js";
 type PreflightDiscordMessage =
   typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 type CreateDiscordReplyTypingFeedback = typeof createDiscordReplyTypingFeedback;
+type DiscordAcceptedTypingMode = "never" | "instant" | "thinking" | "message";
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
@@ -66,44 +67,59 @@ function shouldSkipInitialTypingSignal(createFeedback?: CreateDiscordReplyTyping
   return !createFeedback && Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
 }
 
-function shouldStartAcceptedTypingFeedback(ctx: DiscordMessagePreflightContext): boolean {
+function resolveAcceptedTypingMode(ctx: DiscordMessagePreflightContext): DiscordAcceptedTypingMode {
+  const configuredTypingMode = ctx.cfg.session?.typingMode ?? ctx.cfg.agents?.defaults?.typingMode;
+  if (configuredTypingMode) {
+    return configuredTypingMode;
+  }
+  if (!ctx.isGuildMessage && !ctx.isGroupDm) {
+    return "instant";
+  }
+  if (ctx.effectiveWasMentioned) {
+    return "instant";
+  }
+  return "message";
+}
+
+function shouldCreateAcceptedTypingFeedback(ctx: DiscordMessagePreflightContext): boolean {
   if (ctx.abortSignal?.aborted) {
     return false;
   }
   if (!ctx.messageText.trim()) {
     return false;
   }
-  const configuredTypingMode = ctx.cfg.session?.typingMode ?? ctx.cfg.agents?.defaults?.typingMode;
-  return configuredTypingMode !== "never";
+  return resolveAcceptedTypingMode(ctx) !== "never";
 }
 
-function startAcceptedTypingFeedback(params: {
+function shouldPreStartAcceptedTypingFeedback(ctx: DiscordMessagePreflightContext): boolean {
+  return resolveAcceptedTypingMode(ctx) === "instant";
+}
+
+function prepareAcceptedTypingFeedback(params: {
   ctx: DiscordMessagePreflightContext;
   createFeedback?: CreateDiscordReplyTypingFeedback;
 }): DiscordReplyTypingFeedback | undefined {
   const { ctx, createFeedback } = params;
-  if (shouldSkipInitialTypingSignal(createFeedback) || !shouldStartAcceptedTypingFeedback(ctx)) {
+  if (shouldSkipInitialTypingSignal(createFeedback) || !shouldCreateAcceptedTypingFeedback(ctx)) {
     return undefined;
   }
-  if (ctx.replyTypingFeedback) {
-    void ctx.replyTypingFeedback.onReplyStart().catch((err) => {
+  const replyTypingFeedback =
+    ctx.replyTypingFeedback ??
+    (createFeedback ?? createDiscordReplyTypingFeedback)({
+      cfg: ctx.cfg,
+      token: ctx.token,
+      accountId: ctx.accountId,
+      channelId: ctx.messageChannelId,
+      log: (message) => {
+        ctx.runtime.error?.(danger(message));
+      },
+    });
+  ctx.replyTypingFeedback = replyTypingFeedback;
+  if (shouldPreStartAcceptedTypingFeedback(ctx)) {
+    void replyTypingFeedback.onReplyStart().catch((err) => {
       ctx.runtime.error?.(danger(`discord accepted typing failed: ${String(err)}`));
     });
-    return ctx.replyTypingFeedback;
   }
-  const replyTypingFeedback = (createFeedback ?? createDiscordReplyTypingFeedback)({
-    cfg: ctx.cfg,
-    token: ctx.token,
-    accountId: ctx.accountId,
-    channelId: ctx.messageChannelId,
-    log: (message) => {
-      ctx.runtime.error?.(danger(message));
-    },
-  });
-  ctx.replyTypingFeedback = replyTypingFeedback;
-  void replyTypingFeedback.onReplyStart().catch((err) => {
-    ctx.runtime.error?.(danger(`discord accepted typing failed: ${String(err)}`));
-  });
   return replyTypingFeedback;
 }
 
@@ -206,7 +222,7 @@ export function createDiscordMessageHandler(
             await commitDiscordInboundReplay({ replayKeys, replayGuard });
             return;
           }
-          startAcceptedTypingFeedback({
+          prepareAcceptedTypingFeedback({
             ctx,
             createFeedback: params.__testing?.createReplyTypingFeedback,
           });
@@ -259,7 +275,7 @@ export function createDiscordMessageHandler(
           await commitDiscordInboundReplay({ replayKeys, replayGuard });
           return;
         }
-        startAcceptedTypingFeedback({
+        prepareAcceptedTypingFeedback({
           ctx,
           createFeedback: params.__testing?.createReplyTypingFeedback,
         });
