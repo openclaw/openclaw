@@ -8,6 +8,28 @@ import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
 
+const TRUTHY_ENV = new Set(["1", "true", "yes", "on"]);
+const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
+  "OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY";
+
+function isManagedProxyActive(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env["OPENCLAW_PROXY_ACTIVE"] === "1";
+}
+
+function allowsDirectConnectWithManagedProxy(env: NodeJS.ProcessEnv = process.env): boolean {
+  return TRUTHY_ENV.has((env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE] ?? "").toLowerCase());
+}
+
+export function assertDebugProxyDirectConnectAllowed(env: NodeJS.ProcessEnv = process.env): void {
+  if (!isManagedProxyActive(env) || allowsDirectConnectWithManagedProxy(env)) {
+    return;
+  }
+  throw new Error(
+    "Debug proxy CONNECT upstream forwarding is disabled while managed proxy mode is active. " +
+      `Set ${DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE}=1 only for approved local diagnostics.`,
+  );
+}
+
 type DebugProxyServerHandle = {
   proxyUrl: string;
   stop: () => Promise<void>;
@@ -187,6 +209,26 @@ export async function startDebugProxyServer(params: {
       path: req.url ?? "",
       headersJson: JSON.stringify(req.headers),
     });
+    try {
+      assertDebugProxyDirectConnectAllowed();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: message,
+      });
+      clientSocket.end(`HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\n\r\n${message}`);
+      return;
+    }
     const upstreamSocket = net.connect(port, hostname, () => {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head.length > 0) {

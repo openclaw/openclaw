@@ -26,6 +26,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Proxy/debugging: disable debug proxy CONNECT upstream forwarding while managed proxy mode is active unless `OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY=1` is explicitly set for approved local diagnostics.
+
 - Google Meet: route stateful CLI session commands through the gateway-owned runtime so joined realtime sessions survive after the starting CLI process exits. Fixes #76344. Thanks @coltonharris-wq.
 - Memory/status: keep plain `openclaw memory status` and `openclaw memory status --json` on the cheap read-only path by reserving vector and embedding provider probes for `--deep` or `--index`. Fixes #76769. Thanks @daruire.
 - Telegram: suppress stale same-session replies when a newer accepted message arrives before an older in-flight Telegram dispatch finalizes. Fixes #76642. Thanks @chinar-amrutkar.
