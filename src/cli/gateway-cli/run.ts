@@ -159,7 +159,7 @@ function createGatewayCliStartupTrace() {
     async measure<T>(name: string, run: () => Awaitable<T>): Promise<T> {
       const before = performance.now();
       try {
-        return await withDiagnosticPhase(`cli.${name}`, run);
+        return await withDiagnosticPhase(name, run);
       } finally {
         const now = performance.now();
         emit(name, now - before, now - started);
