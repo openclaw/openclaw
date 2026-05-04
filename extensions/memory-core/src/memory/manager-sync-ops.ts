@@ -91,6 +91,15 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   "venv",
   ".tox",
   "__pycache__",
+  // Runtime / cache directories that may live under workspace/memory but
+  // whose contents are not user-authored memory content. Excluding them
+  // prevents high-frequency periodic writes (e.g. a daemon writing a
+  // _health.json every minute) from firing the memory watcher and
+  // scheduling watch-triggered reindex cycles that compete for the sqlite
+  // index lock.
+  "_shadow",
+  "_cache",
+  "_tmp",
 ]);
 
 const log = createSubsystemLogger("memory");

@@ -89,6 +89,11 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   "venv",
   ".tox",
   "__pycache__",
+  // Runtime / cache dirs (e.g. daemons writing periodic _health.json). See
+  // manager-sync-ops.ts for the matching list and rationale.
+  "_shadow",
+  "_cache",
+  "_tmp",
 ]);
 
 function qmdUsesVectors(searchMode: ResolvedQmdConfig["searchMode"]): boolean {
