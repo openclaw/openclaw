@@ -95,6 +95,8 @@ const resolveHookExternalContentSourceMock = createMock();
 const getSkillsSnapshotVersionMock = createMock();
 export const loadModelCatalogMock = createMock();
 const getRemoteSkillEligibilityMock = createMock();
+const getGlobalHookRunnerMock = createMock();
+const buildSessionEndHookPayloadMock = createMock();
 
 vi.mock("./run.runtime.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,
@@ -126,6 +128,8 @@ vi.mock("./run.runtime.js", () => ({
   isExternalHookSession: isExternalHookSessionMock,
   resolveHookExternalContentSource: resolveHookExternalContentSourceMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
+  getGlobalHookRunner: getGlobalHookRunnerMock,
+  buildSessionEndHookPayload: buildSessionEndHookPayloadMock,
 }));
 
 vi.mock("./run-external-content.runtime.js", () => ({
@@ -341,6 +345,8 @@ function resetRunConfigMocks(): void {
   getSkillsSnapshotVersionMock.mockReturnValue(42);
   loadModelCatalogMock.mockResolvedValue([]);
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
+  getGlobalHookRunnerMock.mockReturnValue(null);
+  buildSessionEndHookPayloadMock.mockReturnValue({ event: {}, context: {} });
 }
 
 function resetRunExecutionMocks(): void {
