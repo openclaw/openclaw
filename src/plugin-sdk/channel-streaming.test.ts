@@ -118,7 +118,7 @@ describe("channel-streaming", () => {
         { streaming: { mode: "partial", preview: { toolProgress: false } } },
         { draftStreamActive: true },
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       resolveChannelStreamingSuppressDefaultToolProgressMessages(
         { streaming: { mode: "partial", preview: { toolProgress: false } } },

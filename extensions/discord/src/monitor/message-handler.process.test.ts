@@ -1561,7 +1561,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps standalone Discord tool progress when partial preview lines are disabled", async () => {
+  it("suppresses standalone Discord tool progress when partial preview lines are disabled", async () => {
     createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
@@ -1581,7 +1581,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(
       dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions?.suppressDefaultToolProgressMessages,
-    ).toBeUndefined();
+    ).toBe(true);
   });
 
   it("strips reply tags from preview partials", async () => {

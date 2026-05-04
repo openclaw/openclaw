@@ -448,6 +448,9 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
   if (mode === "progress") {
     return true;
   }
+  if (options?.draftStreamActive === true) {
+    return true;
+  }
   return options?.previewToolProgressEnabled ?? resolveChannelStreamingPreviewToolProgress(entry);
 }
 

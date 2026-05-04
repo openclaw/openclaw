@@ -301,6 +301,9 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
     if (entry?.streaming?.mode === "progress") {
       return true;
     }
+    if (options?.draftStreamActive === true) {
+      return true;
+    }
     return options?.previewToolProgressEnabled ?? true;
   },
   isChannelProgressDraftWorkToolName: (name?: string) =>
@@ -765,7 +768,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update).not.toHaveBeenCalled();
   });
 
-  it("keeps standalone Slack tool progress when partial preview lines are disabled", async () => {
+  it("suppresses standalone Slack tool progress when partial preview lines are disabled", async () => {
     mockedSlackStreamingMode = "partial";
     mockedSlackDraftMode = "replace";
     mockedDispatchSequence = [];
@@ -776,7 +779,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
     expect(capturedReplyOptions?.onItemEvent).toBeDefined();
   });
 
