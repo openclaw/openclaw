@@ -17,6 +17,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   pluginToolAllowlist?: string[];
+  pluginToolDenylist?: string[];
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
@@ -81,6 +82,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     }),
     existingToolNames: params.existingToolNames ?? new Set<string>(),
     toolAllowlist: params.options?.pluginToolAllowlist,
+    toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(authProfileStore
       ? {

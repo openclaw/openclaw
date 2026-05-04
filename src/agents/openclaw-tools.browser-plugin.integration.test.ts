@@ -142,6 +142,31 @@ describe("createOpenClawTools browser plugin integration", () => {
     );
   });
 
+  it("forwards plugin tool deny policy to plugin resolution", () => {
+    hoisted.resolvePluginTools.mockReturnValue([]);
+    const config = {
+      plugins: {
+        allow: ["browser"],
+      },
+    } as OpenClawConfig;
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config,
+        pluginToolAllowlist: ["*"],
+        pluginToolDenylist: ["browser"],
+      },
+      resolvedConfig: config,
+    });
+
+    expect(hoisted.resolvePluginTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolAllowlist: ["*"],
+        toolDenylist: ["browser"],
+      }),
+    );
+  });
+
   it("does not pass a stale active snapshot as plugin runtime config for a resolved run config", () => {
     const staleSourceConfig = {
       plugins: {
