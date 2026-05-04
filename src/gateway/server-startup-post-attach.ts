@@ -9,6 +9,8 @@ import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { summarizeChannelStartup } from "./channel-startup-summary.js";
+import { formatDurationSeconds } from "../infra/format-time/format-duration.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
@@ -557,16 +559,13 @@ export async function startGatewayPostAttachRuntime(
 
         try {
           if (params.getChannelRuntimeSnapshot) {
-            const { summarizeChannelStartup } = await import(
-              "./channel-startup-summary.js"
-            );
             const summary = summarizeChannelStartup({
               snapshot: params.getChannelRuntimeSnapshot(),
+              now: Date.now(),
             });
-            const elapsed =
-              typeof params.startupStartedAt === "number"
-                ? `${((Date.now() - params.startupStartedAt) / 1000).toFixed(1)}s`
-                : null;
+            const elapsed = params.startupStartedAt
+              ? formatDurationSeconds(Date.now() - params.startupStartedAt)
+              : undefined;
             params.log.info(
               elapsed
                 ? `sidecars settled (${elapsed}): ${summary.summaryLine}`
