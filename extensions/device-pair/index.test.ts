@@ -8,7 +8,6 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
-import type { PendingPairingRequest } from "./notify.ts";
 
 const pluginApiMocks = vi.hoisted(() => ({
   clearDeviceBootstrapTokens: vi.fn(async () => ({ removed: 2 })),
@@ -57,7 +56,12 @@ vi.mock("./notify.js", () => ({
   registerPairingNotifierService: vi.fn(),
 }));
 
-import { approveDevicePairing, listDevicePairing } from "./api.js";
+import {
+  approveDevicePairing,
+  listDevicePairing,
+  resolveGatewayBindUrl,
+  resolveTailnetHostWithRunner,
+} from "./api.js";
 import registerDevicePair from "./index.js";
 
 type ListedPendingPairingRequest = Awaited<ReturnType<typeof listDevicePairing>>["pending"][number];
@@ -88,7 +92,7 @@ function createApi(params?: {
       },
     },
     pluginConfig: {
-      publicUrl: "ws://51.79.175.165:18789",
+      publicUrl: "wss://gateway.example.test",
       ...params?.pluginConfig,
     },
     runtime: (params?.runtime ?? {}) as OpenClawPluginApi["runtime"],
@@ -612,8 +616,17 @@ describe("device-pair /pair default setup code", () => {
     });
   });
 
-  it("normalizes bare publicUrl host ports before issuing setup codes", async () => {
+  it("normalizes secure bare publicUrl host ports before issuing setup codes", async () => {
     const command = registerPairCommand({
+      config: {
+        gateway: {
+          tls: { enabled: true },
+          auth: {
+            mode: "token",
+            token: "gateway-token",
+          },
+        },
+      },
       pluginConfig: {
         publicUrl: "gateway.example.test:18789/setup",
       },
@@ -629,7 +642,131 @@ describe("device-pair /pair default setup code", () => {
     const text = requireText(result);
 
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
-    expect(text).toContain("Gateway: ws://gateway.example.test:18789");
+    expect(text).toContain("Gateway: wss://gateway.example.test:18789");
+  });
+
+  it("allows loopback cleartext setup urls", async () => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl: "ws://127.0.0.1:18789",
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+    const text = requireText(result);
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Gateway: ws://127.0.0.1:18789");
+  });
+
+  it("rejects private LAN cleartext setup urls before issuing setup codes", async () => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl: "ws://192.168.1.20:18789",
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(requireText(result)).toContain(
+      "Mobile pairing over non-loopback networks requires a secure gateway URL",
+    );
+  });
+
+  it("rejects public cleartext setup urls before issuing setup codes", async () => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl: "ws://gateway.example.test:18789",
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(requireText(result)).toContain(
+      "Mobile pairing over non-loopback networks requires a secure gateway URL",
+    );
+  });
+
+  it("rejects tailnet cleartext setup urls before issuing setup codes", async () => {
+    vi.mocked(resolveGatewayBindUrl).mockReturnValueOnce({
+      url: "ws://100.64.0.9:18789",
+      source: "gateway.bind=tailnet",
+    });
+    const command = registerPairCommand({
+      config: {
+        gateway: {
+          bind: "tailnet",
+          auth: {
+            mode: "token",
+            token: "gateway-token",
+          },
+        },
+      },
+      pluginConfig: {
+        publicUrl: undefined,
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(requireText(result)).toContain("prefer gateway.tailscale.mode=serve");
+  });
+
+  it("uses Tailscale Serve MagicDNS as a secure setup url", async () => {
+    vi.mocked(resolveTailnetHostWithRunner).mockResolvedValueOnce("gateway.tailnet.ts.net");
+    const command = registerPairCommand({
+      config: {
+        gateway: {
+          tailscale: { mode: "serve" },
+          auth: {
+            mode: "token",
+            token: "gateway-token",
+          },
+        },
+      },
+      pluginConfig: {
+        publicUrl: undefined,
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+    const text = requireText(result);
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Gateway: wss://gateway.tailnet.ts.net");
   });
 
   it("rejects invalid bare publicUrl host ports", async () => {
@@ -713,7 +850,7 @@ describe("device-pair notify pending formatting", () => {
   it("includes role and scopes for pending requests", async () => {
     const { formatPendingRequests } =
       await vi.importActual<typeof import("./notify.ts")>("./notify.ts");
-    const pending: PendingPairingRequest[] = [
+    const pending: Parameters<typeof formatPendingRequests>[0] = [
       {
         requestId: "req-1",
         deviceId: "device-1",
@@ -737,7 +874,7 @@ describe("device-pair notify pending formatting", () => {
   it("falls back to roles list and no scopes when role/scopes are absent", async () => {
     const { formatPendingRequests } =
       await vi.importActual<typeof import("./notify.ts")>("./notify.ts");
-    const pending: PendingPairingRequest[] = [
+    const pending: Parameters<typeof formatPendingRequests>[0] = [
       {
         requestId: "req-2",
         deviceId: "device-2",

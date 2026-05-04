@@ -24,3 +24,13 @@ describe("agent fallback chip styles", () => {
     expect(css).toContain(".agent-chip-input .chip-remove:disabled");
   });
 });
+
+describe("sessions filter styles", () => {
+  it("keeps the expanded sessions filters on one row until the mobile breakpoint", () => {
+    const css = readComponentsCss();
+
+    expect(css).toContain(".sessions-filter-bar {\n  display: flex;\n  flex-wrap: wrap;");
+    expect(css).toContain("@media (max-width: 760px)");
+    expect(css).toContain(".sessions-filter-bar {\n    flex-direction: column;");
+  });
+});

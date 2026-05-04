@@ -8,9 +8,24 @@ const mocks = vi.hoisted(() => ({
     hostnameAllowlist: hosts,
   })),
   fetchWithSsrFGuard: vi.fn(),
-  gaxiosCtor: vi.fn(function MockGaxios(this: { defaults: Record<string, unknown> }, defaults) {
-    this.defaults = defaults as Record<string, unknown>;
-  }),
+  gaxiosCtor: vi.fn(
+    function MockGaxios(
+      this: {
+        defaults: Record<string, unknown>;
+        interceptors: {
+          request: { add: ReturnType<typeof vi.fn> };
+          response: { add: ReturnType<typeof vi.fn> };
+        };
+      },
+      defaults,
+    ) {
+      this.defaults = defaults as Record<string, unknown>;
+      this.interceptors = {
+        request: { add: vi.fn() },
+        response: { add: vi.fn() },
+      };
+    },
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -330,12 +345,28 @@ describe("googlechat google auth runtime", () => {
           fetchImplementation: expect.any(Function),
         },
       });
+      expect(transport.interceptors.request.add).toHaveBeenCalledWith({
+        resolved: expect.any(Function),
+      });
       expect("window" in globalThis).toBe(false);
     } finally {
       if (originalWindowDescriptor) {
         Object.defineProperty(globalThis, "window", originalWindowDescriptor);
       }
     }
+  });
+
+  it("normalizes Google auth request headers before upstream interceptors run", async () => {
+    const config = {
+      headers: { "x-test": "1" },
+      url: new URL("https://www.googleapis.com/oauth2/v1/certs"),
+    };
+
+    const normalized = __testing.normalizeGoogleAuthPreparedRequestHeaders(config);
+
+    expect(normalized.headers).toBeInstanceOf(Headers);
+    expect(normalized.headers.has("x-test")).toBe(true);
+    expect(normalized.headers.get("x-test")).toBe("1");
   });
 
   it("rejects service-account credentials that override Google auth endpoints", async () => {

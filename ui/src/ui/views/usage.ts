@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { getUsageCacheRefreshTitle } from "../usage-cache-status.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
 import {
   buildAggregatesFromSessions,
@@ -8,9 +9,8 @@ import {
   formatCost,
   formatIsoDate,
   formatTokens,
-  getZonedHour,
   renderUsageMosaic,
-  setToHourEnd,
+  sessionTouchesSelectedHours,
 } from "./usage-metrics.ts";
 import {
   addQueryToken,
@@ -171,35 +171,11 @@ export function renderUsage(props: UsageProps) {
         })
       : sortedSessions;
 
-  const sessionTouchesHours = (session: UsageSessionEntry, hours: number[]): boolean => {
-    if (hours.length === 0) {
-      return true;
-    }
-    const usage = session.usage;
-    const start = usage?.firstActivity ?? session.updatedAt;
-    const end = usage?.lastActivity ?? session.updatedAt;
-    if (!start || !end) {
-      return false;
-    }
-    const startMs = Math.min(start, end);
-    const endMs = Math.max(start, end);
-    let cursor = startMs;
-    while (cursor <= endMs) {
-      const date = new Date(cursor);
-      const hour = getZonedHour(date, filters.timeZone);
-      if (hours.includes(hour)) {
-        return true;
-      }
-      const nextHour = setToHourEnd(date, filters.timeZone);
-      const nextMs = Math.min(nextHour.getTime(), endMs);
-      cursor = nextMs + 1;
-    }
-    return false;
-  };
-
   const hourFilteredSessions =
     filters.selectedHours.length > 0
-      ? dayFilteredSessions.filter((s) => sessionTouchesHours(s, filters.selectedHours))
+      ? dayFilteredSessions.filter((s) =>
+          sessionTouchesSelectedHours(s, filters.selectedHours, filters.timeZone),
+        )
       : dayFilteredSessions;
 
   // Filter sessions by query (client-side)
@@ -324,6 +300,7 @@ export function renderUsage(props: UsageProps) {
 
   const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
+  const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
     (displayTotals?.missingCostEntries ?? 0) > 0 ||
     (displayTotals
@@ -447,8 +424,10 @@ export function renderUsage(props: UsageProps) {
         <div class="usage-header-row">
           <div class="usage-header-title">
             <div class="card-title usage-section-title">${t("usage.filters.title")}</div>
-            ${data.loading
-              ? html`<span class="usage-refresh-indicator">${t("usage.loading.badge")}</span>`
+            ${data.loading || cacheStatusTitle
+              ? html`<span class="usage-refresh-indicator" title=${cacheStatusTitle ?? ""}>
+                  ${t("usage.loading.badge")}
+                </span>`
               : nothing}
             ${isEmpty
               ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>`
@@ -732,6 +711,13 @@ export function renderUsage(props: UsageProps) {
 
         ${data.error
           ? html`<div class="callout danger usage-callout">${data.error}</div>`
+          : nothing}
+        ${cacheStatusTitle
+          ? html`
+              <div class="callout warning usage-callout usage-cache-warning">
+                ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
+              </div>
+            `
           : nothing}
         ${data.sessionsLimitReached
           ? html`

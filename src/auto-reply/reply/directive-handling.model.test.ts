@@ -10,6 +10,10 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   clearRuntimeAuthProfileStoreSnapshots: () => {
     authProfilesStoreMock.profiles = {};
   },
+  externalCliDiscoveryForProviderAuth: () => ({
+    mode: "scoped",
+    allowKeychainPrompt: false,
+  }),
   ensureAuthProfileStore: () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
@@ -58,6 +62,42 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
     },
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async ({ update }) => update(store())),
+  };
+});
+
+vi.mock("../../agents/model-auth.js", () => {
+  const store = () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  });
+  const hasWorkspaceCredential = (env: NodeJS.ProcessEnv = process.env) =>
+    Boolean(env.WORKSPACE_MODEL_LIST_CREDENTIALS || env.WORKSPACE_MODEL_CREDENTIALS);
+  return {
+    ensureAuthProfileStore: store,
+    hasRuntimeAvailableProviderAuth: ({
+      provider,
+      env,
+    }: {
+      provider: string;
+      env?: NodeJS.ProcessEnv;
+    }) => provider === "anthropic" && hasWorkspaceCredential(env),
+    resolveAuthProfileOrder: ({ provider }: { provider: string }) =>
+      Object.entries(authProfilesStoreMock.profiles)
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([profileId]) => profileId),
+    resolveEnvApiKey: (provider: string, env: NodeJS.ProcessEnv = process.env) => {
+      if (provider !== "anthropic") {
+        return null;
+      }
+      if (env.WORKSPACE_MODEL_CREDENTIALS) {
+        return { apiKey: "sk-workspace", source: "workspace model credentials" };
+      }
+      if (env.WORKSPACE_MODEL_LIST_CREDENTIALS) {
+        return { apiKey: "sk-workspace", source: "workspace model list credentials" };
+      }
+      return null;
+    },
+    resolveUsableCustomProviderApiKey: () => null,
   };
 });
 
@@ -501,6 +541,8 @@ describe("/model chat UX", () => {
     try {
       await withEnvAsync(
         {
+          ANTHROPIC_API_KEY: undefined,
+          ANTHROPIC_OAUTH_TOKEN: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
           OPENCLAW_STATE_DIR: stateDir,
           WORKSPACE_MODEL_CREDENTIALS: credentialPath,
@@ -897,6 +939,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     expect(result?.text).toContain("Model set to");
     expect(result?.text).toContain("openai/gpt-4o");
+    expect(result?.text).toContain("for this session");
     expect(result?.text).not.toContain("failed");
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
   });
@@ -940,6 +983,28 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       provider: "openai",
       model: "gpt-4o",
     });
+  });
+
+  it("keeps xhigh when switching to OpenCode Claude Opus 4.7", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model opencode/claude-opus-4-7"),
+        allowedModelKeys: new Set([...allowedModelKeys, "opencode/claude-opus-4-7"]),
+        allowedModelCatalog: [
+          ...allowedModelCatalog,
+          { provider: "opencode", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+        ],
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to opencode/claude-opus-4-7 for this session.");
+    expect(result?.text ?? "").not.toContain("xhigh not supported");
+    expect(sessionEntry.thinkingLevel).toBe("xhigh");
   });
 
   it("does not request a live restart when /model mutates an active session", async () => {
@@ -1004,7 +1069,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       }),
     );
 
-    expect(result?.text).toContain("Model set to Opus (anthropic/claude-opus-4-6).");
+    expect(result?.text).toContain(
+      "Model set to Opus (anthropic/claude-opus-4-6) for this session.",
+    );
     expect(result?.text).toContain("Auth profile set to anthropic:work.");
     expect(sessionEntry.providerOverride).toBe("anthropic");
     expect(sessionEntry.modelOverride).toBe("claude-opus-4-6");

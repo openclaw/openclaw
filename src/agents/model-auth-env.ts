@@ -18,7 +18,7 @@ export type EnvApiKeyResult = {
   source: string;
 };
 
-export type EnvApiKeyLookupOptions = {
+type EnvApiKeyLookupOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   aliasMap?: Readonly<Record<string, string>>;
@@ -32,7 +32,11 @@ function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string
     return undefined;
   }
   const homeDir = normalizeOptionalPathInput(env.HOME) ?? os.homedir();
-  return trimmed.replaceAll("${HOME}", homeDir);
+  const appDataDir = normalizeOptionalPathInput(env.APPDATA);
+  if (trimmed.includes("${APPDATA}") && !appDataDir) {
+    return undefined;
+  }
+  return trimmed.replaceAll("${HOME}", homeDir).replaceAll("${APPDATA}", appDataDir ?? "");
 }
 
 function normalizeOptionalPathInput(value: unknown): string | undefined {
@@ -128,7 +132,10 @@ export function resolveEnvApiKey(
     }
   }
 
-  const authEvidence = resolveAuthEvidence(authEvidenceMap[normalized], env);
+  const evidence = Object.hasOwn(authEvidenceMap, normalized)
+    ? authEvidenceMap[normalized]
+    : undefined;
+  const authEvidence = resolveAuthEvidence(evidence, env);
   if (authEvidence) {
     return authEvidence;
   }

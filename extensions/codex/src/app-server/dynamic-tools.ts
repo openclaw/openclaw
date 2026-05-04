@@ -5,11 +5,14 @@ import {
   createCodexAppServerToolResultExtensionRunner,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
+  HEARTBEAT_RESPONSE_TOOL_NAME,
   isToolWrappedWithBeforeToolCallHook,
   isMessagingTool,
   isMessagingToolSendAction,
+  normalizeHeartbeatToolResponse,
   runAgentHarnessAfterToolCallHook,
   type AnyAgentTool,
+  type HeartbeatToolResponse,
   type MessagingToolSend,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -32,6 +35,7 @@ export type CodexDynamicToolBridge = {
     messagingToolSentTexts: string[];
     messagingToolSentMediaUrls: string[];
     messagingToolSentTargets: MessagingToolSend[];
+    heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
@@ -190,6 +194,12 @@ function collectToolTelemetry(params: {
   if (!params.isError && params.toolName === "cron" && isCronAddAction(params.args)) {
     params.telemetry.successfulCronAdds = (params.telemetry.successfulCronAdds ?? 0) + 1;
   }
+  if (!params.isError && params.toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
+    const response = normalizeHeartbeatToolResponse(params.result?.details);
+    if (response) {
+      params.telemetry.heartbeatToolResponse = response;
+    }
+  }
   if (!params.isError && params.result) {
     const media = extractToolResultMediaArtifact(params.result);
     if (media) {
@@ -221,13 +231,16 @@ function collectToolTelemetry(params: {
   if (text) {
     params.telemetry.messagingToolSentTexts.push(text);
   }
-  params.telemetry.messagingToolSentMediaUrls.push(...collectMediaUrls(params.args));
+  const mediaUrls = collectMediaUrls(params.args);
+  params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
   params.telemetry.messagingToolSentTargets.push({
     tool: params.toolName,
     provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
     accountId: readFirstString(params.args, ["accountId", "account_id"]),
     to: readFirstString(params.args, ["to", "target", "recipient"]),
     threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
+    ...(text ? { text } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
   });
 }
 
@@ -256,6 +269,7 @@ function isToolResultError(result: AgentToolResult<unknown>): boolean {
     status !== "ok" &&
     status !== "success" &&
     status !== "completed" &&
+    status !== "recorded" &&
     status !== "running"
   );
 }

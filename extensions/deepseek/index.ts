@@ -4,6 +4,7 @@ import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-mod
 import { applyDeepSeekConfig, DEEPSEEK_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
+import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 
 const PROVIDER_ID = "deepseek";
 
@@ -46,9 +47,7 @@ export default defineSingleProviderPluginEntry({
       /\bdeepseek\b.*(?:input.*too long|context.*exceed)/i.test(errorMessage),
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     wrapStreamFn: (ctx) => createDeepSeekV4ThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
-    isModernModelRef: ({ modelId }) => {
-      const lower = modelId.toLowerCase();
-      return lower === "deepseek-v4-flash" || lower === "deepseek-v4-pro";
-    },
+    resolveThinkingProfile: ({ modelId }) => resolveDeepSeekV4ThinkingProfile(modelId),
+    isModernModelRef: ({ modelId }) => Boolean(resolveDeepSeekV4ThinkingProfile(modelId)),
   },
 });

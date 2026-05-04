@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 
 let capturedDispatchParams: unknown;
 
@@ -35,6 +36,28 @@ vi.mock("./runtime-api.js", () => ({
     return phone ? `+${phone}` : null;
   },
   logVerbose: () => {},
+  resolveChannelSourceReplyDeliveryMode: ({
+    cfg,
+    ctx,
+  }: {
+    cfg: {
+      messages?: {
+        visibleReplies?: "automatic" | "message_tool";
+        groupChat?: { visibleReplies?: "automatic" | "message_tool" };
+      };
+    };
+    ctx: { ChatType?: string; CommandSource?: "native" };
+  }) => {
+    if (ctx.CommandSource === "native") {
+      return "automatic";
+    }
+    if (ctx.ChatType === "group" || ctx.ChatType === "channel") {
+      const configuredMode =
+        cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies;
+      return configuredMode === "automatic" ? "automatic" : "message_tool_only";
+    }
+    return cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+  },
   resolveChunkMode: () => "length",
   resolveIdentityNamePrefix: (cfg: {
     agents?: { list?: Array<{ id?: string; default?: boolean; identity?: { name?: string } }> };
@@ -75,6 +98,16 @@ import {
 type TestRoute = Parameters<typeof buildWhatsAppInboundContext>[0]["route"];
 type TestMsg = Parameters<typeof buildWhatsAppInboundContext>[0]["msg"];
 
+function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
+
 function makeRoute(overrides: Partial<TestRoute> = {}): TestRoute {
   return {
     agentId: "main",
@@ -99,8 +132,8 @@ function makeMsg(overrides: Partial<TestMsg> = {}): TestMsg {
     chatType: "direct",
     body: "hi",
     sendComposing: async () => {},
-    reply: async () => {},
-    sendMedia: async () => {},
+    reply: async () => acceptedSendResult("text", "r1"),
+    sendMedia: async () => acceptedSendResult("media", "m1"),
     ...overrides,
   };
 }
@@ -128,6 +161,17 @@ function getCapturedOnError() {
   )?.dispatcherOptions?.onError;
 }
 
+function getCapturedReplyOptions() {
+  return (
+    capturedDispatchParams as {
+      replyOptions?: {
+        disableBlockStreaming?: boolean;
+        sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      };
+    }
+  )?.replyOptions;
+}
+
 type BufferedReplyParams = Parameters<typeof dispatchWhatsAppBufferedReply>[0];
 
 function makeReplyLogger(): BufferedReplyParams["replyLogger"] {
@@ -139,13 +183,37 @@ function makeReplyLogger(): BufferedReplyParams["replyLogger"] {
   } as never;
 }
 
+function acceptedDeliveryResult() {
+  return {
+    results: [
+      {
+        kind: "text" as const,
+        messageId: "wa-sent-1",
+        messageIds: ["wa-sent-1"],
+        keys: [{ id: "wa-sent-1" }],
+        providerAccepted: true,
+      },
+    ],
+    messageIds: ["wa-sent-1"],
+    providerAccepted: true,
+  };
+}
+
+function unacceptedDeliveryResult() {
+  return {
+    results: [],
+    messageIds: [],
+    providerAccepted: false,
+  };
+}
+
 async function dispatchBufferedReply(overrides: Partial<BufferedReplyParams> = {}) {
   const params: BufferedReplyParams = {
     cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
     connectionId: "conn",
     context: { Body: "hi" },
     conversationId: "+1000",
-    deliverReply: async () => {},
+    deliverReply: async () => acceptedDeliveryResult(),
     groupHistories: new Map(),
     groupHistoryKey: "+1000",
     maxMediaBytes: 1,
@@ -390,7 +458,7 @@ describe("whatsapp inbound dispatch", () => {
   });
 
   it("delivers block and final WhatsApp payloads; suppresses text-only tool payloads but delivers media", async () => {
-    const deliverReply = vi.fn(async () => undefined);
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
 
     await dispatchBufferedReply({
@@ -446,7 +514,7 @@ describe("whatsapp inbound dispatch", () => {
   });
 
   it("normalizes WhatsApp payload text before delivery and echo bookkeeping", async () => {
-    const deliverReply = vi.fn(async () => undefined);
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
 
     await dispatchBufferedReply({
@@ -479,7 +547,7 @@ describe("whatsapp inbound dispatch", () => {
   });
 
   it("suppresses reasoning and compaction payloads before WhatsApp delivery", async () => {
-    const deliverReply = vi.fn(async () => undefined);
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
 
     await dispatchBufferedReply({
@@ -500,7 +568,7 @@ describe("whatsapp inbound dispatch", () => {
   });
 
   it("suppresses payloads that normalize to no visible WhatsApp content", async () => {
-    const deliverReply = vi.fn(async () => undefined);
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
 
     await dispatchBufferedReply({
@@ -523,7 +591,7 @@ describe("whatsapp inbound dispatch", () => {
   });
 
   it("suppresses error payload text", async () => {
-    const deliverReply = vi.fn(async () => undefined);
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
 
     await dispatchBufferedReply({ deliverReply, rememberSentText });
@@ -540,13 +608,7 @@ describe("whatsapp inbound dispatch", () => {
   it("maps WhatsApp blockStreaming=true to disableBlockStreaming=false", async () => {
     await dispatchBufferedReply();
 
-    expect(
-      (
-        capturedDispatchParams as {
-          replyOptions?: { disableBlockStreaming?: boolean };
-        }
-      )?.replyOptions?.disableBlockStreaming,
-    ).toBe(false);
+    expect(getCapturedReplyOptions()?.disableBlockStreaming).toBe(false);
   });
 
   it("maps WhatsApp blockStreaming=false to disableBlockStreaming=true", async () => {
@@ -554,13 +616,7 @@ describe("whatsapp inbound dispatch", () => {
       cfg: { channels: { whatsapp: { blockStreaming: false } } } as never,
     });
 
-    expect(
-      (
-        capturedDispatchParams as {
-          replyOptions?: { disableBlockStreaming?: boolean };
-        }
-      )?.replyOptions?.disableBlockStreaming,
-    ).toBe(true);
+    expect(getCapturedReplyOptions()?.disableBlockStreaming).toBe(true);
   });
 
   it("leaves disableBlockStreaming undefined when WhatsApp blockStreaming is unset", async () => {
@@ -568,17 +624,51 @@ describe("whatsapp inbound dispatch", () => {
       cfg: { channels: { whatsapp: {} } } as never,
     });
 
-    expect(
-      (
-        capturedDispatchParams as {
-          replyOptions?: { disableBlockStreaming?: boolean };
-        }
-      )?.replyOptions?.disableBlockStreaming,
-    ).toBeUndefined();
+    expect(getCapturedReplyOptions()?.disableBlockStreaming).toBeUndefined();
+  });
+
+  it("leaves WhatsApp direct reply mode unset by default", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "hi", ChatType: "direct" },
+      msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
+    });
+
+    expect(getCapturedReplyOptions()).toMatchObject({
+      disableBlockStreaming: false,
+    });
+    expect(getCapturedReplyOptions()?.sourceReplyDeliveryMode).toBeUndefined();
+  });
+
+  it("defaults WhatsApp group replies to message-tool-only and disables source streaming", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "hi", ChatType: "group" },
+      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group" }),
+    });
+
+    expect(getCapturedReplyOptions()).toMatchObject({
+      sourceReplyDeliveryMode: "message_tool_only",
+      disableBlockStreaming: true,
+    });
+  });
+
+  it("honors automatic visible replies for WhatsApp groups", async () => {
+    await dispatchBufferedReply({
+      cfg: {
+        channels: { whatsapp: { blockStreaming: true } },
+        messages: { groupChat: { visibleReplies: "automatic" } },
+      } as never,
+      context: { Body: "hi", ChatType: "group" },
+      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group" }),
+    });
+
+    expect(getCapturedReplyOptions()).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      disableBlockStreaming: false,
+    });
   });
 
   it("treats block-only turns as visible replies instead of silent turns", async () => {
-    const deliverReply = vi.fn(async () => undefined);
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
       async (params: {
@@ -607,8 +697,52 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).toHaveBeenCalledTimes(1);
   });
 
+  it("does not treat generated WhatsApp text as sent when the provider did not accept it", async () => {
+    const deliverReply = vi.fn(async () => unacceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+    const replyLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as BufferedReplyParams["replyLogger"];
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: {
+        ctx: unknown;
+        dispatcherOptions?: {
+          deliver?: (
+            payload: { text?: string },
+            info: { kind: "tool" | "block" | "final" },
+          ) => Promise<void>;
+        };
+      }) => {
+        capturedDispatchParams = params;
+        await params.dispatcherOptions?.deliver?.({ text: "final text" }, { kind: "final" });
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    );
+
+    await expect(
+      dispatchBufferedReply({
+        deliverReply,
+        rememberSentText,
+        replyLogger,
+      }),
+    ).resolves.toBe(false);
+
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expect(rememberSentText).not.toHaveBeenCalled();
+    expect(replyLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyKind: "final",
+        conversationId: "+1000",
+      }),
+      "auto-reply was not accepted by WhatsApp provider",
+    );
+  });
+
   it("returns true for tool-only media turns after delivering media", async () => {
-    const deliverReply = vi.fn(async () => undefined);
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
       async (params: {

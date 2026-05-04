@@ -81,7 +81,10 @@
           {
             "type": "local-file-with-env",
             "fileEnvVar": "GOOGLE_APPLICATION_CREDENTIALS",
-            "fallbackPaths": ["${HOME}/.config/gcloud/application_default_credentials.json"],
+            "fallbackPaths": [
+              "${HOME}/.config/gcloud/application_default_credentials.json",
+              "${APPDATA}/gcloud/application_default_credentials.json"
+            ],
             "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
             "requiresAllEnv": ["GOOGLE_CLOUD_LOCATION"],
             "credentialMarker": "gcp-vertex-credentials",
@@ -130,6 +133,10 @@
     "webSearch.model": {
       "label": "Gemini Search Model",
       "help": "Gemini model override for web search grounding."
+    },
+    "webSearch.baseUrl": {
+      "label": "Gemini Search Base URL",
+      "help": "Optional Gemini API base URL for web search grounding proxies."
     }
   },
   "contracts": {
@@ -173,6 +180,9 @@
             "type": ["string", "object"]
           },
           "model": {
+            "type": "string"
+          },
+          "baseUrl": {
             "type": "string"
           }
         }

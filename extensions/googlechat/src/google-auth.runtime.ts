@@ -20,6 +20,9 @@ type GoogleAuthRuntime = {
   OAuth2Client: GoogleAuthModule["OAuth2Client"];
 };
 type GoogleAuthTransport = InstanceType<GaxiosModule["Gaxios"]>;
+type GoogleAuthRequestWithUnknownHeaders = RequestInit & {
+  headers?: unknown;
+};
 type GuardedGoogleAuthRequestInit = RequestInit & {
   agent?: unknown;
   cert?: unknown;
@@ -66,6 +69,24 @@ const MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES = 64 * 1024;
 
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 let googleAuthTransportPromise: Promise<GoogleAuthTransport> | null = null;
+
+function normalizeGoogleAuthPreparedRequestHeaders<T extends GoogleAuthRequestWithUnknownHeaders>(
+  config: T,
+): T & { headers: Headers } {
+  if (!(config.headers instanceof Headers)) {
+    config.headers = new Headers(config.headers as HeadersInit | undefined);
+  }
+  return config as T & { headers: Headers };
+}
+
+function installGoogleAuthHeaderCompatibilityInterceptor(
+  transport: GoogleAuthTransport,
+): GoogleAuthTransport {
+  transport.interceptors.request.add({
+    resolved: async (config) => normalizeGoogleAuthPreparedRequestHeaders(config),
+  });
+  return transport;
+}
 
 function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -504,9 +525,11 @@ export async function getGoogleAuthTransport(): Promise<GoogleAuthTransport> {
     googleAuthTransportPromise = (async () => {
       try {
         const { Gaxios } = await loadGoogleAuthRuntime();
-        return new Gaxios({
-          fetchImplementation: createGoogleAuthFetch(),
-        });
+        return installGoogleAuthHeaderCompatibilityInterceptor(
+          new Gaxios({
+            fetchImplementation: createGoogleAuthFetch(),
+          }),
+        );
       } catch (error) {
         googleAuthTransportPromise = null;
         throw error;
@@ -534,6 +557,7 @@ export const __testing = {
     googleAuthRuntimePromise = null;
     googleAuthTransportPromise = null;
   },
+  normalizeGoogleAuthPreparedRequestHeaders,
   resolveGoogleAuthEnvProxyUrl,
   validateGoogleChatServiceAccountCredentials,
 };

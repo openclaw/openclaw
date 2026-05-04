@@ -32,6 +32,12 @@ describe("createDiscordPluginBase", () => {
     expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
   });
 
+  it("hydrates announce delivery targets from stored session routing", () => {
+    const plugin = createDiscordPluginBase({ setup: {} as never });
+
+    expect(plugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+
   it("reports duplicate-token accounts as disabled to gateway startup", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
     const plugin = createDiscordPluginBase({ setup: {} as never });
@@ -55,6 +61,27 @@ describe("createDiscordPluginBase", () => {
       'duplicate bot token; using account "work"',
     );
     expect(plugin.config.isEnabled?.(workAccount, cfg)).toBe(true);
+  });
+
+  it("describes unresolved SecretRef tokens without marking them startup-configured", () => {
+    const plugin = createDiscordPluginBase({ setup: {} as never });
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const account = plugin.config.resolveAccount(cfg, "default");
+    const described = plugin.config.describeAccount?.(account, cfg);
+
+    expect(account.token).toBe("");
+    expect(account.tokenSource).toBe("config");
+    expect(account.tokenStatus).toBe("configured_unavailable");
+    expect(plugin.config.isConfigured?.(account, cfg)).toBe(false);
+    expect(described?.configured).toBe(false);
+    expect(described?.tokenStatus).toBe("configured_unavailable");
   });
 });
 
@@ -127,5 +154,33 @@ describe("discordConfigAdapter", () => {
     expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
       "123456789",
     ]);
+  });
+
+  it("keeps read-only accessors from resolving token SecretRefs", () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          discord_token: {
+            source: "file",
+            path: "/tmp/openclaw-missing-discord-token",
+            mode: "singleValue",
+          },
+        },
+      },
+      channels: {
+        discord: {
+          token: { source: "file", provider: "discord_token", id: "value" },
+          allowFrom: ["1128540374256849009"],
+          defaultTo: "1498959610751750304",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "1128540374256849009",
+    ]);
+    expect(discordConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+      "1498959610751750304",
+    );
   });
 });

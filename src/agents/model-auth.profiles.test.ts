@@ -10,6 +10,8 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
 } from "./auth-profiles/store.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
+import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
   getApiKeyForModel,
   hasAvailableAuthForProvider,
@@ -129,7 +131,10 @@ vi.mock("./model-auth-env-vars.js", () => {
           {
             type: "local-file-with-env",
             fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
-            fallbackPaths: ["${HOME}/.config/gcloud/application_default_credentials.json"],
+            fallbackPaths: [
+              "${HOME}/.config/gcloud/application_default_credentials.json",
+              "${APPDATA}/gcloud/application_default_credentials.json",
+            ],
             requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
             requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
             credentialMarker: "gcp-vertex-credentials",
@@ -203,14 +208,21 @@ vi.mock("../plugins/providers.js", () => ({
     provider === "openai" ? ["openai"] : [],
 }));
 
-vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
-  readCodexCliCredentialsCached: () => null,
-  readMiniMaxCliCredentialsCached: () => null,
+const cliCredentialMocks = vi.hoisted(() => ({
+  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => ClaudeCliCredential | null>(
+    () => null,
+  ),
+  readCodexCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
+  readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
+
+vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  cliCredentialMocks.readClaudeCliCredentialsCached.mockReset().mockReturnValue(null);
+  cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
+  cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -380,6 +392,67 @@ describe("getApiKeyForModel", () => {
         }
         expect(String(error)).toContain("openai/gpt-5.5");
       },
+    );
+  });
+
+  it("does not read unrelated external CLI credentials when resolving provider auth", async () => {
+    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+      expires: createUsableOAuthExpiry(),
+    });
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-scope-",
+        agentEnv: "main",
+        env: {
+          OPENAI_API_KEY: undefined,
+        },
+      },
+      async () => {
+        await expect(resolveApiKeyForProvider({ provider: "openai" })).rejects.toThrow(
+          'No API key found for provider "openai".',
+        );
+      },
+    );
+
+    expect(cliCredentialMocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
+    expect(cliCredentialMocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+    expect(cliCredentialMocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
+  it("reads Claude CLI credentials when the Claude CLI provider is resolved", async () => {
+    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+      expires: createUsableOAuthExpiry(),
+    });
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-claude-cli-",
+        agentEnv: "main",
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({ provider: "claude-cli" });
+        expect(resolved).toMatchObject({
+          apiKey: "claude-cli-access",
+          profileId: "anthropic:claude-cli",
+          source: "profile:anthropic:claude-cli",
+          mode: "oauth",
+        });
+      },
+    );
+
+    expect(cliCredentialMocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith(
+      expect.objectContaining({ allowKeychainPrompt: false }),
     );
   });
 
@@ -1010,6 +1083,76 @@ describe("getApiKeyForModel", () => {
       expect(resolved?.source).toBe("gcloud adc");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') rejects GOOGLE_CLOUD_PROJECT_ID-only ADC auth evidence", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-project-id-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved).toBeNull();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') accepts Windows APPDATA ADC fallback evidence", async () => {
+    const appDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-appdata-"));
+    const fallbackDir = path.join(appDataDir, "gcloud");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        APPDATA: appDataDir,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(appDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') does not synthesize APPDATA from USERPROFILE", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const userProfileDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-google-adc-userprofile-"),
+    );
+    const fallbackDir = path.join(userProfileDir, "AppData", "Roaming", "gcloud");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        HOME: homeDir,
+        USERPROFILE: userProfileDir,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved).toBeNull();
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+      await fs.rm(userProfileDir, { recursive: true, force: true });
     }
   });
 

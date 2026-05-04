@@ -6,6 +6,7 @@ docker-compose.extra.yml
 docker-compose.sandbox.yml
 dist
 dist-runtime/
+dist-sea/
 pnpm-lock.yaml
 bun.lock
 bun.lockb
@@ -13,7 +14,7 @@ coverage
 __openclaw_vitest__/
 __pycache__/
 *.pyc
-.tsbuildinfo
+*.tsbuildinfo
 .pnpm-store
 .worktrees/
 .DS_Store
@@ -92,8 +93,11 @@ docs/internal/
 tmp/
 IDENTITY.md
 USER.md
-.tgz
+*.tgz
+*.tar.gz
+*.zip
 .idea
+.vscode/
 
 # local tooling
 .serena/
@@ -103,6 +107,8 @@ USER.md
 .agents/skills/*
 !.agents/skills/blacksmith-testbox/
 !.agents/skills/blacksmith-testbox/**
+!.agents/skills/crabbox/
+!.agents/skills/crabbox/**
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-ghsa-maintainer/
@@ -137,6 +143,7 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 /local/
+/client_secret_*.json
 package-lock.json
 .claude/
 .agent/
@@ -148,7 +155,10 @@ apps/ios/LocalSigning.xcconfig
 # Xcode build directories (xcodebuild output)
 apps/ios/build/
 apps/shared/OpenClawKit/build/
-Swabble/build/
+apps/swabble/build/
+*.xcresult
+*.trace
+*.profraw
 
 # Generated protocol schema (produced via pnpm protocol:gen)
 dist/protocol.schema.json
@@ -181,11 +191,26 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .vmux*
 .artifacts/
+.openclaw-config-doc-cache/
+openclaw-path-alias-*/
+/.pi/
+/C:\\openclaw/
+*.log
+*.tmp
+*.heapsnapshot
+*.cpuprofile
+*.prof
 test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
+/runs/
+/data/rtt.jsonl
 extensions/qa-lab/web/dist/
 
 # Generated bundled plugin runtime dependency manifests

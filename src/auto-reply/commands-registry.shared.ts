@@ -2,15 +2,30 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
+  CommandArgChoiceContext,
   CommandCategory,
   CommandScope,
   CommandTier,
 } from "./commands-registry.types.js";
-import { listThinkingLevels } from "./thinking.js";
+import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";
+
+type ListThinkingLevels = (
+  provider?: string | null,
+  model?: string | null,
+  catalog?: CommandArgChoiceContext["catalog"],
+) => ThinkLevel[];
+
+const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
+  ...BASE_THINKING_LEVELS,
+  "xhigh",
+  "adaptive",
+  "max",
+];
 
 type DefineChatCommandInput = {
   key: string;
   nativeName?: string;
+  nativeAliases?: string[];
   description: string;
   args?: ChatCommandDefinition["args"];
   argsParsing?: ChatCommandDefinition["argsParsing"];
@@ -36,6 +51,7 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   return {
     key: command.key,
     nativeName: command.nativeName,
+    nativeAliases: command.nativeAliases?.map((alias) => alias.trim()).filter(Boolean),
     description: command.description,
     acceptsArgs,
     args: command.args,
@@ -49,11 +65,7 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   };
 }
 
-export function registerAlias(
-  commands: ChatCommandDefinition[],
-  key: string,
-  ...aliases: string[]
-): void {
+function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliases: string[]): void {
   const command = commands.find((entry) => entry.key === key);
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
@@ -95,17 +107,22 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
       if (nativeName) {
         throw new Error(`Text-only command has native name: ${command.key}`);
       }
+      if (command.nativeAliases?.length) {
+        throw new Error(`Text-only command has native aliases: ${command.key}`);
+      }
       if (command.textAliases.length === 0) {
         throw new Error(`Text-only command missing text alias: ${command.key}`);
       }
     } else if (!nativeName) {
       throw new Error(`Native command missing native name: ${command.key}`);
     } else {
-      const nativeKey = normalizeOptionalLowercaseString(nativeName) ?? "";
-      if (nativeNames.has(nativeKey)) {
-        throw new Error(`Duplicate native command: ${nativeName}`);
+      for (const alias of [nativeName, ...(command.nativeAliases ?? [])]) {
+        const nativeKey = normalizeOptionalLowercaseString(alias) ?? "";
+        if (nativeNames.has(nativeKey)) {
+          throw new Error(`Duplicate native command: ${alias}`);
+        }
+        nativeNames.add(nativeKey);
       }
-      nativeNames.add(nativeKey);
     }
 
     if (command.scope === "native" && command.textAliases.length > 0) {
@@ -125,7 +142,11 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   }
 }
 
-export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
+export function buildBuiltinChatCommands(
+  params: { listThinkingLevels?: ListThinkingLevels } = {},
+): ChatCommandDefinition[] {
+  const listThinkingLevelChoices =
+    params.listThinkingLevels ?? (() => BROWSER_SAFE_THINKING_LEVELS);
   const commands: ChatCommandDefinition[] = [
     defineChatCommand({
       key: "help",
@@ -254,8 +275,9 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "btw",
       nativeName: "btw",
+      nativeAliases: ["side"],
       description: "Ask a side question without changing future session context.",
-      textAlias: "/btw",
+      textAliases: ["/btw", "/side"],
       acceptsArgs: true,
       category: "tools",
       tier: "standard",
@@ -490,16 +512,11 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "steer",
       nativeName: "steer",
-      description: "Send guidance to a running subagent.",
+      description: "Send guidance to the active run in this session.",
       textAlias: "/steer",
       category: "management",
       tier: "standard",
       args: [
-        {
-          name: "target",
-          description: "Label, run id, or index",
-          type: "string",
-        },
         {
           name: "message",
           description: "Steering message",
@@ -731,7 +748,8 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           name: "level",
           description: "Thinking level",
           type: "string",
-          choices: ({ provider, model, catalog }) => listThinkingLevels(provider, model, catalog),
+          choices: ({ provider, model, catalog }) =>
+            listThinkingLevelChoices(provider, model, catalog),
         },
       ],
       argsMenu: "auto",

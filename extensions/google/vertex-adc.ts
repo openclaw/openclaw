@@ -22,6 +22,10 @@ const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 
+export function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
+  cachedGoogleVertexAuthorizedUserToken = undefined;
+}
+
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -40,8 +44,21 @@ function resolveGoogleApplicationCredentialsPath(
     return existsSync(explicit) ? explicit : undefined;
   }
   const homeDir = normalizeOptionalString(env.HOME) ?? os.homedir();
-  const fallback = path.join(homeDir, ".config", "gcloud", "application_default_credentials.json");
-  return existsSync(fallback) ? fallback : undefined;
+  const homeFallback = path.join(
+    homeDir,
+    ".config",
+    "gcloud",
+    "application_default_credentials.json",
+  );
+  if (existsSync(homeFallback)) {
+    return homeFallback;
+  }
+  const appDataDir = normalizeOptionalString(env.APPDATA);
+  if (!appDataDir) {
+    return undefined;
+  }
+  const appDataFallback = path.join(appDataDir, "gcloud", "application_default_credentials.json");
+  return existsSync(appDataFallback) ? appDataFallback : undefined;
 }
 
 async function readGoogleAuthorizedUserCredentials(

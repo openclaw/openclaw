@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
+import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
 function migrateLegacyConfigForTest(raw: unknown): {
@@ -38,6 +39,74 @@ describe("legacy session maintenance migrate", () => {
       maxEntries: 500,
     });
     expect(res.changes).toContain("Removed deprecated session.maintenance.rotateBytes.");
+  });
+});
+
+describe("legacy session parent fork migrate", () => {
+  it("removes legacy session.parentForkMaxTokens", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        store: "sessions.json",
+        parentForkMaxTokens: 200_000,
+      },
+    });
+
+    expect(res.config?.session).toEqual({
+      store: "sessions.json",
+    });
+    expect(res.changes).toContain(
+      "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
+    );
+  });
+});
+
+describe("legacy thread binding spawn migrate", () => {
+  it("moves matching split spawn flags to unified spawnSessions", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        discord: {
+          threadBindings: {
+            enabled: true,
+            spawnSubagentSessions: true,
+            spawnAcpSessions: true,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.channels?.discord?.threadBindings).toEqual({
+      enabled: true,
+      spawnSessions: true,
+    });
+    expect(res.changes).toContain(
+      "Moved channels.discord.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.threadBindings.spawnSessions (true).",
+    );
+  });
+
+  it("collapses conflicting split spawn flags conservatively", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              threadBindings: {
+                spawnSubagentSessions: true,
+                spawnAcpSessions: false,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      res.config?.channels?.discord?.accounts?.work?.threadBindings as Record<string, unknown>,
+    ).toEqual({
+      spawnSessions: false,
+    });
+    expect(res.changes).toContain(
+      "Collapsed conflicting channels.discord.accounts.work.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.accounts.work.threadBindings.spawnSessions (false).",
+    );
   });
 });
 
@@ -142,6 +211,38 @@ describe("legacy migrate mention routing", () => {
 });
 
 describe("legacy migrate sandbox scope aliases", () => {
+  it("returns migrated config when unrelated plugin validation issues remain (#76798)", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          llm: { idleTimeoutSeconds: 120 },
+        },
+      },
+      plugins: {
+        entries: {
+          brave: {
+            enabled: true,
+            config: { webSearch: { mode: "definitely-invalid" } },
+          },
+        },
+      },
+      tools: { web: { search: { provider: "brave" } } },
+    });
+
+    expect(res.partiallyValid).toBe(true);
+    expect(res.changes).toContain(
+      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+    );
+    expect(res.changes).toContain(
+      "Migration applied; other validation issues remain — run doctor to review.",
+    );
+    expect(res.config?.agents?.defaults).toEqual({
+      model: { primary: "openai/gpt-5.5" },
+    });
+    expect(res.config?.tools?.web?.search?.provider).toBe("brave");
+  });
+
   it("removes legacy agents.defaults.llm timeout config", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
@@ -193,14 +294,12 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.config?.agents?.defaults).toEqual({
       agentRuntime: {
         id: "claude-cli",
-        fallback: "none",
       },
     });
     expect(res.config?.agents?.list?.[0]).toEqual({
       id: "reviewer",
       agentRuntime: {
         id: "codex",
-        fallback: "pi",
       },
     });
   });

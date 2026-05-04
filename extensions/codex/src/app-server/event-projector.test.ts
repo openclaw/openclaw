@@ -580,6 +580,38 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult).toHaveBeenCalledWith({
+      text: "🛠️ Bash: `run tests (in /workspace)`",
+    });
+  });
+
+  it("can emit raw verbose tool summaries through onToolResult", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      toolProgressDetail: "raw",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith({
       text: "🛠️ Bash: `` run tests (in /workspace), `pnpm test extensions/codex` ``",
     });
   });
@@ -589,6 +621,7 @@ describe("CodexAppServerEventProjector", () => {
     const projector = await createProjector({
       ...(await createParams()),
       verboseLevel: "on",
+      toolProgressDetail: "raw",
       onToolResult,
     });
 
@@ -780,6 +813,7 @@ describe("CodexAppServerEventProjector", () => {
 
   it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {
     const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks();
+    const openSpy = vi.spyOn(SessionManager, "open");
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -791,6 +825,7 @@ describe("CodexAppServerEventProjector", () => {
         item: { type: "contextCompaction", id: "compact-1" },
       }),
     );
+    expect(openSpy).not.toHaveBeenCalled();
 
     expect(beforeCompaction).toHaveBeenCalledWith(
       expect.objectContaining({

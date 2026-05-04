@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
-import { WhatsAppConnectionController } from "./connection-controller.js";
+import { closeWaSocket, WhatsAppConnectionController } from "./connection-controller.js";
+import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 
 vi.mock("./session.js", async () => {
@@ -16,11 +17,21 @@ vi.mock("./session.js", async () => {
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 
+function acceptedSendResult(kind: WhatsAppSendKind, id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
+
 function createListenerStub(messageId = "ok") {
   return {
-    sendMessage: vi.fn(async () => ({ messageId })),
-    sendPoll: vi.fn(async () => ({ messageId })),
-    sendReaction: vi.fn(async () => {}),
+    sendMessage: vi.fn(async () => acceptedSendResult("text", messageId)),
+    sendPoll: vi.fn(async () => acceptedSendResult("poll", messageId)),
+    sendReaction: vi.fn(async () => acceptedSendResult("reaction", messageId)),
     sendComposingTo: vi.fn(async () => {}),
   };
 }
@@ -29,6 +40,7 @@ function createSocketWithTransportEmitter() {
   const ws = new EventEmitter() as EventEmitter & { close: ReturnType<typeof vi.fn> };
   ws.close = vi.fn();
   return {
+    end: vi.fn(),
     ws,
   };
 }
@@ -63,6 +75,7 @@ describe("WhatsAppConnectionController", () => {
 
   it("closes the socket when open fails before listener creation", async () => {
     const sock = {
+      end: vi.fn(),
       ws: {
         close: vi.fn(),
       },
@@ -80,9 +93,19 @@ describe("WhatsAppConnectionController", () => {
     ).rejects.toThrow("handshake failed");
 
     expect(createListener).not.toHaveBeenCalled();
-    expect(sock.ws.close).toHaveBeenCalledOnce();
+    expect(sock.end).toHaveBeenCalledOnce();
+    expect(sock.end).toHaveBeenCalledWith(expect.any(Error));
+    expect(sock.ws.close).not.toHaveBeenCalled();
     expect(controller.socketRef.current).toBeNull();
     expect(controller.getActiveListener()).toBeNull();
+  });
+
+  it("falls back to raw websocket close when Baileys end is unavailable", () => {
+    const sock = { ws: { close: vi.fn() } };
+
+    closeWaSocket(sock);
+
+    expect(sock.ws.close).toHaveBeenCalledOnce();
   });
 
   it("lets createWaSocket own the auth barrier before opening a socket", async () => {

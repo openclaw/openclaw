@@ -16,6 +16,7 @@ const memoryWikiCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   plugins: [
     {
       id: "memory-wiki",
+      enabledByDefault: true,
       commandAliases: [{ name: "wiki" }],
     },
   ],
@@ -213,6 +214,17 @@ describe("resolveMissingPluginCommandMessage", () => {
     ).toBeNull();
   });
 
+  it("does not classify reserved non-plugin command roots as plugin allowlist misses", () => {
+    for (const root of ["auth", "tool"]) {
+      const message = resolveMissingPluginCommandMessage(root, {
+        plugins: {
+          allow: ["browser"],
+        },
+      });
+      expect(message).toBeNull();
+    }
+  });
+
   it("explains that dreaming is a runtime slash command, not a CLI command", () => {
     const message = resolveMissingPluginCommandMessage(
       "dreaming",
@@ -258,6 +270,54 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).toContain('"dreaming" is not a plugin');
     expect(message).toContain('"memory-core"');
     expect(message).toContain("plugins.allow");
+  });
+
+  it("explains disabled-by-default parent plugins for CLI command aliases", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "voicecall",
+      {},
+      {
+        registry: {
+          plugins: [
+            {
+              id: "voice-call",
+              commandAliases: [{ name: "voicecall" }],
+            },
+          ],
+        },
+      },
+    );
+
+    expect(message).toContain('"voice-call" plugin');
+    expect(message).toContain("disabled by default");
+    expect(message).toContain("openclaw plugins enable voice-call");
+  });
+
+  it("returns null for CLI command aliases when disabled-by-default parent plugins are enabled", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "voicecall",
+      {
+        plugins: {
+          entries: {
+            "voice-call": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      {
+        registry: {
+          plugins: [
+            {
+              id: "voice-call",
+              commandAliases: [{ name: "voicecall" }],
+            },
+          ],
+        },
+      },
+    );
+
+    expect(message).toBeNull();
   });
 
   it("explains parent plugin disablement for runtime command aliases", () => {
