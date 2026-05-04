@@ -1,4 +1,5 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { PluginHookInboundClaimEvent } from "openclaw/plugin-sdk/plugin-entry";
 import type { CodexUserInput } from "./app-server/protocol.js";
 
@@ -66,7 +67,7 @@ function isImageMedia(media: InboundMedia): boolean {
 }
 
 function normalizeFileUrl(value: string): string {
-  return value.startsWith("file://") ? new URL(value).pathname : value;
+  return value.startsWith("file://") ? fileURLToPath(value) : value;
 }
 
 function readStringArray(value: unknown): string[] {

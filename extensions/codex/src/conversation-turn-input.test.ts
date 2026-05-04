@@ -41,4 +41,24 @@ describe("codex conversation turn input", () => {
       { type: "image", url: "https://example.test/photo.webp?sig=1" },
     ]);
   });
+
+  it("decodes local file URLs for Codex local image input", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "look",
+        event: {
+          content: "look",
+          channel: "webchat",
+          isGroup: false,
+          metadata: {
+            mediaPath: "file:///tmp/OpenClaw%20QA/photo.png",
+            mediaType: "image/png",
+          },
+        },
+      }),
+    ).toEqual([
+      { type: "text", text: "look", text_elements: [] },
+      { type: "localImage", path: "/tmp/OpenClaw QA/photo.png" },
+    ]);
+  });
 });
