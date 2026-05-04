@@ -193,16 +193,20 @@ describe("inbound dedupe", () => {
     expect(shouldSkipDuplicateInbound(retry)).toBe(false);
   });
 
-  it("does not create a fallback key for idless messages without text content", () => {
-    expect(
-      buildInboundDedupeKey({
-        ...sharedInboundContext,
-        MessageSid: undefined,
-        Body: "",
-        RawBody: "",
-        CommandBody: "",
-        Timestamp: 1777207291784,
-      }),
-    ).toBeNull();
+  it("does not dedupe attachment-only idless retries without text content", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      Body: "",
+      RawBody: "",
+      CommandBody: "",
+      BodyForAgent: "MEDIA:/tmp/openclaw-attachment.png",
+      Timestamp: 1777207291784,
+    };
+    const retry = { ...first };
+
+    expect(buildInboundDedupeKey(first)).toBeNull();
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(false);
   });
 });
