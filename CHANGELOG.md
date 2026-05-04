@@ -2329,6 +2329,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Kimi: add blank `reasoning_content` to replayed assistant tool-call messages when thinking is enabled, preventing Kimi API 400 errors on conversation replay. (#76073)
 - Packaged installs: preserve package-root runtime dependencies and their exported subpaths when bundled plugin runtime mirrors fall back to copying shared chunks, fixing Windows npm updates that could fail to load copied `dist` modules.
 - Heartbeat: clamp oversized scheduler delays through the shared safe timer helper, preventing `every` values over Node's timeout cap from becoming a 1 ms crash loop. Fixes #71414. (#71478) Thanks @hclsys.
 - Agents/heartbeat: stop injecting the heartbeat system prompt into non-heartbeat runs, preventing ordinary user replies from being suppressed as `HEARTBEAT_OK` acknowledgments. Fixes #69079. (#69278) Thanks @stainlu.
