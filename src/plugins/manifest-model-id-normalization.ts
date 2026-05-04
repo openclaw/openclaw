@@ -29,11 +29,13 @@ function collectManifestModelIdNormalizationPolicies(
 }
 
 type ManifestModelIdNormalizationPolicyCache = {
+  loadedAt: number;
   configFingerprint: string;
   policies: Map<string, PluginManifestModelIdNormalizationProvider>;
 };
 
 let cachedPolicies: ManifestModelIdNormalizationPolicyCache | undefined;
+const MANIFEST_MODEL_ID_NORMALIZATION_CACHE_TTL_MS = 60_000;
 
 function resolveMetadataSnapshotForPolicies(
   params: ManifestModelIdNormalizationLookupParams = {},
@@ -69,12 +71,18 @@ function loadManifestModelIdNormalizationPolicies(
   }
   const { snapshot, cacheable } = resolveMetadataSnapshotForPolicies(params);
   const configFingerprint = snapshot.configFingerprint;
-  if (cacheable && configFingerprint && cachedPolicies?.configFingerprint === configFingerprint) {
+  const now = Date.now();
+  if (
+    cacheable &&
+    configFingerprint &&
+    cachedPolicies?.configFingerprint === configFingerprint &&
+    now - cachedPolicies.loadedAt <= MANIFEST_MODEL_ID_NORMALIZATION_CACHE_TTL_MS
+  ) {
     return cachedPolicies.policies;
   }
   const policies = collectManifestModelIdNormalizationPolicies(snapshot.plugins);
   if (cacheable && configFingerprint) {
-    cachedPolicies = { configFingerprint, policies };
+    cachedPolicies = { loadedAt: now, configFingerprint, policies };
   }
   return policies;
 }
