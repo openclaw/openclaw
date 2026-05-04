@@ -11,13 +11,20 @@ const CIAO_SELF_PROBE_MESSAGE_RE =
 // can refuse os.networkInterfaces(), which ciao calls during NetworkManager init.
 // Node surfaces this as a SystemError mentioning the libuv syscall by name.
 const CIAO_INTERFACE_ENUMERATION_FAILURE_RE = /\bUV_INTERFACE_ADDRESSES\b/u;
+// IPv6-only interfaces (e.g. Fly.io WireGuard interfaces with a single fdaa::/120
+// address) and other interfaces ciao does not consider to have a valid address
+// trip an AssertionError in NetworkManager.getCurrentNetworkInterfaces. Treat
+// this as a non-fatal warning: the interface state will not change without
+// external intervention, so a recovery retry would just hit the same assertion.
+const CIAO_NO_VALID_ADDRESSES_RE = /COULD NOT FIND VALID ADDRESSES FOR INTERFACE/u;
 
 export type CiaoProcessErrorClassification =
   | { kind: "cancellation"; formatted: string }
   | { kind: "interface-assertion"; formatted: string }
   | { kind: "netmask-assertion"; formatted: string }
   | { kind: "self-probe"; formatted: string }
-  | { kind: "interface-enumeration-failure"; formatted: string };
+  | { kind: "interface-enumeration-failure"; formatted: string }
+  | { kind: "no-valid-addresses"; formatted: string };
 
 function collectCiaoProcessErrorCandidates(reason: unknown): unknown[] {
   const queue: unknown[] = [reason];
@@ -77,6 +84,9 @@ export function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClass
     }
     if (CIAO_INTERFACE_ENUMERATION_FAILURE_RE.test(message)) {
       return { kind: "interface-enumeration-failure", formatted };
+    }
+    if (CIAO_NO_VALID_ADDRESSES_RE.test(message)) {
+      return { kind: "no-valid-addresses", formatted };
     }
   }
   return null;

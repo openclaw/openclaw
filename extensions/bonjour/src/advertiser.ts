@@ -399,6 +399,14 @@ export async function startGatewayBonjourAdvertiser(
         logger.warn(
           `bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: ${classification.formatted}`,
         );
+      } else if (classification.kind === "no-valid-addresses") {
+        // IPv6-only or otherwise address-less interfaces (e.g. Fly.io WireGuard)
+        // make ciao throw "Could not find valid addresses for interface". The
+        // interface state will not change without external intervention, so a
+        // recovery retry would hit the same assertion. Surface a warning only.
+        logger.warn(
+          `bonjour: skipping mDNS for interface without valid addresses: ${classification.formatted}`,
+        );
       } else {
         const label =
           classification.kind === "netmask-assertion"
@@ -537,7 +545,15 @@ export async function startGatewayBonjourAdvertiser(
             svc,
           )}): ${classification.formatted}`,
         );
-        requestCiaoRecovery?.(classification);
+        // Skip recovery for terminal-state classifications: the underlying
+        // condition will not change without external intervention, so retrying
+        // would just re-enter the same failure.
+        if (
+          classification.kind !== "interface-enumeration-failure" &&
+          classification.kind !== "no-valid-addresses"
+        ) {
+          requestCiaoRecovery?.(classification);
+        }
         return;
       }
       logger.warn(

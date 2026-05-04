@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Bonjour/ciao: classify the `Could not find valid addresses for interface` AssertionError thrown by `@homebridge/ciao`'s `NetworkManager.getCurrentNetworkInterfaces` for IPv6-only or otherwise address-less interfaces (e.g. Fly.io WireGuard `fdaa::/120` interfaces) as a non-fatal `no-valid-addresses` condition, so an unhandled rejection no longer crashes the gateway and tells systemd to restart-loop. The classifier emits a single warning and skips watchdog recovery because the interface state will not change without external intervention. Fixes #76499. Thanks @lonexreb.
 - Plugins/onboarding: trust optional official plugin and web-search installs selected from the official catalog so npm security scanning treats them like other source-linked official install paths. Thanks @vincentkoc.
 - CLI/plugins: keep `plugins enable` and `plugins disable` from creating unconfigured channel config sections, so channel plugins with required setup fields no longer fail validation during lifecycle probes. Thanks @vincentkoc.
 - Agents/sessions: keep delayed `sessions_send` A2A replies alive after soft wait-window timeouts, while preserving terminal run timeouts and avoiding stale target replies in requester sessions. Fixes #76443. Thanks @ryswork1993 and @vincentkoc.

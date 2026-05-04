@@ -125,6 +125,28 @@ describe("bonjour-ciao", () => {
     expect(ignoreCiaoUnhandledRejection(error)).toBe(true);
   });
 
+  // Regression for #76499: IPv6-only interfaces (e.g. Fly.io WireGuard with
+  // a single fdaa::/120 address) make ciao throw an AssertionError that
+  // bubbled past the classifier and crashed the gateway. The new classifier
+  // entry must catch it as a non-fatal "no-valid-addresses" condition.
+  it("classifies missing-valid-addresses assertions as non-fatal (#76499)", () => {
+    const err = Object.assign(
+      new Error("Could not find valid addresses for interface 'fly-redis'"),
+      { name: "AssertionError" },
+    );
+    expect(classifyCiaoUnhandledRejection(err)).toEqual({
+      kind: "no-valid-addresses",
+      formatted: "AssertionError: Could not find valid addresses for interface 'fly-redis'",
+    });
+  });
+
+  it("suppresses missing-valid-addresses assertions at the unhandled-rejection boundary (#76499)", () => {
+    const err = Object.assign(new Error("Could not find valid addresses for interface 'wg0'"), {
+      name: "AssertionError",
+    });
+    expect(ignoreCiaoUnhandledRejection(err)).toBe(true);
+  });
+
   it("classifies networkInterfaces SystemError failures (restricted sandboxes)", () => {
     const err = Object.assign(
       new Error("A system error occurred: uv_interface_addresses returned Unknown system error 1"),
