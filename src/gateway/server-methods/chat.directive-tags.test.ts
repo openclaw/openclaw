@@ -716,7 +716,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("does not persist agent media supplements when no playable media resolves", async () => {
+  it("does not mirror agent-run stale media final text from live delivery", async () => {
     const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
     const staleAudioPath = path.join(transcriptDir, "stale.mp3");
     mockState.config = {
@@ -756,6 +756,66 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         (update.message as { role?: unknown }).role === "assistant",
     );
     expect(assistantUpdates).toEqual([]);
+    const transcriptLines = fs
+      .readFileSync(mockState.transcriptPath, "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const assistantEntries = transcriptLines.filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    );
+    expect(assistantEntries).toEqual([]);
+  });
+
+  it("does not mirror normal agent-run final text from live delivery", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-text-only-");
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "It's 11:52 AM EDT.",
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-text-only",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toEqual([]);
+    const transcriptLines = fs
+      .readFileSync(mockState.transcriptPath, "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const assistantEntries = transcriptLines.filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    );
+    expect(assistantEntries).toEqual([]);
   });
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
