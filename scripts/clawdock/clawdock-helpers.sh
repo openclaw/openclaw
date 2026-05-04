@@ -171,12 +171,23 @@ _clawdock_read_env_token() {
 }
 
 _clawdock_read_env_gateway_port() {
-  local raw=""
+  local raw="" port=""
   if [[ -f "${CLAWDOCK_DIR}/.env" ]]; then
     raw=$(sed -n 's/^OPENCLAW_GATEWAY_PORT=//p' "${CLAWDOCK_DIR}/.env" | head -n 1)
     raw=$(_clawdock_trim_quotes "$raw")
   fi
-  echo "${raw:-18789}"
+  # Normalize Docker Compose publish formats to a bare port number:
+  #   18789            -> 18789
+  #   127.0.0.1:18789  -> 18789  (host-bind address prefix)
+  #   [::1]:18789      -> 18789  (IPv6 bracketed prefix)
+  if [[ "$raw" =~ ^\[.*\]:([0-9]+)$ ]]; then
+    port="${BASH_REMATCH[1]}"
+  elif [[ "$raw" =~ ^[^:]+:([0-9]+)$ ]]; then
+    port="${BASH_REMATCH[1]}"
+  elif [[ "$raw" =~ ^[0-9]+$ ]]; then
+    port="$raw"
+  fi
+  echo "${port:-18789}"
 }
 
 # Basic Operations
