@@ -623,6 +623,33 @@ describe("update-cli", () => {
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
+  it("finishes package updates when the post-core process writes a result but keeps handles open", async () => {
+    setupUpdatedRootRefresh();
+    const kill = vi.fn();
+    spawn.mockImplementationOnce((_command: unknown, _argv: unknown, options: unknown) => {
+      const resultPath = (options as { env?: NodeJS.ProcessEnv }).env
+        ?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+      if (!resultPath) {
+        throw new Error("missing post-core result path");
+      }
+      queueMicrotask(() => {
+        void fs.writeFile(resultPath, `${JSON.stringify({ status: "ok" })}\n`, "utf-8");
+      });
+      const child = new EventEmitter() as EventEmitter & {
+        kill: typeof kill;
+        once: EventEmitter["once"];
+      };
+      child.kill = kill;
+      return child;
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("does not carry gateway service markers into the post-core update process", async () => {
     setupUpdatedRootRefresh();
 
