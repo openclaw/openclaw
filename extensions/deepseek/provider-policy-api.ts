@@ -1,6 +1,7 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { DEEPSEEK_MODEL_CATALOG } from "./models.js";
+import { resolveDeepSeekV4ThinkingProfile } from "./thinking-profile.js";
 
 type ModelDefinitionDraft = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
@@ -94,4 +95,11 @@ export function normalizeConfig(params: {
   }
 
   return { ...providerConfig, models: nextModels as ModelDefinitionConfig[] };
+}
+
+export function resolveThinkingProfile(params: { provider: string; modelId: string }) {
+  if (params.provider.trim().toLowerCase() !== "deepseek") {
+    return null;
+  }
+  return resolveDeepSeekV4ThinkingProfile(params.modelId) ?? null;
 }
