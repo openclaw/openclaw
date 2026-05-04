@@ -373,7 +373,7 @@ describe("CronService failure alerts", () => {
         channel: "telegram",
         to: "19098680",
         text: expect.stringMatching(
-          /Cron job "gateway restart" skipped 2 times\nSkip reason: disabled/,
+          /Cron job "gateway restart" skipped 2 times[\s\S]*\nSkip reason: disabled/,
         ),
       }),
     );
@@ -424,6 +424,45 @@ describe("CronService failure alerts", () => {
     const skippedJob = cron.getJob(job.id);
     expect(skippedJob?.state.consecutiveSkipped).toBe(2);
     expect(skippedJob?.state.consecutiveErrors).toBe(0);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("includes event timestamp in repeated-failure alert text (#77497)", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "network timeout",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: { failureAlert: { enabled: true, after: 2, cooldownMs: 0 } },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "ts-test-job",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run" },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    });
+
+    await cron.run(job.id, "force");
+    await cron.run(job.id, "force");
+
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    const { text } = sendCronFailureAlert.mock.lastCall![0] as { text: string };
+    // Timestamp format: YYYY-MM-DD HH:MM (from en-CA locale in UTC)
+    expect(text).toMatch(/ts-test-job.*failed 2 times \(last at 2026-01-01 \d{2}:\d{2}\)/);
+    expect(text).toContain("Last error: network timeout");
 
     cron.stop();
     await store.cleanup();

@@ -20,6 +20,7 @@ import {
   summarizeCronRunDiagnostics,
 } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
+import { formatCronTimestamp } from "../schedule.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronAgentExecutionStarted,
@@ -435,16 +436,19 @@ function emitFailureAlert(
     mode?: "announce" | "webhook";
     accountId?: string;
     status: "error" | "skipped";
+    runAtMs?: number;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
   const truncatedError = (params.error?.trim() || "unknown reason").slice(0, 200);
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
   const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
-  const text = [
-    `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
-    `${detailLabel}: ${truncatedError}`,
-  ].join("\n");
+  const jobTz = params.job.schedule.kind === "cron" ? params.job.schedule.tz : undefined;
+  const eventTimestamp = formatCronTimestamp(params.runAtMs, jobTz);
+  const header = eventTimestamp
+    ? `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times (last at ${eventTimestamp})`
+    : `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`;
+  const text = [`${header}`, `${detailLabel}: ${truncatedError}`].join("\n");
 
   if (state.deps.sendCronFailureAlert) {
     void state.deps
@@ -508,6 +512,7 @@ function maybeEmitFailureAlert(
     mode: params.alertConfig.mode,
     accountId: params.alertConfig.accountId,
     status: params.status,
+    runAtMs: now,
   });
   params.job.state.lastFailureAlertAtMs = now;
 }

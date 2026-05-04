@@ -7,6 +7,7 @@ import {
   sendCronAnnouncePayloadStrict,
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
+import { formatCronTimestamp } from "../cron/schedule.js";
 import type { CronEvent } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type { CronJob, CronMessageChannel } from "../cron/types.js";
@@ -275,7 +276,11 @@ function dispatchCronFailureDestinationNotifications(params: {
     return;
   }
 
-  const failureMessage = `Cron job "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
+  const jobTz = params.job.schedule.kind === "cron" ? params.job.schedule.tz : undefined;
+  const eventTimestamp = formatCronTimestamp(params.evt.runAtMs, jobTz);
+  const failureMessage = eventTimestamp
+    ? `Cron job "${params.job.name}" failed at ${eventTimestamp}: ${params.evt.error ?? "unknown error"}`
+    : `Cron job "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
   const failureDest = resolveFailureDestination(params.job, params.globalFailureDestination);
   const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
 

@@ -5,6 +5,7 @@ import {
   normalizeOptionalThreadValue,
 } from "../../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
+import { formatCronTimestamp } from "../schedule.js";
 import {
   coerceFiniteScheduleNumber,
   computeNextRunAtMs,
@@ -337,7 +338,11 @@ export function recordScheduleComputeError(params: {
     );
 
     // Notify the user so the auto-disable is not silent (#28861).
-    const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
+    const jobTz = job.schedule.kind === "cron" ? job.schedule.tz : undefined;
+    const eventTimestamp = formatCronTimestamp(state.deps.nowMs(), jobTz);
+    const notifyText = eventTimestamp
+      ? `⚠️ Cron job "${job.name}" has been auto-disabled at ${eventTimestamp} after ${errorCount} consecutive schedule errors. Last error: ${errText}`
+      : `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
     state.deps.enqueueSystemEvent(notifyText, {
       agentId: job.agentId,
       sessionKey: job.sessionKey,

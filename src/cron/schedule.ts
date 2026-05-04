@@ -165,6 +165,32 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   return previousMs;
 }
 
+/**
+ * Format a cron run timestamp in the job's configured timezone for human-readable alert messages.
+ * Returns undefined when runAtMs is absent or non-finite so callers can omit the timestamp gracefully.
+ */
+export function formatCronTimestamp(runAtMs: number | undefined, tz?: string): string | undefined {
+  if (runAtMs == null || !Number.isFinite(runAtMs)) {
+    return undefined;
+  }
+  try {
+    const resolved = resolveCronTimezone(tz);
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: resolved,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+      .format(new Date(runAtMs))
+      .replace(",", "");
+  } catch {
+    return undefined;
+  }
+}
+
 export function clearCronScheduleCacheForTest(): void {
   cronEvalCache.clear();
 }
