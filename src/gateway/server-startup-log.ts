@@ -4,12 +4,23 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import {
   resolveConfiguredModelRef,
-  resolveReasoningDefault,
   resolveThinkingDefault,
+  legacyModelKey,
+  modelKey,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
+
+type StartupThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
 
 export function logGatewayStartup(params: {
   cfg: OpenClawConfig;
@@ -57,6 +68,36 @@ export function logGatewayStartup(params: {
   }
 }
 
+function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefined {
+  return value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "adaptive" ||
+    value === "max"
+    ? value
+    : undefined;
+}
+
+function resolveExplicitStartupThinking(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  defaultAgentThinking: unknown;
+}): StartupThinkLevel | undefined {
+  const models = params.cfg.agents?.defaults?.models;
+  const canonicalKey = modelKey(params.provider, params.model);
+  const legacyKey = legacyModelKey(params.provider, params.model);
+  return (
+    normalizeStartupThinkLevel(params.defaultAgentThinking) ??
+    normalizeStartupThinkLevel(models?.[canonicalKey]?.params?.thinking) ??
+    normalizeStartupThinkLevel(legacyKey ? models?.[legacyKey]?.params?.thinking : undefined) ??
+    normalizeStartupThinkLevel(params.cfg.agents?.defaults?.thinkingDefault)
+  );
+}
+
 export function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -64,20 +105,20 @@ export function formatAgentModelStartupDetails(params: {
 }): string {
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const defaultAgentConfig = resolveAgentConfig(params.cfg, defaultAgentId);
-  const thinking =
-    defaultAgentConfig?.thinkingDefault ??
+  const explicitThinking = resolveExplicitStartupThinking({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    defaultAgentThinking: defaultAgentConfig?.thinkingDefault,
+  });
+  const resolvedThinking =
+    explicitThinking ??
     resolveThinkingDefault({
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
     });
-  const reasoning =
-    defaultAgentConfig?.reasoningDefault ??
-    params.cfg.agents?.defaults?.reasoningDefault ??
-    resolveReasoningDefault({
-      provider: params.provider,
-      model: params.model,
-    });
+  const thinking = explicitThinking ?? (resolvedThinking === "off" ? "medium" : resolvedThinking);
   const fast = resolveFastModeState({
     cfg: params.cfg,
     provider: params.provider,
@@ -85,7 +126,7 @@ export function formatAgentModelStartupDetails(params: {
     agentId: defaultAgentId,
   });
 
-  return `thinking=${thinking}, reasoning=${reasoning}, fast=${fast.enabled ? "on" : "off"}`;
+  return `thinking=${thinking}, fast=${fast.enabled ? "on" : "off"}`;
 }
 
 function formatReadyDetails(

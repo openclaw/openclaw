@@ -49,7 +49,7 @@ describe("gateway startup log", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("logs configured model mode defaults with the startup model", () => {
+  it("logs configured model thinking and fast mode defaults with the startup model", () => {
     const info = vi.fn();
     const warn = vi.fn();
 
@@ -78,13 +78,48 @@ describe("gateway startup log", () => {
     });
 
     expect(info).toHaveBeenCalledWith(
-      "agent model: openai-codex/gpt-5.5 (thinking=medium, reasoning=stream, fast=on)",
+      "agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)",
       expect.objectContaining({
         consoleMessage: expect.stringContaining(
-          "agent model: openai-codex/gpt-5.5 (thinking=medium, reasoning=stream, fast=on)",
+          "agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)",
         ),
       }),
     );
+  });
+
+  it("defaults unset startup thinking to medium", () => {
+    expect(
+      formatAgentModelStartupDetails({
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai-codex/gpt-5.5",
+            },
+            list: [{ id: "main", default: true, fastModeDefault: true }],
+          },
+        },
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      }),
+    ).toBe("thinking=medium, fast=on");
+  });
+
+  it("preserves explicit startup thinking off", () => {
+    expect(
+      formatAgentModelStartupDetails({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai-codex/gpt-5.5": { params: { thinking: "off", fastMode: true } },
+              },
+            },
+          },
+        },
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      }),
+    ).toBe("thinking=off, fast=on");
   });
 
   it("uses default agent mode overrides in the startup model details", () => {
@@ -105,7 +140,7 @@ describe("gateway startup log", () => {
         provider: "openai",
         model: "gpt-5.5",
       }),
-    ).toBe("thinking=high, reasoning=off, fast=on");
+    ).toBe("thinking=high, fast=on");
   });
 
   it("logs a compact listening line with loaded plugin ids and duration", () => {

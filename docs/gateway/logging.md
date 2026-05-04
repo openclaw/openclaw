@@ -19,12 +19,12 @@ At startup, the Gateway logs the resolved default agent model together with the
 mode defaults that affect new sessions, for example:
 
 ```text
-agent model: openai-codex/gpt-5.5 (thinking=medium, reasoning=off, fast=on)
+agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)
 ```
 
 `thinking` comes from the default agent, model params, or global agent default;
-`reasoning` comes from the default agent or global reasoning default; and `fast`
-comes from the default agent or model `fastMode` params.
+when it is unset, the startup summary shows `medium`. `fast` comes from the
+default agent or model `fastMode` params.
 
 ## File-based logger
 
