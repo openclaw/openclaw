@@ -401,7 +401,7 @@ export function createTelegramDraftStream(params: {
         const supersededMessageId = streamMessageId;
         const supersededTextSnapshot = lastDeliveredText;
         textBaseOffset += deliveredLen;
-        resetStreamToNewMessage();
+        resetStreamToNewMessage({ keepPending: true });
         lastDeliveredText = "";
         streamState.stopped = false;
         if (typeof supersededMessageId === "number") {
@@ -550,7 +550,7 @@ export function createTelegramDraftStream(params: {
     await stopForClear();
   };
 
-  const resetStreamToNewMessage = () => {
+  const resetStreamToNewMessage = (opts?: { keepPending?: boolean }) => {
     streamState.stopped = false;
     streamState.final = false;
     generation += 1;
@@ -559,7 +559,9 @@ export function createTelegramDraftStream(params: {
     streamVisibleSinceMs = undefined;
     lastSentText = "";
     lastSentParseMode = undefined;
-    loop.resetPending();
+    if (!opts?.keepPending) {
+      loop.resetPending();
+    }
     loop.resetThrottleWindow();
   };
 
