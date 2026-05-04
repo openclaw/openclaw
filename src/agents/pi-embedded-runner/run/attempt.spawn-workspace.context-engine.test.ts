@@ -316,6 +316,54 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(systemPrompt).toContain("Ask who I am.");
   });
 
+  it("includes hook-adjusted bootstrap files preloaded before routing", async () => {
+    const workspaceDir = "/tmp/openclaw-hook-workspace";
+    hoisted.resolveBootstrapFilesForRunMock.mockResolvedValueOnce([
+      {
+        name: "BOOTSTRAP.md",
+        path: `${workspaceDir}/BOOTSTRAP.md`,
+        content: "Ask who I am before continuing.",
+        missing: false,
+      },
+    ]);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {
+              systemPromptOverride: "Custom override prompt.",
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "visible ask",
+        transcriptPrompt: "visible ask",
+        trigger: "user",
+        workspaceDir,
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(hoisted.resolveBootstrapFilesForRunMock).toHaveBeenCalledOnce();
+    expect(hoisted.resolveBootstrapContextForRunMock).not.toHaveBeenCalled();
+    const systemPrompt =
+      hoisted.systemPromptOverrideTexts.find((text) => text.includes("Custom override prompt.")) ??
+      "";
+
+    expect(systemPrompt).toContain("## Bootstrap Pending");
+    expect(systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(systemPrompt).toContain(`## ${workspaceDir}/BOOTSTRAP.md`);
+    expect(systemPrompt).toContain("Ask who I am before continuing.");
+  });
+
   it("adds explicit reply context to the current model input without exposing generic runtime context", async () => {
     let seenPrompt: string | undefined;
 
