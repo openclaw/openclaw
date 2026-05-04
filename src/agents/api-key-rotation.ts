@@ -1,5 +1,12 @@
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys.js";
+import {
+  resolveTransientProviderAttempts,
+  resolveTransientProviderDelayMs,
+  shouldRetrySameKeyProviderOperation,
+  type TransientProviderRetryOptions,
+} from "./provider-operation-retry.js";
 
 type ApiKeyRetryParams = {
   apiKey: string;
@@ -13,6 +20,7 @@ type ExecuteWithApiKeyRotationOptions<T> = {
   execute: (apiKey: string) => Promise<T>;
   shouldRetry?: (params: ApiKeyRetryParams & { message: string }) => boolean;
   onRetry?: (params: ApiKeyRetryParams & { message: string }) => void;
+  transientRetry?: TransientProviderRetryOptions;
 };
 
 function dedupeApiKeys(raw: string[]): string[] {
@@ -46,22 +54,46 @@ export async function executeWithApiKeyRotation<T>(
   }
 
   let lastError: unknown;
-  for (let attempt = 0; attempt < keys.length; attempt += 1) {
-    const apiKey = keys[attempt];
-    try {
-      return await params.execute(apiKey);
-    } catch (error) {
-      lastError = error;
-      const message = formatErrorMessage(error);
-      const retryable = params.shouldRetry
-        ? params.shouldRetry({ apiKey, error, attempt, message })
-        : isApiKeyRateLimitError(message);
+  keyLoop: for (let apiKeyIndex = 0; apiKeyIndex < keys.length; apiKeyIndex += 1) {
+    const apiKey = keys[apiKeyIndex];
+    const maxOperationAttempts = resolveTransientProviderAttempts(params.transientRetry);
+    for (let attemptNumber = 1; attemptNumber <= maxOperationAttempts; attemptNumber += 1) {
+      try {
+        return await params.execute(apiKey);
+      } catch (error) {
+        lastError = error;
+        const message = formatErrorMessage(error);
+        const rotateKey = params.shouldRetry
+          ? params.shouldRetry({ apiKey, error, attempt: apiKeyIndex, message })
+          : isApiKeyRateLimitError(message);
 
-      if (!retryable || attempt + 1 >= keys.length) {
-        break;
+        if (rotateKey) {
+          if (apiKeyIndex + 1 >= keys.length) {
+            break;
+          }
+          params.onRetry?.({ apiKey, error, attempt: apiKeyIndex, message });
+          break;
+        }
+
+        if (
+          !params.transientRetry ||
+          !shouldRetrySameKeyProviderOperation({
+            options: params.transientRetry,
+            error,
+            message,
+            provider: params.provider,
+            apiKeyIndex,
+            attemptNumber,
+            maxAttempts: maxOperationAttempts,
+          })
+        ) {
+          break keyLoop;
+        }
+
+        const delayMs = resolveTransientProviderDelayMs(params.transientRetry, attemptNumber);
+        const sleep = params.transientRetry.sleep ?? sleepWithAbort;
+        await sleep(delayMs, params.transientRetry.signal);
       }
-
-      params.onRetry?.({ apiKey, error, attempt, message });
     }
   }
 
