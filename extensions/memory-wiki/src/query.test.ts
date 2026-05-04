@@ -147,6 +147,7 @@ describe("isSessionMemoryPath", () => {
       "sessions/child-session.jsonl",
       "qmd/sessions/child-session.md",
       "qmd/sessions-main/child-session.md",
+      "qmd\\sessions-main\\child-session.md",
       "qmd/sessions",
     ]) {
       expect(isSessionMemoryPath(relPath)).toBe(true);
@@ -156,6 +157,7 @@ describe("isSessionMemoryPath", () => {
       "sessionsx/child-session.jsonl",
       "qmd/sessionsxxx",
       "wiki/sessions/foo.md",
+      "wiki\\sessions\\foo.md",
     ]) {
       expect(isSessionMemoryPath(relPath)).toBe(false);
     }
@@ -1121,6 +1123,43 @@ describe("getMemoryWikiPage", () => {
 
     expect(result).toBeNull();
     expect(manager.readFile).not.toHaveBeenCalled();
+  });
+
+  it("permits session memory reads inside the caller visibility policy", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    mockSessionTranscriptStore();
+    const manager = createMemoryManager({
+      readResult: {
+        path: "qmd/sessions-main/child-session.md",
+        text: "own transcript content",
+      },
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const result = await getMemoryWikiPage({
+      config,
+      appConfig: createSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+      lookup: "qmd/sessions-main/child-session.md",
+    });
+
+    expect(result).toMatchObject({
+      corpus: "memory",
+      path: "qmd/sessions-main/child-session.md",
+      content: "own transcript content",
+    });
+    expect(manager.readFile).toHaveBeenCalledTimes(1);
+    expect(manager.readFile).toHaveBeenCalledWith({
+      relPath: "qmd/sessions-main/child-session.md",
+      from: 1,
+      lines: 200,
+    });
   });
 
   it("requires appConfig for session-bound shared memory reads", async () => {

@@ -1213,6 +1213,24 @@ async function filterMemoryWikiSearchHitsBySessionVisibility(params: {
     return params.hits;
   }
 
+  const canReadSessionPath = await createSessionMemoryPathVisibilityChecker({
+    cfg: params.cfg,
+    requesterSessionKey: params.requesterSessionKey,
+    sandboxed: params.sandboxed,
+  });
+  return filterMemoryWikiSearchHitsWithSessionVisibility({
+    canReadSessionPath,
+    hits: params.hits,
+  });
+}
+
+type SessionMemoryPathVisibilityChecker = (relPath: string) => boolean;
+
+async function createSessionMemoryPathVisibilityChecker(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string | undefined;
+  sandboxed: boolean;
+}): Promise<SessionMemoryPathVisibilityChecker> {
   const visibility = resolveEffectiveSessionToolsVisibility({
     cfg: params.cfg,
     sandboxed: params.sandboxed,
@@ -1227,10 +1245,27 @@ async function filterMemoryWikiSearchHitsBySessionVisibility(params: {
       })
     : null;
   if (!guard) {
-    return params.hits.filter((hit) => hit.source !== "sessions");
+    return () => false;
   }
 
   const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(params.cfg);
+  return (relPath) => {
+    const stem = extractTranscriptStemFromSessionsMemoryHit(relPath);
+    if (!stem) {
+      return false;
+    }
+    const keys = resolveTranscriptStemToSessionKeys({
+      store: combinedSessionStore,
+      stem,
+    });
+    return keys.some((key) => guard.check(key).allowed);
+  };
+}
+
+function filterMemoryWikiSearchHitsWithSessionVisibility(params: {
+  canReadSessionPath: SessionMemoryPathVisibilityChecker;
+  hits: MemorySearchResult[];
+}): MemorySearchResult[] {
   const next: MemorySearchResult[] = [];
   for (const hit of params.hits) {
     if (hit.source !== "sessions") {
@@ -1238,32 +1273,20 @@ async function filterMemoryWikiSearchHitsBySessionVisibility(params: {
       continue;
     }
 
-    const stem = extractTranscriptStemFromSessionsMemoryHit(hit.path);
-    if (!stem) {
-      continue;
-    }
-    const keys = resolveTranscriptStemToSessionKeys({
-      store: combinedSessionStore,
-      stem,
-    });
-    if (keys.some((key) => guard.check(key).allowed)) {
+    if (params.canReadSessionPath(hit.path)) {
       next.push(hit);
     }
   }
   return next;
 }
 
-async function canReadSessionMemoryPath(params: {
-  cfg: OpenClawConfig;
-  requesterSessionKey: string | undefined;
-  sandboxed: boolean;
+function canReadSessionMemoryPath(params: {
+  canReadSessionPath: SessionMemoryPathVisibilityChecker;
   relPath: string;
-}): Promise<boolean> {
+}): boolean {
   // Reuses the search filter with a synthetic hit; update this if the filter needs more than path/source.
-  const filtered = await filterMemoryWikiSearchHitsBySessionVisibility({
-    cfg: params.cfg,
-    requesterSessionKey: params.requesterSessionKey,
-    sandboxed: params.sandboxed,
+  const filtered = filterMemoryWikiSearchHitsWithSessionVisibility({
+    canReadSessionPath: params.canReadSessionPath,
     hits: [
       {
         path: params.relPath,
@@ -1480,17 +1503,26 @@ export async function getMemoryWikiPage(params: {
     return null;
   }
 
-  for (const relPath of buildLookupCandidates(params.lookup)) {
+  const lookupCandidates = buildLookupCandidates(params.lookup);
+  const canReadSessionPath =
+    params.appConfig &&
+    shouldEnforceSessionVisibility(params) &&
+    lookupCandidates.some((relPath) => isSessionMemoryPath(relPath))
+      ? await createSessionMemoryPathVisibilityChecker({
+          cfg: params.appConfig,
+          requesterSessionKey: params.agentSessionKey,
+          sandboxed: params.sandboxed === true,
+        })
+      : null;
+
+  for (const relPath of lookupCandidates) {
     if (
-      params.appConfig &&
-      shouldEnforceSessionVisibility(params) &&
+      canReadSessionPath &&
       isSessionMemoryPath(relPath) &&
-      !(await canReadSessionMemoryPath({
-        cfg: params.appConfig,
-        requesterSessionKey: params.agentSessionKey,
-        sandboxed: params.sandboxed === true,
+      !canReadSessionMemoryPath({
+        canReadSessionPath,
         relPath,
-      }))
+      })
     ) {
       continue;
     }
