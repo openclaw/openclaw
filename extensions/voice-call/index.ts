@@ -504,6 +504,13 @@ export default definePluginEntry({
               respond(true, { success: true });
               return;
             }
+            if (params?.allowTwimlFallback === false) {
+              respond(true, {
+                success: false,
+                error: realtimeResult.error ?? "Realtime bridge is not active",
+              });
+              return;
+            }
           }
           const result = await request.rt.manager.speak(request.callId, request.message);
           if (!result.success) {
