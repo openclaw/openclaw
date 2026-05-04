@@ -29,6 +29,7 @@ const ACTION_PAD = 12;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
+  label?: string;
 };
 
 function formatCleanupActionCell(
@@ -70,8 +71,34 @@ function buildActionRows(params: {
         cappedKeys: params.cappedKeys,
         budgetEvictedKeys: params.budgetEvictedKeys,
       }),
+      label: params.beforeStore[row.key]?.label,
     }),
   );
+}
+
+function renderLabelSummary(params: {
+  actionRows: SessionCleanupActionRow[];
+  runtime: RuntimeEnv;
+}) {
+  const byLabel = new Map<string, { kept: number; pruned: number }>();
+  for (const row of params.actionRows) {
+    const label = row.label ?? "(unlabeled)";
+    const bucket = byLabel.get(label) ?? { kept: 0, pruned: 0 };
+    if (row.action === "keep") {
+      bucket.kept += 1;
+    } else {
+      bucket.pruned += 1;
+    }
+    byLabel.set(label, bucket);
+  }
+  if (byLabel.size === 0) {
+    return;
+  }
+  params.runtime.log("");
+  params.runtime.log("Summary by label:");
+  for (const [label, counts] of byLabel) {
+    params.runtime.log(`  ${label}: ${counts.kept} kept, ${counts.pruned} pruned`);
+  }
 }
 
 function renderStoreDryRunPlan(params: {
@@ -122,6 +149,7 @@ function renderStoreDryRunPlan(params: {
     ].join(" ");
     params.runtime.log(line.trimEnd());
   }
+  renderLabelSummary({ actionRows: params.actionRows, runtime: params.runtime });
 }
 
 function renderAppliedSummaries(params: {

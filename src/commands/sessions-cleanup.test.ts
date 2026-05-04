@@ -425,6 +425,49 @@ describe("sessionsCleanupCommand", () => {
     expect(logs.some((line) => line.includes("stale") && line.includes("prune-stale"))).toBe(true);
   });
 
+  it("renders per-label summary in dry-run action table when entries have labels", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "warn",
+      previewResults: [
+        {
+          summary: {
+            agentId: "main",
+            storePath: "/resolved/sessions.json",
+            mode: "warn",
+            dryRun: true,
+            beforeCount: 3,
+            afterCount: 2,
+            missing: 0,
+            pruned: 1,
+            capped: 0,
+            diskBudget: null,
+            wouldMutate: true,
+          },
+          beforeStore: {
+            cronA: { sessionId: "s1", updatedAt: 3, label: "cron:daily" },
+            cronB: { sessionId: "s2", updatedAt: 2, label: "cron:daily" },
+            staleEntry: { sessionId: "s3", updatedAt: 1, label: "cron:weekly" },
+          },
+          missingKeys: new Set<string>(),
+          staleKeys: new Set(["staleEntry"]),
+          cappedKeys: new Set<string>(),
+          budgetEvictedKeys: new Set<string>(),
+        },
+      ],
+      appliedSummaries: [],
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand({ dryRun: true }, runtime);
+
+    const labelSummaryIdx = logs.findIndex((l) => l.includes("Summary by label:"));
+    expect(labelSummaryIdx).toBeGreaterThan(-1);
+    const summaryBlock = logs.slice(labelSummaryIdx).join("\n");
+    expect(summaryBlock).toMatch(/cron:daily.*2 kept.*0 pruned/);
+    expect(summaryBlock).toMatch(/cron:weekly.*0 kept.*1 pruned/);
+  });
+
   it("returns grouped JSON for --all-agents dry-runs", async () => {
     mocks.resolveSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/main-sessions.json" },
