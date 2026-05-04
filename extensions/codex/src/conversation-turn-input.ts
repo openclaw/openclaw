@@ -49,8 +49,9 @@ function toCodexImageInput(media: InboundMedia): CodexUserInput | undefined {
   if (!isImageMedia(media)) {
     return undefined;
   }
-  if (media.path) {
-    return { type: "localImage", path: normalizeFileUrl(media.path) };
+  const localPath = media.path ?? readLocalMediaPath(media.url);
+  if (localPath) {
+    return { type: "localImage", path: normalizeFileUrl(localPath) };
   }
   return media.url ? { type: "image", url: media.url } : undefined;
 }
@@ -68,6 +69,16 @@ function isImageMedia(media: InboundMedia): boolean {
 
 function normalizeFileUrl(value: string): string {
   return value.startsWith("file://") ? fileURLToPath(value) : value;
+}
+
+function readLocalMediaPath(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value.startsWith("file://")) {
+    return value;
+  }
+  return /^[a-z][a-z0-9+.-]*:/i.test(value) ? undefined : value;
 }
 
 function readStringArray(value: unknown): string[] {

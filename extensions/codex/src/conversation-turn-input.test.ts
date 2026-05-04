@@ -61,4 +61,25 @@ describe("codex conversation turn input", () => {
       { type: "localImage", path: "/tmp/OpenClaw QA/photo.png" },
     ]);
   });
+
+  it("treats local media URLs as Codex local image input", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "look",
+        event: {
+          content: "look",
+          channel: "webchat",
+          isGroup: false,
+          metadata: {
+            mediaUrls: ["/tmp/staged-photo.png", "file:///tmp/OpenClaw%20QA/second.jpg"],
+            mediaTypes: ["image/png", "image/jpeg"],
+          },
+        },
+      }),
+    ).toEqual([
+      { type: "text", text: "look", text_elements: [] },
+      { type: "localImage", path: "/tmp/staged-photo.png" },
+      { type: "localImage", path: "/tmp/OpenClaw QA/second.jpg" },
+    ]);
+  });
 });
