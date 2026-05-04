@@ -10,8 +10,8 @@ export type SessionState = {
   queueDepth: number;
   toolCallHistory?: ToolCallRecord[];
   /**
-   * Monotonic counter of observable tool-outcome records ever pushed to
-   * toolCallHistory (i.e. unmatched-push branch of recordToolCallOutcome).
+   * Monotonic counter of observable tool outcomes recorded in
+   * toolCallHistory.
    * Never decremented by trims. Lets observers detect new records via a
    * delta on the seq instead of an absolute index that breaks once the
    * history is trimmed at historySize.

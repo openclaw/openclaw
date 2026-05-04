@@ -693,6 +693,7 @@ export function recordToolCallOutcome(
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
   let matched = false;
+  let recordedOutcome = false;
   for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
     const call = state.toolCallHistory[i];
     if (!call) {
@@ -713,6 +714,7 @@ export function recordToolCallOutcome(
     call.resultHash = resultHash;
     call.unknownToolName = outcome.unknownToolName;
     matched = true;
+    recordedOutcome = true;
     break;
   }
 
@@ -726,11 +728,10 @@ export function recordToolCallOutcome(
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
     });
-    // Bump the monotonic outcome counter only when an observable record (one
-    // with resultHash already populated) is appended. Matched updates set
-    // resultHash on a record that the post-compaction guard's cursor has
-    // already passed, so they were never observable under the prior index
-    // scheme either. See logging/diagnostic-session-state.ts for the field.
+    recordedOutcome = true;
+  }
+
+  if (recordedOutcome) {
     state.toolOutcomeSeq = (state.toolOutcomeSeq ?? 0) + 1;
   }
 

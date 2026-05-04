@@ -811,6 +811,45 @@ describe("tool-loop-detection", () => {
       expect(entry?.resultHash?.length).toBe(64);
     });
 
+    it("increments the outcome sequence when a pre-recorded tool call receives its result", () => {
+      const state = createState();
+      const params = { action: "lookup", path: "cron.maxConcurrentRuns" };
+
+      recordToolCall(state, "gateway", params, "call-1");
+      expect(state.toolOutcomeSeq).toBeUndefined();
+
+      recordToolCallOutcome(state, {
+        toolName: "gateway",
+        toolParams: params,
+        toolCallId: "call-1",
+        result: { content: [{ type: "text", text: "same schema" }] },
+      });
+
+      expect(state.toolOutcomeSeq).toBe(1);
+      expect(state.toolCallHistory).toHaveLength(1);
+      expect(state.toolCallHistory?.[0]?.resultHash).toBeTypeOf("string");
+    });
+
+    it("keeps outcome sequence monotonic while trimming production call/outcome records", () => {
+      const state = createState();
+
+      for (let i = 0; i < TOOL_CALL_HISTORY_SIZE + 3; i += 1) {
+        const params = { action: "lookup", path: `config.${i}` };
+        const toolCallId = `call-${i}`;
+        recordToolCall(state, "gateway", params, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "gateway",
+          toolParams: params,
+          toolCallId,
+          result: { content: [{ type: "text", text: `schema-${i}` }] },
+        });
+      }
+
+      expect(state.toolOutcomeSeq).toBe(TOOL_CALL_HISTORY_SIZE + 3);
+      expect(state.toolCallHistory).toHaveLength(TOOL_CALL_HISTORY_SIZE);
+      expect(state.toolCallHistory?.[0]?.toolCallId).toBe("call-3");
+    });
+
     it("does not attach outcomes to matching calls from other runs", () => {
       const state = createState();
       const params = { path: "/same.txt" };

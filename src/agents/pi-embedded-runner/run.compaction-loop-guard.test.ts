@@ -4,7 +4,10 @@ import type {
   getDiagnosticSessionState as GetDiagnosticSessionStateType,
   SessionState,
 } from "../../logging/diagnostic-session-state.js";
-import type { hashToolCall as HashToolCallType } from "../tool-loop-detection.js";
+import type {
+  recordToolCall as RecordToolCallType,
+  recordToolCallOutcome as RecordToolCallOutcomeType,
+} from "../tool-loop-detection.js";
 import type { PostCompactionLoopPersistedError as PostCompactionLoopPersistedErrorType } from "./post-compaction-loop-guard.js";
 import {
   makeAttemptResult,
@@ -30,7 +33,8 @@ let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 // vi.resetModules() inside the harness invalidates any earlier import.
 let diagnosticSessionStates: typeof DiagnosticSessionStatesType;
 let getDiagnosticSessionState: typeof GetDiagnosticSessionStateType;
-let hashToolCall: typeof HashToolCallType;
+let recordToolCall: typeof RecordToolCallType;
+let recordToolCallOutcome: typeof RecordToolCallOutcomeType;
 let PostCompactionLoopPersistedError: typeof PostCompactionLoopPersistedErrorType;
 
 // Mirror the production trim cap (resolveLoopDetectionConfig default
@@ -42,26 +46,20 @@ function recordToolOutcome(
   state: SessionState,
   toolName: string,
   toolParams: unknown,
-  resultHash: string,
+  result: unknown,
   runId?: string,
 ): void {
-  if (!state.toolCallHistory) {
-    state.toolCallHistory = [];
-  }
-  state.toolCallHistory.push({
-    toolName,
-    argsHash: hashToolCall(toolName, toolParams),
-    resultHash,
-    timestamp: Date.now(),
+  const toolCallId = `${toolName}-${state.toolOutcomeSeq ?? 0}`;
+  recordToolCall(state, toolName, toolParams, toolCallId, undefined, {
     ...(runId ? { runId } : {}),
   });
-  if (state.toolCallHistory.length > HISTORY_TRIM_CAP) {
-    state.toolCallHistory.splice(0, state.toolCallHistory.length - HISTORY_TRIM_CAP);
-  }
-  // Mirror recordToolCallOutcome's unmatched-push branch: bump the monotonic
-  // outcome seq the runner uses to detect new records without an absolute
-  // index into the (trim-prone) toolCallHistory array.
-  state.toolOutcomeSeq = (state.toolOutcomeSeq ?? 0) + 1;
+  recordToolCallOutcome(state, {
+    toolName,
+    toolParams,
+    toolCallId,
+    result,
+    ...(runId ? { runId } : {}),
+  });
 }
 
 describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
@@ -71,7 +69,7 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     // the runner. The runner imports both modules through its own graph.
     ({ diagnosticSessionStates, getDiagnosticSessionState } =
       await import("../../logging/diagnostic-session-state.js"));
-    ({ hashToolCall } = await import("../tool-loop-detection.js"));
+    ({ recordToolCall, recordToolCallOutcome } = await import("../tool-loop-detection.js"));
     ({ PostCompactionLoopPersistedError } = await import("./post-compaction-loop-guard.js"));
   });
 
