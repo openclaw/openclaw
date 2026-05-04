@@ -309,6 +309,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'add_profile_suite native-live-src-gateway-core "minimum stable full"',
     );
+    expect(workflow).toContain('add_profile_suite native-live-src-infra "stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-docker "minimum stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
@@ -346,6 +347,10 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
+    expect(workflow).toContain("suite_id: native-live-src-infra");
+    expect(workflow).toContain(
+      "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
+    );
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-smoke");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-opus");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku");
@@ -522,7 +527,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("published_upgrade_survivor_scenarios: reported-issues");
     expect(workflow).toContain("telegram_mode: mock-openai");
     expect(workflow).toContain(
-      "telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-mention-gating",
+      "telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-current-session-status-tool,telegram-mention-gating",
     );
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
     expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");

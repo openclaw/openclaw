@@ -207,6 +207,115 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     }
   });
 
+  it("keeps bootstrap truncation warnings out of WebChat runtime context", async () => {
+    const seen: { prompt?: string; messages?: unknown[] } = {};
+    hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/openclaw-warning-workspace/AGENTS.md",
+          content: "A".repeat(200),
+          missing: false,
+        },
+      ],
+      contextFiles: [
+        { path: "/tmp/openclaw-warning-workspace/AGENTS.md", content: "A".repeat(20) },
+      ],
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {
+              bootstrapMaxChars: 50,
+              bootstrapTotalMaxChars: 50,
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "visible ask",
+        transcriptPrompt: "visible ask",
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toBe("visible ask");
+    expect(JSON.stringify(seen.messages)).not.toContain("[Bootstrap truncation warning]");
+    expect(JSON.stringify(seen.messages)).not.toContain("bootstrapMaxChars");
+  });
+
+  it("preserves bootstrap system context when system prompt override is configured", async () => {
+    const seen: { prompt?: string; messages?: unknown[] } = {};
+    hoisted.isWorkspaceBootstrapPendingMock.mockResolvedValueOnce(true);
+    hoisted.createOpenClawCodingToolsMock.mockImplementationOnce(() => [
+      { name: "read", execute: async () => "" },
+    ]);
+    hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        {
+          name: "BOOTSTRAP.md",
+          path: "/tmp/openclaw-override-workspace/BOOTSTRAP.md",
+          content: "Ask who I am.",
+          missing: false,
+        },
+      ],
+      contextFiles: [
+        {
+          path: "/tmp/openclaw-override-workspace/BOOTSTRAP.md",
+          content: "Ask who I am.",
+        },
+      ],
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {
+              systemPromptOverride: "Custom override prompt.",
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "visible ask",
+        transcriptPrompt: "visible ask",
+        trigger: "user",
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toBe("visible ask");
+    expect(JSON.stringify(seen.messages)).not.toContain("Ask who I am.");
+    const systemPrompt =
+      hoisted.systemPromptOverrideTexts.find((text) => text.includes("Custom override prompt.")) ??
+      "";
+
+    expect(systemPrompt).toContain("Custom override prompt.");
+    expect(systemPrompt).toContain("## Bootstrap Pending");
+    expect(systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(systemPrompt).toContain("## /tmp/openclaw-override-workspace/BOOTSTRAP.md");
+    expect(systemPrompt).toContain("Ask who I am.");
+  });
+
   it("adds explicit reply context to the current model input without exposing generic runtime context", async () => {
     let seenPrompt: string | undefined;
 
@@ -240,7 +349,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(seenPrompt).toContain("what does this mean?");
-    expect(seenPrompt).toContain("Replied message (untrusted, for context):");
+    expect(seenPrompt).toContain("Reply target of current user message (untrusted, for context):");
     expect(seenPrompt).toContain('"sender_label": "Mike"');
     expect(seenPrompt).toContain("WT daily plan - Sat May 2");
     expect(seenPrompt).toContain("./quoted-secret.png");

@@ -15,6 +15,7 @@ import {
   clearPluginCommandsForPlugin,
   isReservedCommandName,
   listPluginInvocationKeys,
+  pluginCommandSupportsChannel,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
@@ -61,6 +62,7 @@ export {
  */
 export function matchPluginCommand(
   commandBody: string,
+  options: { channel?: string } = {},
 ): { command: RegisteredPluginCommand; args?: string } | null {
   const trimmed = commandBody.trim();
   if (!trimmed.startsWith("/")) {
@@ -89,6 +91,7 @@ export function matchPluginCommand(
             listPluginInvocationNames(candidate).includes(candidateKey),
           ),
       )
+      .filter((candidate) => candidate && pluginCommandSupportsChannel(candidate, options.channel))
       .find(Boolean) ?? null;
 
   if (!command) {
@@ -197,6 +200,10 @@ export async function executePluginCommand(params: {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
   // Check authorization
+  if (!pluginCommandSupportsChannel(command, channel)) {
+    logVerbose(`Plugin command /${command.name} skipped on unsupported channel ${channel}`);
+    return { continueAgent: true };
+  }
   const requireAuth = command.requireAuth !== false; // Default to true
   if (requireAuth && !isAuthorizedSender) {
     logVerbose(
@@ -339,6 +346,10 @@ export async function executePluginCommand(params: {
     logVerbose(
       `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
     );
+    if (!result || typeof result !== "object") {
+      logVerbose(`Plugin command /${command.name} returned no reply payload`);
+      return {};
+    }
     return result;
   } catch (err) {
     const error = err as Error;

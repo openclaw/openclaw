@@ -28,6 +28,7 @@ import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
+  buildTurnCollaborationMode,
   buildThreadResumeParams,
   buildTurnStartParams,
   startOrResumeThread,
@@ -462,6 +463,52 @@ describe("runCodexAppServerAttempt", () => {
     const dynamicToolNames = dynamicTools.map((tool) => tool.name);
 
     expect(dynamicToolNames).toContain("message");
+  });
+
+  it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionsPath = path.join(tempDir, "sessions.json");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.sessionKey = "agent:main:main";
+    params.config = {
+      session: { store: sessionsPath, mainKey: "main", scope: "per-sender" },
+      tools: { profile: "coding" },
+    };
+    await fs.writeFile(
+      sessionsPath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "s-main",
+          updatedAt: 10,
+          status: "running",
+        },
+        "agent:main:telegram:default:direct:1234": {
+          sessionId: "s-telegram-policy",
+          updatedAt: 5,
+          status: "done",
+        },
+      }),
+    );
+
+    const dynamicTools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: "agent:main:telegram:default:direct:1234",
+      sandbox: null,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+    const sessionStatus = dynamicTools.find((tool) => tool.name === "session_status");
+
+    expect(sessionStatus).toBeDefined();
+    const result = await sessionStatus?.execute("call-current", { sessionKey: "current" });
+    expect((result?.details as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+      "agent:main:main",
+    );
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
@@ -2325,8 +2372,38 @@ describe("runCodexAppServerAttempt", () => {
         approvalsReviewer: "guardian_subagent",
         sandboxPolicy: { type: "dangerFullAccess" },
         serviceTier: "flex",
+        collaborationMode: {
+          mode: "default",
+          settings: {
+            model: "gpt-5.4-codex",
+            reasoning_effort: "medium",
+            developer_instructions: null,
+          },
+        },
       }),
     );
+  });
+
+  it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
+    const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
+    params.trigger = "heartbeat";
+
+    expect(buildTurnCollaborationMode(params)).toEqual({
+      mode: "default",
+      settings: {
+        model: "gpt-5.4-codex",
+        reasoning_effort: "medium",
+        developer_instructions: expect.stringContaining(
+          "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
+        ),
+      },
+    });
+    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive.",
+    );
+
+    params.trigger = "user";
+    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toBeNull();
   });
 
   it("preserves the bound auth profile when resume params omit authProfileId", async () => {

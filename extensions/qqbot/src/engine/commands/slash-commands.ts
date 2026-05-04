@@ -85,6 +85,7 @@ export interface QQBotFrameworkCommand {
   name: string;
   description: string;
   usage?: string;
+  c2cOnly?: boolean;
   handler: (ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>;
 }
 
@@ -125,6 +126,7 @@ export class SlashCommandRegistry {
       name: cmd.name,
       description: cmd.description,
       usage: cmd.usage,
+      c2cOnly: cmd.c2cOnly,
       handler: cmd.handler,
     }));
   }
