@@ -340,6 +340,9 @@ async function deliverQueuedSessionDelivery(params: {
     onDispatchError: (err) => {
       dispatchError ??= err;
     },
+    replyOptions: {
+      sourceReplyDeliveryMode: "automatic",
+    },
   });
   if (dispatchError) {
     throw dispatchError;

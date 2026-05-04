@@ -138,6 +138,7 @@ describe("gateway tool restart continuation", () => {
     );
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
       delayMs: 250,
+      deferralTimeoutMs: 30_000,
       reason: "continue after reboot",
       emitHooks: expect.objectContaining({
         beforeEmit: expect.any(Function),

@@ -724,6 +724,61 @@ describe("scheduleRestartSentinelWake", () => {
           OriginatingChannel: "telegram",
           OriginatingTo: "telegram:200482621",
         }),
+        replyOptions: expect.objectContaining({
+          sourceReplyDeliveryMode: "automatic",
+        }),
+      }),
+    );
+  });
+
+  it("keeps restart continuations visible in group topics", async () => {
+    mocks.readRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:telegram:group:-100123:topic:26866",
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-100123",
+          accountId: "default",
+        },
+        threadId: "26866",
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue after restart",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "topic-session",
+        updatedAt: 0,
+        origin: { chatType: "group" },
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:telegram:group:-100123:topic:26866",
+      legacyKey: undefined,
+    } as LoadedSessionEntry);
+    mocks.resolveOutboundTarget.mockReturnValue({
+      ok: true as const,
+      to: "telegram:-100123",
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "default",
+        ctxPayload: expect.objectContaining({
+          Body: "continue after restart",
+          ChatType: "group",
+          MessageThreadId: "26866",
+        }),
+        replyOptions: expect.objectContaining({
+          sourceReplyDeliveryMode: "automatic",
+        }),
       }),
     );
   });
