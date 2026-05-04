@@ -146,6 +146,31 @@ describe("openrouter media understanding provider", () => {
     );
   });
 
+  it("normalizes parameterized mime for extensionless filenames", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
+      release,
+    });
+
+    await transcribeOpenRouterAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "media-1",
+      mime: " Audio/Ogg; codecs=opus ",
+      apiKey: "sk-openrouter",
+      timeoutMs: 5_000,
+      fetchFn: fetch,
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          input_audio: expect.objectContaining({ format: "ogg" }),
+        }),
+      }),
+    );
+  });
+
   it("throws when format cannot be resolved", async () => {
     await expect(
       transcribeOpenRouterAudio({
