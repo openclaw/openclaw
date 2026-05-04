@@ -28,6 +28,10 @@ const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
     "playwright-core",
     "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
   ],
+  [
+    "sharp",
+    "keep at root; packaged core image-attachment paths load the bundled media-understanding-core public image ops before plugin-local runtime dependencies are installed",
+  ],
 ]);
 
 function readJson(filePath) {
