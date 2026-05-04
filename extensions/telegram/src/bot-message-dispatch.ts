@@ -558,18 +558,6 @@ export const dispatchTelegramMessage = async ({
       await renderProgressDraft();
     }
   };
-  const activeVerboseActions = new Map<string, { name: string; startedAt: number }>();
-  const pushVerboseReasoningAction = (line: string) => {
-    if (!verboseReasoningActions || !reasoningLane.stream) {
-      return;
-    }
-    const current = reasoningLane.lastPartialText ?? "";
-    const separator = current && !current.endsWith("\n") ? "\n" : "";
-    const updated = `${current}${separator}${line}\n`;
-    reasoningLane.lastPartialText = updated;
-    reasoningLane.hasStreamedMessage = true;
-    reasoningLane.stream.update(updated);
-  };
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
   let pendingCompactionReplayBoundary = false;
@@ -586,6 +574,20 @@ export const dispatchTelegramMessage = async ({
       logVerbose(`telegram: draft lane callback failed: ${String(err)}`);
     });
     return draftLaneEventQueue;
+  };
+  const activeVerboseActions = new Map<string, { name: string; startedAt: number }>();
+  const pushVerboseReasoningAction = (line: string) => {
+    if (!verboseReasoningActions || !reasoningLane.stream) {
+      return;
+    }
+    void enqueueDraftLaneEvent(async () => {
+      const current = reasoningLane.lastPartialText ?? "";
+      const separator = current && !current.endsWith("\n") ? "\n" : "";
+      const updated = `${current}${separator}${line}\n`;
+      reasoningLane.lastPartialText = updated;
+      reasoningLane.hasStreamedMessage = true;
+      reasoningLane.stream?.update(updated);
+    });
   };
   type SplitLaneSegment = { lane: LaneName; text: string };
   type SplitLaneSegmentsResult = {
@@ -1207,8 +1209,7 @@ export const dispatchTelegramMessage = async ({
                       { toolName },
                     );
                     if (toolName) {
-                      const id = payload.phase ?? toolName;
-                      activeVerboseActions.set(id, { name: toolName, startedAt: Date.now() });
+                      activeVerboseActions.set(toolName, { name: toolName, startedAt: Date.now() });
                       pushVerboseReasoningAction(`⏳ ${toolName}…`);
                     }
                   },
@@ -1227,7 +1228,7 @@ export const dispatchTelegramMessage = async ({
                       }),
                     );
                     if (payload.phase === "end" && payload.name) {
-                      const id = payload.itemId ?? payload.name;
+                      const id = payload.name;
                       const active = activeVerboseActions.get(id);
                       const durationMs = active ? Date.now() - active.startedAt : undefined;
                       const durationStr = durationMs != null ? ` (${(durationMs / 1000).toFixed(1)}s)` : "";
