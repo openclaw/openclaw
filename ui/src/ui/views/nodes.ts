@@ -201,10 +201,10 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
 
 function renderPairedDevice(device: PairedDevice, props: NodesProps) {
   const displayName = normalizeOptionalString(device.displayName);
-  const technicalId = String(device.deviceId ?? "").trim();
+  const technicalId = device.deviceId.trim();
   const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
   const titleLabel = displayName || technicalId;
-  const showTechnicalIdRow = Boolean(displayName) && displayName.trim() !== technicalId;
+  const showTechnicalIdRow = Boolean(displayName && displayName.trim() !== technicalId);
   const roles = `roles: ${formatList(device.roles)}`;
   const scopes = `scopes: ${formatList(device.scopes)}`;
   const tokens = Array.isArray(device.tokens) ? device.tokens : [];
