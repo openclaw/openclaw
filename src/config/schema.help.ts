@@ -1212,8 +1212,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Select the active memory plugin by id, or "none" to disable memory plugins.',
   "plugins.slots.contextEngine":
     "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
-  "plugins.bundledMode":
-    'Controls whether bundled plugins bypass plugins.allow on runtime discovery paths. "compat" (default) preserves legacy behavior where bundled provider plugins are force-loaded on every chat turn. "respect-allow" gates bundled plugins by the allowlist the same way third-party plugins are gated.',
+  "plugins.bundledDiscovery":
+    'Controls bundled plugin runtime discovery when plugins.allow is configured. "compat" (default) preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn. "allowlist" gates bundled provider plugins by plugins.allow like third-party plugins.',
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":

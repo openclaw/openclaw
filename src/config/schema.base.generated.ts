@@ -24186,12 +24186,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
           },
-          bundledMode: {
+          bundledDiscovery: {
             type: "string",
-            enum: ["compat", "respect-allow"],
-            title: "Bundled Plugin Mode",
+            enum: ["compat", "allowlist"],
+            title: "Bundled Plugin Discovery",
             description:
-              'Controls whether bundled plugins bypass plugins.allow on runtime discovery paths. "compat" (default) preserves legacy behavior where bundled provider plugins are force-loaded on every chat turn. "respect-allow" gates bundled plugins by the allowlist the same way third-party plugins are gated.',
+              'Controls bundled plugin runtime discovery when plugins.allow is configured. "compat" (default) preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn. "allowlist" gates bundled provider plugins by plugins.allow like third-party plugins.',
           },
         },
         additionalProperties: false,
@@ -28872,9 +28872,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
       tags: ["access"],
     },
-    "plugins.bundledMode": {
-      label: "Bundled Plugin Mode",
-      help: 'Controls whether bundled plugins bypass plugins.allow on runtime discovery paths. "compat" (default) preserves legacy behavior where bundled provider plugins are force-loaded on every chat turn. "respect-allow" gates bundled plugins by the allowlist the same way third-party plugins are gated.',
+    "plugins.bundledDiscovery": {
+      label: "Bundled Plugin Discovery",
+      help: 'Controls bundled plugin runtime discovery when plugins.allow is configured. "compat" (default) preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn. "allowlist" gates bundled provider plugins by plugins.allow like third-party plugins.',
       tags: ["advanced"],
     },
     "plugins.deny": {

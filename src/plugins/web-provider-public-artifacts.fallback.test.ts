@@ -88,7 +88,7 @@ describe("web provider public artifact manifest fallback", () => {
     });
   });
 
-  it("keeps explicit bundled web-search public artifact candidates inside respect-allow", () => {
+  it("keeps explicit bundled web-search public artifact candidates inside allowlist discovery", () => {
     const resolveExplicitWebSearchProviders =
       mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts as unknown as {
         mockImplementation: (
@@ -105,7 +105,7 @@ describe("web provider public artifact manifest fallback", () => {
       config: {
         plugins: {
           allow: ["fallback-search"],
-          bundledMode: "respect-allow",
+          bundledDiscovery: "allowlist",
         },
       },
       onlyPluginIds: ["blocked-search", "fallback-search"],
@@ -117,7 +117,7 @@ describe("web provider public artifact manifest fallback", () => {
     });
   });
 
-  it("keeps manifest bundled web-fetch public artifact candidates inside respect-allow", () => {
+  it("keeps manifest bundled web-fetch public artifact candidates inside allowlist discovery", () => {
     mocks.loadPluginMetadataSnapshot.mockReturnValueOnce({
       diagnostics: [],
       plugins: [
@@ -140,7 +140,7 @@ describe("web provider public artifact manifest fallback", () => {
       config: {
         plugins: {
           allow: ["fallback-fetch"],
-          bundledMode: "respect-allow",
+          bundledDiscovery: "allowlist",
         },
       },
     });

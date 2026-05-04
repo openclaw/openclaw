@@ -79,10 +79,10 @@ export function withActivatedPluginIds(params: {
     return params.config;
   }
   const originalAllow = params.config?.plugins?.allow ?? [];
-  // Empty allowlists are still open; respect-allow only stops compat from widening configured allowlists.
-  const respectAllow =
-    params.config?.plugins?.bundledMode === "respect-allow" && originalAllow.length > 0;
-  const originalAllowSet = respectAllow ? new Set(originalAllow) : undefined;
+  // Empty allowlists are still open; allowlist mode only stops compat from widening configured allowlists.
+  const useAllowlistDiscovery =
+    params.config?.plugins?.bundledDiscovery === "allowlist" && originalAllow.length > 0;
+  const originalAllowSet = useAllowlistDiscovery ? new Set(originalAllow) : undefined;
   const allow = new Set(originalAllow);
   const entries = {
     ...params.config?.plugins?.entries,

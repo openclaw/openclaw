@@ -482,7 +482,7 @@ describe("resolvePluginWebSearchProviders", () => {
     expectScopedWebSearchCandidates(["brave"]);
   });
 
-  it("keeps respect-allow web-search provider discovery scoped to the configured allowlist", () => {
+  it("keeps allowlist web-search provider discovery scoped to the configured allowlist", () => {
     loadInstalledPluginManifestRegistryMock.mockReturnValueOnce({
       plugins: [
         createWebSearchManifestRecord({ id: "brave", providerId: "brave" }),
@@ -495,7 +495,7 @@ describe("resolvePluginWebSearchProviders", () => {
       config: {
         plugins: {
           allow: ["brave"],
-          bundledMode: "respect-allow",
+          bundledDiscovery: "allowlist",
         },
       },
       bundledAllowlistCompat: true,
@@ -510,7 +510,7 @@ describe("resolvePluginWebSearchProviders", () => {
         config: expect.objectContaining({
           plugins: expect.objectContaining({
             allow: ["brave"],
-            bundledMode: "respect-allow",
+            bundledDiscovery: "allowlist",
             entries: { brave: { enabled: true } },
           }),
         }),
