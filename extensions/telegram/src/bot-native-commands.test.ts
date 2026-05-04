@@ -421,6 +421,9 @@ describe("registerTelegramNativeCommands", () => {
   it("falls back to a normal reply when a metadata-driven progress result is not editable", async () => {
     const { handler, sendMessage, deleteMessage } = registerPlugCommand({
       args: "now",
+      registerOverrides: {
+        mediaMaxBytes: 13 * 1024 * 1024,
+      },
       command: {
         nativeProgressMessages: { telegram: "Working on it..." },
       },
@@ -442,6 +445,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ mediaUrl: "/tmp/render.png" })],
+        mediaMaxBytes: 13 * 1024 * 1024,
       }),
     );
   });

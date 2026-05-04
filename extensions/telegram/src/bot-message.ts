@@ -24,6 +24,7 @@ type TelegramMessageProcessorDeps = Omit<
   replyToMode: ReplyToMode;
   streamMode: TelegramStreamMode;
   textLimit: number;
+  mediaMaxBytes: number;
   telegramDeps: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token">;
 };
@@ -50,6 +51,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     replyToMode,
     streamMode,
     textLimit,
+    mediaMaxBytes,
     telegramDeps,
     opts,
   } = deps;
@@ -119,6 +121,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         replyToMode,
         streamMode,
         textLimit,
+        mediaMaxBytes,
         telegramCfg,
         telegramDeps,
         opts,

@@ -122,6 +122,7 @@ type DispatchTelegramMessageParams = {
   replyToMode: ReplyToMode;
   streamMode: TelegramStreamMode;
   textLimit: number;
+  mediaMaxBytes: number;
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token">;
@@ -256,6 +257,7 @@ export const dispatchTelegramMessage = async ({
   replyToMode,
   streamMode,
   textLimit,
+  mediaMaxBytes,
   telegramCfg,
   telegramDeps: injectedTelegramDeps,
   opts,
@@ -714,6 +716,7 @@ export const dispatchTelegramMessage = async ({
     runtime,
     bot,
     mediaLocalRoots,
+    mediaMaxBytes,
     replyToMode,
     textLimit,
     thread: threadSpec,

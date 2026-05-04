@@ -685,6 +685,28 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("passes configured mediaMaxBytes to media loading", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendPhoto });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg" }],
+      runtime,
+      bot,
+      mediaMaxBytes: 42 * 1024 * 1024,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith("https://example.com/photo.jpg", {
+      maxBytes: 42 * 1024 * 1024,
+    });
+  });
+
   it("includes link_preview_options when linkPreview is false", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({

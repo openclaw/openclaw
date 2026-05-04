@@ -383,6 +383,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       replyToMode: params.replyToMode ?? "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: 4096,
+      mediaMaxBytes: 42 * 1024 * 1024,
       telegramCfg: params.telegramCfg ?? {},
       telegramDeps: params.telegramDeps ?? telegramDepsForTest,
       opts: { token: "token" },
@@ -428,6 +429,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
+        mediaMaxBytes: 42 * 1024 * 1024,
         mediaLocalRoots: expect.arrayContaining([
           expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/u),
         ]),

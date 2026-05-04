@@ -41,6 +41,7 @@ export function createNativeCommandTestParams(
     groupAllowFrom: params.groupAllowFrom ?? [],
     replyToMode: params.replyToMode ?? "off",
     textLimit: params.textLimit ?? 4000,
+    mediaMaxBytes: params.mediaMaxBytes ?? 100 * 1024 * 1024,
     useAccessGroups: params.useAccessGroups ?? false,
     nativeEnabled: params.nativeEnabled ?? true,
     nativeSkillsEnabled: params.nativeSkillsEnabled ?? false,

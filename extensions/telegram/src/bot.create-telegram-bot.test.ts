@@ -2068,7 +2068,7 @@ describe("createTelegramBot", () => {
       contentType: "image/gif",
       fileName: "fun.gif",
     });
-    createTelegramBot({ token: "tok" });
+    createTelegramBot({ token: "tok", mediaMaxMb: 12 });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler({
@@ -2092,6 +2092,11 @@ describe("createTelegramBot", () => {
     expect(sendPhotoSpy).not.toHaveBeenCalled();
     expect(loadWebMedia).toHaveBeenCalledTimes(1);
     expect(loadWebMedia.mock.calls[0]?.[0]).toBe("https://example.com/fun");
+    expect(loadWebMedia.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        maxBytes: 12 * 1024 * 1024,
+      }),
+    );
   });
 
   function resetHarnessSpies() {
