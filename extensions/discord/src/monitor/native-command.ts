@@ -312,16 +312,15 @@ async function dispatchDiscordCommandInteraction(params: {
       },
       allowNameMatching,
     });
-  const { ownerAllowList: commandOwnerAllowList, ownerAllowed: commandOwnerOk } =
-    resolveDiscordOwnerAccess({
-      allowFrom: commandOwnerAllowFrom,
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      },
-      allowNameMatching,
-    });
+  const { ownerAllowed: commandOwnerOk } = resolveDiscordOwnerAccess({
+    allowFrom: commandOwnerAllowFrom,
+    sender: {
+      id: sender.id,
+      name: sender.name,
+      tag: sender.tag,
+    },
+    allowNameMatching,
+  });
   const commandOwnerAllowAll = commandOwnerAllowFrom?.includes("*") === true;
   const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
   const ownerAllowListConfigured = discordOwnerAllowList != null;
