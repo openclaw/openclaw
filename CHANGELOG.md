@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway/sessions: clear stale implicit `model`/`modelProvider` cache on session reset (`/new`) so the new session entry reflects the current `agents.defaults.model.primary` rather than inheriting the previous session's cached model. Fixes #77322. (#77322) Thanks @hclsys.
 - Models/auth: add `openclaw models auth list [--provider <id>] [--json]` so users can inspect saved per-agent auth profiles without dumping secrets or hitting the old “too many arguments” path. Thanks @vincentkoc.
 - Control UI/header: show the active agent name in dashboard breadcrumbs without adding the current session key, keeping non-chat views oriented without crowding the topbar.
 - Control UI/cron: make the New Job sidebar collapsible so the jobs list can reclaim space while keeping the form one click away. Thanks @BunsDev.

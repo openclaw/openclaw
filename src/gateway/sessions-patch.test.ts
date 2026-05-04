@@ -316,6 +316,32 @@ describe("gateway sessions patch", () => {
     expect(entry.liveModelSwitchPending).toBe(true);
   });
 
+  test("clears stale implicit model cache on reset patch without marking live switch pending", async () => {
+    // sessions.create passes model: null when caller provides no explicit model,
+    // so a /new command resets stale model/modelProvider without triggering a live switch notice.
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-stale-model",
+        updatedAt: 1,
+        model: "deepseek-v4-pro",
+        modelProvider: "deepseek",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: null },
+      }),
+    );
+
+    expect(entry.model).toBeUndefined();
+    expect(entry.modelProvider).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.liveModelSwitchPending).toBeUndefined();
+  });
+
   test.each([
     {
       name: "accepts explicit allowlisted provider/model refs from sessions.patch",
