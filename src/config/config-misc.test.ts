@@ -266,6 +266,28 @@ describe("tools.loopDetection.consecutiveErrorThreshold", () => {
       ).toBe(true);
     }
   });
+
+  it("rejects thresholds larger than the effective default historySize", () => {
+    const res = validateConfigObject({
+      tools: {
+        loopDetection: {
+          enabled: true,
+          consecutiveErrorThreshold: 31,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path === "tools.loopDetection.historySize" &&
+            issue.message.includes("consecutiveErrorThreshold"),
+        ),
+      ).toBe(true);
+    }
+  });
 });
 
 describe("gateway.controlUi.embedSandbox", () => {

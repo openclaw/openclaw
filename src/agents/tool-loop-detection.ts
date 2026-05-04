@@ -617,21 +617,6 @@ export function detectToolCallLoop(
     };
   }
 
-  if (resolvedConfig.detectors.pingPong && pingPong.count >= resolvedConfig.warningThreshold) {
-    log.warn(
-      `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
-    );
-    return {
-      stuck: true,
-      level: "warning",
-      detector: "ping_pong",
-      count: pingPong.count,
-      message: `WARNING: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This looks like a ping-pong loop; stop retrying and report the task as failed.`,
-      pairedToolName: pingPong.pairedToolName,
-      warningKey: pingPongWarningKey,
-    };
-  }
-
   const consecutiveErrorStreak = getConsecutiveErrorStreak(history);
   if (consecutiveErrorStreak >= resolvedConfig.consecutiveErrorThreshold) {
     log.error(
@@ -644,6 +629,21 @@ export function detectToolCallLoop(
       count: consecutiveErrorStreak,
       message: `CRITICAL: ${consecutiveErrorStreak} consecutive tool calls failed in this run. Stop retrying unrelated tools and report the shared failure instead of continuing the error cascade.`,
       warningKey: `consecutive-errors:${consecutiveErrorStreak}`,
+    };
+  }
+
+  if (resolvedConfig.detectors.pingPong && pingPong.count >= resolvedConfig.warningThreshold) {
+    log.warn(
+      `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+    );
+    return {
+      stuck: true,
+      level: "warning",
+      detector: "ping_pong",
+      count: pingPong.count,
+      message: `WARNING: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This looks like a ping-pong loop; stop retrying and report the task as failed.`,
+      pairedToolName: pingPong.pairedToolName,
+      warningKey: pingPongWarningKey,
     };
   }
 

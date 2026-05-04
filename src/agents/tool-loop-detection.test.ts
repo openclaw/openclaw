@@ -951,6 +951,32 @@ describe("tool-loop-detection", () => {
       expect(result.count).toBe(10);
     });
 
+    it("prioritizes consecutive errors before ping-pong warnings at the default threshold", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        consecutiveErrorThreshold: 10,
+      };
+      const alternatingCalls = [
+        { toolName: "read", params: { path: "/a.txt" } },
+        { toolName: "list", params: { dir: "/workspace" } },
+      ] as const;
+
+      for (let i = 0; i < 10; i += 1) {
+        const entry = alternatingCalls[i % alternatingCalls.length];
+        recordErroredCall(state, entry.toolName, entry.params, i);
+      }
+
+      const result = detectToolCallLoop(state, "read", { path: "/a.txt" }, config);
+      expect(result.stuck).toBe(true);
+      if (!result.stuck) {
+        return;
+      }
+      expect(result.level).toBe("critical");
+      expect(result.detector).toBe("consecutive_errors");
+      expect(result.count).toBe(10);
+    });
+
     it("stops counting when a non-error result breaks the streak", () => {
       const state = createState();
       const config: ToolLoopDetectionConfig = {

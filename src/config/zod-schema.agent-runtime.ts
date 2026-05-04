@@ -539,9 +539,8 @@ const ToolLoopDetectionSchema = z
       });
     }
     if (
-      value.historySize !== undefined &&
       value.consecutiveErrorThreshold !== undefined &&
-      value.historySize < value.consecutiveErrorThreshold
+      Math.max(1, value.historySize ?? 30) < value.consecutiveErrorThreshold
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
