@@ -8,6 +8,32 @@ import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
 
+const TRUTHY_ENV = new Set(["1", "true", "yes", "on"]);
+const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
+  "OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY";
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return TRUTHY_ENV.has((value ?? "").trim().toLowerCase());
+}
+
+function isManagedProxyActive(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isTruthyEnvValue(env["OPENCLAW_PROXY_ACTIVE"]);
+}
+
+function allowsDirectConnectWithManagedProxy(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE]);
+}
+
+export function assertDebugProxyDirectConnectAllowed(env: NodeJS.ProcessEnv = process.env): void {
+  if (!isManagedProxyActive(env) || allowsDirectConnectWithManagedProxy(env)) {
+    return;
+  }
+  throw new Error(
+    "Debug proxy CONNECT upstream forwarding is disabled while managed proxy mode is active. " +
+      `Set ${DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE}=1 only for approved local diagnostics.`,
+  );
+}
+
 type DebugProxyServerHandle = {
   proxyUrl: string;
   stop: () => Promise<void>;
@@ -187,6 +213,29 @@ export async function startDebugProxyServer(params: {
       path: req.url ?? "",
       headersJson: JSON.stringify(req.headers),
     });
+    try {
+      assertDebugProxyDirectConnectAllowed();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: message,
+      });
+      const responseBody = `${message}\n`;
+      clientSocket.end(
+        `HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(responseBody)}\r\n\r\n${responseBody}`,
+      );
+      return;
+    }
     const upstreamSocket = net.connect(port, hostname, () => {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head.length > 0) {
