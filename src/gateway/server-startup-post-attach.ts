@@ -559,6 +559,7 @@ export async function startGatewayPostAttachRuntime(
 
         try {
           if (params.getChannelRuntimeSnapshot) {
+<<<<<<< HEAD
             const summary = summarizeChannelStartup({
               snapshot: params.getChannelRuntimeSnapshot(),
               now: Date.now(),
@@ -566,6 +567,18 @@ export async function startGatewayPostAttachRuntime(
             const elapsed = params.startupStartedAt
               ? formatDurationSeconds(Date.now() - params.startupStartedAt)
               : undefined;
+=======
+            const { summarizeChannelStartup } = await import(
+              "./channel-startup-summary.js"
+            );
+            const summary = summarizeChannelStartup({
+              snapshot: params.getChannelRuntimeSnapshot(),
+            });
+            const elapsed =
+              typeof params.startupStartedAt === "number"
+                ? `${((Date.now() - params.startupStartedAt) / 1000).toFixed(1)}s`
+                : null;
+>>>>>>> 797dac46be7f2a9837e342f3eff35808c6d527b8
             params.log.info(
               elapsed
                 ? `sidecars settled (${elapsed}): ${summary.summaryLine}`
@@ -577,6 +590,10 @@ export async function startGatewayPostAttachRuntime(
         } catch (err) {
           params.log.warn(`sidecars settled summary failed: ${String(err)}`);
         }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 797dac46be7f2a9837e342f3eff35808c6d527b8
         return result;
       });
 

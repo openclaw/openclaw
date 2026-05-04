@@ -32,7 +32,11 @@ export function logGatewayStartup(params: {
   // Keep the `ready (` marker for existing tooling/tests while clarifying the meaning:
   // this indicates the gateway is listening, not that all channels have recovered.
   params.log.info(
+<<<<<<< HEAD
     `http server listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
+=======
+    `ready (gateway listening; ${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
+>>>>>>> 797dac46be7f2a9837e342f3eff35808c6d527b8
   );
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   if (params.isNixMode) {

@@ -31,7 +31,10 @@ const CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS = 10_000;
 const DEFAULT_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS = 5_000;
 const MIN_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS = 250;
 const MAX_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS = 30_000;
+<<<<<<< HEAD
 const BACKGROUND_WEBHOOK_CLEANUP_TIMEOUT_MS = 10_000;
+=======
+>>>>>>> 797dac46be7f2a9837e342f3eff35808c6d527b8
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
@@ -68,6 +71,10 @@ const resolveWebhookCleanupStartupBudgetMs = (envValue: string | undefined): num
     Math.max(MIN_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS, Math.floor(raw)),
   );
 };
+<<<<<<< HEAD
+=======
+
+>>>>>>> 797dac46be7f2a9837e342f3eff35808c6d527b8
 const resolvePollingStallThresholdMs = (value: number | undefined): number => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_POLL_STALL_THRESHOLD_MS;
@@ -248,6 +255,7 @@ export class TelegramPollingSession {
       }
       if (isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
         const errMsg = formatErrorMessage(err);
+<<<<<<< HEAD
 
         // If deleteWebhook fails, try a quick getWebhookInfo check. If the URL
         // is already empty, then we are effectively clean and can continue.
@@ -263,6 +271,8 @@ export class TelegramPollingSession {
           // Ignore secondary check errors; proceed to background retry.
         }
 
+=======
+>>>>>>> 797dac46be7f2a9837e342f3eff35808c6d527b8
         this.opts.log(
           `Telegram webhook cleanup degraded (budget=${formatDurationPrecise(startupBudgetMs)}): ${errMsg}; continuing startup.`,
         );
@@ -290,7 +300,11 @@ export class TelegramPollingSession {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (bot.api.deleteWebhook as any)(
             { drop_pending_updates: false },
+<<<<<<< HEAD
             telegramApiTimeoutSignal(BACKGROUND_WEBHOOK_CLEANUP_TIMEOUT_MS),
+=======
+            telegramApiTimeoutSignal(MAX_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS),
+>>>>>>> 797dac46be7f2a9837e342f3eff35808c6d527b8
           ),
       })
         .then(() => {

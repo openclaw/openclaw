@@ -69,9 +69,15 @@ describe("gateway startup log", () => {
 
     const listeningMessages = info.mock.calls
       .map((call) => call[0])
+<<<<<<< HEAD
       .filter((message) => message.startsWith("http server listening ("));
     expect(listeningMessages).toEqual([
       "http server listening (3 plugins: alpha, beta, delta; 16.0s)",
+=======
+      .filter((message) => message.startsWith("ready ("));
+    expect(readyMessages).toEqual([
+      "ready (gateway listening; 3 plugins: alpha, beta, delta; 16.0s)",
+>>>>>>> 797dac46be7f2a9837e342f3eff35808c6d527b8
     ]);
   });
 });
