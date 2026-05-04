@@ -70,6 +70,9 @@ function resolveFormatFromFileName(fileName?: string): string | undefined {
   if (ext === "mpeg") {
     return "mp3";
   }
+  if (ext === "mp4") {
+    return "m4a";
+  }
   if (ext === "oga" || ext === "opus") {
     return "ogg";
   }
