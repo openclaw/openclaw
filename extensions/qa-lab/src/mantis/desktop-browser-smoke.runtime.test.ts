@@ -16,6 +16,8 @@ describe("mantis desktop browser smoke runtime", () => {
   });
 
   it("leases a desktop box, runs a visible browser, copies artifacts, and stops on pass", async () => {
+    await fs.mkdir(path.join(repoRoot, "qa-artifacts"), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, "qa-artifacts", "timeline.html"), "<h1>Mantis</h1>");
     const commands: { args: readonly string[]; command: string }[] = [];
     const runner = vi.fn(async (command: string, args: readonly string[]) => {
       commands.push({ command, args });
@@ -53,6 +55,7 @@ describe("mantis desktop browser smoke runtime", () => {
       browserUrl: "https://openclaw.ai/docs",
       commandRunner: runner,
       crabboxBin: "/tmp/crabbox",
+      htmlFile: "qa-artifacts/timeline.html",
       now: () => new Date("2026-05-04T12:00:00.000Z"),
       outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-test",
       repoRoot,
@@ -81,21 +84,40 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(remoteScript).toContain("${BROWSER:-}");
     expect(remoteScript).toContain("${CHROME_BIN:-}");
     expect(remoteScript).toContain("chromium-browser");
+    expect(remoteScript).toContain("base64 -d");
+    expect(remoteScript).toContain('url="file://$out/input.html"');
     expect(remoteScript).toContain('"browserBinary": "$browser_bin"');
     await expect(fs.readFile(result.screenshotPath ?? "", "utf8")).resolves.toBe("png");
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       browserUrl: string;
       crabbox: { id: string; vncCommand: string };
+      htmlFile?: string;
       status: string;
     };
+    expect(summary.browserUrl).toMatch(/^file:\/\//u);
     expect(summary).toMatchObject({
-      browserUrl: "https://openclaw.ai/docs",
+      htmlFile: path.join(repoRoot, "qa-artifacts", "timeline.html"),
       crabbox: {
         id: "cbx_abc123",
         vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
       },
       status: "pass",
     });
+  });
+
+  it("rejects html files outside the repository", async () => {
+    const runner = vi.fn(async () => ({ stdout: "", stderr: "" }));
+
+    await expect(
+      runMantisDesktopBrowserSmoke({
+        commandRunner: runner,
+        crabboxBin: "/tmp/crabbox",
+        htmlFile: "../outside.html",
+        outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-outside",
+        repoRoot,
+      }),
+    ).rejects.toThrow("Mantis desktop HTML file must be inside the repository");
+    expect(runner).not.toHaveBeenCalled();
   });
 
   it("keeps an existing lease and writes failure reports when the remote run fails", async () => {

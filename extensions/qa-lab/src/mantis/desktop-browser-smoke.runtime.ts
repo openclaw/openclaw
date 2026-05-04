@@ -1,6 +1,7 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 
@@ -9,6 +10,7 @@ export type MantisDesktopBrowserSmokeOptions = {
   commandRunner?: CommandRunner;
   crabboxBin?: string;
   env?: NodeJS.ProcessEnv;
+  htmlFile?: string;
   idleTimeout?: string;
   keepLease?: boolean;
   leaseId?: string;
@@ -58,6 +60,7 @@ type MantisDesktopBrowserSmokeSummary = {
     summaryPath: string;
   };
   browserUrl: string;
+  htmlFile?: string;
   crabbox: {
     bin: string;
     createdLease: boolean;
@@ -174,16 +177,43 @@ function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function renderRemoteScript(params: { browserUrl: string; remoteOutputDir: string }) {
+function resolveRepoBoundFile(repoRoot: string, filePath: string, label: string) {
+  const resolved = path.resolve(repoRoot, filePath);
+  const relative = path.relative(repoRoot, resolved);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`${label} must be inside the repository: ${filePath}`);
+  }
+  return resolved;
+}
+
+function renderRemoteScript(params: {
+  browserUrl: string;
+  htmlBase64?: string;
+  remoteOutputDir: string;
+}) {
   const shellUrl = shellQuote(params.browserUrl);
   const shellUrlJson = shellQuote(JSON.stringify(params.browserUrl));
+  const htmlBase64 = shellQuote(params.htmlBase64 ?? "");
   const shellOutputDir = shellQuote(params.remoteOutputDir);
+  const inputModeJson = shellQuote(JSON.stringify(params.htmlBase64 ? "html-file" : "url"));
+  const openedUrlJson = shellQuote(
+    JSON.stringify(
+      params.htmlBase64 ? `file://${params.remoteOutputDir}/input.html` : params.browserUrl,
+    ),
+  );
   return `set -euo pipefail
 out=${shellOutputDir}
 url=${shellUrl}
 url_json=${shellUrlJson}
+html_b64=${htmlBase64}
+input_mode_json=${inputModeJson}
+opened_url_json=${openedUrlJson}
 rm -rf "$out"
 mkdir -p "$out"
+if [ -n "$html_b64" ]; then
+  printf '%s' "$html_b64" | base64 -d >"$out/input.html"
+  url="file://$out/input.html"
+fi
 export DISPLAY="\${DISPLAY:-:99}"
 if ! command -v scrot >/dev/null 2>&1; then
   sudo apt-get update -y >"$out/apt.log" 2>&1
@@ -228,6 +258,8 @@ cat >"$out/remote-metadata.json" <<MANTIS_REMOTE_METADATA
   "browserBinary": "$browser_bin",
   "display": "$DISPLAY",
   "chromePid": $chrome_pid,
+  "inputMode": $input_mode_json,
+  "openedUrl": $opened_url_json,
   "capturedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 MANTIS_REMOTE_METADATA
@@ -241,6 +273,7 @@ function renderReport(summary: MantisDesktopBrowserSmokeSummary) {
     "",
     `Status: ${summary.status}`,
     `Browser URL: ${summary.browserUrl}`,
+    summary.htmlFile ? `HTML file: ${summary.htmlFile}` : undefined,
     `Output: ${summary.outputDir}`,
     `Started: ${summary.startedAt}`,
     `Finished: ${summary.finishedAt}`,
@@ -412,7 +445,16 @@ export async function runMantisDesktopBrowserSmoke(
     trimToValue(env[CRABBOX_IDLE_TIMEOUT_ENV]) ??
     DEFAULT_IDLE_TIMEOUT;
   const ttl = trimToValue(opts.ttl) ?? trimToValue(env[CRABBOX_TTL_ENV]) ?? DEFAULT_TTL;
-  const browserUrl = trimToValue(opts.browserUrl) ?? DEFAULT_BROWSER_URL;
+  const htmlFileOption = trimToValue(opts.htmlFile);
+  const htmlFile = htmlFileOption
+    ? resolveRepoBoundFile(repoRoot, htmlFileOption, "Mantis desktop HTML file")
+    : undefined;
+  const htmlBase64 = htmlFile
+    ? Buffer.from(await fs.readFile(htmlFile)).toString("base64")
+    : undefined;
+  const browserUrl = htmlFile
+    ? pathToFileURL(htmlFile).toString()
+    : (trimToValue(opts.browserUrl) ?? DEFAULT_BROWSER_URL);
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const explicitLeaseId = trimToValue(opts.leaseId) ?? trimToValue(env[CRABBOX_LEASE_ID_ENV]);
   const keepLease = opts.keepLease ?? isTruthyOptIn(env[CRABBOX_KEEP_ENV]);
@@ -455,7 +497,7 @@ export async function runMantisDesktopBrowserSmoke(
         "--no-sync",
         "--shell",
         "--",
-        renderRemoteScript({ browserUrl, remoteOutputDir }),
+        renderRemoteScript({ browserUrl, htmlBase64, remoteOutputDir }),
       ],
       cwd: repoRoot,
       runner,
@@ -479,6 +521,7 @@ export async function runMantisDesktopBrowserSmoke(
         summaryPath,
       },
       browserUrl,
+      htmlFile,
       crabbox: {
         bin: crabboxBin,
         createdLease,
@@ -508,6 +551,7 @@ export async function runMantisDesktopBrowserSmoke(
         summaryPath,
       },
       browserUrl,
+      htmlFile,
       crabbox: {
         bin: crabboxBin,
         createdLease,

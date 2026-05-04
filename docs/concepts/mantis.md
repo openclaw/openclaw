@@ -107,6 +107,7 @@ Useful desktop smoke flags:
 
 - `--lease-id <cbx_...>` or `OPENCLAW_MANTIS_CRABBOX_LEASE_ID` reuses a warmed desktop.
 - `--browser-url <url>` changes the page opened in the visible browser.
+- `--html-file <path>` renders a repo-local HTML artifact in the visible browser. Mantis uses this to capture the generated Discord status-reaction timeline through a real Crabbox desktop.
 - `--keep-lease` or `OPENCLAW_MANTIS_KEEP_VM=1` keeps a newly created passing lease open for VNC inspection. Failed runs keep the lease by default when one was created so an operator can reconnect.
 - `--class`, `--idle-timeout`, and `--ttl` tune machine size and lease lifetime.
 
@@ -120,7 +121,9 @@ accepts:
 It checks out the workflow harness ref, builds separate baseline and candidate
 worktrees, runs `discord-status-reactions-tool-only` against each worktree, and
 uploads `baseline/`, `candidate/`, `comparison.json`, and `mantis-report.md` as
-Actions artifacts.
+Actions artifacts. It also renders each lane's timeline HTML in a Crabbox
+desktop browser and publishes those VNC screenshots beside the deterministic
+timeline PNGs in the PR comment.
 
 You can also trigger the status-reactions run directly from a PR comment:
 

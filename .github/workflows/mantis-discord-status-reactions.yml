@@ -255,6 +255,24 @@ jobs:
       - name: Build Mantis harness
         run: pnpm build
 
+      - name: Install Crabbox CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/crabbox"
+          mkdir -p "$install_dir" "$HOME/.local/bin"
+          gh release download \
+            --repo openclaw/crabbox \
+            --pattern 'crabbox_*_linux_amd64.tar.gz' \
+            --dir "$install_dir" \
+            --clobber
+          tar -xzf "$install_dir"/crabbox_*_linux_amd64.tar.gz -C "$install_dir"
+          install -m 0755 "$install_dir/crabbox" "$HOME/.local/bin/crabbox"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/crabbox" --version
+
       - name: Prepare baseline and candidate worktrees
         shell: bash
         env:
@@ -285,6 +303,10 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN }}
+          CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
+          CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
 
@@ -299,6 +321,7 @@ jobs:
           require_var OPENAI_API_KEY
           require_var OPENCLAW_QA_CONVEX_SITE_URL
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
+          require_var CRABBOX_COORDINATOR_TOKEN
 
           root=".artifacts/qa-e2e/mantis/discord-status-reactions"
           worktree_root=".artifacts/qa-e2e/mantis/discord-status-reactions-worktrees"
@@ -328,6 +351,55 @@ jobs:
           run_lane baseline
           run_lane candidate
 
+          desktop_lease_id=""
+          warmup_output="$(
+            crabbox warmup \
+              --provider hetzner \
+              --desktop \
+              --browser \
+              --class standard \
+              --idle-timeout 30m \
+              --ttl 90m
+          )"
+          printf '%s\n' "$warmup_output" | tee "$root/crabbox-desktop-warmup.log"
+          desktop_lease_id="$(printf '%s\n' "$warmup_output" | grep -Eo 'cbx_[a-f0-9]+' | head -n 1 || true)"
+          if [[ ! "$desktop_lease_id" =~ ^cbx_[a-f0-9]+$ ]]; then
+            echo "Crabbox desktop warmup did not return a lease id." >&2
+            exit 1
+          fi
+
+          cleanup_desktop_lease() {
+            if [[ -n "$desktop_lease_id" ]]; then
+              crabbox stop --provider hetzner "$desktop_lease_id" || true
+            fi
+          }
+          trap cleanup_desktop_lease EXIT
+
+          capture_desktop_lane() {
+            local lane="$1"
+            local html_file="$root/$lane/discord-status-reactions-tool-only-timeline.html"
+            local desktop_dir="$root/$lane/desktop-browser"
+            if [[ ! -f "$html_file" ]]; then
+              echo "Missing desktop source HTML for ${lane}: ${html_file}" >&2
+              exit 1
+            fi
+            local args=(
+              openclaw qa mantis desktop-browser-smoke
+              --html-file "$html_file"
+              --output-dir "$desktop_dir"
+              --provider hetzner
+              --class standard
+              --idle-timeout 30m
+              --ttl 90m
+              --lease-id "$desktop_lease_id"
+            )
+            pnpm "${args[@]}"
+            cp "$desktop_dir/desktop-browser-smoke.png" "$root/$lane/discord-status-reactions-tool-only-desktop.png"
+          }
+
+          capture_desktop_lane baseline
+          capture_desktop_lane candidate
+
           baseline_status="$(jq -r '.scenarios[0].status' "$root/baseline/discord-qa-summary.json")"
           candidate_status="$(jq -r '.scenarios[0].status' "$root/candidate/discord-qa-summary.json")"
 
@@ -351,6 +423,8 @@ jobs:
             echo "- Candidate status: \`${candidate_status}\`"
             echo "- Baseline screenshot: \`baseline/discord-status-reactions-tool-only-timeline.png\`"
             echo "- Candidate screenshot: \`candidate/discord-status-reactions-tool-only-timeline.png\`"
+            echo "- Baseline desktop screenshot: \`baseline/discord-status-reactions-tool-only-desktop.png\`"
+            echo "- Candidate desktop screenshot: \`candidate/discord-status-reactions-tool-only-desktop.png\`"
           } > "$root/mantis-report.md"
 
           cat "$root/mantis-report.md" >> "$GITHUB_STEP_SUMMARY"
@@ -409,7 +483,9 @@ jobs:
           for required in \
             "$root/comparison.json" \
             "$root/baseline/discord-status-reactions-tool-only-timeline.png" \
-            "$root/candidate/discord-status-reactions-tool-only-timeline.png"
+            "$root/candidate/discord-status-reactions-tool-only-timeline.png" \
+            "$root/baseline/discord-status-reactions-tool-only-desktop.png" \
+            "$root/candidate/discord-status-reactions-tool-only-desktop.png"
           do
             if [[ ! -f "$required" ]]; then
               echo "Missing required QA evidence file: $required" >&2
@@ -435,6 +511,8 @@ jobs:
           mkdir -p "$artifacts_worktree/$artifact_root"
           cp "$root/baseline/discord-status-reactions-tool-only-timeline.png" "$artifacts_worktree/$artifact_root/baseline.png"
           cp "$root/candidate/discord-status-reactions-tool-only-timeline.png" "$artifacts_worktree/$artifact_root/candidate.png"
+          cp "$root/baseline/discord-status-reactions-tool-only-desktop.png" "$artifacts_worktree/$artifact_root/baseline-desktop.png"
+          cp "$root/candidate/discord-status-reactions-tool-only-desktop.png" "$artifacts_worktree/$artifact_root/candidate-desktop.png"
           cp "$root/comparison.json" "$artifacts_worktree/$artifact_root/comparison.json"
           cp "$root/mantis-report.md" "$artifacts_worktree/$artifact_root/mantis-report.md"
 
@@ -469,6 +547,10 @@ jobs:
           | Baseline queued-only | Candidate queued -> thinking -> done |
           | --- | --- |
           | <img src="${raw_base}/baseline.png" width="420" alt="Baseline Discord status reaction timeline"> | <img src="${raw_base}/candidate.png" width="420" alt="Candidate Discord status reaction timeline"> |
+
+          | Baseline desktop/VNC browser | Candidate desktop/VNC browser |
+          | --- | --- |
+          | <img src="${raw_base}/baseline-desktop.png" width="420" alt="Baseline Mantis desktop browser screenshot"> | <img src="${raw_base}/candidate-desktop.png" width="420" alt="Candidate Mantis desktop browser screenshot"> |
 
           Raw QA files: https://github.com/${GITHUB_REPOSITORY}/tree/qa-artifacts/${artifact_root}
           EOF

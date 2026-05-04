@@ -56,6 +56,7 @@ type MantisDesktopBrowserSmokeCommanderOptions = {
   browserUrl?: string;
   class?: string;
   crabboxBin?: string;
+  htmlFile?: string;
   idleTimeout?: string;
   keepLease?: boolean;
   leaseId?: string;
@@ -137,6 +138,7 @@ export function registerMantisCli(qa: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Mantis desktop browser artifact directory")
     .option("--browser-url <url>", "URL to open in the visible browser")
+    .option("--html-file <path>", "Repo-local HTML file to render in the visible browser")
     .option("--crabbox-bin <path>", "Crabbox binary path")
     .option("--provider <provider>", "Crabbox provider")
     .option("--machine-class <class>", "Crabbox machine class")
@@ -149,6 +151,7 @@ export function registerMantisCli(qa: Command) {
       await runDesktopBrowserSmoke({
         browserUrl: opts.browserUrl,
         crabboxBin: opts.crabboxBin,
+        htmlFile: opts.htmlFile,
         idleTimeout: opts.idleTimeout,
         keepLease: opts.keepLease,
         leaseId: opts.leaseId,

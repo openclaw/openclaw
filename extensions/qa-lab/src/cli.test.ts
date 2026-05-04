@@ -225,6 +225,8 @@ describe("qa cli registration", () => {
       ".artifacts/qa-e2e/mantis/desktop-browser",
       "--browser-url",
       "https://openclaw.ai/docs",
+      "--html-file",
+      "qa-artifacts/timeline.html",
       "--crabbox-bin",
       "/tmp/crabbox",
       "--provider",
@@ -243,6 +245,7 @@ describe("qa cli registration", () => {
     expect(runMantisDesktopBrowserSmokeCommand).toHaveBeenCalledWith({
       browserUrl: "https://openclaw.ai/docs",
       crabboxBin: "/tmp/crabbox",
+      htmlFile: "qa-artifacts/timeline.html",
       idleTimeout: "30m",
       keepLease: true,
       leaseId: "cbx_123abc",
@@ -268,6 +271,7 @@ describe("qa cli registration", () => {
     expect(runMantisDesktopBrowserSmokeCommand).toHaveBeenCalledWith({
       browserUrl: undefined,
       crabboxBin: undefined,
+      htmlFile: undefined,
       idleTimeout: undefined,
       keepLease: undefined,
       leaseId: undefined,
