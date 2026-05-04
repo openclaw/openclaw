@@ -42,10 +42,6 @@ const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const ACTIVE_MEMORY_TOOL_ALLOWLIST = ["memory_recall", "memory_search", "memory_get"] as const;
-const MISSING_REGISTERED_MEMORY_TOOLS_ERROR_MESSAGE =
-  `No callable tools remain after resolving explicit tool allowlist (` +
-  `runtime toolsAllow: ${ACTIVE_MEMORY_TOOL_ALLOWLIST.join(", ")}` +
-  `); no registered tools matched. Fix the allowlist or enable the plugin that registers the requested tool.`;
 const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
@@ -500,8 +496,15 @@ function normalizeOptionalString(value: unknown): string | undefined {
 }
 
 function isMissingRegisteredMemoryToolsError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.trim();
   return (
-    error instanceof Error && error.message.trim() === MISSING_REGISTERED_MEMORY_TOOLS_ERROR_MESSAGE
+    message.startsWith("No callable tools remain after resolving explicit tool allowlist (") &&
+    message.includes(`runtime toolsAllow: ${ACTIVE_MEMORY_TOOL_ALLOWLIST.join(", ")}`) &&
+    message.includes("; no registered tools matched.") &&
+    message.endsWith("Fix the allowlist or enable the plugin that registers the requested tool.")
   );
 }
 

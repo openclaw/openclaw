@@ -125,10 +125,13 @@ describe("active-memory plugin", () => {
       "utf8",
     );
   };
-  const makeMemoryToolAllowlistError = (reason: string) =>
+  const makeMemoryToolAllowlistError = (
+    reason: string,
+    sources = "runtime toolsAllow: memory_recall, memory_search, memory_get",
+  ) =>
     new Error(
       `No callable tools remain after resolving explicit tool allowlist ` +
-        `(runtime toolsAllow: memory_recall, memory_search, memory_get); ${reason}. ` +
+        `(${sources}); ${reason}. ` +
         `Fix the allowlist or enable the plugin that registers the requested tool.`,
     );
   const hasDebugLine = (needle: string) =>
@@ -1681,6 +1684,32 @@ describe("active-memory plugin", () => {
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=empty")]);
     expect(lines.join("\n")).not.toContain("status=unavailable");
+  });
+
+  it("skips missing memory tools when the allowlist error includes inherited sources", async () => {
+    const sessionKey = "agent:main:missing-memory-tools-with-policy-source";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-missing-memory-tools-with-policy-source",
+      updatedAt: 0,
+    };
+    const error = makeMemoryToolAllowlistError(
+      "no registered tools matched",
+      "tools.allow: *, lobster; runtime toolsAllow: memory_recall, memory_search, memory_get",
+    );
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? missing memory tools with policy", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(true);
+    expect(hasWarnLine("No callable tools remain")).toBe(false);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=empty"),
+    ]);
   });
 
   it.each([
