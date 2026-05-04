@@ -386,6 +386,7 @@ function maybeResetToolStream(state: ChatState) {
 
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
+    state.chatLoading = false;
     return;
   }
   const sessionKey = state.sessionKey;

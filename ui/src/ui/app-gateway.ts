@@ -593,7 +593,9 @@ function handleTerminalChatEvent(
   // replace the now-cleared streaming state.
   if (hadToolEvents && state === "final") {
     const completedRunId = runId ?? null;
-    void loadChatHistory(host as unknown as ChatState).finally(() => {
+    const chatStateHostForTools = host as unknown as ChatState;
+    chatStateHostForTools.chatLoading = true;
+    void loadChatHistory(chatStateHostForTools).finally(() => {
       if (completedRunId && host.chatRunId && host.chatRunId !== completedRunId) {
         return;
       }
@@ -658,11 +660,15 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
   }
   if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
-    void loadChatHistory(host as unknown as ChatState);
+    const chatStateHost = host as unknown as ChatState;
+    chatStateHost.chatLoading = true;
+    void loadChatHistory(chatStateHost);
     return;
   }
   if (shouldReplayDeferredSessionMessageReload && !historyReloaded) {
-    void loadChatHistory(host as unknown as ChatState);
+    const chatStateHost = host as unknown as ChatState;
+    chatStateHost.chatLoading = true;
+    void loadChatHistory(chatStateHost);
   }
 }
 
