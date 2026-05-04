@@ -1458,6 +1458,30 @@ describe("codex command", () => {
     });
   });
 
+  it("rejects bind options with missing values before starting Codex", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const startCodexConversationThread = vi.fn();
+    const requestConversationBinding = vi.fn();
+
+    await expect(
+      handleCodexCommand(
+        createContext("bind thread-123 --cwd --model gpt-5.4", sessionFile, {
+          requestConversationBinding,
+        }),
+        {
+          deps: createDeps({
+            startCodexConversationThread,
+            resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
+          }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
+    });
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+    expect(requestConversationBinding).not.toHaveBeenCalled();
+  });
+
   it("returns the binding approval reply when conversation bind needs approval", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const reply = { text: "Approve this?" };
