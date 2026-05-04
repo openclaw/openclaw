@@ -661,6 +661,9 @@ export const dispatchTelegramMessage = async ({
     sessionKeyForInternalHooks: ctxPayload.SessionKey,
     mirrorIsGroup: isGroup,
     mirrorGroupId: isGroup ? String(chatId) : undefined,
+    transcriptMirror: ctxPayload.SessionKey
+      ? { sessionKey: ctxPayload.SessionKey, agentId: route.agentId }
+      : undefined,
     token: opts.token,
     runtime,
     bot,
@@ -1370,6 +1373,7 @@ export const dispatchTelegramMessage = async ({
         ...deliveryBaseOptions,
         silent: false,
         mediaLoader: telegramDeps.loadWebMedia,
+        transcriptMirror: undefined,
       });
       sentFallback = result.delivered;
     }

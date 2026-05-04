@@ -1,4 +1,5 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
+import { appendAssistantMessageToSessionTranscript } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-types";
 import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
@@ -674,6 +675,10 @@ export async function deliverReplies(params: {
   policySessionKey?: string;
   mirrorIsGroup?: boolean;
   mirrorGroupId?: string;
+  transcriptMirror?: {
+    sessionKey: string;
+    agentId?: string;
+  };
   token: string;
   runtime: RuntimeEnv;
   bot: Bot;
@@ -869,6 +874,14 @@ export async function deliverReplies(params: {
         isGroup: params.mirrorIsGroup,
         groupId: params.mirrorGroupId,
       });
+      if (params.transcriptMirror && progress.deliveredCount > deliveredCountBeforeReply) {
+        await appendAssistantMessageToSessionTranscript({
+          sessionKey: params.transcriptMirror.sessionKey,
+          agentId: params.transcriptMirror.agentId,
+          text: reply.text,
+          mediaUrls: mediaList,
+        });
+      }
     } catch (error) {
       emitMessageSentHooks({
         hookRunner,
