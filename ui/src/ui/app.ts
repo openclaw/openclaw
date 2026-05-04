@@ -380,6 +380,7 @@ export class OpenClawApp extends LitElement {
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
   @state() sessionsShowArchived = false;
+  @state() sessionsFiltersCollapsed = false;
   @state() sessionsHideCron = true;
   @state() sessionsSearchQuery = "";
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";

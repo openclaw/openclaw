@@ -1678,6 +1678,7 @@ export function renderApp(state: AppViewState) {
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
                 showArchived: state.sessionsShowArchived,
+                filtersCollapsed: state.sessionsFiltersCollapsed,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
                 agentIdentityById: state.agentIdentityById,
@@ -1706,6 +1707,9 @@ export function renderApp(state: AppViewState) {
                     includeUnknown: next.includeUnknown,
                     showArchived: next.showArchived,
                   });
+                },
+                onToggleFiltersCollapsed: () => {
+                  state.sessionsFiltersCollapsed = !state.sessionsFiltersCollapsed;
                 },
                 onSearchChange: (q) => {
                   state.sessionsSearchQuery = q;

@@ -2,17 +2,20 @@
   "fallbackKeys": [
     "sessionsView.activeTooltip",
     "sessionsView.globalTooltip",
+    "sessionsView.hideFilters",
     "sessionsView.limitTooltip",
     "sessionsView.showArchived",
     "sessionsView.showArchivedTooltip",
+    "sessionsView.showFilters",
+    "sessionsView.sourceFilters",
     "sessionsView.unknownTooltip"
   ],
-  "generatedAt": "2026-05-04T02:58:41.769Z",
+  "generatedAt": "2026-05-04T05:07:46.784Z",
   "locale": "es",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "733eca902f504c023ef5807a44783863da0b8794b9b416f8e9f2c8184e07b4e8",
-  "totalKeys": 992,
-  "translatedKeys": 986,
+  "sourceHash": "811aafd29beaa9a3db352fd59ef96a410ee137a3ca791d04e889365f0a3e09e2",
+  "totalKeys": 996,
+  "translatedKeys": 987,
   "workflow": 1
 }

@@ -261,6 +261,7 @@ export type AppViewState = {
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
   sessionsShowArchived: boolean;
+  sessionsFiltersCollapsed: boolean;
   sessionsHideCron: boolean;
   sessionsSearchQuery: string;
   sessionsSortColumn: "key" | "kind" | "updated" | "tokens";

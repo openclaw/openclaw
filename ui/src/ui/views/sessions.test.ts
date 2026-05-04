@@ -35,6 +35,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeGlobal: false,
     includeUnknown: false,
     showArchived: false,
+    filtersCollapsed: false,
     basePath: "",
     searchQuery: "",
     agentIdentityById: {},
@@ -49,6 +50,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     checkpointBusyKey: null,
     checkpointErrorByKey: {},
     onFiltersChange: () => undefined,
+    onToggleFiltersCollapsed: () => undefined,
     onSearchChange: () => undefined,
     onSortChange: () => undefined,
     onPageChange: () => undefined,
@@ -134,6 +136,62 @@ describe("sessions view", () => {
     ).toBe(
       "Include explicitly archived rows and older store-backed sessions by removing the active-time cutoff.",
     );
+  });
+
+  it("keeps active and limit together and renders streamlined source toggles", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        activeMinutes: "120",
+        limit: "200",
+        includeGlobal: true,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const primaryRow = container.querySelector(".session-filter-primary-row");
+    expect(primaryRow?.querySelector(".session-filter-input--minutes")?.closest("label")).toBe(
+      primaryRow?.firstElementChild,
+    );
+    expect(primaryRow?.querySelector(".session-filter-input--limit")?.closest("label")).toBe(
+      primaryRow?.lastElementChild,
+    );
+
+    const toggleGroup = container.querySelector(".session-filter-toggle-group");
+    expect(toggleGroup?.getAttribute("role")).toBe("group");
+    expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
+    expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(3);
+    expect(
+      toggleGroup
+        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeGlobal]")
+        ?.closest("label")
+        ?.classList.contains("session-filter-check--active"),
+    ).toBe(true);
+    expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
+  });
+
+  it("collapses the whole session filter section from the header", async () => {
+    const container = document.createElement("div");
+    const onToggleFiltersCollapsed = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        filtersCollapsed: true,
+        onToggleFiltersCollapsed,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const toggle = container.querySelector<HTMLButtonElement>(".sessions-filter-panel__toggle");
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".sessions-filter-bar")).toBeNull();
+
+    toggle?.click();
+
+    expect(onToggleFiltersCollapsed).toHaveBeenCalledTimes(1);
   });
 
   it("renders and patches provider-owned thinking ids", async () => {

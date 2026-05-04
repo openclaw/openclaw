@@ -23,6 +23,7 @@ export type SessionsProps = {
   includeGlobal: boolean;
   includeUnknown: boolean;
   showArchived: boolean;
+  filtersCollapsed: boolean;
   basePath: string;
   searchQuery: string;
   agentIdentityById: Record<string, AgentIdentityResult>;
@@ -43,6 +44,7 @@ export type SessionsProps = {
     includeUnknown: boolean;
     showArchived: boolean;
   }) => void;
+  onToggleFiltersCollapsed: () => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
   onPageChange: (page: number) => void;
@@ -263,6 +265,37 @@ function isRowControlTarget(target: EventTarget | null): boolean {
   );
 }
 
+function renderFilterToggle(params: {
+  name: string;
+  checked: boolean;
+  label: string;
+  title: string;
+  extraClass?: string;
+  onChange: (checked: boolean) => void;
+}) {
+  const className = [
+    "session-filter-check",
+    "session-filter-toggle",
+    params.extraClass ?? "",
+    params.checked ? "session-filter-check--active" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return html`
+    <label class=${className} title=${params.title} data-tooltip=${params.title}>
+      <input
+        name=${params.name}
+        class="session-filter-check__input"
+        type="checkbox"
+        .checked=${params.checked}
+        @change=${(e: Event) => params.onChange((e.target as HTMLInputElement).checked)}
+      />
+      <span class="session-filter-check__mark" aria-hidden="true">${icons.check}</span>
+      <span class="session-filter-check__label">${params.label}</span>
+    </label>
+  `;
+}
+
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
   const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
@@ -276,6 +309,11 @@ export function renderSessions(props: SessionsProps) {
   const globalTooltip = t("sessionsView.globalTooltip");
   const unknownTooltip = t("sessionsView.unknownTooltip");
   const showArchivedTooltip = t("sessionsView.showArchivedTooltip");
+  const filtersExpanded = !props.filtersCollapsed;
+  const filterPanelTitle = t("sessionsView.filters");
+  const filterToggleLabel = filtersExpanded
+    ? t("sessionsView.hideFilters")
+    : t("sessionsView.showFilters");
 
   const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
@@ -313,99 +351,124 @@ export function renderSessions(props: SessionsProps) {
         </button>
       </div>
 
-      <div class="sessions-filter-bar" aria-label="Session filters">
-        <label class="session-filter-field" title=${activeTooltip} data-tooltip=${activeTooltip}>
-          <span class="session-filter-label">${t("sessionsView.active")}</span>
-          <input
-            class="session-filter-input session-filter-input--minutes"
-            placeholder=${t("sessionsView.minutesPlaceholder")}
-            title=${activeTooltip}
-            .value=${props.activeMinutes}
-            ?disabled=${props.showArchived}
-            @input=${(e: Event) =>
-              props.onFiltersChange({
-                activeMinutes: (e.target as HTMLInputElement).value,
-                limit: props.limit,
-                includeGlobal: props.includeGlobal,
-                includeUnknown: props.includeUnknown,
-                showArchived: props.showArchived,
-              })}
-          />
-        </label>
-        <label class="session-filter-field" title=${limitTooltip} data-tooltip=${limitTooltip}>
-          <span class="session-filter-label">${t("sessionsView.limit")}</span>
-          <input
-            class="session-filter-input session-filter-input--limit"
-            title=${limitTooltip}
-            .value=${props.limit}
-            @input=${(e: Event) =>
-              props.onFiltersChange({
-                activeMinutes: props.activeMinutes,
-                limit: (e.target as HTMLInputElement).value,
-                includeGlobal: props.includeGlobal,
-                includeUnknown: props.includeUnknown,
-                showArchived: props.showArchived,
-              })}
-          />
-        </label>
-        <label class="session-filter-check" title=${globalTooltip} data-tooltip=${globalTooltip}>
-          <input
-            name="includeGlobal"
-            class="session-filter-check__input"
-            type="checkbox"
-            .checked=${props.includeGlobal}
-            @change=${(e: Event) =>
-              props.onFiltersChange({
-                activeMinutes: props.activeMinutes,
-                limit: props.limit,
-                includeGlobal: (e.target as HTMLInputElement).checked,
-                includeUnknown: props.includeUnknown,
-                showArchived: props.showArchived,
-              })}
-          />
-          <span class="session-filter-check__box" aria-hidden="true">${icons.check}</span>
-          <span class="session-filter-check__label">${t("sessionsView.global")}</span>
-        </label>
-        <label class="session-filter-check" title=${unknownTooltip} data-tooltip=${unknownTooltip}>
-          <input
-            name="includeUnknown"
-            class="session-filter-check__input"
-            type="checkbox"
-            .checked=${props.includeUnknown}
-            @change=${(e: Event) =>
-              props.onFiltersChange({
-                activeMinutes: props.activeMinutes,
-                limit: props.limit,
-                includeGlobal: props.includeGlobal,
-                includeUnknown: (e.target as HTMLInputElement).checked,
-                showArchived: props.showArchived,
-              })}
-          />
-          <span class="session-filter-check__box" aria-hidden="true">${icons.check}</span>
-          <span class="session-filter-check__label">${t("sessionsView.unknown")}</span>
-        </label>
-        <label
-          class="session-filter-check session-archive-toggle"
-          title=${showArchivedTooltip}
-          data-tooltip=${showArchivedTooltip}
-        >
-          <input
-            name="showArchived"
-            class="session-filter-check__input"
-            type="checkbox"
-            .checked=${props.showArchived}
-            @change=${(e: Event) =>
-              props.onFiltersChange({
-                activeMinutes: props.activeMinutes,
-                limit: props.limit,
-                includeGlobal: props.includeGlobal,
-                includeUnknown: props.includeUnknown,
-                showArchived: (e.target as HTMLInputElement).checked,
-              })}
-          />
-          <span class="session-filter-check__box" aria-hidden="true">${icons.check}</span>
-          <span class="session-filter-check__label">${t("sessionsView.showArchived")}</span>
-        </label>
+      <div class="sessions-filter-panel">
+        <div class="sessions-filter-panel__header">
+          <div class="sessions-filter-panel__title">${filterPanelTitle}</div>
+          <button
+            class="sessions-filter-panel__toggle"
+            type="button"
+            aria-expanded=${String(filtersExpanded)}
+            aria-controls="sessions-filter-bar"
+            @click=${props.onToggleFiltersCollapsed}
+          >
+            ${filtersExpanded ? icons.chevronDown : icons.chevronRight}
+            <span>${filterToggleLabel}</span>
+          </button>
+        </div>
+
+        ${filtersExpanded
+          ? html`
+              <div
+                id="sessions-filter-bar"
+                class="sessions-filter-bar"
+                aria-label="Session filters"
+              >
+                <div class="session-filter-primary-row">
+                  <label
+                    class="session-filter-field"
+                    title=${activeTooltip}
+                    data-tooltip=${activeTooltip}
+                  >
+                    <span class="session-filter-label">${t("sessionsView.active")}</span>
+                    <input
+                      class="session-filter-input session-filter-input--minutes"
+                      placeholder=${t("sessionsView.minutesPlaceholder")}
+                      title=${activeTooltip}
+                      .value=${props.activeMinutes}
+                      ?disabled=${props.showArchived}
+                      @input=${(e: Event) =>
+                        props.onFiltersChange({
+                          activeMinutes: (e.target as HTMLInputElement).value,
+                          limit: props.limit,
+                          includeGlobal: props.includeGlobal,
+                          includeUnknown: props.includeUnknown,
+                          showArchived: props.showArchived,
+                        })}
+                    />
+                  </label>
+                  <label
+                    class="session-filter-field"
+                    title=${limitTooltip}
+                    data-tooltip=${limitTooltip}
+                  >
+                    <span class="session-filter-label">${t("sessionsView.limit")}</span>
+                    <input
+                      class="session-filter-input session-filter-input--limit"
+                      title=${limitTooltip}
+                      .value=${props.limit}
+                      @input=${(e: Event) =>
+                        props.onFiltersChange({
+                          activeMinutes: props.activeMinutes,
+                          limit: (e.target as HTMLInputElement).value,
+                          includeGlobal: props.includeGlobal,
+                          includeUnknown: props.includeUnknown,
+                          showArchived: props.showArchived,
+                        })}
+                    />
+                  </label>
+                </div>
+                <div
+                  class="session-filter-toggle-group"
+                  role="group"
+                  aria-label=${t("sessionsView.sourceFilters")}
+                >
+                  ${renderFilterToggle({
+                    name: "includeGlobal",
+                    checked: props.includeGlobal,
+                    label: t("sessionsView.global"),
+                    title: globalTooltip,
+                    onChange: (checked) =>
+                      props.onFiltersChange({
+                        activeMinutes: props.activeMinutes,
+                        limit: props.limit,
+                        includeGlobal: checked,
+                        includeUnknown: props.includeUnknown,
+                        showArchived: props.showArchived,
+                      }),
+                  })}
+                  ${renderFilterToggle({
+                    name: "includeUnknown",
+                    checked: props.includeUnknown,
+                    label: t("sessionsView.unknown"),
+                    title: unknownTooltip,
+                    onChange: (checked) =>
+                      props.onFiltersChange({
+                        activeMinutes: props.activeMinutes,
+                        limit: props.limit,
+                        includeGlobal: props.includeGlobal,
+                        includeUnknown: checked,
+                        showArchived: props.showArchived,
+                      }),
+                  })}
+                  ${renderFilterToggle({
+                    name: "showArchived",
+                    checked: props.showArchived,
+                    label: t("sessionsView.showArchived"),
+                    title: showArchivedTooltip,
+                    extraClass: "session-archive-toggle",
+                    onChange: (checked) =>
+                      props.onFiltersChange({
+                        activeMinutes: props.activeMinutes,
+                        limit: props.limit,
+                        includeGlobal: props.includeGlobal,
+                        includeUnknown: props.includeUnknown,
+                        showArchived: checked,
+                      }),
+                  })}
+                </div>
+              </div>
+            `
+          : nothing}
       </div>
 
       ${props.error

@@ -2592,16 +2592,78 @@ td.data-table-key-col {
   accent-color: var(--accent);
 }
 
+.sessions-filter-panel {
+  margin-bottom: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-muted) 58%, transparent);
+}
+
+.sessions-filter-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px;
+}
+
+.sessions-filter-panel__title {
+  padding-left: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.sessions-filter-panel__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) ease,
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.sessions-filter-panel__toggle:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+  border-color: color-mix(in srgb, var(--border) 74%, transparent);
+}
+
+.sessions-filter-panel__toggle:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.sessions-filter-panel__toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
 .sessions-filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 6px 6px;
+}
+
+.session-filter-primary-row,
+.session-filter-toggle-group {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin-bottom: 12px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-muted) 58%, transparent);
 }
 
 .session-filter-field,
@@ -2666,8 +2728,8 @@ td.data-table-key-col {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px 6px 8px;
+  gap: 6px;
+  padding: 6px 10px;
   cursor: pointer;
   user-select: none;
   transition:
@@ -2679,6 +2741,12 @@ td.data-table-key-col {
 .session-filter-check:hover {
   border-color: color-mix(in srgb, var(--border-strong) 74%, transparent);
   background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+}
+
+.session-filter-check--active {
+  border-color: color-mix(in srgb, var(--accent) 64%, var(--border));
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--card));
 }
 
 .session-filter-field[data-tooltip]::before,
@@ -2756,36 +2824,31 @@ td.data-table-key-col {
   white-space: nowrap;
 }
 
-.session-filter-check__box {
+.session-filter-check__mark {
   display: inline-grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-  color: transparent;
+  color: color-mix(in srgb, var(--muted) 48%, transparent);
+  opacity: 0.42;
   transition:
-    background-color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
     color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
+    opacity var(--duration-fast) ease;
 }
 
-.session-filter-check__box svg {
-  width: 12px;
-  height: 12px;
+.session-filter-check__mark svg {
+  width: 13px;
+  height: 13px;
   stroke-width: 3;
 }
 
-.session-filter-check__input:checked + .session-filter-check__box {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-foreground);
+.session-filter-check__input:checked + .session-filter-check__mark {
+  color: var(--accent);
+  opacity: 1;
 }
 
-.session-filter-check__input:focus-visible + .session-filter-check__box {
+.session-filter-check__input:focus-visible + .session-filter-check__mark {
   box-shadow: var(--focus-ring);
 }
 
@@ -2795,6 +2858,8 @@ td.data-table-key-col {
 
 @media (max-width: 760px) {
   .sessions-filter-bar,
+  .session-filter-primary-row,
+  .session-filter-toggle-group,
   .session-filter-field,
   .session-filter-check {
     width: 100%;
