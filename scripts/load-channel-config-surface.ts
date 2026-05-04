@@ -12,10 +12,19 @@ import {
 
 type CreateJiti = typeof createJiti;
 
+const jitiFactoryOverrideKey = Symbol.for("openclaw.channelConfigSurfaceJitiFactoryOverride");
 const requireForJiti = createRequire(import.meta.url);
 let createJitiLoaderFactory: CreateJiti | undefined;
 
 function loadCreateJitiLoaderFactory(): CreateJiti {
+  const override = (
+    globalThis as typeof globalThis & {
+      [jitiFactoryOverrideKey]?: CreateJiti;
+    }
+  )[jitiFactoryOverrideKey];
+  if (override) {
+    return override;
+  }
   if (createJitiLoaderFactory) {
     return createJitiLoaderFactory;
   }
