@@ -253,6 +253,11 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain(
       "assert_legacy_plugin_dependency_debris_before_doctor",
     );
+    expect(publishedUpgradeSurvivor.indexOf("phase seed-source-only-plugin-shadow")).toBeLessThan(
+      publishedUpgradeSurvivor.indexOf("phase assert-baseline"),
+    );
+    expect(publishedUpgradeSurvivor).toContain('"id": "opik-openclaw"');
+    expect(publishedUpgradeSurvivor).toContain('"configSchema": {');
     expect(publishedUpgradeSurvivor).toContain(
       "Legacy plugin dependency debris was already removed before doctor",
     );
