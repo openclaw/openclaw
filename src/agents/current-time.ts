@@ -30,9 +30,12 @@ export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronSty
   return { userTimezone, formattedTime, timeLine };
 }
 
-// Matches a single "Current time: ..." line (anchored to start of line so
-// occurrences in interior body text are not rewritten by accident).
-const CURRENT_TIME_LINE_RE = /^Current time:.*$/gm;
+// Matches the helper's own injected `Current time: ...` line shape exactly
+// (anchored to start of line, format `Current time: YYYY-MM-DD HH:MM (TZ) / YYYY-MM-DD HH:MM UTC`).
+// Restricting to the helper's exact format avoids rewriting user-authored
+// reminder/cron content that happens to start with `Current time:`.
+const CURRENT_TIME_LINE_RE =
+  /^Current time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \([^)]+\) \/ \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/gm;
 
 export function appendCronStyleCurrentTimeLine(text: string, cfg: TimeConfigLike, nowMs: number) {
   const base = text.trimEnd();

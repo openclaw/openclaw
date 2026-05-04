@@ -42,8 +42,11 @@ describe("appendCronStyleCurrentTimeLine", () => {
   });
 
   it("collapses multiple Current time lines into a single fresh entry", () => {
-    const stale =
-      "Heartbeat tick\nCurrent time: 2025-01-01 00:00 UTC\nCurrent time: 2025-01-02 00:00 UTC";
+    const stale = [
+      "Heartbeat tick",
+      "Current time: 2025-01-01 00:00 (UTC) / 2025-01-01 00:00 UTC",
+      "Current time: 2025-01-02 00:00 (UTC) / 2025-01-02 00:00 UTC",
+    ].join("\n");
     const newNow = Date.parse("2026-04-30T10:00:00Z");
     const out = appendCronStyleCurrentTimeLine(stale, CFG, newNow);
     expect(out).toContain("Heartbeat tick");
@@ -51,5 +54,23 @@ describe("appendCronStyleCurrentTimeLine", () => {
     expect(out).not.toMatch(/2025-01-01/);
     expect(out).not.toMatch(/2025-01-02/);
     expect(out.match(/Current time:/g)?.length).toBe(1);
+  });
+
+  it("preserves user-authored content that starts with 'Current time:' (Codex P2)", () => {
+    // Reminder/cron text passed through `heartbeat-events-filter.ts` may
+    // legitimately start with "Current time:" but does NOT match the helper's
+    // exact injected shape (`YYYY-MM-DD HH:MM (TZ) / YYYY-MM-DD HH:MM UTC`).
+    // The helper must leave such lines alone and append a fresh injected line.
+    const userContent =
+      "Reminder from cron:\nCurrent time: please check the dashboard before EOD";
+    const newNow = Date.parse("2026-04-30T10:00:00Z");
+    const out = appendCronStyleCurrentTimeLine(userContent, CFG, newNow);
+    expect(out).toContain("Reminder from cron:");
+    // User-authored "Current time:" line MUST survive untouched.
+    expect(out).toContain("Current time: please check the dashboard before EOD");
+    // The helper's own injected line is appended (since no helper-format line existed).
+    expect(out).toMatch(/Current time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(UTC\) \/ 2026-04-30 10:00 UTC/);
+    // Two `Current time:` occurrences expected: 1 user-authored + 1 helper-injected.
+    expect(out.match(/Current time:/g)?.length).toBe(2);
   });
 });
