@@ -2012,6 +2012,53 @@
   width: 100%;
 }
 
+/* Nodes → Devices → Paired: long role/scope strings must wrap; keep actions visible */
+.nodes-device-paired .list-main {
+  min-width: 0;
+}
+
+.nodes-device-paired .list-sub {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.nodes-device-token-row {
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.nodes-device-token-row__detail {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.nodes-device-token-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 1 auto;
+}
+
+/* When the devices list column is narrow, stack token meta above actions */
+@container (max-width: 520px) {
+  .nodes-device-token-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .nodes-device-token-row__actions {
+    justify-content: flex-start;
+  }
+}
+
 /* Debug event log payloads should use full width like other debug sections. */
 .debug-event-log__item {
   grid-template-columns: minmax(0, 1fr);

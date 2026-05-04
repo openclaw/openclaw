@@ -172,7 +172,7 @@ function renderPairedDevice(device: PairedDevice, props: NodesProps) {
   const scopes = `scopes: ${formatList(device.scopes)}`;
   const tokens = Array.isArray(device.tokens) ? device.tokens : [];
   return html`
-    <div class="list-item">
+    <div class="list-item nodes-device-paired">
       <div class="list-main">
         <div class="list-title">${name}</div>
         <div class="list-sub">${device.deviceId}${ip}</div>
@@ -197,9 +197,11 @@ function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: Node
     token.rotatedAtMs ?? token.createdAtMs ?? token.lastUsedAtMs ?? null,
   );
   return html`
-    <div class="row" style="justify-content: space-between; gap: 8px;">
-      <div class="list-sub">${token.role} · ${status} · ${scopes} · ${when}</div>
-      <div class="row" style="justify-content: flex-end; gap: 6px; flex-wrap: wrap;">
+    <div class="nodes-device-token-row">
+      <div class="list-sub nodes-device-token-row__detail">
+        ${token.role} · ${status} · ${scopes} · ${when}
+      </div>
+      <div class="nodes-device-token-row__actions">
         <button
           class="btn btn--sm"
           @click=${() => props.onDeviceRotate(deviceId, token.role, token.scopes)}
