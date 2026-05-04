@@ -130,7 +130,7 @@ export async function handleCodexConversationInboundClaim(
   if (event.commandAuthorized !== true) {
     return { handled: true };
   }
-  const prompt = (event.bodyForAgent ?? event.content ?? "").trim();
+  const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
   if (!prompt) {
     return { handled: true };
   }
