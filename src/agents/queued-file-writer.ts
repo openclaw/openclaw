@@ -130,6 +130,7 @@ export function getQueuedFileWriter(
     write: (line: string) => {
       queue = queue
         .then(() => ready)
+        .then(() => new Promise<void>((resolve) => setImmediate(resolve)))
         .then(() => safeAppendFile(filePath, line, options))
         .catch(() => undefined);
     },
