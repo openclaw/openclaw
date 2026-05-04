@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   installPluginFromClawHub: vi.fn(),
   installPluginFromNpmSpec: vi.fn(),
+  getCurrentPluginMetadataSnapshot: vi.fn(() => undefined),
   listChannelPluginCatalogEntries: vi.fn(),
   listOfficialExternalPluginCatalogEntries: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
@@ -59,6 +60,10 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
+vi.mock("../../../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: mocks.getCurrentPluginMetadataSnapshot,
+}));
+
 vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
   getOfficialExternalPluginCatalogManifest: mocks.getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries: mocks.listOfficialExternalPluginCatalogEntries,
@@ -78,6 +83,7 @@ vi.mock("../../../plugins/update.js", () => ({
 describe("repairMissingConfiguredPluginInstalls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -1931,6 +1937,87 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         brave: expect.objectContaining({ installPath: process.cwd() }),
       }),
       { env: {} },
+    );
+    expect(result.changes).toEqual(['Repaired missing configured plugin "brave".']);
+  });
+
+  it("repairs a configured external web search plugin with broken runtime entries", async () => {
+    const records = {
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave-plugin@2026.5.2",
+        installPath: process.cwd(),
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "global",
+          channels: [],
+          providers: [],
+        },
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "brave",
+          source: `${process.cwd()}/index.ts`,
+          message:
+            "installed plugin package requires compiled runtime output for TypeScript entry ./index.ts: expected ./dist/index.js",
+        },
+      ],
+    });
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      changed: true,
+      config: {
+        plugins: {
+          installs: {
+            brave: {
+              source: "npm",
+              spec: "@openclaw/brave-plugin@2026.5.3",
+              installPath: process.cwd(),
+            },
+          },
+        },
+      },
+      outcomes: [
+        {
+          pluginId: "brave",
+          status: "updated",
+          message: "Updated brave.",
+        },
+      ],
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            brave: { enabled: true },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["brave"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({ installs: records }),
+        }),
+      }),
     );
     expect(result.changes).toEqual(['Repaired missing configured plugin "brave".']);
   });

@@ -77,6 +77,11 @@ const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[]
 
 const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs metadata";
 const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
+const BROKEN_RUNTIME_ENTRY_DIAGNOSTICS = [
+  "requires compiled runtime output",
+  "runtime extension entry not found",
+  "runtime setup entry not found",
+] as const;
 
 function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
   return (
@@ -414,16 +419,75 @@ function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
   return stalePluginIds;
 }
 
+function isBrokenRuntimeEntryDiagnostic(message: string): boolean {
+  return BROKEN_RUNTIME_ENTRY_DIAGNOSTICS.some((needle) => message.includes(needle));
+}
+
+function isPathInsideOrEqual(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveInstallRecordPath(
+  record: PluginInstallRecord | undefined,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const rawPath =
+    typeof record?.installPath === "string" && record.installPath.trim()
+      ? record.installPath
+      : typeof record?.sourcePath === "string" && record.sourcePath.trim()
+        ? record.sourcePath
+        : undefined;
+  return rawPath ? resolveUserPath(rawPath, env) : undefined;
+}
+
+function collectConfiguredPluginIdsWithBrokenRuntimeEntries(params: {
+  snapshot: PluginMetadataSnapshot;
+  configuredPluginIds: ReadonlySet<string>;
+  records: Record<string, PluginInstallRecord>;
+  env: NodeJS.ProcessEnv;
+}): Set<string> {
+  const stalePluginIds = new Set<string>();
+  const configuredInstallPaths = Object.entries(params.records)
+    .filter(([pluginId]) => params.configuredPluginIds.has(pluginId))
+    .flatMap(([pluginId, record]) => {
+      const installPath = resolveInstallRecordPath(record, params.env);
+      return installPath ? [{ pluginId, installPath }] : [];
+    });
+
+  for (const diagnostic of params.snapshot.diagnostics) {
+    if (!isBrokenRuntimeEntryDiagnostic(diagnostic.message)) {
+      continue;
+    }
+    const pluginId = diagnostic.pluginId?.trim();
+    if (pluginId && params.configuredPluginIds.has(pluginId)) {
+      stalePluginIds.add(pluginId);
+      continue;
+    }
+    const source = diagnostic.source?.trim();
+    if (!source) {
+      continue;
+    }
+    const resolvedSource = resolveUserPath(source, params.env);
+    for (const entry of configuredInstallPaths) {
+      if (isPathInsideOrEqual(entry.installPath, resolvedSource)) {
+        stalePluginIds.add(entry.pluginId);
+      }
+    }
+  }
+
+  return stalePluginIds;
+}
+
 function isInstalledRecordMissingOnDisk(
   record: PluginInstallRecord | undefined,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  const installPath = record?.installPath?.trim();
+  const installPath = resolveInstallRecordPath(record, env);
   if (!installPath) {
     return true;
   }
-  const resolved = resolveUserPath(installPath, env);
-  return !existsSync(path.join(resolved, "package.json"));
+  return !existsSync(path.join(installPath, "package.json"));
 }
 
 function isUpdatePackageDoctorPass(env: NodeJS.ProcessEnv): boolean {
@@ -655,13 +719,20 @@ async function repairMissingPluginInstalls(params: {
         ] as const,
     ),
   ]);
+  const records = await loadInstalledPluginIndexInstallRecords({ env });
   const configuredPluginIdsWithStaleDescriptors =
     collectConfiguredPluginIdsWithMissingChannelConfigDescriptors({
       snapshot,
       configuredPluginIds: params.pluginIds,
       configuredChannelIds: params.channelIds,
     });
-  const records = await loadInstalledPluginIndexInstallRecords({ env });
+  const configuredPluginIdsWithBrokenRuntimeEntries =
+    collectConfiguredPluginIdsWithBrokenRuntimeEntries({
+      snapshot,
+      configuredPluginIds: params.pluginIds,
+      records,
+      env,
+    });
   const changes: string[] = [];
   const warnings: string[] = [];
   const deferredPluginIds = new Set<string>();
@@ -714,7 +785,8 @@ async function repairMissingPluginInstalls(params: {
       !bundledPluginsById.has(pluginId) &&
       ((params.pluginIds.has(pluginId) &&
         (!knownIds.has(pluginId) || isInstalledRecordMissingOnDisk(nextRecords[pluginId], env))) ||
-        configuredPluginIdsWithStaleDescriptors.has(pluginId)),
+        configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
+        configuredPluginIdsWithBrokenRuntimeEntries.has(pluginId)),
   );
 
   if (missingRecordedPluginIds.length > 0) {
