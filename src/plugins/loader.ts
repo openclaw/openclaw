@@ -315,6 +315,8 @@ export function clearActivatedPluginRuntimeState(): void {
 
 export function clearPluginRegistryLoadCache(): void {
   pluginLoaderCacheState.clearCachedRegistries();
+  memoizedInstallRecords = null;
+  memoizedInstallRecordsEnvRef = null;
   fullWorkspacePluginLoaderCacheState.clearCachedRegistries();
 }
 
