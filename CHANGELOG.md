@@ -266,6 +266,7 @@ Docs: https://docs.openclaw.ai
 - QA/Mantis: accept Blacksmith Testbox `tbx_...` lease ids from desktop smoke warmup, so provider overrides do not fail before inspect/run. Thanks @vincentkoc.
 - Plugins/SDK: add bounded `before_agent_finalize` retry instructions so workflow plugins can request one more model pass. Thanks @100yenadmin.
 - Plugin SDK: add plugin-owned `SessionEntry` slot projection and scoped trusted-policy session extension reads. (#75609; replaces part of #73384/#74483) Thanks @100yenadmin.
+- Plugin SDK/Gateway: add scoped `plugins.sessionAction` dispatch and plugin-attributed `emitAgentEvent` support so plugins can expose typed session actions and workflow events to trusted clients. (#75578; replaces part of #73384/#74483) Thanks @100yenadmin.
 - Plugins/SDK: expose host-derived tool target paths to `before_tool_call` and trusted policy hooks so workflow plugins can reason about known file targets without reparsing tool envelopes. (#75605) Thanks @100yenadmin.
 - Control UI/WebChat: show a persistent compact context usage indicator from fresh session token data before the high-pressure warning state, while keeping the existing compaction prompt threshold. Fixes #46398; refs #45048, #50071, and #73744. Thanks @walterwkchoy, @AxelrodAI, @Brissux, @vincentkoc, and @BunsDev.
 - Contributor PRs: require external pull requests to include after-fix real behavior proof from a real OpenClaw setup, with terminal screenshots, console output, redacted runtime logs, linked artifacts, and copied live output treated as valid evidence while unit tests, mocks, lint, typechecks, snapshots, and CI remain supplemental only.
@@ -1587,7 +1588,6 @@ Docs: https://docs.openclaw.ai
 - macOS app: move recent session context rows into a Context submenu while keeping usage and cost details root-level, so the menu bar companion stays compact with many active sessions. Thanks @guti.
 - Gateway/SDK: add SDK-facing tools.invoke RPC with shared HTTP policy, typed approval/refusal results, and SDK helper support. Refs #74705. Thanks @BunsDev and @ai-hpc.
 - Discord: keep active buttons, selects, and forms working across Gateway restarts until they expire, so multi-step Discord interactions are less likely to break during upgrades or restarts. Thanks @amknight.
-- Plugin SDK/Gateway: add scoped `plugins.sessionAction` dispatch and plugin-attributed `emitAgentEvent` support so plugins can expose typed session actions and workflow events to trusted clients. Replaces part of #73384/#74483. Thanks @100yenadmin.
 - Messages/docs: clarify that `BodyForAgent` is the primary inbound model text while `Body` is the legacy envelope fallback, and add Signal coverage so channel hardening patches target the real prompt path. Refs #66198. Thanks @defonota3box.
 - Slack: publish a safe default App Home tab view on `app_home_opened` and include the Home tab event in setup manifests. Fixes #11655; refs #52020. Thanks @TinyTb.
 - Slack: keep track of bot-participated threads across restarts, so ongoing threaded conversations can continue auto-replying after the Gateway is restarted. Thanks @amknight.
