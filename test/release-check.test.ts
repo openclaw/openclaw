@@ -187,6 +187,7 @@ describe("bundled plugin root runtime mirrors", () => {
         "@matrix-org/matrix-sdk-crypto-wasm",
         { conflicts: [], pluginIds: ["matrix"], spec: "18.0.0" },
       ],
+      ["matrix-js-sdk", { conflicts: [], pluginIds: ["matrix"], spec: "41.4.0-rc.0" }],
     ]);
   }
 
@@ -256,6 +257,27 @@ describe("bundled plugin root runtime mirrors", () => {
       }),
     ).toEqual([
       "installed package root is missing mirrored bundled runtime dependency '@larksuiteoapi/node-sdk' for dist importers: probe-Cz2PiFtC.js. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/feishu/.",
+    ]);
+  });
+
+  it("flags missing root mirrors for matrix sdk imports from root dist", () => {
+    expect(
+      collectBundledPluginRootRuntimeMirrorErrors({
+        bundledRuntimeDependencySpecs: makeBundledSpecs(),
+        requiredRootMirrors: new Map([
+          [
+            "matrix-js-sdk",
+            {
+              importers: new Set(["sdk-C_a4AtkX.js"]),
+              pluginIds: ["matrix"],
+              spec: "41.4.0-rc.0",
+            },
+          ],
+        ]),
+        rootPackageJson: { dependencies: {} },
+      }),
+    ).toEqual([
+      "installed package root is missing mirrored bundled runtime dependency 'matrix-js-sdk' for dist importers: sdk-C_a4AtkX.js. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/matrix/.",
     ]);
   });
 
