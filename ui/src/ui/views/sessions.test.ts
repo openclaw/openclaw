@@ -96,6 +96,46 @@ describe("sessions view", () => {
     });
   });
 
+  it("explains each session source filter with a tooltip", async () => {
+    const container = document.createElement("div");
+    render(renderSessions(buildProps(buildMultiResult([]))), container);
+    await Promise.resolve();
+
+    const filters = container.querySelector(".sessions-filter-bar");
+    expect(
+      filters
+        ?.querySelector<HTMLInputElement>(".session-filter-input--minutes")
+        ?.getAttribute("title"),
+    ).toBe(
+      "Only request sessions updated within the last N minutes. Clear the field, or show archived sessions, to remove the active-time cutoff.",
+    );
+    expect(
+      filters
+        ?.querySelector<HTMLInputElement>(".session-filter-input--limit")
+        ?.getAttribute("title"),
+    ).toBe("Maximum rows to request from the Gateway. Higher limits can make large stores slower.");
+    expect(
+      filters
+        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeGlobal]")
+        ?.closest("label")
+        ?.getAttribute("title"),
+    ).toBe("Include the special global session bucket shared outside a specific agent or chat.");
+    expect(
+      filters
+        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeUnknown]")
+        ?.closest("label")
+        ?.getAttribute("title"),
+    ).toBe("Include the special unknown session bucket for legacy or unresolved traffic.");
+    expect(
+      filters
+        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
+        ?.closest("label")
+        ?.getAttribute("title"),
+    ).toBe(
+      "Include explicitly archived rows and older store-backed sessions by removing the active-time cutoff.",
+    );
+  });
+
   it("renders and patches provider-owned thinking ids", async () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();

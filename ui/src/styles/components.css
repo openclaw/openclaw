@@ -2588,6 +2588,7 @@ td.data-table-key-col {
 
 .session-filter-field,
 .session-filter-check {
+  position: relative;
   min-height: 34px;
   box-sizing: border-box;
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
@@ -2660,6 +2661,70 @@ td.data-table-key-col {
 .session-filter-check:hover {
   border-color: color-mix(in srgb, var(--border-strong) 74%, transparent);
   background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+}
+
+.session-filter-field[data-tooltip]::before,
+.session-filter-check[data-tooltip]::before,
+.session-filter-field[data-tooltip]::after,
+.session-filter-check[data-tooltip]::after {
+  position: absolute;
+  z-index: 20;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.session-filter-field[data-tooltip]::before,
+.session-filter-check[data-tooltip]::before {
+  content: "";
+  bottom: calc(100% + 4px);
+  left: 18px;
+  width: 8px;
+  height: 8px;
+  background: var(--text);
+  transform: translateY(3px) rotate(45deg);
+}
+
+.session-filter-field[data-tooltip]::after,
+.session-filter-check[data-tooltip]::after {
+  content: attr(data-tooltip);
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 7px 9px;
+  color: var(--card);
+  background: var(--text);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: normal;
+  transform: translateY(3px);
+}
+
+@media (hover: hover) {
+  .session-filter-field[data-tooltip]:hover::before,
+  .session-filter-field[data-tooltip]:hover::after,
+  .session-filter-check[data-tooltip]:hover::before,
+  .session-filter-check[data-tooltip]:hover::after,
+  .session-filter-field[data-tooltip]:focus-within::before,
+  .session-filter-field[data-tooltip]:focus-within::after,
+  .session-filter-check[data-tooltip]:focus-within::before,
+  .session-filter-check[data-tooltip]:focus-within::after {
+    opacity: 1;
+    transform: translateY(0) rotate(45deg);
+  }
+
+  .session-filter-field[data-tooltip]:hover::after,
+  .session-filter-check[data-tooltip]:hover::after,
+  .session-filter-field[data-tooltip]:focus-within::after,
+  .session-filter-check[data-tooltip]:focus-within::after {
+    transform: translateY(0);
+  }
 }
 
 .session-filter-check__input {

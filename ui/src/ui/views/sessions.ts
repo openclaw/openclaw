@@ -264,6 +264,11 @@ export function renderSessions(props: SessionsProps) {
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
   const paginated = paginateRows(sorted, page, props.pageSize);
+  const activeTooltip = t("sessionsView.activeTooltip");
+  const limitTooltip = t("sessionsView.limitTooltip");
+  const globalTooltip = t("sessionsView.globalTooltip");
+  const unknownTooltip = t("sessionsView.unknownTooltip");
+  const showArchivedTooltip = t("sessionsView.showArchivedTooltip");
 
   const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
@@ -302,11 +307,12 @@ export function renderSessions(props: SessionsProps) {
       </div>
 
       <div class="sessions-filter-bar" aria-label="Session filters">
-        <label class="session-filter-field">
+        <label class="session-filter-field" title=${activeTooltip} data-tooltip=${activeTooltip}>
           <span class="session-filter-label">${t("sessionsView.active")}</span>
           <input
             class="session-filter-input session-filter-input--minutes"
             placeholder=${t("sessionsView.minutesPlaceholder")}
+            title=${activeTooltip}
             .value=${props.activeMinutes}
             ?disabled=${props.showArchived}
             @input=${(e: Event) =>
@@ -319,10 +325,11 @@ export function renderSessions(props: SessionsProps) {
               })}
           />
         </label>
-        <label class="session-filter-field">
+        <label class="session-filter-field" title=${limitTooltip} data-tooltip=${limitTooltip}>
           <span class="session-filter-label">${t("sessionsView.limit")}</span>
           <input
             class="session-filter-input session-filter-input--limit"
+            title=${limitTooltip}
             .value=${props.limit}
             @input=${(e: Event) =>
               props.onFiltersChange({
@@ -334,8 +341,9 @@ export function renderSessions(props: SessionsProps) {
               })}
           />
         </label>
-        <label class="session-filter-check">
+        <label class="session-filter-check" title=${globalTooltip} data-tooltip=${globalTooltip}>
           <input
+            name="includeGlobal"
             class="session-filter-check__input"
             type="checkbox"
             .checked=${props.includeGlobal}
@@ -351,8 +359,9 @@ export function renderSessions(props: SessionsProps) {
           <span class="session-filter-check__box" aria-hidden="true">${icons.check}</span>
           <span class="session-filter-check__label">${t("sessionsView.global")}</span>
         </label>
-        <label class="session-filter-check">
+        <label class="session-filter-check" title=${unknownTooltip} data-tooltip=${unknownTooltip}>
           <input
+            name="includeUnknown"
             class="session-filter-check__input"
             type="checkbox"
             .checked=${props.includeUnknown}
@@ -368,8 +377,13 @@ export function renderSessions(props: SessionsProps) {
           <span class="session-filter-check__box" aria-hidden="true">${icons.check}</span>
           <span class="session-filter-check__label">${t("sessionsView.unknown")}</span>
         </label>
-        <label class="session-filter-check session-archive-toggle">
+        <label
+          class="session-filter-check session-archive-toggle"
+          title=${showArchivedTooltip}
+          data-tooltip=${showArchivedTooltip}
+        >
           <input
+            name="showArchived"
             class="session-filter-check__input"
             type="checkbox"
             .checked=${props.showArchived}

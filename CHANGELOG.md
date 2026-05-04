@@ -55,6 +55,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/Cron: ignore malformed persisted cron rows without valid payloads before they enter UI state and guard stale cron render paths, preventing blank Control UI sections after a bad cron snapshot. Fixes #55047 and #54439; supersedes #54550 and #54552.
 - Control UI/sessions: bound the default Sessions tab query to recent activity and fewer rows, avoiding expensive full-history loads while keeping filters editable. Fixes #76050. (#76051) Thanks @Neomail2.
 - Control UI/sessions: apply reliable `sessions.changed` snapshots in-place and refetch only for partial events, avoiding redundant `sessions.list` regeneration during active session updates.
+- Control UI/sessions: explain the Sessions filter controls with hover tooltips and raise the default list limit to 200 rows.
 - Gateway/channels: cap startup fanout at four channel/account handoffs and recover from Bonjour ciao self-probe races, reducing Windows startup stalls with many Telegram accounts. Fixes #75687.
 - Gateway/sessions: keep `sessions.list` polling responsive on large session stores by reusing list-safe session cache/indexes and returning a lightweight compaction checkpoint preview instead of heavyweight summaries. Thanks @rolandrscheel.
 - Control UI/Gateway: keep long-running dashboard WebSocket sessions alive with protocol pings and keep Stop available after reconnect or reload by recovering session-scoped active-run abort state. Fixes #70991. Thanks @alexandre-leng.
