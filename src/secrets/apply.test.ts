@@ -308,6 +308,58 @@ describe("secrets apply", () => {
     expect(nextEnv).toContain("UNRELATED=value");
   });
 
+  it("preserves auth-profile tokenRef during provider scrub", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:bot": {
+          type: "token",
+          provider: "openai",
+          token: "sk-token-plaintext", // pragma: allowlist secret
+          tokenRef: OPENAI_API_KEY_ENV_REF,
+        },
+      },
+    });
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: createOneWayScrubOptions(),
+    });
+
+    await runSecretsApply({ plan, env: fixture.env, write: true });
+
+    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+      profiles: { "openai:bot": { token?: string; tokenRef?: unknown } };
+    };
+    expect(nextAuthStore.profiles["openai:bot"].token).toBeUndefined();
+    expect(nextAuthStore.profiles["openai:bot"].tokenRef).toEqual(OPENAI_API_KEY_ENV_REF);
+  });
+
+  it("scrubs malformed auth-profile ref residue during provider scrub", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-openai-plaintext", // pragma: allowlist secret
+          keyRef: "secretref-managed", // pragma: allowlist secret
+        },
+      },
+    });
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: createOneWayScrubOptions(),
+    });
+
+    await runSecretsApply({ plan, env: fixture.env, write: true });
+
+    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+      profiles: { "openai:default": { key?: string; keyRef?: unknown } };
+    };
+    expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
+    expect(nextAuthStore.profiles["openai:default"].keyRef).toBeUndefined();
+  });
+
   it("skips exec SecretRef checks during dry-run unless explicitly allowed", async () => {
     if (process.platform === "win32") {
       return;

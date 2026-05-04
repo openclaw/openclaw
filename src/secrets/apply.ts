@@ -15,7 +15,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
-import type { SecretProviderConfig } from "../config/types.secrets.js";
+import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
@@ -409,6 +409,13 @@ function scrubAuthStoresForProviderTargets(params: {
         }
         if (profile.valueField in profile.profile) {
           delete profile.profile[profile.valueField];
+          mutated = true;
+        }
+        if (
+          profile.refField in profile.profile &&
+          coerceSecretRef(profile.refValue, params.nextConfig.secrets?.defaults) === null
+        ) {
+          delete profile.profile[profile.refField];
           mutated = true;
         }
         continue;
