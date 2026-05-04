@@ -1,0 +1,112 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildCommandPayloadCandidates,
+  detectCarriedShellBuiltinArgv,
+  detectCommandCarrierArgv,
+  detectEnvSplitStringFlag,
+  detectInlineEvalArgv,
+  detectInlineEvalInSegments,
+  detectShellWrapperThroughCarrierArgv,
+} from "./risks.js";
+
+describe("command-analysis risks", () => {
+  it("detects inline eval through transparent carriers", () => {
+    expect(detectInlineEvalArgv(["python3", "-c", "print(1)"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["sudo", "python3", "-c", "print(1)"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["sudo", "-u", "root", "python3", "-c", "print(1)"])?.flag).toBe(
+      "-c",
+    );
+    expect(detectInlineEvalArgv(["env", "sudo", "python3", "-c", "print(1)"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["command", "node", "--eval", "1"])?.flag).toBe("--eval");
+    expect(detectInlineEvalArgv(["env", "-S", 'python3 -c "print(1)"'])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["python3", "script.py"])).toBeNull();
+  });
+
+  it("keeps carrier inline eval detection command-boundary aware", () => {
+    expect(detectInlineEvalArgv(["command", "echo", "python3", "-c", "print(1)"])).toBeNull();
+    expect(detectInlineEvalArgv(["sudo", "echo", "python3", "-c", "print(1)"])).toBeNull();
+    expect(detectInlineEvalArgv(["env", "-S", 'echo python3 -c "print(1)"'])).toBeNull();
+    expect(detectInlineEvalArgv(["command", "-v", "python3", "-c", "print(1)"])).toBeNull();
+  });
+
+  it("detects command carriers", () => {
+    expect(detectCommandCarrierArgv(["find", ".", "-exec", "rm", "{}", ";"])).toEqual([
+      { command: "find", flag: "-exec" },
+    ]);
+    expect(detectCommandCarrierArgv(["xargs", "-I{}", "sh", "-c", "id"])).toEqual([
+      { command: "xargs" },
+    ]);
+    expect(detectCommandCarrierArgv(["env", "-S", "sh -c id"])).toEqual([
+      { command: "env", flag: "-S" },
+    ]);
+  });
+
+  it("detects env split-string flag forms", () => {
+    expect(detectEnvSplitStringFlag(["env", "-S", "sh -c id"])).toBe("-S");
+    expect(detectEnvSplitStringFlag(["env", "-Ssh -c id"])).toBe("-S");
+    expect(detectEnvSplitStringFlag(["env", "--split-string=sh -c id"])).toBe("--split-string");
+    expect(detectEnvSplitStringFlag(["env", "sh", "-c", "id"])).toBeNull();
+  });
+
+  it("detects shell wrappers carried through prefix commands", () => {
+    const hit = detectShellWrapperThroughCarrierArgv(
+      ["sudo", "bash", "-lc", "id"],
+      (argv, startIndex) => argv[startIndex] === "-lc",
+    );
+    expect(hit).toBe("sudo");
+    expect(
+      detectShellWrapperThroughCarrierArgv(
+        ["sudo", "echo", "bash", "-lc", "id"],
+        (argv, startIndex) => argv[startIndex] === "-lc",
+      ),
+    ).toBeNull();
+  });
+
+  it("detects carried eval and source builtins", () => {
+    expect(detectCarriedShellBuiltinArgv(["builtin", "eval", "echo hi"])).toEqual({
+      kind: "eval",
+    });
+    expect(detectCarriedShellBuiltinArgv(["command", "source", "./env.sh"])).toEqual({
+      kind: "source",
+      command: "source",
+    });
+    expect(detectCarriedShellBuiltinArgv(["command", "echo", "eval"])).toBeNull();
+  });
+
+  it("builds executable payload candidates through carriers and shell wrappers", () => {
+    expect(buildCommandPayloadCandidates(["FOO=1", "sudo", "-E", "/approve", "abc"])).toEqual([
+      "/approve abc",
+    ]);
+    expect(buildCommandPayloadCandidates(["env", "-S", "bash -lc '/approve abc deny'"])).toEqual([
+      "bash -lc /approve abc deny",
+      "/approve abc deny",
+    ]);
+    expect(buildCommandPayloadCandidates(["exec", "-a", "openclaw", "/approve", "abc"])).toEqual([
+      "/approve abc",
+    ]);
+    expect(buildCommandPayloadCandidates(["command", "-v", "/approve"])).toEqual([
+      "command -v /approve",
+    ]);
+  });
+
+  it("checks both effective and original argv for segment inline eval", () => {
+    const hit = detectInlineEvalInSegments([
+      {
+        raw: "sudo python3 -c 'print(1)'",
+        argv: ["sudo", "python3", "-c", "print(1)"],
+        resolution: {
+          execution: {
+            rawExecutable: "sudo",
+            executableName: "sudo",
+          },
+          policy: {
+            rawExecutable: "sudo",
+            executableName: "sudo",
+          },
+          effectiveArgv: ["sudo", "python3", "-c", "print(1)"],
+        },
+      },
+    ]);
+    expect(hit?.normalizedExecutable).toBe("python3");
+  });
+});

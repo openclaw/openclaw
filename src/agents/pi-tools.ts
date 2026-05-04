@@ -7,6 +7,7 @@ import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.j
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -68,6 +69,7 @@ import {
 import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
+  collectExplicitDenylist,
   mergeAlsoAllowPolicy,
   normalizeToolName,
   resolveToolProfilePolicy,
@@ -83,11 +85,12 @@ const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
 type BashToolsModule = typeof import("./bash-tools.js");
 
-let bashToolsModulePromise: Promise<BashToolsModule> | undefined;
+const bashToolsModuleLoader = createLazyImportLoader<BashToolsModule>(
+  () => import("./bash-tools.js"),
+);
 
 function loadBashToolsModule(): Promise<BashToolsModule> {
-  bashToolsModulePromise ??= import("./bash-tools.js");
-  return bashToolsModulePromise;
+  return bashToolsModuleLoader.load();
 }
 
 function createLazyExecTool(defaults?: ExecToolDefaults): AnyAgentTool {
@@ -615,6 +618,17 @@ export function createOpenClawCodingTools(options?: {
     subagentPolicy,
     options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
   ]);
+  const pluginToolDenylist = collectExplicitDenylist([
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    sandboxToolPolicy,
+    subagentPolicy,
+  ]);
   const pluginToolsOnly = includeCoreTools
     ? []
     : resolveOpenClawPluginToolsForOptions({
@@ -635,6 +649,7 @@ export function createOpenClawCodingTools(options?: {
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
           sandboxed: !!sandbox,
           pluginToolAllowlist,
+          pluginToolDenylist,
           currentChannelId: options?.currentChannelId,
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,
@@ -703,6 +718,7 @@ export function createOpenClawCodingTools(options?: {
           sandboxed: !!sandbox,
           config: options?.config,
           pluginToolAllowlist,
+          pluginToolDenylist,
           currentChannelId: options?.currentChannelId,
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,

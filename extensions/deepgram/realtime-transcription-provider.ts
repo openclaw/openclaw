@@ -232,6 +232,8 @@ function createDeepgramRealtimeTranscriptionSession(
     reconnectDelayMs: DEEPGRAM_REALTIME_RECONNECT_DELAY_MS,
     maxQueuedBytes: DEEPGRAM_REALTIME_MAX_QUEUED_BYTES,
     connectTimeoutMessage: "Deepgram realtime transcription connection timeout",
+    connectClosedBeforeReadyMessage:
+      "Deepgram realtime transcription connection closed before ready",
     reconnectLimitMessage: "Deepgram realtime transcription reconnect limit reached",
     sendAudio: (audio, transport) => {
       transport.sendBinary(audio);

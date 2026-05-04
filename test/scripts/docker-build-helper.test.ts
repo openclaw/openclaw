@@ -19,6 +19,8 @@ const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs";
+const BUNDLED_PLUGIN_INSTALL_UNINSTALL_RUNTIME_SMOKE_PATH =
+  "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs";
 const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
 const PLUGINS_DOCKER_SWEEP_PATH = "scripts/e2e/lib/plugins/sweep.sh";
 const PLUGINS_DOCKER_MARKETPLACE_PATH = "scripts/e2e/lib/plugins/marketplace.sh";
@@ -88,6 +90,8 @@ describe("docker build helper", () => {
     expect(liveCliBackend).toContain(
       'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"',
     );
+    expect(liveCliBackend).toContain("direct Codex CLI probe failed before OpenClaw gateway smoke");
+    expect(liveCliBackend).toContain("==> Direct Codex CLI probe ok");
     expect(liveCliBackend).not.toContain(
       'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
     );
@@ -208,11 +212,15 @@ describe("docker build helper", () => {
     const runner = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH, "utf8");
     const sweep = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH, "utf8");
     const probe = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH, "utf8");
+    const runtimeSmoke = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_RUNTIME_SMOKE_PATH, "utf8");
 
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX");
+    expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
     expect(runner).toContain("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
     expect(probe).toContain('"openclaw.plugin.json"');
+    expect(runtimeSmoke).toContain("process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
+    expect(runtimeSmoke).toContain("900000");
     expect(sweep).toContain("read -r plugin_id plugin_dir requires_config");
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins install "$plugin_id"');
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force');
@@ -269,11 +277,16 @@ describe("docker build helper", () => {
     const clawhub = readFileSync(PLUGINS_DOCKER_CLAWHUB_PATH, "utf8");
 
     expect(runner).toContain("scripts/e2e/lib/plugins/sweep.sh");
+    expect(runner).toContain("OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB");
     expect(sweep).toContain("scripts/e2e/lib/plugins/clawhub.sh");
     expect(clawhub).toContain("start_clawhub_fixture_server()");
     expect(clawhub).toContain('OPENCLAW_CLAWHUB_URL="http://127.0.0.1:');
+    expect(clawhub).toContain("OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB");
+    expect(clawhub).toContain("OPENCLAW_PLUGINS_E2E_LIVE_NPM_REGISTRY");
     expect(clawhub).toContain("live ClawHub can rate-limit CI");
-    expect(clawhub).toContain('[[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]');
+    expect(clawhub).toContain('[[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]');
+    expect(clawhub).toContain("Ignoring ambient ClawHub URL for fixture-mode plugin E2E");
+    expect(clawhub).toContain("unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL");
   });
 
   it("covers plugin install/update sources in the Docker plugin sweep", () => {
@@ -290,7 +303,8 @@ describe("docker build helper", () => {
     expect(sweep).toContain('plugins install "npm:@openclaw/demo-plugin-npm@0.0.1"');
     expect(sweep).toContain("plugins update demo-plugin-npm");
     expect(assertions).toContain("demo-plugin-npm is up to date (0.0.1).");
-    expect(npmRegistry).toContain('"dist-tags": { latest: entry.version }');
+    expect(npmRegistry).toContain('"dist-tags": { latest: entry.latestVersion }');
+    expect(npmRegistry).toContain("existing.latestVersion = version");
     expect(npmRegistry).toContain("packageArgs.length % 3");
 
     expect(sweep).toContain('plugins install "git:$git_update_repo_url@main"');
@@ -299,6 +313,10 @@ describe("docker build helper", () => {
 
     expect(clawhub).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
     expect(clawhub).toContain('plugins update "$CLAWHUB_PLUGIN_ID"');
+    expect(clawhub).toContain("clawhub:@openclaw/kitchen-sink");
     expect(assertions).toContain("clawhub-updated");
+    expect(assertions).toContain("record.clawpackSha256");
+    expect(assertions).toContain("record.artifactKind");
+    expect(assertions).toContain("record.npmIntegrity");
   });
 });

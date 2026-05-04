@@ -111,11 +111,27 @@ export const slackChannelConfigUiHints = {
   },
   "streaming.nativeTransport": {
     label: "Slack Native Streaming",
-    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Requires a reply thread target; top-level DMs stay on the non-thread fallback path.",
+    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Native streaming and Slack assistant thread status require a reply thread target; top-level DMs can still use draft post-and-edit preview streaming.",
   },
   "streaming.preview.toolProgress": {
     label: "Slack Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
+  },
+  "streaming.progress.label": {
+    label: "Slack Progress Label",
+    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
+  },
+  "streaming.progress.labels": {
+    label: "Slack Progress Label Pool",
+    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
+  },
+  "streaming.progress.maxLines": {
+    label: "Slack Progress Max Lines",
+    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+  },
+  "streaming.progress.toolProgress": {
+    label: "Slack Progress Tool Lines",
+    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",

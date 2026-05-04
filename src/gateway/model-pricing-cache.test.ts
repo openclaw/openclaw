@@ -834,6 +834,54 @@ describe("model-pricing-cache", () => {
     stop();
   });
 
+  it("aborts in-flight bootstrap pricing fetches after stop", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const abortedUrls: string[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(
+        (input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const url =
+              typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            const signal = init?.signal;
+            expect(signal).toBeDefined();
+            signal?.addEventListener(
+              "abort",
+              () => {
+                abortedUrls.push(url);
+                reject(signal.reason);
+              },
+              { once: true },
+            );
+          }),
+      ),
+    );
+
+    try {
+      const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+
+      await vi.dynamicImportSettled();
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      stop();
+      await vi.waitFor(() => expect(abortedUrls).toHaveLength(2));
+      await vi.dynamicImportSettled();
+
+      expect(setTimeoutSpy.mock.calls.some(([, delay]) => delay === 24 * 60 * 60_000)).toBe(false);
+      expect(
+        getCachedGatewayModelPricing({ provider: "anthropic", model: "claude-opus-4-6" }),
+      ).toBeUndefined();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("does not bootstrap remote pricing when pricing is disabled", async () => {
     const config = {
       agents: {

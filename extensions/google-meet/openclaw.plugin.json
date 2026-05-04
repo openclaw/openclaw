@@ -28,7 +28,7 @@
     },
     "defaultMode": {
       "label": "Default Mode",
-      "help": "Realtime voice is the default."
+      "help": "Agent uses realtime transcription plus regular OpenClaw TTS. Bidi uses the realtime voice model directly. Transcribe observes only."
     },
     "chrome.audioBackend": {
       "label": "Chrome Audio Backend",
@@ -143,12 +143,17 @@
       "label": "Voice Call Intro Message",
       "advanced": true
     },
+    "realtime.strategy": {
+      "label": "Realtime Strategy",
+      "help": "Legacy realtime alias setting. Use mode=agent or mode=bidi for new Meet joins."
+    },
     "realtime.provider": {
-      "label": "Realtime Provider",
-      "help": "Defaults to OpenAI; uses OPENAI_API_KEY when no provider config is set."
+      "label": "Speech Provider",
+      "help": "Agent mode uses this for realtime transcription. Bidi mode uses it as the realtime voice provider."
     },
     "realtime.model": {
-      "label": "Realtime Model",
+      "label": "Bidi Realtime Model",
+      "help": "Only used by mode=bidi. Agent mode answers with the configured OpenClaw agent and regular TTS.",
       "advanced": true
     },
     "realtime.instructions": {
@@ -223,8 +228,8 @@
       },
       "defaultMode": {
         "type": "string",
-        "enum": ["realtime", "transcribe"],
-        "default": "realtime"
+        "enum": ["agent", "bidi", "transcribe"],
+        "default": "agent"
       },
       "chrome": {
         "type": "object",
@@ -404,6 +409,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "strategy": {
+            "type": "string",
+            "enum": ["agent", "bidi"],
+            "default": "agent"
+          },
           "provider": {
             "type": "string",
             "default": "openai"
@@ -413,7 +423,7 @@
           },
           "instructions": {
             "type": "string",
-            "default": "You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call openclaw_agent_consult before answering."
+            "default": "You are joining a private Google Meet as an OpenClaw voice transport. Keep spoken replies brief and natural. In agent mode, wait for OpenClaw consult results and speak them exactly. In bidi mode, answer directly and call openclaw_agent_consult for deeper reasoning, current information, or tools."
           },
           "introMessage": {
             "type": "string",

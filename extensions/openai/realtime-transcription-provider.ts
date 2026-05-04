@@ -72,8 +72,16 @@ function createOpenAIRealtimeTranscriptionSession(
 ): RealtimeTranscriptionSession {
   let pendingTranscript = "";
 
-  const handleEvent = (event: RealtimeEvent) => {
+  const handleEvent = (
+    event: RealtimeEvent,
+    transport: RealtimeTranscriptionWebSocketTransport,
+  ) => {
     switch (event.type) {
+      case "session.updated":
+      case "transcription_session.updated":
+        transport.markReady();
+        return;
+
       case "conversation.item.input_audio_transcription.delta":
         if (event.delta) {
           pendingTranscript += event.delta;
@@ -95,7 +103,12 @@ function createOpenAIRealtimeTranscriptionSession(
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
-        config.onError?.(new Error(detail));
+        const error = new Error(detail);
+        if (!transport.isReady()) {
+          transport.failConnect(error);
+        } else {
+          config.onError?.(error);
+        }
         return;
       }
 
@@ -121,11 +134,11 @@ function createOpenAIRealtimeTranscriptionSession(
       Authorization: `Bearer ${config.apiKey}`,
       "OpenAI-Beta": "realtime=v1",
     },
-    readyOnOpen: true,
     connectTimeoutMs: OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS,
     maxReconnectAttempts: OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS,
     reconnectDelayMs: OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS,
     connectTimeoutMessage: "OpenAI realtime transcription connection timeout",
+    connectClosedBeforeReadyMessage: "OpenAI realtime transcription connection closed before ready",
     reconnectLimitMessage: "OpenAI realtime transcription reconnect limit reached",
     sendAudio: (audio, transport) => {
       transport.sendJson({

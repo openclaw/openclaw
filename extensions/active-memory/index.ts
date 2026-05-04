@@ -46,6 +46,7 @@ const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
 const TIMEOUT_PARTIAL_DATA_GRACE_MS = 50;
+const TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS = 25;
 
 const NO_RECALL_VALUES = new Set([
   "",
@@ -56,11 +57,20 @@ const NO_RECALL_VALUES = new Set([
   "no relevant memory",
   "no relevant memories",
   "timeout",
+  "timed out",
+  "request timed out",
+  "llm request timed out",
+  "the llm request timed out",
   "[]",
   "{}",
   "null",
   "n/a",
 ]);
+
+const TIMEOUT_BOILERPLATE_PATTERNS = [
+  /^(?:error:\s*)?(?:the\s+)?(?:llm|model|request|operation|agent)\s+(?:request\s+)?timed out\b/i,
+  /^(?:error:\s*)?active-memory timeout after \d+ms\b/i,
+];
 
 const RECALLED_CONTEXT_LINE_PATTERNS = [
   /^🧩\s*active memory:/i,
@@ -207,6 +217,16 @@ type RecallSubagentResult = {
   rawReply: string;
   transcriptPath?: string;
   searchDebug?: ActiveMemorySearchDebug;
+};
+
+type TerminalMemorySearchResult = {
+  status: "empty";
+  searchDebug?: ActiveMemorySearchDebug;
+};
+
+type TerminalMemorySearchWatch = {
+  promise: Promise<TerminalMemorySearchResult>;
+  stop: () => void;
 };
 
 type CachedActiveRecallResult = {
@@ -437,7 +457,7 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
         agentId: params.agentId,
       },
     );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath);
+    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
     let bestMatch:
       | {
           sessionKey: string;
@@ -486,8 +506,16 @@ function resolveRecallRunChannelContext(params: {
 } {
   const explicitChannel = normalizeOptionalString(params.channelId);
   const explicitProvider = normalizeOptionalString(params.messageProvider);
+  // A channelId that contains ":" is a scoped conversation id (e.g. Telegram
+  // forum-topic "-100123:topic:77"), not a runnable channel name. Using it as
+  // the embedded recall run's channel causes bundled-plugin dirName validation
+  // to throw because ":" is not allowed in directory names (#76704).
+  const runnableExplicitChannel =
+    explicitChannel && !explicitChannel.includes(":") ? explicitChannel : undefined;
   const trustedExplicitChannel =
-    explicitChannel && explicitChannel !== explicitProvider ? explicitChannel : undefined;
+    runnableExplicitChannel && runnableExplicitChannel !== explicitProvider
+      ? runnableExplicitChannel
+      : undefined;
   const resolveReturnValue = (params: {
     resolvedChannel?: string;
     resolvedChannelStrength?: "strong" | "weak";
@@ -498,13 +526,14 @@ function resolveRecallRunChannelContext(params: {
       messageChannel:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
-        explicitChannel ??
+        runnableExplicitChannel ??
+        explicitProvider ??
         params.resolvedChannel,
       messageProvider:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
-        explicitChannel ??
+        runnableExplicitChannel ??
         params.resolvedChannel,
     };
   };
@@ -526,7 +555,7 @@ function resolveRecallRunChannelContext(params: {
         agentId: params.agentId,
       },
     );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath);
+    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
     const sessionEntry = resolveSessionStoreEntry({
       store,
       sessionKey: resolvedSessionKey,
@@ -1384,7 +1413,7 @@ async function persistPluginStatusLines(params: {
       agentId ? { agentId } : undefined,
     );
     if (!params.statusLine && !debugLine) {
-      const store = params.api.runtime.agent.session.loadSessionStore(storePath);
+      const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
       const existingEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
       const hasActiveMemoryEntry = Array.isArray(existingEntry?.pluginDebugEntries)
         ? existingEntry.pluginDebugEntries.some((entry) => entry?.pluginId === "active-memory")
@@ -1549,6 +1578,41 @@ function extractActiveMemorySearchDebugFromSessionRecord(
   };
 }
 
+function extractTerminalMemorySearchResultFromSessionRecord(
+  value: unknown,
+): TerminalMemorySearchResult | undefined {
+  const record = asRecord(value);
+  const nestedMessage = asRecord(record?.message);
+  const topLevelMessage =
+    record?.role === "toolResult" ||
+    record?.toolName === "memory_search" ||
+    record?.toolName === "memory_recall"
+      ? record
+      : undefined;
+  const message = nestedMessage ?? topLevelMessage;
+  if (!message) {
+    return undefined;
+  }
+  const role = normalizeOptionalString(message.role);
+  const toolName = normalizeOptionalString(message.toolName);
+  if (role !== "toolResult" || (toolName !== "memory_search" && toolName !== "memory_recall")) {
+    return undefined;
+  }
+  const details = asRecord(message.details);
+  const debug = extractActiveMemorySearchDebugFromSessionRecord(value);
+  const results = Array.isArray(details?.results) ? details.results : undefined;
+  const disabled = details?.disabled === true;
+  const unavailable =
+    disabled || Boolean(debug?.warning) || Boolean(debug?.error) || Boolean(details?.error);
+  const debugHits =
+    typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined;
+  const zeroHitSearch = results !== undefined ? results.length === 0 : debugHits === 0;
+  if (unavailable || zeroHitSearch) {
+    return { status: "empty", searchDebug: debug };
+  }
+  return undefined;
+}
+
 async function readActiveMemorySearchDebug(
   sessionFile: string,
   limits?: TranscriptReadLimits,
@@ -1565,6 +1629,93 @@ async function readActiveMemorySearchDebug(
     },
   });
   return found;
+}
+
+async function readTerminalMemorySearchResult(
+  sessionFile: string,
+  limits?: TranscriptReadLimits,
+): Promise<TerminalMemorySearchResult | undefined> {
+  let found: TerminalMemorySearchResult | undefined;
+  await streamBoundedTranscriptJsonl({
+    sessionFile,
+    limits,
+    onRecord: (record) => {
+      const result = extractTerminalMemorySearchResultFromSessionRecord(record);
+      if (result) {
+        found = result;
+        return true;
+      }
+      return false;
+    },
+  });
+  return found;
+}
+
+function watchTerminalMemorySearchResult(params: {
+  getSessionFile: () => string | undefined;
+  abortSignal: AbortSignal;
+}): TerminalMemorySearchWatch {
+  let stopped = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let inFlight = false;
+  let resolveWatch: (result: TerminalMemorySearchResult) => void = () => {};
+  const stop = () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = undefined;
+    }
+    params.abortSignal.removeEventListener("abort", onAbort);
+  };
+  const finish = (result: TerminalMemorySearchResult) => {
+    stop();
+    resolveWatch(result);
+  };
+  const schedule = () => {
+    if (stopped) {
+      return;
+    }
+    timeoutId = setTimeout(tick, TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS);
+    timeoutId.unref?.();
+  };
+  const tick = async () => {
+    if (stopped || inFlight) {
+      return;
+    }
+    if (params.abortSignal.aborted) {
+      stop();
+      return;
+    }
+    inFlight = true;
+    try {
+      const sessionFile = params.getSessionFile();
+      const result = sessionFile ? await readTerminalMemorySearchResult(sessionFile) : undefined;
+      if (result) {
+        finish(result);
+        return;
+      }
+    } catch {
+      // Transcript polling is opportunistic; normal timeout handling remains authoritative.
+    } finally {
+      inFlight = false;
+    }
+    schedule();
+  };
+  function onAbort() {
+    stop();
+  }
+  const promise = new Promise<TerminalMemorySearchResult>((resolve) => {
+    resolveWatch = resolve;
+    params.abortSignal.addEventListener("abort", onAbort, { once: true });
+    void tick();
+  });
+  return {
+    promise,
+    stop,
+  };
 }
 
 function normalizeSearchDebug(value: unknown): ActiveMemorySearchDebug | undefined {
@@ -1777,13 +1928,21 @@ function normalizeNoRecallValue(value: string): boolean {
   return NO_RECALL_VALUES.has(value.trim().toLowerCase());
 }
 
+function isTimeoutBoilerplateSummary(value: string): boolean {
+  return TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value));
+}
+
 function normalizeActiveSummary(rawReply: string): string | null {
   const trimmed = rawReply.trim();
   if (normalizeNoRecallValue(trimmed)) {
     return null;
   }
   const singleLine = trimmed.replace(/\s+/g, " ").trim();
-  if (!singleLine || normalizeNoRecallValue(singleLine)) {
+  if (
+    !singleLine ||
+    normalizeNoRecallValue(singleLine) ||
+    isTimeoutBoilerplateSummary(singleLine)
+  ) {
     return null;
   }
   return singleLine;
@@ -2123,6 +2282,7 @@ async function runRecallSubagent(params: {
 
   try {
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
+    const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
     const result = await params.api.runtime.agent.runEmbeddedPiAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
@@ -2136,7 +2296,7 @@ async function runRecallSubagent(params: {
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
-      timeoutMs: params.config.timeoutMs,
+      timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
       toolsAllow: ["memory_recall", "memory_search", "memory_get"],
@@ -2299,6 +2459,7 @@ async function maybeResolveActiveRecall(params: {
     );
   });
 
+  let terminalMemorySearchWatch: TerminalMemorySearchWatch | undefined;
   try {
     const subagentPromise = runRecallSubagent({
       ...params,
@@ -2308,11 +2469,20 @@ async function maybeResolveActiveRecall(params: {
         sessionFile = value;
       },
     });
+    terminalMemorySearchWatch = watchTerminalMemorySearchResult({
+      getSessionFile: () => sessionFile,
+      abortSignal: controller.signal,
+    });
     // Silently catch late rejections after timeout so they don't become
     // unhandled promise rejections.
     subagentPromise.catch(() => undefined);
 
-    const raceResult = await Promise.race([subagentPromise, timeoutPromise]);
+    const raceResult = await Promise.race([
+      subagentPromise,
+      timeoutPromise,
+      terminalMemorySearchWatch.promise,
+    ]);
+    terminalMemorySearchWatch.stop();
 
     if (raceResult === TIMEOUT_SENTINEL) {
       const result = await buildTimeoutRecallResult({
@@ -2335,6 +2505,33 @@ async function maybeResolveActiveRecall(params: {
         searchDebug: result.searchDebug,
       });
       recordCircuitBreakerTimeout(cbKey);
+      return result;
+    }
+
+    if ("status" in raceResult) {
+      controller.abort(new Error("active-memory terminal memory search result"));
+      const result: ActiveRecallResult = {
+        status: raceResult.status,
+        elapsedMs: Date.now() - startedAt,
+        summary: null,
+        searchDebug: raceResult.searchDebug,
+      };
+      if (params.config.logging) {
+        params.api.logger.info?.(
+          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=0`,
+        );
+      }
+      await persistPluginStatusLines({
+        api: params.api,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        statusLine: buildPluginStatusLine({ result, config: params.config }),
+        searchDebug: result.searchDebug,
+      });
+      if (shouldCacheResult(result)) {
+        setCachedResult(cacheKey, result, params.config.cacheTtlMs);
+      }
+      resetCircuitBreaker(cbKey);
       return result;
     }
 
@@ -2423,6 +2620,7 @@ async function maybeResolveActiveRecall(params: {
     });
     return result;
   } finally {
+    terminalMemorySearchWatch?.stop();
     clearTimeout(timeoutId);
   }
 }
@@ -2649,7 +2847,7 @@ export default definePluginEntry({
   },
 });
 
-export const __testing = {
+const testing = {
   buildCacheKey,
   buildCircuitBreakerKey,
   buildMetadata,
@@ -2679,3 +2877,5 @@ export const __testing = {
     return timeoutCircuitBreaker.get(key);
   },
 };
+
+export { testing as __testing };

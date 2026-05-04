@@ -562,11 +562,14 @@ function extractFinishExactlyDirective(text: string) {
 }
 
 function extractExactMarkerDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
+  const backtickedMatch = extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
   if (backtickedMatch) {
     return backtickedMatch;
   }
-  return extractLastCapture(text, /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
+  return extractLastCapture(
+    text,
+    /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
+  );
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {
@@ -1294,19 +1297,22 @@ async function buildResponsesPayload(
       },
     ]);
   }
-  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  const toolProgressReplyDirective = exactReplyDirective ?? exactMarkerDirective;
+  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
     if (!toolOutput) {
       return buildToolProgressReadEvents(QA_TOOL_PROGRESS_ERROR_PROMPT_RE);
     }
     return buildAssistantEvents(
-      hasToolErrorOutput(toolJson, toolOutput) ? exactReplyDirective : "BUG-TOOL-DID-NOT-FAIL",
+      hasToolErrorOutput(toolJson, toolOutput)
+        ? toolProgressReplyDirective
+        : "BUG-TOOL-DID-NOT-FAIL",
     );
   }
-  if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
     if (!toolOutput) {
       return buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE);
     }
-    return buildAssistantEvents(exactReplyDirective);
+    return buildAssistantEvents(toolProgressReplyDirective);
   }
   if (
     QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) &&
@@ -1465,6 +1471,12 @@ async function buildResponsesPayload(
     /silent snack recall check/i.test(allInputText)
   ) {
     if (!toolOutput) {
+      if (!hasDeclaredTool(body, "memory_recall")) {
+        return buildToolCallEventsWithArgs("memory_search", {
+          query: "QA movie night snack lemon pepper wings blue cheese",
+          maxResults: 3,
+        });
+      }
       return buildToolCallEventsWithArgs("memory_recall", {
         query: "QA movie night snack lemon pepper wings blue cheese",
         limit: 3,
@@ -1489,6 +1501,23 @@ async function buildResponsesPayload(
         return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
       }
       return buildAssistantEvents("NONE");
+    }
+    const results = Array.isArray(toolJson?.results)
+      ? (toolJson.results as Array<Record<string, unknown>>)
+      : [];
+    const first = results[0];
+    if (typeof first?.path === "string") {
+      const from =
+        typeof first.startLine === "number"
+          ? Math.max(1, first.startLine)
+          : typeof first.endLine === "number"
+            ? Math.max(1, first.endLine)
+            : 1;
+      return buildToolCallEventsWithArgs("memory_get", {
+        path: first.path,
+        from,
+        lines: 4,
+      });
     }
     const memorySnippet = Array.isArray(toolJson?.results)
       ? JSON.stringify(toolJson.results)

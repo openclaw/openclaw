@@ -897,6 +897,43 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
+  it("attaches shared command analysis to gateway exec approval requests", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "python3 -c 'print(1)'",
+        commandArgv: ["python3", "-c", "print(1)"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const request = requested?.payload as { id?: string; request?: { commandAnalysis?: unknown } };
+    expect(request.request?.commandAnalysis).toEqual(
+      expect.objectContaining({
+        commandCount: 1,
+        riskKinds: expect.arrayContaining(["inline-eval"]),
+        warningLines: expect.arrayContaining(["Contains inline-eval: python3 -c"]),
+      }),
+    );
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: request.id ?? "",
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+  });
+
   it("lists pending exec approvals", async () => {
     const { handlers, respond, context } = createExecApprovalFixture();
     const requestPromise = requestExecApproval({
@@ -2006,6 +2043,65 @@ describe("gateway healthHandlers.health cache freshness", () => {
       includeSensitive: false,
     });
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("preserves event-loop health sampled by the refresh path", async () => {
+    const eventLoop = {
+      degraded: true,
+      reasons: ["event_loop_delay" as const],
+      intervalMs: 2_000,
+      delayP99Ms: 1_500,
+      delayMaxMs: 1_800,
+      utilization: 0.2,
+      cpuCoreRatio: 0.1,
+    };
+    const replacementEventLoop = {
+      degraded: false,
+      reasons: [],
+      intervalMs: 1,
+      delayP99Ms: 0,
+      delayMaxMs: 0,
+      utilization: 0,
+      cpuCoreRatio: 0,
+    };
+    const fresh = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      eventLoop,
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+    const getEventLoopHealth = vi.fn(() => replacementEventLoop);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => null,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        getEventLoopHealth,
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(getEventLoopHealth).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ eventLoop }), undefined);
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {

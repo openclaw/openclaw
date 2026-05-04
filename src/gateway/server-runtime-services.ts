@@ -125,7 +125,6 @@ export function startGatewayRuntimeServices(params: {
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
   log: GatewayRuntimeServiceLogger;
-  pluginLookUpTable?: PluginMetadataRegistryView;
 }): {
   heartbeatRunner: HeartbeatRunner;
   channelHealthMonitor: ChannelHealthMonitor | null;
@@ -139,14 +138,7 @@ export function startGatewayRuntimeServices(params: {
   return {
     heartbeatRunner: createNoopHeartbeatRunner(),
     channelHealthMonitor,
-    stopModelPricingRefresh:
-      !params.minimalTestGateway && !isVitestRuntimeEnv()
-        ? startGatewayModelPricingRefreshOnDemand({
-            config: params.cfgAtStart,
-            ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
-            log: params.log,
-          })
-        : () => {},
+    stopModelPricingRefresh: () => {},
   };
 }
 
@@ -156,17 +148,21 @@ export function activateGatewayScheduledServices(params: {
   deps: import("../cli/deps.types.js").CliDeps;
   sessionDeliveryRecoveryMaxEnqueuedAt: number;
   cron: { start: () => Promise<void> };
+  startCron?: boolean;
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
-}): { heartbeatRunner: HeartbeatRunner } {
+  pluginLookUpTable?: PluginMetadataRegistryView;
+}): { heartbeatRunner: HeartbeatRunner; stopModelPricingRefresh: () => void } {
   if (params.minimalTestGateway) {
-    return { heartbeatRunner: createNoopHeartbeatRunner() };
+    return { heartbeatRunner: createNoopHeartbeatRunner(), stopModelPricingRefresh: () => {} };
   }
   const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });
-  startGatewayCronWithLogging({
-    cron: params.cron,
-    logCron: params.logCron,
-  });
+  if (params.startCron !== false) {
+    startGatewayCronWithLogging({
+      cron: params.cron,
+      logCron: params.logCron,
+    });
+  }
   recoverPendingOutboundDeliveries({
     cfg: params.cfgAtStart,
     log: params.log,
@@ -176,5 +172,12 @@ export function activateGatewayScheduledServices(params: {
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
-  return { heartbeatRunner };
+  const stopModelPricingRefresh = !isVitestRuntimeEnv()
+    ? startGatewayModelPricingRefreshOnDemand({
+        config: params.cfgAtStart,
+        ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+        log: params.log,
+      })
+    : () => {};
+  return { heartbeatRunner, stopModelPricingRefresh };
 }

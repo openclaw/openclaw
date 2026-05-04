@@ -25,6 +25,16 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     // Baileys loads jimp as an optional peer when it needs media thumbnails.
     new Set(["jimp"]),
   ],
+  [
+    "extensions/memory-lancedb",
+    // LanceDB imports apache-arrow at runtime through its peer dependency.
+    new Set(["apache-arrow"]),
+  ],
+  [
+    "extensions/tlon",
+    // The Tlon plugin manifest exposes the bundled skill from this package path.
+    new Set(["@tloncorp/tlon-skill"]),
+  ],
 ]);
 
 type PackageManifest = {
@@ -94,6 +104,11 @@ function listRuntimeFiles(root: string): string[] {
   };
   visit(root);
   return files.toSorted();
+}
+
+function readManifestText(root: string): string {
+  const manifestPath = path.join(root, "openclaw.plugin.json");
+  return fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath, "utf8") : "";
 }
 
 function packageNameForSpecifier(specifier: string): string | null {
@@ -239,6 +254,7 @@ describe("extension runtime dependency manifests", () => {
       const allowedIndirect = INDIRECT_RUNTIME_DEPENDENCIES.get(extensionDir) ?? new Set<string>();
       const runtimeText = listRuntimeFiles(extensionDir)
         .map((filePath) => fs.readFileSync(filePath, "utf8"))
+        .concat(readManifestText(extensionDir))
         .join("\n");
 
       const unused = declared.filter(

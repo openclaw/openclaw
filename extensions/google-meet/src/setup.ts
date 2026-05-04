@@ -87,6 +87,7 @@ export function getGoogleMeetSetupStatus(
     fullConfig?: unknown;
     mode?: GoogleMeetMode;
     transport?: GoogleMeetTransport;
+    twilioDialInNumber?: string;
   },
 ): {
   ok: boolean;
@@ -99,6 +100,7 @@ export function getGoogleMeetSetupStatus(
     fullConfig?: unknown;
     mode?: GoogleMeetMode;
     transport?: GoogleMeetTransport;
+    twilioDialInNumber?: string;
   },
 ) {
   const checks: SetupCheck[] = [];
@@ -107,7 +109,8 @@ export function getGoogleMeetSetupStatus(
   const mode = options?.mode ?? config.defaultMode;
   const transport = options?.transport ?? config.defaultTransport;
   const needsChromeRealtimeAudio =
-    mode === "realtime" && (transport === "chrome" || transport === "chrome-node");
+    (mode === "agent" || mode === "bidi") &&
+    (transport === "chrome" || transport === "chrome-node");
   const pluginEntries = asRecord(asRecord(fullConfig.plugins).entries);
   const pluginAllow = asRecord(fullConfig.plugins).allow;
   const voiceCallEntry = asRecord(pluginEntries["voice-call"]);
@@ -140,17 +143,24 @@ export function getGoogleMeetSetupStatus(
   });
 
   if (needsChromeRealtimeAudio) {
+    const hasCommandPair = Boolean(
+      config.chrome.audioInputCommand && config.chrome.audioOutputCommand,
+    );
+    const hasExternalBridge = Boolean(config.chrome.audioBridgeCommand);
+    const agentModeExternalBridgeInvalid = mode === "agent" && hasExternalBridge;
     checks.push({
       id: "audio-bridge",
-      ok: Boolean(
-        config.chrome.audioBridgeCommand ||
-        (config.chrome.audioInputCommand && config.chrome.audioOutputCommand),
-      ),
-      message: config.chrome.audioBridgeCommand
-        ? "Chrome audio bridge command configured"
-        : config.chrome.audioInputCommand && config.chrome.audioOutputCommand
-          ? `Chrome command-pair realtime audio bridge configured (${config.chrome.audioFormat})`
-          : "Chrome realtime audio bridge not configured",
+      ok:
+        mode === "agent"
+          ? hasCommandPair && !agentModeExternalBridgeInvalid
+          : hasExternalBridge || hasCommandPair,
+      message: agentModeExternalBridgeInvalid
+        ? "Chrome agent mode requires chrome.audioInputCommand and chrome.audioOutputCommand; chrome.audioBridgeCommand is bidi-only"
+        : hasExternalBridge
+          ? "Chrome audio bridge command configured"
+          : hasCommandPair
+            ? `Chrome command-pair talk-back audio bridge configured (${config.chrome.audioFormat})`
+            : "Chrome talk-back audio bridge not configured",
     });
   } else if (transport === "chrome" || transport === "chrome-node") {
     checks.push({
@@ -190,6 +200,21 @@ export function getGoogleMeetSetupStatus(
         config.chrome.waitForInCallMs > 0
           ? `Realtime intro waits up to ${config.chrome.waitForInCallMs}ms for the Meet tab to be in-call`
           : "Set chrome.waitForInCallMs to delay realtime intro until the Meet tab is in-call",
+    });
+  }
+
+  if (transport === "twilio") {
+    const hasRequestDialPlan = Boolean(options?.twilioDialInNumber);
+    const hasDefaultDialPlan = Boolean(config.twilio.defaultDialInNumber);
+    const hasDialPlan = hasRequestDialPlan || hasDefaultDialPlan;
+    checks.push({
+      id: "twilio-dial-plan",
+      ok: hasDialPlan,
+      message: hasRequestDialPlan
+        ? "Twilio request includes a Meet dial-in number"
+        : hasDefaultDialPlan
+          ? "Twilio default Meet dial-in number is configured"
+          : "Twilio joins require a Meet dial-in phone number; pass dialInNumber with optional pin/dtmfSequence or configure twilio.defaultDialInNumber",
     });
   }
 

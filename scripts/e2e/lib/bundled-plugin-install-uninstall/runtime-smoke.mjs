@@ -9,7 +9,7 @@ const TOKEN = "bundled-plugin-runtime-smoke-token";
 const WATCHDOG_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS, 1000);
 const READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS,
-  420000,
+  900000,
 );
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS, 60000);
 const RPC_READY_TIMEOUT_MS = readPositiveInt(

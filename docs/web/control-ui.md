@@ -155,8 +155,10 @@ Imported themes are stored only in the current browser profile. They are not wri
     - Assistant/generated images are persisted as managed media references and served back through authenticated Gateway media URLs, so reloads do not depend on raw base64 image payloads staying in the chat history response.
     - `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply`.
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
+    - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
+    - Typing `/new` in the Control UI creates and switches to the same fresh dashboard session as New Chat. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.models` is present, that allowlist drives the picker. Otherwise the picker shows explicit `models.providers.*.models` entries plus providers with usable auth. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
     - When fresh Gateway session usage reports show high context pressure, the chat composer area shows a context notice and, at recommended compaction levels, a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
 
@@ -245,6 +247,22 @@ Use `trusted` only when the embedded document genuinely needs same-origin behavi
 </Warning>
 
 Absolute external `http(s)` embed URLs stay blocked by default. If you intentionally want `[embed url="https://..."]` to load third-party pages, set `gateway.controlUi.allowExternalEmbedUrls: true`.
+
+## Chat message width
+
+Grouped chat messages use a readable default max-width. Wide-monitor deployments can override it without patching bundled CSS by setting `gateway.controlUi.chatMessageMaxWidth`:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      chatMessageMaxWidth: "min(1280px, 82%)",
+    },
+  },
+}
+```
+
+The value is validated before it reaches the browser. Supported values include plain lengths and percentages such as `960px` or `82%`, plus constrained `min(...)`, `max(...)`, `clamp(...)`, `calc(...)`, and `fit-content(...)` width expressions.
 
 ## Tailnet access (recommended)
 

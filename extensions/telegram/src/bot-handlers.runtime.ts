@@ -14,7 +14,11 @@ import {
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { TelegramGroupConfig, TelegramTopicConfig } from "openclaw/plugin-sdk/config-types";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "openclaw/plugin-sdk/config-types";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
@@ -30,7 +34,7 @@ import {
   resolveSessionStoreEntry,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
+import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
@@ -72,6 +76,7 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  shouldUseTelegramDmThreadSession,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
@@ -143,7 +148,10 @@ export const registerTelegramHandlers = ({
     typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
-      : MEDIA_GROUP_TIMEOUT_MS;
+      : typeof telegramCfg.mediaGroupFlushMs === "number" &&
+          Number.isFinite(telegramCfg.mediaGroupFlushMs)
+        ? Math.max(10, Math.floor(telegramCfg.mediaGroupFlushMs))
+        : MEDIA_GROUP_TIMEOUT_MS;
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
@@ -320,7 +328,16 @@ export const registerTelegramHandlers = ({
       });
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
     const topicThreadId = resolvedThreadId ?? dmThreadId;
-    const { topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
+    const { groupConfig, topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
+    const directConfig = !params.isGroup
+      ? (groupConfig as TelegramDirectConfig | undefined)
+      : undefined;
+    let accountConfig = telegramCfg;
+    try {
+      accountConfig = resolveTelegramAccount({ cfg: runtimeCfg, accountId }).config;
+    } catch {
+      // Keep the startup snapshot when live config is temporarily unavailable.
+    }
     const { route } = resolveTelegramConversationRoute({
       cfg: runtimeCfg,
       accountId,
@@ -339,6 +356,7 @@ export const registerTelegramHandlers = ({
       senderId: params.senderId,
     });
     const threadKeys =
+      shouldUseTelegramDmThreadSession({ dmThreadId, accountConfig, directConfig, topicConfig }) &&
       dmThreadId != null
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
         : null;

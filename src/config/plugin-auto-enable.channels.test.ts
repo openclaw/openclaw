@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -38,6 +38,10 @@ function applyWithBluebubblesImessageConfig(extra?: {
     env: makeIsolatedEnv(),
   });
 }
+
+beforeEach(() => {
+  resetPluginAutoEnableTestState();
+});
 
 afterEach(() => {
   resetPluginAutoEnableTestState();
@@ -210,55 +214,79 @@ describe("applyPluginAutoEnable channels", () => {
     it("prefers an external plugin that declares preferOver for a bundled channel", () => {
       const result = applyPluginAutoEnable({
         config: {
-          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+          channels: { "legacy-bundled-chat": { token: "legacy" } },
         },
         env: makeIsolatedEnv(),
         manifestRegistry: makeRegistry([
-          { id: "qqbot", channels: ["qqbot"] },
           {
-            id: "openclaw-qqbot",
-            channels: ["qqbot"],
+            id: "legacy-bundled-chat",
+            channels: ["legacy-bundled-chat"],
+            origin: "bundled",
             channelConfigs: {
-              qqbot: {
+              "legacy-bundled-chat": {
                 schema: { type: "object" },
-                preferOver: ["qqbot"],
+                label: "Legacy Bundled Chat",
+              },
+            },
+          },
+          {
+            id: "openclaw-modern-chat",
+            channels: ["legacy-bundled-chat"],
+            channelConfigs: {
+              "legacy-bundled-chat": {
+                schema: { type: "object" },
+                label: "Modern Chat",
+                preferOver: ["legacy-bundled-chat"],
               },
             },
           },
         ]),
       });
 
-      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(false);
-      expect(result.changes.join("\n")).toContain("QQ Bot configured, enabled automatically.");
+      expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["legacy-bundled-chat"]?.enabled).toBe(false);
+      expect(result.changes.join("\n")).toContain("Modern Chat configured, enabled automatically.");
     });
 
     it("falls back to the bundled channel when the preferred external plugin is disabled", () => {
       const result = applyPluginAutoEnable({
         config: {
-          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
-          plugins: { entries: { "openclaw-qqbot": { enabled: false } } },
+          channels: { "legacy-bundled-chat": { token: "legacy" } },
+          plugins: { entries: { "openclaw-modern-chat": { enabled: false } } },
         },
         env: makeIsolatedEnv(),
         manifestRegistry: makeRegistry([
-          { id: "qqbot", channels: ["qqbot"] },
           {
-            id: "openclaw-qqbot",
-            channels: ["qqbot"],
+            id: "legacy-bundled-chat",
+            channels: ["legacy-bundled-chat"],
+            origin: "bundled",
             channelConfigs: {
-              qqbot: {
+              "legacy-bundled-chat": {
                 schema: { type: "object" },
-                preferOver: ["qqbot"],
+                label: "Legacy Bundled Chat",
+              },
+            },
+          },
+          {
+            id: "openclaw-modern-chat",
+            channels: ["legacy-bundled-chat"],
+            channelConfigs: {
+              "legacy-bundled-chat": {
+                schema: { type: "object" },
+                label: "Modern Chat",
+                preferOver: ["legacy-bundled-chat"],
               },
             },
           },
         ]),
       });
 
-      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(false);
-      expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
-      expect(result.config.channels?.qqbot?.enabled).toBe(true);
-      expect(result.changes.join("\n")).toContain("QQ Bot configured, enabled automatically.");
+      expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(false);
+      expect(result.config.plugins?.entries?.["legacy-bundled-chat"]).toBeUndefined();
+      expect(result.config.channels?.["legacy-bundled-chat"]?.enabled).toBe(true);
+      expect(result.changes.join("\n")).toContain(
+        "Legacy Bundled Chat configured, enabled automatically.",
+      );
     });
 
     it("does not auto-disable a lower-priority channel plugin that was explicitly selected", () => {
@@ -291,12 +319,7 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(true);
     });
 
-    it("does not add unknown channel to plugins.entries when no plugin claims it", () => {
-      // Previously, collectPluginIdsForConfiguredChannel fell back to returning the
-      // channel id as a plugin id when no plugin claimed the channel. This caused
-      // unknown channels to be incorrectly added to plugins.entries and plugins.allow.
-      // The correct behavior is to return [] when no plugin claims the channel, since
-      // a channel id is not a plugin id.
+    it("does not synthesize plugin entries when no installed manifest declares the channel", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: { "unknown-chan": { someKey: "value" } },
@@ -305,10 +328,9 @@ describe("applyPluginAutoEnable channels", () => {
         manifestRegistry: makeRegistry([]),
       });
 
-      // The channel id should NOT be added to plugins.entries as a plugin
       expect(result.config.plugins?.entries?.["unknown-chan"]).toBeUndefined();
-      // And it should NOT be added to plugins.allow either
-      expect(result.config.plugins?.allow ?? []).not.toContain("unknown-chan");
+      expect(result.config.plugins?.allow).toBeUndefined();
+      expect(result.changes).toEqual([]);
     });
   });
 

@@ -13,6 +13,8 @@ type DoctorConfigResult = {
   path?: string;
   shouldWriteConfig?: boolean;
   sourceConfigValid?: boolean;
+  sourceLastTouchedVersion?: string;
+  skipPluginValidationOnWrite?: boolean;
 };
 
 type DoctorHealthFlowContext = {
@@ -268,6 +270,43 @@ async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<vo
   });
 }
 
+async function runReleaseConfiguredPluginInstallsHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  if (!ctx.sourceConfigValid) {
+    return;
+  }
+  if (!ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { maybeRunConfiguredPluginInstallReleaseStep } =
+    await import("../commands/doctor/shared/release-configured-plugin-installs.js");
+  const { note } = await import("../terminal/note.js");
+  const { VERSION } = await import("../version.js");
+  const result = await maybeRunConfiguredPluginInstallReleaseStep({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
+  });
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+  if (!result.touchedConfig) {
+    return;
+  }
+  ctx.cfg = {
+    ...ctx.cfg,
+    meta: {
+      ...ctx.cfg.meta,
+      lastTouchedVersion: VERSION,
+      lastTouchedAt: new Date().toISOString(),
+    },
+  };
+}
+
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
@@ -295,8 +334,9 @@ async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> 
 }
 
 async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairSandboxImages, noteSandboxScopeWarnings } =
+  const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
+  await maybeRepairSandboxRegistryFiles(ctx.prompter);
   ctx.cfg = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
   noteSandboxScopeWarnings(ctx.cfg);
 }
@@ -430,6 +470,14 @@ async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<v
   noteWorkspaceStatus(ctx.cfg);
 }
 
+async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairSkillReadiness } = await import("../commands/doctor-skills.js");
+  ctx.cfg = await maybeRepairSkillReadiness({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+  });
+}
+
 async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteBootstrapFileSize } = await import("../commands/doctor-bootstrap-size.js");
   await noteBootstrapFileSize(ctx.cfg);
@@ -519,6 +567,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       afterWrite: { mode: "auto" },
       writeOptions: {
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true,
+        skipPluginValidation: ctx.configResult.skipPluginValidationOnWrite === true,
       },
     });
     logConfigUpdated(ctx.runtime);
@@ -600,6 +649,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:release-configured-plugin-installs",
+      label: "Configured plugin installs",
+      run: runReleaseConfiguredPluginInstallsHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:plugin-registry",
       label: "Plugin registry",
       run: runPluginRegistryHealth,
@@ -668,6 +722,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:workspace-status",
       label: "Workspace status",
       run: runWorkspaceStatusHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:skills",
+      label: "Skills",
+      run: runSkillsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",

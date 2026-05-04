@@ -19,6 +19,8 @@ export type PluginPackageJson = {
   openclaw?: {
     extensions?: string[];
     install?: {
+      defaultChoice?: string;
+      minHostVersion?: string;
       npmSpec?: string;
     };
     release?: {
@@ -32,8 +34,8 @@ export type PublishablePluginPackage = {
   packageDir: string;
   packageName: string;
   version: string;
-  channel: "stable" | "beta";
-  publishTag: "latest" | "beta";
+  channel: "stable" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta";
   installNpmSpec?: string;
 };
 
@@ -115,7 +117,7 @@ export function resolvePublishablePluginVersion(params: {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     params.validationErrors.push(
-      `${params.extensionId}: package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${version}".`,
+      `${params.extensionId}: package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${version}".`,
     );
     return null;
   }
@@ -218,6 +220,7 @@ export function collectPublishablePluginPackageErrors(
   const errors: string[] = [];
   const packageName = packageJson.name?.trim() ?? "";
   const packageVersion = packageJson.version?.trim() ?? "";
+  const installNpmSpec = normalizeOptionalString(packageJson.openclaw?.install?.npmSpec);
   const repositoryUrl =
     typeof packageJson.repository === "string"
       ? packageJson.repository.trim()
@@ -241,7 +244,7 @@ export function collectPublishablePluginPackageErrors(
     errors.push("package.json version must be non-empty.");
   } else if (parseReleaseVersion(packageVersion) === null) {
     errors.push(
-      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
+      `package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
     );
   }
   if (!Array.isArray(extensions) || extensions.length === 0) {
@@ -249,6 +252,9 @@ export function collectPublishablePluginPackageErrors(
   }
   if (extensions.some((entry) => typeof entry !== "string" || !entry.trim())) {
     errors.push("openclaw.extensions must contain only non-empty strings.");
+  }
+  if (!installNpmSpec) {
+    errors.push("openclaw.install.npmSpec must be a non-empty string for publishable plugins.");
   }
 
   return errors;

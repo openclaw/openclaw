@@ -9,6 +9,7 @@ import {
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
 } from "./provider-catalog.js";
+import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("openrouter provider hooks", () => {
   it("registers OpenRouter speech alongside model and media providers", async () => {
@@ -68,6 +69,53 @@ describe("openrouter provider hooks", () => {
         modelId: "openai/gpt-5.4",
       } as never),
     ).toBe("native");
+  });
+
+  it("advertises xhigh thinking for OpenRouter-routed DeepSeek V4 models", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openrouter",
+          modelId: "deepseek/deepseek-v4-pro",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(expectedV4Levels);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-flash",
+      } as never)?.defaultLevel,
+    ).toBe("high");
+    expect(
+      provider.supportsXHighThinking?.({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-pro",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+      } as never),
+    ).toBe(undefined);
+  });
+
+  it("exposes DeepSeek V4 thinking levels through the lightweight policy artifact", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-pro",
+      })?.levels.map((level) => level.id),
+    ).toContain("xhigh");
+    expect(
+      resolveThinkingProfile({
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+      }),
+    ).toBe(undefined);
   });
 
   it("canonicalizes stale OpenRouter /v1 config and runtime metadata", async () => {
@@ -217,6 +265,127 @@ describe("openrouter provider hooks", () => {
 
     expect(capturedPayload).toEqual({});
     expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("fills DeepSeek V4 reasoning_content for OpenRouter replay turns", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
+      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        const payload = {
+          messages: [
+            { role: "user", content: "read file" },
+            { role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] },
+            { role: "tool", content: "ok" },
+            { role: "assistant", content: "done" },
+          ],
+        };
+        void args[2]?.onPayload?.(payload, args[0]);
+        capturedPayload = payload;
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "deepseek/deepseek-v4-flash",
+      streamFn: baseStreamFn,
+      thinkingLevel: "xhigh",
+    } as never);
+
+    void wrapped?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "deepseek/deepseek-v4-flash",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "enabled" },
+      reasoning_effort: "max",
+      messages: [
+        { role: "user", content: "read file" },
+        {
+          role: "assistant",
+          tool_calls: [{ id: "call_1", type: "function" }],
+          reasoning_content: "",
+        },
+        { role: "tool", content: "ok" },
+        { role: "assistant", content: "done", reasoning_content: "" },
+      ],
+    });
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("recognizes full OpenRouter DeepSeek V4 refs but skips custom proxy routes", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
+      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        const payload = {
+          messages: [{ role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] }],
+        };
+        void args[2]?.onPayload?.(payload, args[0]);
+        payloads.push(payload);
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    const fullRef = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "openrouter/deepseek/deepseek-v4-pro",
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+    } as never);
+    void fullRef?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "openrouter/deepseek/deepseek-v4-pro",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    const customRoute = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "deepseek/deepseek-v4-pro",
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+    } as never);
+    void customRoute?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "deepseek/deepseek-v4-pro",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    expect(payloads[0]?.messages).toEqual([
+      {
+        role: "assistant",
+        tool_calls: [{ id: "call_1", type: "function" }],
+        reasoning_content: "",
+      },
+    ]);
+    expect(payloads[1]?.messages).toEqual([
+      { role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] },
+    ]);
   });
 
   it("strips OpenRouter-routed Anthropic assistant prefill when reasoning is enabled", async () => {

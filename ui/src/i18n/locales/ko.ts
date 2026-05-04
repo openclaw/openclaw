@@ -722,6 +722,16 @@ export const ko: TranslationMap = {
       dailyCsv: "일별 CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "사용량 캐시가 백그라운드에서 다시 빌드되고 있습니다. 표시된 합계가 최신이 아닐 수 있습니다.",
+      title: "{status}: 대기 중 {pending}, 오래됨 {stale}, 캐시됨 {cached}",
+      status: {
+        refreshing: "새로 고치는 중",
+        stale: "오래됨",
+        partial: "부분적",
+      },
+    },
     empty: {
       title: "날짜 범위부터 시작하세요",
       subtitle:

@@ -2,10 +2,12 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { OPENROUTER_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import {
+  createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createPayloadPatchStreamWrapper,
   stripTrailingAssistantPrefillMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -40,6 +42,15 @@ function shouldPatchAnthropicOpenRouterPayload(model: Parameters<StreamFn>[0]): 
   return (
     (api === undefined || api === "openai-completions") &&
     isOpenRouterAnthropicModelId(model.id) &&
+    isVerifiedOpenRouterRoute(model)
+  );
+}
+
+function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]): boolean {
+  const api = readString(model.api);
+  return (
+    (api === undefined || api === "openai-completions") &&
+    isOpenRouterDeepSeekV4ModelId(model.id) &&
     isVerifiedOpenRouterRoute(model)
   );
 }
@@ -106,6 +117,17 @@ function createOpenRouterAnthropicPrefillWrapper(baseStreamFn: StreamFn | undefi
   );
 }
 
+function createOpenRouterDeepSeekV4ThinkingWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
+): StreamFn | undefined {
+  return createDeepSeekV4OpenAICompatibleThinkingWrapper({
+    baseStreamFn,
+    thinkingLevel,
+    shouldPatchModel: shouldPatchDeepSeekV4OpenRouterPayload,
+  });
+}
+
 export function wrapOpenRouterProviderStream(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | null | undefined {
@@ -118,7 +140,9 @@ export function wrapOpenRouterProviderStream(
     : ctx.streamFn;
   const wrapStreamFn = OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn ?? undefined;
   if (!wrapStreamFn) {
-    return createOpenRouterAnthropicPrefillWrapper(routedStreamFn);
+    return createOpenRouterAnthropicPrefillWrapper(
+      createOpenRouterDeepSeekV4ThinkingWrapper(routedStreamFn, ctx.thinkingLevel),
+    );
   }
   const wrappedStreamFn =
     wrapStreamFn({
@@ -128,12 +152,16 @@ export function wrapOpenRouterProviderStream(
         ? undefined
         : ctx.thinkingLevel,
     }) ?? undefined;
-  return createOpenRouterAnthropicPrefillWrapper(wrappedStreamFn);
+  return createOpenRouterAnthropicPrefillWrapper(
+    createOpenRouterDeepSeekV4ThinkingWrapper(wrappedStreamFn, ctx.thinkingLevel),
+  );
 }
 
 export const __testing = {
+  isOpenRouterDeepSeekV4ModelId,
   isOpenRouterAnthropicModelId,
   isOpenRouterReasoningPayloadEnabled,
   isVerifiedOpenRouterRoute,
+  shouldPatchDeepSeekV4OpenRouterPayload,
   shouldPatchAnthropicOpenRouterPayload,
 };
