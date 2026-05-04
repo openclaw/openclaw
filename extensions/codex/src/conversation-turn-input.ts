@@ -78,6 +78,9 @@ function readLocalMediaPath(value: string | undefined): string | undefined {
   if (value.startsWith("file://")) {
     return value;
   }
+  if (path.isAbsolute(value) || path.win32.isAbsolute(value)) {
+    return value;
+  }
   return /^[a-z][a-z0-9+.-]*:/i.test(value) ? undefined : value;
 }
 

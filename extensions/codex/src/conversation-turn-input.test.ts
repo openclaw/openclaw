@@ -82,4 +82,24 @@ describe("codex conversation turn input", () => {
       { type: "localImage", path: "/tmp/OpenClaw QA/second.jpg" },
     ]);
   });
+
+  it("treats Windows media paths as Codex local image input", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "look",
+        event: {
+          content: "look",
+          channel: "webchat",
+          isGroup: false,
+          metadata: {
+            mediaUrl: "C:\\OpenClaw QA\\photo.png",
+            mediaType: "image/png",
+          },
+        },
+      }),
+    ).toEqual([
+      { type: "text", text: "look", text_elements: [] },
+      { type: "localImage", path: "C:\\OpenClaw QA\\photo.png" },
+    ]);
+  });
 });
