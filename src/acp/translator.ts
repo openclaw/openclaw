@@ -605,7 +605,42 @@ export class AcpGatewayAgent implements Agent {
     return { configOptions, modes };
   }
 
+  /**
+   * Handle `session/list` requests from the ACP TypeScript SDK.
+   *
+   * SDK v0.16.0 renamed `unstable_listSessions` to `listSessions`
+   * ([release notes](https://github.com/agentclientprotocol/typescript-sdk/releases/tag/v0.16.0)),
+   * and the SDK's dispatcher routes the JSON-RPC `session/list` method by
+   * looking for a function named `listSessions` on the agent handler.
+   * OpenClaw's pinned SDK version is `0.21.0`, so the dispatcher already
+   * expects the new name; the prior `unstable_listSessions`-only
+   * implementation matched no SDK-side route and produced
+   * `"Method not found": session/list` on every call (see [Github #48279]).
+   *
+   * `listSessions` is the canonical entrypoint going forward. The
+   * `unstable_listSessions` alias below is preserved as a thin shim so
+   * any caller still binding the older name (e.g. an embedded SDK
+   * version `< 0.16.0` in a downstream consumer) continues to work
+   * without a parallel implementation drifting out of sync.
+   */
+  async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+    return this._listSessionsImpl(params);
+  }
+
+  /**
+   * Backward-compatible alias for {@link listSessions}.
+   *
+   * Kept for embedded callers still on ACP TypeScript SDK `< 0.16.0`,
+   * which dispatched `session/list` to the `unstable_listSessions`
+   * method. Newer SDK versions never look for this name. Both methods
+   * delegate to {@link _listSessionsImpl} so the two surfaces cannot
+   * drift out of sync.
+   */
   async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+    return this._listSessionsImpl(params);
+  }
+
+  private async _listSessionsImpl(params: ListSessionsRequest): Promise<ListSessionsResponse> {
     const limit = readNumber(params._meta, ["limit"]) ?? 100;
     const result = await this.gateway.request<SessionsListResult>("sessions.list", { limit });
     const cwd = params.cwd ?? process.cwd();
