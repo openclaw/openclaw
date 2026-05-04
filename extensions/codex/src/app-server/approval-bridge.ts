@@ -3,6 +3,7 @@ import {
   formatApprovalDisplayPath,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
@@ -137,7 +138,9 @@ export async function handleCodexAppServerApprovalRequest(params: {
       ...approvalEventScope(params.method, cancelled ? "cancelled" : "denied"),
       message: cancelled
         ? "Codex app-server approval cancelled because the run stopped."
-        : `Codex app-server approval route failed: ${formatErrorMessage(error)}`,
+        : `Codex app-server approval route failed: ${formatCodexDisplayText(
+            formatErrorMessage(error),
+          )}`,
     });
     return buildApprovalResponse(
       params.method,
@@ -847,7 +850,7 @@ function sanitizeApprovalPreview(
   if (!sanitized) {
     return { omitted: true };
   }
-  return { text: truncate(sanitized, maxLength), omitted: source.clipped };
+  return { text: formatCodexDisplayText(truncate(sanitized, maxLength)), omitted: source.clipped };
 }
 
 function sanitizeVisibleScalar(value: string): string {

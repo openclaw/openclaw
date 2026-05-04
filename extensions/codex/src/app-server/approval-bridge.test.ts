@@ -232,6 +232,44 @@ describe("Codex app-server approval bridge", () => {
     );
   });
 
+  it("escapes command approval previews before forwarding approval text and events", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-escaped-command", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-escaped-command", decision: "allow-once" });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-escaped",
+        command: "printf '<@U123> [trusted](https://evil) @here'",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain(
+      "printf '&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here'",
+    );
+    expect(description).not.toContain("<@U123>");
+    expect(description).not.toContain("[trusted](https://evil)");
+    expect(description).not.toContain("@here");
+    expect(params.onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "approval",
+        data: expect.objectContaining({
+          command:
+            "printf '&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here'",
+        }),
+      }),
+    );
+  });
+
   it("preserves visible OSC-8 link labels in command previews", async () => {
     const params = createParams();
     mockCallGatewayTool
