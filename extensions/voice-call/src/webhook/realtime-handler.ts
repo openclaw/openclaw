@@ -367,6 +367,7 @@ export class RealtimeCallHandler {
         this.activeBridgesByCallId.delete(callSid);
         this.partialUserTranscriptsByCallId.delete(callId);
         if (reason !== "error") {
+          emitCallEnd("completed");
           return;
         }
         emitCallEnd("error");

@@ -50,6 +50,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Voice Call: mark realtime calls completed when the realtime provider closes normally, so Twilio/OpenAI/Google realtime stop events do not leave active call records behind. Thanks @vincentkoc.
 - Exec approvals: treat POSIX `exec` as a command carrier for inline eval, shell-wrapper, and eval/source detection, so approval explanations and command-risk checks do not miss payloads hidden behind `exec`. Thanks @vincentkoc.
 - Google Meet: log the resolved audio provider model when starting Chrome and paired-node Meet talk-back bridges, so agent-mode joins show the STT model and bidi joins show the realtime voice model.
 - Diagnostics: handle missing session-tail files in cron recovery context without tripping extension test typecheck. Thanks @vincentkoc.
