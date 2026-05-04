@@ -35,7 +35,7 @@ export const mattermostChannelConfigUiHints = {
   },
   "streaming.preview.toolProgress": {
     label: "Mattermost Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview post (default: true). Set false to keep tool updates as separate messages.",
+    help: "Show tool/progress activity in the live draft preview post (default: true). Set false to hide interim tool updates while the draft preview stays active.",
   },
   "streaming.block.enabled": {
     label: "Mattermost Block Streaming Enabled",

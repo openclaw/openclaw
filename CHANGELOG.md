@@ -58,6 +58,7 @@ Docs: https://docs.openclaw.ai
 - Agents/messaging: deliver distinct final commentary after same-target `message` tool sends while still deduping text/media already sent by the tool, so short closing remarks are no longer silently dropped. Fixes #76915. Thanks @hclsys.
 - Agents/messaging: preserve string thread IDs when matching message-tool reply dedupe routes, avoiding precision loss on numeric-looking topic IDs before channel plugin comparison. Thanks @vincentkoc.
 - Channels/streaming: honor `agents.defaults.toolProgressDetail: "raw"` in Slack, Discord, Telegram, Matrix, and Microsoft Teams progress drafts, so tool-start lines include raw command/detail output when debugging. Thanks @vincentkoc.
+- Discord/Slack/Mattermost: align draft preview tool-progress config help with the runtime behavior that hides interim tool updates when `streaming.preview.toolProgress` is false. Thanks @vincentkoc.
 - Feishu: use the shared channel progress formatter for streaming-card tool status lines, including raw command/detail output and message-tool filtering. Thanks @vincentkoc.
 - Mattermost: use the shared progress draft formatter for tool status previews, including raw command/detail output when `agents.defaults.toolProgressDetail: "raw"` is enabled. Thanks @vincentkoc.
 - OpenAI Codex: honor `auth.order.openai-codex` when starting app-server clients without an explicit auth profile, so status/model probes and implicit startup use the configured Codex account instead of falling back to the default profile. Thanks @vincentkoc.
