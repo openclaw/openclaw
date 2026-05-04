@@ -513,6 +513,8 @@ export function buildAfterTurnRuntimeContext(params: {
   >;
   workspaceDir: string;
   agentDir: string;
+  activeAgentId?: string;
+  contextEnginePluginId?: string;
   tokenBudget?: number;
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
@@ -544,6 +546,8 @@ export function buildAfterTurnRuntimeContext(params: {
     ...resolveContextEngineCapabilities({
       config: params.attempt.config,
       sessionKey: params.attempt.sessionKey,
+      agentId: params.activeAgentId,
+      contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.after-turn",
     }),
     ...(typeof params.tokenBudget === "number" &&

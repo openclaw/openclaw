@@ -4,6 +4,7 @@ import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChildLogger } from "../../logging.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
@@ -19,6 +20,8 @@ import type {
 
 export type RuntimeLlmAuthority = {
   caller?: PluginLlmCompleteCaller;
+  /** Trusted host-derived plugin id used only for config policy lookup. */
+  pluginIdForPolicy?: string;
   sessionKey?: string;
   agentId?: string;
   requiresBoundAgent?: boolean;
@@ -95,8 +98,10 @@ async function resolveAgentId(params: {
   authority?: RuntimeLlmAuthority;
   allowAgentIdOverride: boolean;
 }): Promise<string> {
-  const authorityAgentId = normalizeOptionalString(params.authority?.agentId);
-  const requestedAgentId = normalizeOptionalString(params.request.agentId);
+  const authorityAgentIdRaw = normalizeOptionalString(params.authority?.agentId);
+  const requestedAgentIdRaw = normalizeOptionalString(params.request.agentId);
+  const authorityAgentId = authorityAgentIdRaw ? normalizeAgentId(authorityAgentIdRaw) : undefined;
+  const requestedAgentId = requestedAgentIdRaw ? normalizeAgentId(requestedAgentIdRaw) : undefined;
   if (params.authority?.requiresBoundAgent && !authorityAgentId) {
     throw new Error("Plugin LLM completion is not bound to an active session agent.");
   }
@@ -261,14 +266,25 @@ function buildPolicyFromEntry(entry: {
   };
 }
 
-function resolvePluginLlmOverridePolicy(
-  cfg: OpenClawConfig,
+function resolvePluginPolicyId(
+  authority: RuntimeLlmAuthority | undefined,
   caller: PluginLlmCompleteCaller,
-): RuntimeLlmOverridePolicy | undefined {
+): string | undefined {
+  const authorityPluginId = normalizeOptionalString(authority?.pluginIdForPolicy);
+  if (authorityPluginId) {
+    return authorityPluginId;
+  }
   if (caller.kind !== "plugin") {
     return undefined;
   }
   const pluginId = normalizeOptionalString(caller.id);
+  return pluginId;
+}
+
+function resolvePluginLlmOverridePolicy(
+  cfg: OpenClawConfig,
+  pluginId: string | undefined,
+): RuntimeLlmOverridePolicy | undefined {
   if (!pluginId) {
     return undefined;
   }
@@ -296,15 +312,18 @@ function resolveAuthorityModelPolicy(
 
 function assertAllowedModelOverride(params: {
   resolvedModelRef: string | null;
-  caller: PluginLlmCompleteCaller;
+  pluginPolicyId: string | undefined;
   authorityPolicy: RuntimeLlmOverridePolicy | undefined;
   pluginPolicy: RuntimeLlmOverridePolicy | undefined;
 }): void {
-  const policy = params.authorityPolicy?.allowModelOverride
-    ? params.authorityPolicy
-    : params.pluginPolicy?.allowModelOverride
-      ? params.pluginPolicy
-      : undefined;
+  let policy: RuntimeLlmOverridePolicy | undefined;
+  let policyOwnerPluginId: string | undefined;
+  if (params.authorityPolicy?.allowModelOverride) {
+    policy = params.authorityPolicy;
+  } else if (params.pluginPolicy?.allowModelOverride) {
+    policy = params.pluginPolicy;
+    policyOwnerPluginId = params.pluginPolicyId;
+  }
   if (!policy) {
     throw new Error("Plugin LLM completion cannot override the target model.");
   }
@@ -323,10 +342,7 @@ function assertAllowedModelOverride(params: {
     );
   }
   if (!policy.allowedModels.has(params.resolvedModelRef)) {
-    const owner =
-      params.caller.kind === "plugin" && params.caller.id
-        ? ` for plugin "${params.caller.id}"`
-        : "";
+    const owner = policyOwnerPluginId ? ` for plugin "${policyOwnerPluginId}"` : "";
     throw new Error(
       `Plugin LLM completion model override "${params.resolvedModelRef}" is not allowlisted${owner}.`,
     );
@@ -362,15 +378,18 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         import("../../agents/simple-completion-runtime.js"),
         Promise.resolve(resolveRuntimeConfig(options)),
       ]);
-      const pluginPolicy = resolvePluginLlmOverridePolicy(cfg, caller);
+      const pluginPolicyId = resolvePluginPolicyId(options.authority, caller);
+      const pluginPolicy = resolvePluginLlmOverridePolicy(cfg, pluginPolicyId);
       const authorityPolicy = resolveAuthorityModelPolicy(options.authority);
       const agentId = await resolveAgentId({
         request: params,
         cfg,
         authority: options.authority,
         allowAgentIdOverride:
-          authorityPolicy?.allowAgentIdOverride === true ||
-          pluginPolicy?.allowAgentIdOverride === true,
+          options.authority?.allowAgentIdOverride === false
+            ? false
+            : authorityPolicy?.allowAgentIdOverride === true ||
+              pluginPolicy?.allowAgentIdOverride === true,
       });
       const requestedModel = normalizeOptionalString(params.model);
       if (requestedModel) {
@@ -387,7 +406,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
           : null;
         assertAllowedModelOverride({
           resolvedModelRef,
-          caller,
+          pluginPolicyId,
           authorityPolicy,
           pluginPolicy,
         });

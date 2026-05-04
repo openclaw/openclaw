@@ -16,6 +16,7 @@ import {
   getContextEngineFactory,
   listContextEngineIds,
   resolveContextEngine,
+  resolveContextEngineOwnerPluginId,
 } from "./registry.js";
 import type {
   ContextEngineFactory,
@@ -503,6 +504,17 @@ describe("Registry tests", () => {
       existingOwner: "owner-a",
     });
     expect(getContextEngineFactory("reg-owner-guard")).toBe(factory1);
+  });
+
+  it("exposes the trusted plugin owner for a resolved registered engine", async () => {
+    const engineId = `owner-policy-${Date.now().toString(36)}`;
+    registerContextEngineForOwner(engineId, () => new MockContextEngine(), "plugin:lossless-claw", {
+      allowSameOwnerRefresh: true,
+    });
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    expect(resolveContextEngineOwnerPluginId(engine)).toBe("lossless-claw");
   });
 
   it("public registerContextEngine cannot spoof owner or refresh existing ids", () => {
