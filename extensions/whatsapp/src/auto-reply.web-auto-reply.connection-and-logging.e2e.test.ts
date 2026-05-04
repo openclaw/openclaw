@@ -170,6 +170,53 @@ describe("web auto-reply connection", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("2/2 attempts"));
   });
 
+  it("retries post-open Baileys 428 (event-loop-stall close) instead of stopping", async () => {
+    // Regression for #77443: on Windows 11, DefaultResourceLoader.reload() uses
+    // synchronous fs ops that block the event loop for 10+ seconds on first agent
+    // startup. Baileys fires DisconnectReason.connectionClosed (428) when its
+    // keepalive timers can't run during the stall. The channel must retry rather
+    // than stop, so it recovers automatically once the stall clears.
+    const sleep = vi.fn(async () => {});
+    const scripted = createScriptedWebListenerFactory();
+    const { controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBe(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
+    scripted.resolveClose(0, {
+      status: 428,
+      isLoggedOut: false,
+      error: "Connection Terminated",
+    });
+
+    // Must NOT stop immediately — 428 is retryable, so a second listener is created.
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 250, interval: 2 },
+    );
+
+    controller.abort();
+    scripted.resolveClose(scripted.getListenerCount() - 1, {
+      status: 499,
+      isLoggedOut: false,
+      error: "aborted",
+    });
+    await run;
+
+    expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+    expect(sleep).toHaveBeenCalled();
+  });
+
   it("treats status 440 as non-retryable and stops without retrying", async () => {
     const sleep = vi.fn(async () => {});
     const scripted = createScriptedWebListenerFactory();
