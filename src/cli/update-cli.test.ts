@@ -782,6 +782,31 @@ describe("update-cli", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("post-core resume children exit after writing a plugin update result", async () => {
+    const resultDir = createCaseDir("openclaw-post-core-result");
+    const resultPath = path.join(resultDir, "plugins.json");
+    await fs.mkdir(resultDir, { recursive: true });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: resultPath,
+      },
+      async () => {
+        await updateCommand({ restart: false });
+      },
+    );
+
+    const result = JSON.parse(await fs.readFile(resultPath, "utf-8")) as {
+      status?: string;
+    };
+    expect(result.status).toBe("ok");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("post-core resume mode persists the requested update channel with the updated process", async () => {
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
