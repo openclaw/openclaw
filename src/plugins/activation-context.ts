@@ -79,6 +79,7 @@ export function withActivatedPluginIds(params: {
     return params.config;
   }
   const originalAllow = params.config?.plugins?.allow ?? [];
+  // Empty allowlists are still open; respect-allow only stops compat from widening configured allowlists.
   const respectAllow =
     params.config?.plugins?.bundledMode === "respect-allow" && originalAllow.length > 0;
   const originalAllowSet = respectAllow ? new Set(originalAllow) : undefined;

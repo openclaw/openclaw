@@ -264,6 +264,7 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 | ---------------- | --------------------------------------------------------- |
 | `enabled`        | Master toggle (default: `true`)                           |
 | `allow`          | Plugin allowlist (optional)                               |
+| `bundledMode`    | Bundled plugin allowlist mode (`compat` by default)       |
 | `deny`           | Plugin denylist (optional; deny wins)                     |
 | `load.paths`     | Extra plugin files/directories                            |
 | `slots`          | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
@@ -274,6 +275,12 @@ or expose tools, even if `tools.allow` contains `"*"` or a specific plugin-owned
 tool name. If a tool allowlist references plugin tools, add the owning plugin ids
 to `plugins.allow` or remove `plugins.allow`; `openclaw doctor` warns about this
 shape.
+
+`plugins.bundledMode` defaults to `"compat"` so older configs keep legacy
+bundled provider behavior. Set it to `"respect-allow"` when a restrictive
+`plugins.allow` inventory should also block omitted bundled provider plugins,
+including runtime web-search provider discovery. An empty `plugins.allow` is
+still treated as unset/open.
 
 Config changes made through `/plugins enable` or `/plugins disable` trigger an
 in-process Gateway plugin reload. New agent turns rebuild their tool list from
