@@ -3,7 +3,12 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
+import type {
+  GoogleMeetConfig,
+  GoogleMeetMode,
+  GoogleMeetModeInput,
+  GoogleMeetTransport,
+} from "./config.js";
 import { addGoogleMeetSetupCheck, getGoogleMeetSetupStatus } from "./setup.js";
 import { isSameMeetUrlForReuse, resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
@@ -60,8 +65,8 @@ function resolveTransport(input: GoogleMeetTransport | undefined, config: Google
   return input ?? config.defaultTransport;
 }
 
-function resolveMode(input: GoogleMeetMode | undefined, config: GoogleMeetConfig) {
-  return input ?? config.defaultMode;
+function resolveMode(input: GoogleMeetModeInput | undefined, config: GoogleMeetConfig) {
+  return input === "realtime" ? "agent" : (input ?? config.defaultMode);
 }
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
@@ -245,7 +250,7 @@ export class GoogleMeetRuntime {
   async setupStatus(
     options: {
       transport?: GoogleMeetTransport;
-      mode?: GoogleMeetMode;
+      mode?: GoogleMeetModeInput;
       dialInNumber?: string;
     } = {},
   ) {
@@ -397,8 +402,9 @@ export class GoogleMeetRuntime {
       realtime: {
         enabled: isGoogleMeetTalkBackMode(mode),
         strategy: mode === "bidi" ? "bidi" : "agent",
-        provider: this.params.config.realtime.provider,
-        model: this.params.config.realtime.model,
+        provider: mode === "bidi" ? this.params.config.realtime.provider : undefined,
+        model: mode === "bidi" ? this.params.config.realtime.model : undefined,
+        transcriptionProvider: mode === "agent" ? this.params.config.realtime.provider : undefined,
         toolPolicy: this.params.config.realtime.toolPolicy,
       },
       notes: [],
@@ -690,7 +696,8 @@ export class GoogleMeetRuntime {
     recentTranscript?: GoogleMeetChromeHealth["recentTranscript"];
     session: GoogleMeetSession;
   }> {
-    if (request.mode && isGoogleMeetTalkBackMode(request.mode)) {
+    const requestedMode = request.mode ? resolveMode(request.mode, this.params.config) : undefined;
+    if (requestedMode && isGoogleMeetTalkBackMode(requestedMode)) {
       throw new Error(
         "test_listen requires mode: transcribe; use test_speech for talk-back sessions.",
       );

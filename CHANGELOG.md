@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Diagnostics: keep webhook/message OTEL attributes and Prometheus delivery labels low-cardinality and omit raw chat/message IDs from spans, so progress-draft and message-tool modes do not leak high-cardinality messaging identifiers.
+- Google Meet: stop advertising legacy `mode: "realtime"` to agents and config UIs, while keeping it as a hidden compatibility alias for `mode: "agent"`, so new joins use the STT -> OpenClaw agent -> TTS path instead of selecting the direct realtime voice fallback.
 - Telegram: render shared interactive reply buttons in reply delivery so plugin approval messages show inline keyboards. (#76238) Thanks @keshavbotagent.
 - Agents/cli-runner: drop a saved `claude-cli` resume sessionId at preparation time when its on-disk transcript no longer exists in `~/.claude/projects/`, so a stale binding from a half-installed `update.run` cannot trap follow-up runs (auto-reply / Telegram direct) in a `claude --resume` timeout loop; the run starts fresh and the new sessionId is written back through the existing post-run flow. (#77030; refs #77011) Thanks @openperf.
 - Release validation: install the cross-OS TypeScript harness through Windows-safe Node/npm shims so native Windows package checks reach the OpenClaw smoke suites instead of exiting before artifact capture. Thanks @vincentkoc.

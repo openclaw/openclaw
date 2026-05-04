@@ -155,10 +155,14 @@ const googleMeetConfigSchema = {
       help: "Legacy realtime alias setting. Use mode=agent or mode=bidi for new Meet joins.",
     },
     "realtime.provider": {
-      label: "Realtime Provider",
-      help: "Defaults to OpenAI; uses OPENAI_API_KEY when no provider config is set.",
+      label: "Speech Provider",
+      help: "Agent mode uses this for realtime transcription. Bidi mode uses it as the realtime voice provider.",
     },
-    "realtime.model": { label: "Realtime Model", advanced: true },
+    "realtime.model": {
+      label: "Bidi Realtime Model",
+      help: "Only used by mode=bidi. Agent mode answers with the configured OpenClaw agent and regular TTS.",
+      advanced: true,
+    },
     "realtime.instructions": { label: "Realtime Instructions", advanced: true },
     "realtime.introMessage": {
       label: "Realtime Intro Message",
@@ -238,9 +242,9 @@ const GoogleMeetToolSchema = Type.Object({
   ),
   mode: Type.Optional(
     Type.String({
-      enum: ["agent", "bidi", "realtime", "transcribe"],
+      enum: ["agent", "bidi", "transcribe"],
       description:
-        "Join mode. agent uses realtime transcription, the configured OpenClaw agent, and regular TTS. bidi uses the realtime voice model directly. realtime is a compatibility alias for agent. transcribe joins observe-only.",
+        "Join mode. agent uses realtime transcription, the configured OpenClaw agent, and regular TTS. bidi uses the realtime voice model directly. transcribe joins observe-only.",
     }),
   ),
   dialInNumber: Type.Optional(

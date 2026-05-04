@@ -386,6 +386,7 @@ describe("google-meet plugin", () => {
       oauth: {},
       auth: { provider: "google-oauth" },
     });
+    expect(resolveGoogleMeetConfig({ defaultMode: "realtime" }).defaultMode).toBe("agent");
     expect(resolveGoogleMeetConfig({}).realtime.instructions).toContain("openclaw_agent_consult");
   });
 
@@ -621,7 +622,7 @@ describe("google-meet plugin", () => {
           description: expect.stringContaining("recover_current_tab"),
         },
         transport: { type: "string", enum: ["chrome", "chrome-node", "twilio"] },
-        mode: { type: "string", enum: ["agent", "bidi", "realtime", "transcribe"] },
+        mode: { type: "string", enum: ["agent", "bidi", "transcribe"] },
       },
     });
   });
@@ -3154,7 +3155,12 @@ describe("google-meet plugin", () => {
       createdAt: "2026-04-27T00:00:00.000Z",
       updatedAt: "2026-04-27T00:00:00.000Z",
       participantIdentity: "signed-in Google Chrome profile",
-      realtime: { enabled: true, provider: "openai", toolPolicy: "safe-read-only" },
+      realtime: {
+        enabled: true,
+        strategy: "agent",
+        transcriptionProvider: "openai",
+        toolPolicy: "safe-read-only",
+      },
       chrome: {
         audioBackend: "blackhole-2ch",
         launched: true,

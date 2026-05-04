@@ -148,11 +148,12 @@
       "help": "Legacy realtime alias setting. Use mode=agent or mode=bidi for new Meet joins."
     },
     "realtime.provider": {
-      "label": "Realtime Provider",
-      "help": "Defaults to OpenAI; uses OPENAI_API_KEY when no provider config is set."
+      "label": "Speech Provider",
+      "help": "Agent mode uses this for realtime transcription. Bidi mode uses it as the realtime voice provider."
     },
     "realtime.model": {
-      "label": "Realtime Model",
+      "label": "Bidi Realtime Model",
+      "help": "Only used by mode=bidi. Agent mode answers with the configured OpenClaw agent and regular TTS.",
       "advanced": true
     },
     "realtime.instructions": {
@@ -227,7 +228,7 @@
       },
       "defaultMode": {
         "type": "string",
-        "enum": ["agent", "bidi", "realtime", "transcribe"],
+        "enum": ["agent", "bidi", "transcribe"],
         "default": "agent"
       },
       "chrome": {
