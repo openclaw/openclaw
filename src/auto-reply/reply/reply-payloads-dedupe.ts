@@ -106,17 +106,17 @@ function resolveTargetProviderForComparison(params: {
   return targetProvider;
 }
 
-type SuppressionRouteTarget = ChannelRouteTargetInput & {
+type MessagingToolDedupeRouteTarget = ChannelRouteTargetInput & {
   channel: string;
   to: string;
 };
 
-function normalizeRouteTargetForSuppression(params: {
+function normalizeRouteTargetForDedupe(params: {
   provider: string;
   rawTarget?: string;
   accountId?: string;
   threadId?: string;
-}): SuppressionRouteTarget | null {
+}): MessagingToolDedupeRouteTarget | null {
   const to = normalizeTargetForProvider(params.provider, params.rawTarget);
   if (!to) {
     return null;
@@ -129,7 +129,7 @@ function normalizeRouteTargetForSuppression(params: {
   };
 }
 
-function targetsMatchForSuppression(params: {
+function targetsMatchForDedupe(params: {
   provider: string;
   originTarget: string;
   targetKey: string;
@@ -146,23 +146,32 @@ function targetsMatchForSuppression(params: {
   return params.targetKey === params.originTarget;
 }
 
-export function shouldSuppressMessagingToolReplies(params: {
+export function shouldDedupeMessagingToolRepliesForRoute(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
   accountId?: string;
 }): boolean {
+  return getMatchingMessagingToolReplyTargets(params).length > 0;
+}
+
+export function getMatchingMessagingToolReplyTargets(params: {
+  messageProvider?: string;
+  messagingToolSentTargets?: MessagingToolSend[];
+  originatingTo?: string;
+  accountId?: string;
+}): MessagingToolSend[] {
   const provider = normalizeProviderForComparison(params.messageProvider);
   if (!provider) {
-    return false;
+    return [];
   }
   const originRawTarget = normalizeOptionalString(params.originatingTo);
   const originAccount = normalizeOptionalAccountId(params.accountId);
   const sentTargets = params.messagingToolSentTargets ?? [];
   if (sentTargets.length === 0) {
-    return false;
+    return [];
   }
-  return sentTargets.some((target) => {
+  return sentTargets.filter((target) => {
     const targetProvider = resolveTargetProviderForComparison({
       currentProvider: provider,
       targetProvider: target?.provider,
@@ -176,7 +185,7 @@ export function shouldSuppressMessagingToolReplies(params: {
     }
     const targetRaw = normalizeOptionalString(target.to);
     const routeAccount = originAccount ?? targetAccount;
-    const originRoute = normalizeRouteTargetForSuppression({
+    const originRoute = normalizeRouteTargetForDedupe({
       provider,
       rawTarget: originRawTarget,
       accountId: routeAccount,
@@ -184,7 +193,7 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (!originRoute) {
       return false;
     }
-    const targetRoute = normalizeRouteTargetForSuppression({
+    const targetRoute = normalizeRouteTargetForDedupe({
       provider: targetProvider,
       rawTarget: targetRaw,
       accountId: routeAccount,
@@ -196,7 +205,7 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (channelRouteTargetsMatchExact({ left: originRoute, right: targetRoute })) {
       return true;
     }
-    return targetsMatchForSuppression({
+    return targetsMatchForDedupe({
       provider,
       originTarget: originRoute.to,
       targetKey: targetRoute.to,
@@ -207,7 +216,11 @@ export function shouldSuppressMessagingToolReplies(params: {
 
 export type MessagingToolPayloadDedupeDecision = {
   shouldDedupePayloads: boolean;
-  suppressReplies: boolean;
+  matchingRoute: boolean;
+  routeSentTexts: string[];
+  routeSentMediaUrls: string[];
+  useGlobalSentTextEvidenceFallback: boolean;
+  useGlobalSentMediaUrlEvidenceFallback: boolean;
 };
 
 export function resolveMessagingToolPayloadDedupe(params: {
@@ -217,15 +230,38 @@ export function resolveMessagingToolPayloadDedupe(params: {
   accountId?: string;
 }): MessagingToolPayloadDedupeDecision {
   const sentTargets = params.messagingToolSentTargets ?? [];
-  const suppressReplies = shouldSuppressMessagingToolReplies({
+  const matchingTargets = getMatchingMessagingToolReplyTargets({
     messageProvider: params.messageProvider,
     messagingToolSentTargets: sentTargets,
     originatingTo: params.originatingTo,
     accountId: params.accountId,
   });
+  const matchingRoute = matchingTargets.length > 0;
+  const routeSentTexts = matchingTargets.flatMap((target) =>
+    typeof target.text === "string" && target.text.trim() ? [target.text] : [],
+  );
+  const routeSentMediaUrls = matchingTargets.flatMap((target) =>
+    Array.isArray(target.mediaUrls)
+      ? target.mediaUrls.filter(
+          (url): url is string => typeof url === "string" && Boolean(url.trim()),
+        )
+      : [],
+  );
+  const hasTargetTextEvidence = sentTargets.some(
+    (target) => typeof target.text === "string" && Boolean(target.text.trim()),
+  );
+  const hasTargetMediaUrlEvidence = sentTargets.some(
+    (target) =>
+      Array.isArray(target.mediaUrls) &&
+      target.mediaUrls.some((url) => typeof url === "string" && Boolean(url.trim())),
+  );
 
   return {
-    shouldDedupePayloads: suppressReplies || sentTargets.length === 0,
-    suppressReplies,
+    shouldDedupePayloads: matchingRoute || sentTargets.length === 0,
+    matchingRoute,
+    routeSentTexts,
+    routeSentMediaUrls,
+    useGlobalSentTextEvidenceFallback: matchingRoute && !hasTargetTextEvidence,
+    useGlobalSentMediaUrlEvidenceFallback: matchingRoute && !hasTargetMediaUrlEvidence,
   };
 }
