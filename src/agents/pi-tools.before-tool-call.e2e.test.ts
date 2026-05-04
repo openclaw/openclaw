@@ -165,6 +165,19 @@ describe("before_tool_call loop detection behavior", () => {
     };
   }
 
+  function createAlwaysFailingTools(contextOverride?: Record<string, unknown>) {
+    const execute = vi.fn().mockRejectedValue(new Error("Permission denied"));
+    const context = {
+      ...enabledLoopDetectionContext,
+      ...contextOverride,
+    };
+    return {
+      readTool: wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, context),
+      listTool: wrapToolWithBeforeToolCallHook({ name: "list", execute } as any, context),
+      writeTool: wrapToolWithBeforeToolCallHook({ name: "write", execute } as any, context),
+    };
+  }
+
   function expectCriticalLoopEvent(
     loopEvent: DiagnosticToolLoopEvent | undefined,
     params: {
@@ -283,6 +296,101 @@ describe("before_tool_call loop detection behavior", () => {
     await expect(
       secondRunTool.execute("new-run-0", params, undefined, undefined),
     ).resolves.toBeDefined();
+  });
+
+  it("blocks consecutive cross-tool errors within the same run", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const { readTool, listTool, writeTool } = createAlwaysFailingTools({
+        runId: "run-errors-1",
+        loopDetection: {
+          enabled: true,
+          consecutiveErrorThreshold: 3,
+        },
+      });
+
+      await expect(
+        readTool.execute("read-0", { path: "/a.txt" }, undefined, undefined),
+      ).rejects.toThrow("Permission denied");
+      await expect(
+        listTool.execute("list-1", { dir: "/tmp" }, undefined, undefined),
+      ).rejects.toThrow("Permission denied");
+      await expect(
+        writeTool.execute("write-2", { path: "/tmp/out.txt", content: "x" }, undefined, undefined),
+      ).rejects.toThrow("Permission denied");
+      const blocked = await readTool.execute("read-3", { path: "/b.txt" }, undefined, undefined);
+      expect(blocked).toBeDefined();
+      expect(blocked).toHaveProperty("details.status", "blocked");
+      expect(blocked).toHaveProperty("details.deniedReason", "tool-loop");
+
+      const loopEvent = emitted.at(-1);
+      expect(loopEvent?.type).toBe("tool.loop");
+      expect(loopEvent?.level).toBe("critical");
+      expect(loopEvent?.action).toBe("block");
+      expect(loopEvent?.detector).toBe("consecutive_errors");
+      expect(loopEvent?.count).toBe(3);
+    });
+  });
+
+  it("keeps blocking after the consecutive cross-tool error threshold is reached", async () => {
+    const { readTool, listTool, writeTool } = createAlwaysFailingTools({
+      runId: "run-errors-sticky",
+      loopDetection: {
+        enabled: true,
+        consecutiveErrorThreshold: 3,
+      },
+    });
+
+    await expect(
+      readTool.execute("read-0", { path: "/a.txt" }, undefined, undefined),
+    ).rejects.toThrow("Permission denied");
+    await expect(listTool.execute("list-1", { dir: "/tmp" }, undefined, undefined)).rejects.toThrow(
+      "Permission denied",
+    );
+    await expect(
+      writeTool.execute("write-2", { path: "/tmp/out.txt", content: "x" }, undefined, undefined),
+    ).rejects.toThrow("Permission denied");
+
+    const firstBlocked = await readTool.execute("read-3", { path: "/b.txt" }, undefined, undefined);
+    expectToolLoopBlockedResult(firstBlocked, "CRITICAL");
+
+    const secondBlocked = await listTool.execute("list-4", { dir: "/tmp-2" }, undefined, undefined);
+    expectToolLoopBlockedResult(secondBlocked, "CRITICAL");
+  });
+
+  it("does not carry consecutive cross-tool errors across run ids in the hook path", async () => {
+    const firstRunTools = createAlwaysFailingTools({
+      runId: "run-errors-old",
+      loopDetection: {
+        enabled: true,
+        consecutiveErrorThreshold: 3,
+      },
+    });
+    const secondRunTools = createAlwaysFailingTools({
+      runId: "run-errors-new",
+      loopDetection: {
+        enabled: true,
+        consecutiveErrorThreshold: 3,
+      },
+    });
+
+    await expect(
+      firstRunTools.readTool.execute("read-old-0", { path: "/old-a.txt" }, undefined, undefined),
+    ).rejects.toThrow("Permission denied");
+    await expect(
+      firstRunTools.listTool.execute("list-old-1", { dir: "/old" }, undefined, undefined),
+    ).rejects.toThrow("Permission denied");
+    await expect(
+      firstRunTools.writeTool.execute(
+        "write-old-2",
+        { path: "/old/out.txt", content: "x" },
+        undefined,
+        undefined,
+      ),
+    ).rejects.toThrow("Permission denied");
+
+    await expect(
+      secondRunTools.readTool.execute("read-new-0", { path: "/new-a.txt" }, undefined, undefined),
+    ).rejects.toThrow("Permission denied");
   });
 
   it("coalesces repeated generic warning events into threshold buckets", async () => {

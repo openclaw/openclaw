@@ -510,6 +510,7 @@ const ToolLoopDetectionSchema = z
     unknownToolThreshold: z.number().int().positive().optional(),
     criticalThreshold: z.number().int().positive().optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
+    consecutiveErrorThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
   })
   .strict()
@@ -535,6 +536,17 @@ const ToolLoopDetectionSchema = z
         path: ["globalCircuitBreakerThreshold"],
         message:
           "tools.loopDetection.criticalThreshold must be lower than globalCircuitBreakerThreshold.",
+      });
+    }
+    if (
+      value.consecutiveErrorThreshold !== undefined &&
+      Math.max(1, value.historySize ?? 30) < value.consecutiveErrorThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["historySize"],
+        message:
+          "tools.loopDetection.historySize must be greater than or equal to consecutiveErrorThreshold.",
       });
     }
   })
