@@ -817,6 +817,10 @@ export async function runEmbeddedPiAgent(
         }
         params.onUserMessagePersisted?.(message);
       };
+      const continueFromCurrentTranscript = () => {
+        nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+        suppressNextUserMessagePersistence = true;
+      };
       const maybeEscalateRateLimitProfileFallback = (params: {
         failoverProvider: string;
         failoverModel: string;
@@ -1327,7 +1331,7 @@ export async function runEmbeddedPiAgent(
                 (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
             );
             if (retryingFromTranscript) {
-              nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+              continueFromCurrentTranscript();
             }
             continue;
           }
@@ -1512,7 +1516,7 @@ export async function runEmbeddedPiAgent(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
               if (preflightRecovery?.source === "mid-turn") {
-                nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                continueFromCurrentTranscript();
               }
               continue;
             }
@@ -1645,7 +1649,7 @@ export async function runEmbeddedPiAgent(
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 if (preflightRecovery?.source === "mid-turn") {
-                  nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                  continueFromCurrentTranscript();
                 } else if (
                   params.currentMessageId !== undefined &&
                   params.currentMessageId === lastPersistedCurrentMessageId
@@ -1696,7 +1700,7 @@ export async function runEmbeddedPiAgent(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
                   if (preflightRecovery?.source === "mid-turn") {
-                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                    continueFromCurrentTranscript();
                   }
                   continue;
                 }

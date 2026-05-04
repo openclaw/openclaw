@@ -359,6 +359,7 @@ describe("overflow compaction in run loop", () => {
       2,
       expect.objectContaining({
         prompt: expect.stringContaining("Continue from the current transcript"),
+        suppressNextUserMessagePersistence: true,
       }),
     );
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
@@ -433,6 +434,7 @@ describe("overflow compaction in run loop", () => {
       2,
       expect.objectContaining({
         prompt: expect.stringContaining("Continue from the current transcript"),
+        suppressNextUserMessagePersistence: true,
       }),
     );
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
