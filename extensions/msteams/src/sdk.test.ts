@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MSTeamsTurnContext } from "./sdk-types.js";
 import {
   createBotFrameworkJwtValidator,
   createMSTeamsAdapter,
@@ -645,6 +646,56 @@ describe("createMSTeamsAdapter – continueConversation", () => {
     const activity = readFirstCreatedActivity(createFn);
     expect(activity.type).toBe("message");
     expect(activity.text).toBe("hello from proactive send");
+  });
+
+  it("propagates inbound tenant and sender identity into process sendActivity", async () => {
+    const { sdk, createFn } = makeFakeApiSdk();
+    const adapter = createMSTeamsAdapter(makeFakeApp(), sdk);
+    const response = {
+      status: vi.fn(() => ({ send: vi.fn() })),
+    };
+
+    await adapter.process(
+      {
+        body: {
+          id: "activity-1",
+          type: "message",
+          serviceUrl: "https://smba.trafficmanager.net/teams/",
+          from: { id: "29:user", aadObjectId: "aad-user" },
+          recipient: { id: "28:bot", name: "OpenClaw" },
+          conversation: { id: "conv-123", conversationType: "personal" },
+          channelData: { tenant: { id: "tenant-1" } },
+        },
+      },
+      response,
+      async (ctx) => {
+        const turnContext = ctx as MSTeamsTurnContext;
+        await turnContext.sendActivity({
+          type: "message",
+          attachments: [
+            {
+              contentType: "application/vnd.microsoft.card.oauth",
+              content: { text: "Sign in" },
+            },
+          ],
+        });
+      },
+    );
+
+    expect(createFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        channelData: { tenant: { id: "tenant-1" } },
+        conversation: expect.objectContaining({
+          id: "conv-123",
+          tenantId: "tenant-1",
+        }),
+        recipient: {
+          id: "29:user",
+          aadObjectId: "aad-user",
+        },
+      }),
+    );
   });
 
   it("provides deleteActivity via REST DELETE in logic callback", async () => {
