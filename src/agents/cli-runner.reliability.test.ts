@@ -325,7 +325,7 @@ describe("runCliAgent reliability", () => {
 
       expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
       await vi.waitFor(() => {
-        expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
+        expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(2);
         expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
       });
       expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
@@ -757,7 +757,7 @@ describe("runCliAgent reliability", () => {
     }
   });
 
-  it("does not emit duplicate llm_input when session-expired recovery succeeds", async () => {
+  it("emits per-attempt llm_input when session-expired recovery succeeds", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) =>
         ["llm_input", "llm_output", "agent_end"].includes(hookName),
@@ -806,12 +806,14 @@ describe("runCliAgent reliability", () => {
             sessionKey: "agent:main:main",
             runId: "run-retry-success",
             cliSessionId: "thread-123",
+            openClawHistoryPrompt: "history prompt for retry\n\nhi",
           }),
           params: {
             ...buildPreparedContext({
               sessionKey: "agent:main:main",
               runId: "run-retry-success",
               cliSessionId: "thread-123",
+              openClawHistoryPrompt: "history prompt for retry\n\nhi",
             }).params,
             agentId: "main",
             sessionFile,
@@ -823,18 +825,120 @@ describe("runCliAgent reliability", () => {
       });
 
       await vi.waitFor(() => {
-        expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
+        expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(2);
         expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(1);
         expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
       });
       const llmInputCalls = hookRunner.runLlmInput.mock.calls as unknown as Array<Array<unknown>>;
-      const llmInputEvent = llmInputCalls[0]?.[0] as { historyMessages: unknown[] } | undefined;
-      expect(llmInputEvent).toBeDefined();
-      expect(llmInputEvent?.historyMessages).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
-      expect(llmInputEvent?.historyMessages[0]).toMatchObject({
+      const firstLlmInputEvent = llmInputCalls[0]?.[0] as
+        | { historyMessages: unknown[]; prompt: string }
+        | undefined;
+      const retryLlmInputEvent = llmInputCalls[1]?.[0] as
+        | { historyMessages: unknown[]; prompt: string }
+        | undefined;
+      expect(firstLlmInputEvent).toBeDefined();
+      expect(firstLlmInputEvent?.prompt).toBe("hi");
+      expect(firstLlmInputEvent?.historyMessages).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
+      expect(firstLlmInputEvent?.historyMessages[0]).toMatchObject({
         role: "user",
         content: `history-5`,
       });
+      expect(retryLlmInputEvent).toMatchObject({
+        prompt: "history prompt for retry\n\nhi",
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reruns before_model_call on session-expired recovery and blocks before retry spawn", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["before_model_call", "llm_input", "agent_end"].includes(hookName),
+      ),
+      runBeforeModelCall: vi
+        .fn()
+        .mockResolvedValueOnce({ block: false })
+        .mockResolvedValueOnce({ block: true, blockReason: "retry prompt denied" }),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier context" }],
+    });
+    const supervisorSpawnCallsBefore = supervisorSpawnMock.mock.calls.length;
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "session expired",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await expect(
+        runPreparedCliAgent({
+          ...buildPreparedContext({
+            sessionKey: "agent:main:main",
+            runId: "run-retry-blocked",
+            cliSessionId: "thread-123",
+            openClawHistoryPrompt: "retry full history prompt\n\nhi",
+          }),
+          params: {
+            ...buildPreparedContext({
+              sessionKey: "agent:main:main",
+              runId: "run-retry-blocked",
+              cliSessionId: "thread-123",
+              openClawHistoryPrompt: "retry full history prompt\n\nhi",
+            }).params,
+            agentId: "main",
+            sessionFile,
+            workspaceDir: dir,
+          },
+          workspaceDir: dir,
+        }),
+      ).rejects.toThrow("model call blocked by before_model_call hook: retry prompt denied");
+
+      expect(supervisorSpawnMock.mock.calls).toHaveLength(supervisorSpawnCallsBefore + 1);
+      expect(hookRunner.runBeforeModelCall).toHaveBeenCalledTimes(2);
+      expect(hookRunner.runBeforeModelCall).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          prompt: "hi",
+          harnessId: "cli",
+          resolvedRef: "codex-cli/gpt-5.4",
+        }),
+        expect.any(Object),
+      );
+      expect(hookRunner.runBeforeModelCall).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          prompt: "retry full history prompt\n\nhi",
+          harnessId: "cli",
+          resolvedRef: "codex-cli/gpt-5.4",
+        }),
+        expect.any(Object),
+      );
+      expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
+      expect(hookRunner.runLlmInput).toHaveBeenCalledWith(
+        expect.objectContaining({ prompt: "hi" }),
+        expect.any(Object),
+      );
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: "model call blocked by before_model_call hook: retry prompt denied",
+        }),
+        expect.any(Object),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -139,19 +139,6 @@ export async function runPreparedCliAgent(
           config: params.config,
         })
       : [];
-  const preparedPromptForModel = context.reusableCliSession.sessionId
-    ? params.prompt
-    : (context.openClawHistoryPrompt ?? params.prompt);
-  const llmInputEvent = {
-    runId: params.runId,
-    sessionId: params.sessionId,
-    provider: params.provider,
-    model: context.modelId,
-    systemPrompt: context.systemPrompt,
-    prompt: preparedPromptForModel,
-    historyMessages,
-    imagesCount: params.images?.length ?? 0,
-  } as const;
   const hookContext = {
     runId: params.runId,
     jobId: params.jobId,
@@ -200,7 +187,51 @@ export async function runPreparedCliAgent(
     throw error;
   };
 
+  const resolvePromptForCliAttempt = (cliSessionIdToUse?: string) =>
+    cliSessionIdToUse ? params.prompt : (context.openClawHistoryPrompt ?? params.prompt);
+
+  const runPreflightForCliAttempt = async (cliSessionIdToUse?: string) => {
+    const prompt = resolvePromptForCliAttempt(cliSessionIdToUse);
+    const beforeModelCall = await runAgentHarnessBeforeModelCallHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        model: context.modelId,
+        resolvedRef: `${params.provider}/${context.modelId}`,
+        harnessId: "cli",
+        workspaceDir: params.workspaceDir,
+        systemPrompt: context.systemPrompt,
+        prompt,
+        historyMessages,
+        imagesCount: params.images?.length ?? 0,
+      },
+      ctx: hookContext,
+      hookRunner,
+    });
+    if (beforeModelCall.action === "block") {
+      throw new Error(`model call blocked by before_model_call hook: ${beforeModelCall.reason}`);
+    }
+
+    runAgentHarnessLlmInputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.provider,
+        model: context.modelId,
+        systemPrompt: context.systemPrompt,
+        prompt,
+        historyMessages,
+        imagesCount: params.images?.length ?? 0,
+      },
+      ctx: hookContext,
+      hookRunner,
+    });
+  };
+
   const executeCliAttempt = async (cliSessionIdToUse?: string) => {
+    await runPreflightForCliAttempt(cliSessionIdToUse);
     const output = await executePreparedCliRun(context, cliSessionIdToUse);
     const assistantText = output.text.trim();
     const assistantTexts = assistantText ? [assistantText] : [];
@@ -309,42 +340,6 @@ export async function runPreparedCliAgent(
 
   // Try with the provided CLI session ID first
   try {
-    try {
-      const beforeModelCall = await runAgentHarnessBeforeModelCallHook({
-        event: {
-          runId: params.runId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          provider: params.provider,
-          model: context.modelId,
-          resolvedRef: `${params.provider}/${context.modelId}`,
-          harnessId: "cli",
-          workspaceDir: params.workspaceDir,
-          systemPrompt: context.systemPrompt,
-          prompt: preparedPromptForModel,
-          historyMessages,
-          imagesCount: params.images?.length ?? 0,
-        },
-        ctx: hookContext,
-        hookRunner,
-      });
-      if (beforeModelCall.action === "block") {
-        throw new Error(`model call blocked by before_model_call hook: ${beforeModelCall.reason}`);
-      }
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      runAgentHarnessAgentEndHook({
-        event: buildFailedAgentEndEvent(message),
-        ctx: hookContext,
-        hookRunner,
-      });
-      return toCliRunFailure(err);
-    }
-    runAgentHarnessLlmInputHook({
-      event: llmInputEvent,
-      ctx: hookContext,
-      hookRunner,
-    });
     try {
       const { output, lastAssistant } = await executeCliAttempt(
         context.reusableCliSession.sessionId,
