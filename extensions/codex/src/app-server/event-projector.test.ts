@@ -951,4 +951,108 @@ describe("CodexAppServerEventProjector", () => {
       }),
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // markTimedOut + buildResult flag plumbing
+  //
+  // The embedded-runner failover policy (assistant-failover.ts) gates same-model
+  // idle-timeout retry on the conjunction `idleTimedOut && allowSameModelIdleTimeoutRetry`.
+  // Before this fix `buildResult()` hardcoded `timedOut: false, idleTimedOut: false`,
+  // so even when an idle watchdog fired the retry path could never engage.
+  //
+  // These tests pin the contract so future refactors do not silently re-break it:
+  //   - default `markTimedOut()` (idle) sets BOTH timedOut and idleTimedOut
+  //   - explicit `markTimedOut("idle")` matches default
+  //   - `markTimedOut("wallclock")` sets timedOut but leaves idleTimedOut false
+  //   - aborted-without-timeout leaves both flags false (regression guard)
+  //   - flags are sticky on subsequent buildResult calls
+  // ---------------------------------------------------------------------------
+
+  it("markTimedOut() (default) flags both timedOut and idleTimedOut on buildResult", async () => {
+    const projector = await createProjector();
+
+    projector.markTimedOut();
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.idleTimedOut).toBe(true);
+    expect(result.promptError).toBe("codex app-server attempt timed out");
+  });
+
+  it("markTimedOut('idle') matches the default behaviour", async () => {
+    const projector = await createProjector();
+
+    projector.markTimedOut("idle");
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.timedOut).toBe(true);
+    expect(result.idleTimedOut).toBe(true);
+  });
+
+  it("markTimedOut('wallclock') flags timedOut but leaves idleTimedOut false", async () => {
+    const projector = await createProjector();
+
+    projector.markTimedOut("wallclock");
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    // Wallclock cap (~3h) is semantically not an idle stall; the embedded-
+    // runner failover-policy must NOT retry on the same model.
+    expect(result.idleTimedOut).toBe(false);
+    expect(result.promptError).toBe("codex app-server attempt timed out");
+  });
+
+  it("does not mark timeout flags when only abort fires (no markTimedOut)", async () => {
+    const projector = await createProjector();
+
+    // Simulate an abort that did NOT come from an idle/wallclock watchdog
+    // (e.g. external user cancel). Without markTimedOut(), neither timedOut
+    // nor idleTimedOut should flip.
+    await projector.handleNotification(forCurrentTurn("turn/aborted", { reason: "user_cancel" }));
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.timedOut).toBe(false);
+    expect(result.idleTimedOut).toBe(false);
+  });
+
+  it("flags are sticky across multiple buildResult invocations", async () => {
+    const projector = await createProjector();
+
+    projector.markTimedOut("idle");
+    const first = projector.buildResult(buildEmptyToolTelemetry());
+    const second = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(first.timedOut).toBe(true);
+    expect(first.idleTimedOut).toBe(true);
+    expect(second.timedOut).toBe(true);
+    expect(second.idleTimedOut).toBe(true);
+  });
+
+  it("an idle markTimedOut after a wallclock markTimedOut does not lower idle flag", async () => {
+    // Defensive: if markTimedOut is called more than once with mixed kinds,
+    // we should keep both flags true (any idle reason taints the result).
+    const projector = await createProjector();
+
+    projector.markTimedOut("wallclock");
+    projector.markTimedOut("idle");
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.timedOut).toBe(true);
+    expect(result.idleTimedOut).toBe(true);
+  });
+
+  it("a wallclock markTimedOut after an idle markTimedOut does not unset idle flag", async () => {
+    // Symmetric guard: once idle has fired, a later wallclock observation
+    // must not "downgrade" the result to non-idle and lose retry eligibility.
+    const projector = await createProjector();
+
+    projector.markTimedOut("idle");
+    projector.markTimedOut("wallclock");
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.timedOut).toBe(true);
+    expect(result.idleTimedOut).toBe(true);
+  });
 });

@@ -1195,7 +1195,12 @@ export async function runCodexAppServerAttempt(
   const timeout = setTimeout(
     () => {
       timedOut = true;
-      projector?.markTimedOut();
+      // Hard wallclock cap reached. Distinct from the idle watchdogs:
+      // a wallclock timeout means the whole turn ran past `params.timeoutMs`
+      // (typically 3+ hours), so a same-model retry would not help.
+      // Pass `"wallclock"` so idleTimedOut stays false and the embedded
+      // runner's failover-policy surfaces the error instead of retrying.
+      projector?.markTimedOut("wallclock");
       runAbortController.abort("timeout");
     },
     Math.max(100, params.timeoutMs),

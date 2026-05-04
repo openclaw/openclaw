@@ -96,6 +96,8 @@ export class CodexAppServerEventProjector {
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private aborted = false;
+  private timedOut = false;
+  private idleTimedOut = false;
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
@@ -218,8 +220,8 @@ export class CodexAppServerEventProjector {
     return {
       aborted: this.aborted || turnInterrupted,
       externalAbort: false,
-      timedOut: false,
-      idleTimedOut: false,
+      timedOut: this.timedOut,
+      idleTimedOut: this.idleTimedOut,
       timedOutDuringCompaction: false,
       timedOutDuringToolExecution: false,
       promptError,
@@ -259,8 +261,36 @@ export class CodexAppServerEventProjector {
     };
   }
 
-  markTimedOut(): void {
+  /**
+   * Record that the run attempt timed out.
+   *
+   * The `kind` parameter distinguishes between two semantically-different
+   * timeout categories that the embedded-runner failover policy keys on:
+   *
+   *   - `"idle"` (default) — an idle watchdog fired because no progress
+   *     events arrived from the codex app-server within the configured
+   *     window (turnCompletionIdleTimeoutMs / turnTransportIdleTimeoutMs /
+   *     turnTerminalIdleTimeoutMs). These are recoverable: the upstream
+   *     Responses websocket likely stalled mid-stream and a fresh request
+   *     on the same model usually succeeds, so failover-policy.ts and
+   *     assistant-failover.ts both gate `sameModelIdleTimeoutRetry()` on
+   *     `idleTimedOut === true`.
+   *
+   *   - `"wallclock"` — the run-attempt's outer hard cap (`params.timeoutMs`,
+   *     typically 3+ hours) was reached. This indicates the entire turn
+   *     was genuinely too long and an idle-retry on the same model would
+   *     not fix it. Sets only `timedOut = true`, not `idleTimedOut`, so
+   *     failover surfaces the error rather than retrying.
+   *
+   * Both kinds set `timedOut = true` and abort the run so downstream code
+   * (which checked for `aborted`) keeps observing the same shape.
+   */
+  markTimedOut(kind: "idle" | "wallclock" = "idle"): void {
     this.aborted = true;
+    this.timedOut = true;
+    if (kind === "idle") {
+      this.idleTimedOut = true;
+    }
     this.promptError = "codex app-server attempt timed out";
     this.promptErrorSource = "prompt";
   }

@@ -733,6 +733,96 @@ describe("runCodexAppServerAttempt", () => {
     expect(queueAgentHarnessMessage("session-1", "after transport idle")).toBe(false);
   });
 
+  // End-to-end flag plumbing through runCodexAppServerAttempt.
+  //
+  // event-projector.test.ts verifies markTimedOut → buildResult flag mapping
+  // in isolation. These tests verify the same plumbing through the full
+  // attempt path so the embedded-runner failover policy can rely on the
+  // returned shape.
+  it("transport-idle timeout returns timedOut=true and idleTimedOut=true (retry-eligible)", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, { turnTransportIdleTimeoutMs: 5 });
+    await harness.waitForMethod("turn/start");
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.idleTimedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server transport idle timed out (no notifications/requests received)",
+    );
+  });
+
+  it("terminal-idle timeout returns timedOut=true and idleTimedOut=true (retry-eligible)", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 5 });
+    await harness.waitForMethod("turn/start");
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.idleTimedOut).toBe(true);
+  });
+
+  it("wallclock timeout returns timedOut=true but idleTimedOut=false (NOT retry-eligible)", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    // Wallclock cap fires before any of the idle watchdogs (idle defaults
+    // are 60s; this test uses 50ms to win the race), so the result must
+    // reflect the wallclock kind explicitly.
+    params.timeoutMs = 50;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 60_000,
+      turnTransportIdleTimeoutMs: 60_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await harness.waitForMethod("turn/start");
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    // CRITICAL: idleTimedOut must be FALSE for wallclock so the embedded-
+    // runner does not retry on the same model — a 3+ hour wallclock means
+    // the turn was genuinely too long, not that the transport stalled.
+    expect(result.idleTimedOut).toBe(false);
+  });
+
+  it("normal turn completion does not flag timedOut or idleTimedOut", async () => {
+    // Regression guard: a successful turn must keep both flags false so
+    // failover-policy treats it as a clean completion.
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.idleTimedOut).toBe(false);
+  });
+
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
     const beforePromptBuild = vi.fn(async () => ({
       systemPrompt: "custom codex system",
