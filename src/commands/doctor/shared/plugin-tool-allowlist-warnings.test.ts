@@ -132,7 +132,7 @@ describe("collectPluginToolAllowlistWarnings", () => {
     { name: "default", plugins: { allow: ["telegram"] } },
     {
       name: "explicit allowlist",
-      plugins: { allow: ["telegram"], bundledDiscovery: "allowlist" },
+      plugins: { allow: ["telegram"], bundledDiscovery: "allowlist" as const },
     },
   ])(
     "does not warn when bundled provider discovery follows the allowlist ($name)",
