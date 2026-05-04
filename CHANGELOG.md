@@ -203,6 +203,7 @@ Docs: https://docs.openclaw.ai
 - Agents/subagents: detect prefix-only completion announce replies and fall back to the captured child result so requester chats no longer lose most of long sub-agent reports silently. Fixes #76412. Thanks @inxaos and @davemorin.
 - TUI: replace the stale-response watchdog notice with plain user-facing copy so stalled replies no longer surface backend or streaming internals. (#77120) Thanks @davemorin.
 - Security/Windows: validate `SystemRoot`/`WINDIR` env values through the Windows install-root validator and add them to the dangerous-host-env policy when resolving `icacls.exe`/`whoami.exe` for `openclaw security audit`, so workspace `.env` overrides and bare command names cannot redirect Windows ACL helpers to attacker-controlled binaries. (#74458) Thanks @mmaps.
+- Security/Windows: pin Windows registry-probe `reg.exe` resolution to the canonical Windows install root in install-root probing, so `SystemRoot`/`WINDIR` env overrides cannot redirect registry queries during Windows host detection. (#74454) Thanks @mmaps.
 
 ## 2026.5.3-1
 
