@@ -17,6 +17,7 @@ import {
   runQuotaSuspensionMaintenance,
   updateSessionStoreEntry,
 } from "../../../config/sessions/store.js";
+import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
@@ -788,6 +789,7 @@ export async function runEmbeddedAttempt(
       );
     }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
+    const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(
       createDiagnosticTraceContextFromActiveScope(),
@@ -1462,6 +1464,8 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           agentDir,
           tokenBudget: params.contextTokenBudget,
+          activeAgentId: sessionAgentId,
+          contextEnginePluginId: activeContextEnginePluginId,
         }),
         runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
@@ -1473,6 +1477,7 @@ export async function runEmbeddedAttempt(
             sessionManager: contextParams.sessionManager as never,
             runtimeContext: contextParams.runtimeContext,
             config: params.config,
+            agentId: sessionAgentId,
           }),
         warn: (message) => log.warn(message),
       });
@@ -3442,6 +3447,8 @@ export async function runEmbeddedAttempt(
             tokenBudget: params.contextTokenBudget,
             lastCallUsage,
             promptCache,
+            activeAgentId: sessionAgentId,
+            contextEnginePluginId: activeContextEnginePluginId,
           });
           await finalizeAttemptContextEngineTurn({
             contextEngine: activeContextEngine,
@@ -3465,6 +3472,7 @@ export async function runEmbeddedAttempt(
                 sessionManager: contextParams.sessionManager as never,
                 runtimeContext: contextParams.runtimeContext,
                 config: params.config,
+                agentId: sessionAgentId,
               }),
             sessionManager,
             config: params.config,

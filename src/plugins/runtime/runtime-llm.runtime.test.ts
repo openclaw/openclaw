@@ -177,6 +177,158 @@ describe("runtime.llm.complete", () => {
     expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
+  it("denies context-engine model overrides without owning plugin llm policy", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    await expect(
+      runtimeContext.llm!.complete({
+        model: "openai-codex/gpt-5.4-mini",
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    ).rejects.toThrow("cannot override the target model");
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
+  it("allows context-engine model overrides through the owning plugin llm policy", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: {
+        ...cfg,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openai-codex/gpt-5.4-mini", "minimax/MiniMax-M2.7"],
+              },
+            },
+          },
+        },
+      },
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    const result = await runtimeContext.llm!.complete({
+      agentId: "main",
+      model: "openai-codex/gpt-5.4-mini",
+      messages: [{ role: "user", content: "summarize" }],
+    });
+
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        modelRef: "openai-codex/gpt-5.4-mini",
+      }),
+    );
+    expect(result.audit).toMatchObject({
+      caller: { kind: "context-engine", id: "context-engine.compaction" },
+      sessionKey: "agent:main:session:abc",
+    });
+  });
+
+  it("denies context-engine model overrides outside the owning plugin allowlist", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: {
+        ...cfg,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openai-codex/gpt-5.4-mini"],
+              },
+            },
+          },
+        },
+      },
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    await expect(
+      runtimeContext.llm!.complete({
+        model: "openai-codex/gpt-5.5",
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    ).rejects.toThrow(
+      'model override "openai-codex/gpt-5.5" is not allowlisted for plugin "lossless-claw"',
+    );
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
+  it("keeps context-engine attribution and host-derived policy inside plugin runtime scope", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: {
+        ...cfg,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openai-codex/gpt-5.4-mini"],
+              },
+            },
+          },
+        },
+      },
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    const result = await withPluginRuntimePluginIdScope("spoofed-plugin", () =>
+      runtimeContext.llm!.complete({
+        model: "openai-codex/gpt-5.4-mini",
+        messages: [{ role: "user", content: "summarize" }],
+        caller: { kind: "plugin", id: "spoofed-plugin" },
+      } as Parameters<NonNullable<typeof runtimeContext.llm>["complete"]>[0] & {
+        caller: unknown;
+      }),
+    );
+
+    expect(result.audit.caller).toEqual({
+      kind: "context-engine",
+      id: "context-engine.compaction",
+    });
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "openai-codex/gpt-5.4-mini",
+      }),
+    );
+  });
+
+  it("allows the bound context-engine agent and denies cross-agent overrides", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "main",
+      purpose: "context-engine.compaction",
+    });
+
+    await runtimeContext.llm!.complete({
+      agentId: "main",
+      messages: [{ role: "user", content: "summarize" }],
+    });
+    expect(hoisted.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+      }),
+    );
+
+    await expect(
+      runtimeContext.llm!.complete({
+        agentId: "worker",
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    ).rejects.toThrow("cannot override the active session agent");
+  });
+
   it("allows explicit agentId for non-session plugin calls", async () => {
     const logger = createLogger();
     const llm = createRuntimeLlm({

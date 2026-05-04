@@ -1,5 +1,8 @@
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
-import { resolveContextEngine } from "../../context-engine/registry.js";
+import {
+  resolveContextEngine,
+  resolveContextEngineOwnerPluginId,
+} from "../../context-engine/registry.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
@@ -93,6 +96,7 @@ export async function compactEmbeddedPiSession(
     params,
     agentDir,
     contextTokenBudget,
+    contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
   const harnessResult = await maybeCompactAgentHarnessSession({
     ...params,
@@ -303,6 +307,7 @@ export async function compactEmbeddedPiSession(
 function buildCompactionContextEngineRuntimeContext(params: {
   params: CompactEmbeddedPiSessionParams;
   agentDir: string;
+  contextEnginePluginId?: string;
   contextTokenBudget?: number;
 }): ContextEngineRuntimeContext {
   return {
@@ -335,6 +340,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
     ...resolveContextEngineCapabilities({
       config: params.params.config,
       sessionKey: params.params.sessionKey,
+      contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.compaction",
     }),
     tokenBudget: params.contextTokenBudget,
