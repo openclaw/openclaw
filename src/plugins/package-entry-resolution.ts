@@ -21,6 +21,8 @@ type RuntimeExtensionsResolution =
   | { ok: true; runtimeExtensions: string[] }
   | { ok: false; error: string };
 
+type PackageManifestStringList = { ok: true; entries: string[] } | { ok: false; error: string };
+
 function runtimeExtensionsLengthMismatchMessage(params: {
   runtimeExtensionsLength: number;
   extensionsLength: number;
@@ -31,11 +33,25 @@ function runtimeExtensionsLengthMismatchMessage(params: {
   );
 }
 
-function normalizePackageManifestStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
+function readPackageManifestStringList(params: {
+  fieldName: string;
+  value: unknown;
+}): PackageManifestStringList {
+  if (!Array.isArray(params.value)) {
+    return { ok: true, entries: [] };
   }
-  return value.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+  const entries: string[] = [];
+  for (const [index, entry] of params.value.entries()) {
+    const normalized = normalizeOptionalString(entry);
+    if (!normalized) {
+      return {
+        ok: false,
+        error: `package.json ${params.fieldName}[${index}] must be a non-empty string`,
+      };
+    }
+    entries.push(normalized);
+  }
+  return { ok: true, entries };
 }
 
 function resolvePackageRuntimeExtensionEntries(params: {
@@ -43,7 +59,14 @@ function resolvePackageRuntimeExtensionEntries(params: {
   extensions: readonly string[];
 }): RuntimeExtensionsResolution {
   const packageManifest = getPackageManifestMetadata(params.manifest ?? undefined);
-  const runtimeExtensions = normalizePackageManifestStringList(packageManifest?.runtimeExtensions);
+  const runtimeExtensionsResult = readPackageManifestStringList({
+    fieldName: "openclaw.runtimeExtensions",
+    value: packageManifest?.runtimeExtensions,
+  });
+  if (!runtimeExtensionsResult.ok) {
+    return runtimeExtensionsResult;
+  }
+  const runtimeExtensions = runtimeExtensionsResult.entries;
   if (runtimeExtensions.length === 0) {
     return { ok: true, runtimeExtensions: [] };
   }
