@@ -3,6 +3,8 @@ import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { saveJsonFile } from "../infra/json-file.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveDefaultPluginNpmDir } from "../plugins/install-paths.js";
 import type { InstalledPluginIndexRecordStoreOptions } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
@@ -31,6 +33,20 @@ type StaleManagedNpmBundledPlugin = {
   version?: string;
 };
 
+type ManagedNpmOpenClawPeerLink = {
+  pluginId?: string;
+  packageName: string;
+  packageDir: string;
+  linkPath: string;
+  expectedTarget: string;
+  currentTarget?: string;
+};
+
+type ManagedNpmOpenClawPeerLinkScan = {
+  links: ManagedNpmOpenClawPeerLink[];
+  warnings: string[];
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -57,6 +73,12 @@ function readStringMap(value: unknown): Record<string, string> {
   return result;
 }
 
+function resolveManagedPluginNpmRoot(params: PluginRegistryDoctorRepairParams): string {
+  return params.stateDir
+    ? path.join(params.stateDir, "npm")
+    : resolveDefaultPluginNpmDir(params.env);
+}
+
 function deleteObjectKey(record: Record<string, unknown>, key: string): boolean {
   if (!Object.prototype.hasOwnProperty.call(record, key)) {
     return false;
@@ -77,6 +99,10 @@ function readPluginManifestId(packageDir: string): string | undefined {
   return typeof id === "string" && id.trim() ? id.trim() : undefined;
 }
 
+function readPackagePeerDependencies(packageDir: string): Record<string, string> {
+  return readStringMap(readJsonObject(path.join(packageDir, "package.json"))?.peerDependencies);
+}
+
 function listStaleManagedNpmBundledPlugins(
   params: PluginRegistryDoctorRepairParams,
 ): StaleManagedNpmBundledPlugin[] {
@@ -87,9 +113,7 @@ function listStaleManagedNpmBundledPlugins(
   const bundledByPackage = new Map(
     currentBundled.map((plugin) => [plugin.packageName, plugin] as const),
   );
-  const npmRoot = params.stateDir
-    ? path.join(params.stateDir, "npm")
-    : resolveDefaultPluginNpmDir(params.env);
+  const npmRoot = resolveManagedPluginNpmRoot(params);
   const npmPackageJsonPath = path.join(npmRoot, "package.json");
   const dependencies = readStringMap(readJsonObject(npmPackageJsonPath)?.dependencies);
   const stale: StaleManagedNpmBundledPlugin[] = [];
@@ -228,6 +252,187 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
   return true;
 }
 
+function safeRealpath(filePath: string): string | undefined {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function safeReadlink(filePath: string): string | undefined {
+  try {
+    return fs.readlinkSync(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveManagedNpmDependencyPackageDir(params: {
+  npmRoot: string;
+  packageName: string;
+}): string {
+  return path.join(params.npmRoot, "node_modules", params.packageName);
+}
+
+function formatManagedNpmOpenClawPeerLink(link: ManagedNpmOpenClawPeerLink): string {
+  return link.pluginId && link.pluginId !== link.packageName
+    ? `${link.pluginId}: ${link.packageName}`
+    : link.packageName;
+}
+
+function resolveManagedNpmDependencyPackageDirInsideRoot(params: {
+  npmRoot: string;
+  packageName: string;
+}): { packageDir: string } | { warning: string } {
+  const nodeModulesRoot = path.join(params.npmRoot, "node_modules");
+  const packageDir = resolveManagedNpmDependencyPackageDir(params);
+  if (!isPathInside(nodeModulesRoot, packageDir)) {
+    return {
+      warning: `- ${params.packageName}: package path escapes the managed npm root; skipping peer-link repair.`,
+    };
+  }
+
+  const packageDirRealpath = safeRealpath(packageDir);
+  if (packageDirRealpath && !isPathInside(nodeModulesRoot, packageDirRealpath)) {
+    return {
+      warning: `- ${params.packageName}: package path resolves outside the managed npm root; skipping peer-link repair.`,
+    };
+  }
+
+  return { packageDir };
+}
+
+function listManagedNpmOpenClawPeerLinks(
+  params: PluginRegistryDoctorRepairParams,
+): ManagedNpmOpenClawPeerLinkScan {
+  const npmRoot = resolveManagedPluginNpmRoot(params);
+  const dependencies = readStringMap(
+    readJsonObject(path.join(npmRoot, "package.json"))?.dependencies,
+  );
+  if (Object.keys(dependencies).length === 0) {
+    return { links: [], warnings: [] };
+  }
+
+  const hostRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
+  });
+  if (!hostRoot) {
+    return {
+      links: [],
+      warnings: [
+        "Could not locate the OpenClaw package root to repair managed npm plugin peer links; plugin SDK imports may still fail.",
+      ],
+    };
+  }
+
+  const expectedTarget = safeRealpath(hostRoot) ?? hostRoot;
+  const links: ManagedNpmOpenClawPeerLink[] = [];
+  const warnings: string[] = [];
+  for (const packageName of Object.keys(dependencies).toSorted()) {
+    const packageDirResult = resolveManagedNpmDependencyPackageDirInsideRoot({
+      npmRoot,
+      packageName,
+    });
+    if ("warning" in packageDirResult) {
+      warnings.push(packageDirResult.warning);
+      continue;
+    }
+    const { packageDir } = packageDirResult;
+    const peerDependencies = readPackagePeerDependencies(packageDir);
+    if (!Object.prototype.hasOwnProperty.call(peerDependencies, "openclaw")) {
+      continue;
+    }
+    const linkPath = path.join(packageDir, "node_modules", "openclaw");
+    if (!isPathInside(packageDir, linkPath)) {
+      warnings.push(
+        `- ${packageName}: peer-link path escapes the package directory; skipping peer-link repair.`,
+      );
+      continue;
+    }
+    const currentTarget = safeRealpath(linkPath) ?? safeReadlink(linkPath);
+    if (currentTarget === expectedTarget) {
+      continue;
+    }
+    const pluginId = readPluginManifestId(packageDir);
+    links.push({
+      ...(pluginId ? { pluginId } : {}),
+      packageName,
+      packageDir,
+      linkPath,
+      expectedTarget,
+      ...(currentTarget ? { currentTarget } : {}),
+    });
+  }
+  return { links, warnings };
+}
+
+function repairManagedNpmOpenClawPeerLink(link: ManagedNpmOpenClawPeerLink): void {
+  fs.mkdirSync(path.dirname(link.linkPath), { recursive: true });
+  fs.rmSync(link.linkPath, { recursive: true, force: true });
+  fs.symlinkSync(link.expectedTarget, link.linkPath, "junction");
+}
+
+export function maybeRepairManagedNpmOpenClawPeerLinks(
+  params: PluginRegistryDoctorRepairParams,
+): boolean {
+  const { links: missingOrStaleLinks, warnings: scanWarnings } =
+    listManagedNpmOpenClawPeerLinks(params);
+  if (scanWarnings.length > 0) {
+    note(
+      ["Could not inspect all managed npm OpenClaw host peer links:", ...scanWarnings].join("\n"),
+      "Plugin registry",
+    );
+  }
+  if (missingOrStaleLinks.length === 0) {
+    return false;
+  }
+
+  if (!params.prompter.shouldRepair) {
+    note(
+      [
+        "Managed npm plugin packages are missing their OpenClaw host peer link:",
+        ...missingOrStaleLinks.map((link) => `- ${formatManagedNpmOpenClawPeerLink(link)}`),
+        `Repair with ${formatCliCommand("openclaw doctor --fix")} to relink the host openclaw package for plugin SDK imports.`,
+      ].join("\n"),
+      "Plugin registry",
+    );
+    return false;
+  }
+
+  const repaired: ManagedNpmOpenClawPeerLink[] = [];
+  const warnings: string[] = [];
+  for (const link of missingOrStaleLinks) {
+    try {
+      repairManagedNpmOpenClawPeerLink(link);
+      repaired.push(link);
+    } catch (error) {
+      warnings.push(`- ${formatManagedNpmOpenClawPeerLink(link)}: ${String(error)}`);
+    }
+  }
+
+  if (repaired.length > 0) {
+    note(
+      [
+        "Repaired OpenClaw host peer link(s) for managed npm plugins:",
+        ...repaired.map((link) => `- ${formatManagedNpmOpenClawPeerLink(link)}`),
+      ].join("\n"),
+      "Plugin registry",
+    );
+  }
+  if (warnings.length > 0) {
+    note(
+      ["Could not repair OpenClaw host peer link(s) for managed npm plugins:", ...warnings].join(
+        "\n",
+      ),
+      "Plugin registry",
+    );
+  }
+  return repaired.length > 0;
+}
+
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<OpenClawConfig> {
@@ -248,6 +453,7 @@ export async function maybeRepairPluginRegistryState(
     config: params.config,
   };
   const removedStaleManagedNpmBundledPlugins = maybeRepairStaleManagedNpmBundledPlugins(params);
+  const repairedManagedNpmOpenClawPeerLinks = maybeRepairManagedNpmOpenClawPeerLinks(params);
   if (!params.prompter.shouldRepair) {
     if (preflight.action === "migrate") {
       note(
@@ -274,7 +480,11 @@ export async function maybeRepairPluginRegistryState(
     return params.config;
   }
 
-  if (preflight.action === "skip-existing" || removedStaleManagedNpmBundledPlugins) {
+  if (
+    preflight.action === "skip-existing" ||
+    removedStaleManagedNpmBundledPlugins ||
+    repairedManagedNpmOpenClawPeerLinks
+  ) {
     const index = await refreshPluginRegistry({
       ...migrationParams,
       reason: "migration",
