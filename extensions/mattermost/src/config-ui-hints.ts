@@ -33,9 +33,17 @@ export const mattermostChannelConfigUiHints = {
     label: "Mattermost Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
   },
+  "streaming.progress.commandText": {
+    label: "Mattermost Progress Command Text",
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
   "streaming.preview.toolProgress": {
     label: "Mattermost Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview post (default: true). Set false to keep tool updates as separate messages.",
+    help: "Show tool/progress activity in the live draft preview post (default: true). Set false to hide interim tool updates while the draft preview stays active.",
+  },
+  "streaming.preview.commandText": {
+    label: "Mattermost Draft Command Text",
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
   "streaming.block.enabled": {
     label: "Mattermost Block Streaming Enabled",

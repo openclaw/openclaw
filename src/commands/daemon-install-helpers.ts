@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
+import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
@@ -13,11 +13,16 @@ import {
   resolveGatewayProgramArguments,
   resolveOpenClawWrapperPath,
 } from "../daemon/program-args.js";
+import {
+  addServiceEnvPlanEntries,
+  compactServiceEnvPlanValueSources,
+  createMutableServiceEnvPlan,
+} from "../daemon/service-env-plan.js";
+import { applyManagedServiceEnvRenderPolicy } from "../daemon/service-env-render-policy.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   formatManagedServiceEnvKeys,
   readManagedServiceEnvKeysFromEnvironment,
-  writeManagedServiceEnvKeysToEnvironment,
 } from "../daemon/service-managed-env.js";
 import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
@@ -408,10 +413,11 @@ async function buildGatewayInstallEnvironment(params: {
   environment: Record<string, string | undefined>;
   environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 }> {
-  const durableEnvironment = collectDurableServiceEnvVars({
-    env: params.env,
-    config: params.config,
-  });
+  const { stateDirDotEnvEnvironment, configEnvironment, durableEnvironment } =
+    collectDurableServiceEnvVarSources({
+      env: params.env,
+      config: params.config,
+    });
   const configSecretRefEnvironment = collectConfigSecretRefServiceEnvVars({
     env: params.env,
     config: params.config,
@@ -433,43 +439,33 @@ async function buildGatewayInstallEnvironment(params: {
     params.existingEnvironment,
     readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment),
   );
-  const environment: Record<string, string | undefined> = {
-    ...preservedExistingEnvironment,
-    ...durableEnvironment,
-    ...configSecretRefEnvironment,
-    ...execSecretRefPassEnvEnvironment,
-    ...authProfileEnvironment,
-  };
-  const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource | undefined> =
-    {};
-  for (const rawKey of Object.keys(preservedExistingEnvironment)) {
-    const normalizedKey = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
-    environmentValueSources[rawKey] = normalizedKey
-      ? (readExistingEnvironmentValueSource({
-          existingEnvironmentValueSources: params.existingEnvironmentValueSources,
-          normalizedKey,
-        }) ?? "inline")
-      : "inline";
-  }
-  for (const key of Object.keys({
-    ...durableEnvironment,
-    ...configSecretRefEnvironment,
-    ...execSecretRefPassEnvEnvironment,
-    ...authProfileEnvironment,
-  })) {
-    environmentValueSources[key] = "inline";
-  }
+  const plan = createMutableServiceEnvPlan();
+  addServiceEnvPlanEntries(plan, preservedExistingEnvironment, {
+    source: "existing-preserved",
+    valueSource: ({ normalizedKey }) =>
+      readExistingEnvironmentValueSource({
+        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
+        normalizedKey,
+      }) ?? "inline",
+  });
+  addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, { source: "state-dotenv" });
+  addServiceEnvPlanEntries(plan, configEnvironment, { source: "config-env" });
+  addServiceEnvPlanEntries(plan, configSecretRefEnvironment, { source: "config-secretref-env" });
+  addServiceEnvPlanEntries(plan, execSecretRefPassEnvEnvironment, { source: "exec-passenv" });
+  addServiceEnvPlanEntries(plan, authProfileEnvironment, { source: "auth-profile-env" });
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(durableEnvironment, {
     omitKeys: Object.keys(params.serviceEnvironment),
   });
-  writeManagedServiceEnvKeysToEnvironment(environment, managedServiceEnvKeys);
-  if (environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS) {
-    environmentValueSources.OPENCLAW_SERVICE_MANAGED_ENV_KEYS = "inline";
-  }
-  Object.assign(environment, params.serviceEnvironment);
-  for (const key of Object.keys(params.serviceEnvironment)) {
-    environmentValueSources[key] = "inline";
-  }
+  applyManagedServiceEnvRenderPolicy({
+    plan,
+    managedServiceEnvKeys,
+    serviceEnvironment: params.serviceEnvironment,
+    platform: params.platform,
+  });
+  addServiceEnvPlanEntries(plan, params.serviceEnvironment, {
+    source: "service-generated",
+    includeRawKeys: true,
+  });
   const mergedPath = mergeServicePath(
     params.serviceEnvironment.PATH,
     params.existingEnvironment?.PATH,
@@ -477,15 +473,14 @@ async function buildGatewayInstallEnvironment(params: {
     params.platform,
   );
   if (mergedPath) {
-    environment.PATH = mergedPath;
-    environmentValueSources.PATH = "inline";
+    plan.environment.PATH = mergedPath;
+    plan.environmentValueSources.PATH = "inline";
   }
-  for (const key of Object.keys(environmentValueSources)) {
-    if (!Object.hasOwn(environment, key)) {
-      delete environmentValueSources[key];
-    }
-  }
-  return { environment, environmentValueSources };
+  compactServiceEnvPlanValueSources(plan);
+  return {
+    environment: plan.environment,
+    environmentValueSources: plan.environmentValueSources,
+  };
 }
 
 export async function buildGatewayInstallPlan(params: {

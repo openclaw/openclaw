@@ -11,7 +11,7 @@ import {
   listGoogleMeetCalendarEvents,
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
-import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
+import type { GoogleMeetConfig, GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
 import { hasCreateSpaceConfigInput, resolveCreateSpaceConfig } from "./create.js";
 import {
   buildGoogleMeetPreflightReport,
@@ -37,7 +37,7 @@ import type { GoogleMeetRuntime } from "./runtime.js";
 
 type JoinOptions = {
   transport?: GoogleMeetTransport;
-  mode?: GoogleMeetMode;
+  mode?: GoogleMeetModeInput;
   message?: string;
   timeoutMs?: string;
   dialInNumber?: string;
@@ -134,7 +134,7 @@ export type GoogleMeetExportManifest = {
 
 type SetupOptions = {
   json?: boolean;
-  mode?: GoogleMeetMode;
+  mode?: GoogleMeetModeInput;
   transport?: GoogleMeetTransport;
 };
 
@@ -181,7 +181,7 @@ type CreateOptions = {
   entryPointAccess?: string;
   join?: boolean;
   transport?: GoogleMeetTransport;
-  mode?: GoogleMeetMode;
+  mode?: GoogleMeetModeInput;
   message?: string;
   dialInNumber?: string;
   pin?: string;
@@ -349,10 +349,18 @@ function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"
     }
     writeStdoutLine("node: %s", session.chrome?.nodeId ?? "local/none");
     writeStdoutLine("audio bridge: %s", session.chrome?.audioBridge?.type ?? "none");
+    const bridgeProvider =
+      session.chrome?.audioBridge?.provider ??
+      session.realtime.transcriptionProvider ??
+      session.realtime.provider ??
+      "n/a";
     writeStdoutLine(
-      "provider: %s",
-      session.chrome?.audioBridge?.provider ?? session.realtime.provider ?? "n/a",
+      session.mode === "agent" ? "transcription provider: %s" : "provider: %s",
+      bridgeProvider,
     );
+    if (session.realtime.enabled) {
+      writeStdoutLine("talk-back mode: %s", session.realtime.strategy ?? session.mode);
+    }
     writeStdoutLine("in call: %s", formatBoolean(health?.inCall));
     writeStdoutLine("lobby waiting: %s", formatBoolean(health?.lobbyWaiting));
     writeStdoutLine("captioning: %s", formatBoolean(health?.captioning));
@@ -372,6 +380,11 @@ function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"
     writeStdoutLine("realtime ready: %s", formatBoolean(health?.realtimeReady));
     writeStdoutLine("audio input active: %s", formatBoolean(health?.audioInputActive));
     writeStdoutLine("audio output active: %s", formatBoolean(health?.audioOutputActive));
+    writeStdoutLine("meet output routed: %s", formatBoolean(health?.audioOutputRouted));
+    if (health?.audioOutputDeviceLabel || health?.audioOutputRouteError) {
+      writeStdoutLine("meet output device: %s", formatOptional(health.audioOutputDeviceLabel));
+      writeStdoutLine("meet output route error: %s", formatOptional(health.audioOutputRouteError));
+    }
     writeStdoutLine(
       "last input: %s (%s bytes)",
       formatOptional(health?.lastInputAt),
@@ -1473,10 +1486,7 @@ export function registerGoogleMeetCli(params: {
     )
     .option("--no-join", "Only create the meeting URL; do not join it")
     .option("--transport <transport>", "Join transport: chrome, chrome-node, or twilio")
-    .option(
-      "--mode <mode>",
-      "Join mode: realtime for live talk-back, transcribe for observe/control",
-    )
+    .option("--mode <mode>", "Join mode: agent, bidi, or transcribe")
     .option("--message <text>", "Realtime speech to trigger after join")
     .option("--dial-in-number <phone>", "Meet dial-in number for Twilio transport")
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
@@ -1657,10 +1667,7 @@ export function registerGoogleMeetCli(params: {
     .command("join")
     .argument("[url]", "Explicit https://meet.google.com/... URL")
     .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
-    .option(
-      "--mode <mode>",
-      "Mode: realtime for live talk-back, transcribe to join without the realtime voice bridge",
-    )
+    .option("--mode <mode>", "Mode: agent, bidi, or transcribe")
     .option("--message <text>", "Realtime speech to trigger after join")
     .option("--dial-in-number <phone>", "Meet dial-in number for Twilio transport")
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
@@ -1695,10 +1702,7 @@ export function registerGoogleMeetCli(params: {
     .command("test-speech")
     .argument("[url]", "Explicit https://meet.google.com/... URL")
     .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
-    .option(
-      "--mode <mode>",
-      "Mode: realtime for live talk-back, transcribe to join without the realtime voice bridge",
-    )
+    .option("--mode <mode>", "Mode: agent, bidi, or transcribe")
     .option(
       "--message <text>",
       "Realtime speech to trigger",
@@ -2269,7 +2273,7 @@ export function registerGoogleMeetCli(params: {
     .command("setup")
     .description("Show Google Meet transport setup status")
     .option("--transport <transport>", "Transport to check: chrome, chrome-node, or twilio")
-    .option("--mode <mode>", "Mode to check: realtime or transcribe")
+    .option("--mode <mode>", "Mode to check: agent, bidi, or transcribe")
     .option("--json", "Print JSON output", false)
     .action(async (options: SetupOptions) => {
       const rt = await params.ensureRuntime();

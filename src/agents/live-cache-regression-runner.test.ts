@@ -103,6 +103,13 @@ describe("live cache regression runner", () => {
       __testing.shouldRetryCacheProbeText({
         attempt: 1,
         suffix: "openai-stable-hit-a",
+        text: "I saw openai-stable-hit-a.",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 1,
+        suffix: "openai-stable-hit-a",
         text: "CACHE-OK openai-stable-hit-a",
       }),
     ).toBe(false);

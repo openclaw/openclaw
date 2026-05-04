@@ -1142,6 +1142,39 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("forwards raw tool progress detail mode to tool-start reply options", async () => {
+    const onToolStart = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "pnpm test -- --watch=false" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+      toolProgressDetail: "raw",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "pnpm test -- --watch=false" },
+      detailMode: "raw",
+    });
+  });
+
   it("publishes Codex app-server telemetry to agent event subscribers", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);

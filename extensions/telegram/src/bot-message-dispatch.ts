@@ -8,6 +8,8 @@ import {
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   createChannelProgressDraftGate,
+  formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
@@ -237,10 +239,13 @@ function clipProgressMarkdownText(text: string): string {
   return `${text.slice(0, MAX_PROGRESS_MARKDOWN_TEXT_CHARS - 1).trimEnd()}…`;
 }
 
+function sanitizeProgressMarkdownText(text: string): string {
+  return text.replaceAll("`", "'");
+}
+
 function formatProgressAsMarkdownCode(text: string): string {
   const clipped = clipProgressMarkdownText(text);
-  const safe = clipped.replaceAll("`", "'");
-  return `\`${safe}\``;
+  return `\`${sanitizeProgressMarkdownText(clipped)}\``;
 }
 
 export const dispatchTelegramMessage = async ({
@@ -478,6 +483,7 @@ export const dispatchTelegramMessage = async ({
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: string[] = [];
+  let answerLaneHasAssistantContent = false;
   const renderProgressDraft = async (options?: { flush?: boolean }) => {
     if (!answerLane.stream || streamMode !== "progress") {
       return;
@@ -508,7 +514,7 @@ export const dispatchTelegramMessage = async ({
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
       return;
     }
-    const normalized = line?.replace(/\s+/g, " ").trim();
+    const normalized = sanitizeProgressMarkdownText(line?.replace(/\s+/g, " ").trim() ?? "");
     if (streamMode !== "progress") {
       if (!previewToolProgressEnabled || previewToolProgressSuppressed || !normalized) {
         return;
@@ -600,13 +606,14 @@ export const dispatchTelegramMessage = async ({
           messageId: previewMessageId,
           textSnapshot: answerLane.lastPartialText,
           visibleSinceMs: answerLane.stream?.visibleSinceMs?.(),
-          deleteIfUnused: false,
+          deleteIfUnused: !answerLaneHasAssistantContent,
         });
       }
       answerLane.stream?.forceNewMessage();
       didForceNewMessage = true;
     }
     resetDraftLaneState(answerLane);
+    answerLaneHasAssistantContent = false;
     if (didForceNewMessage) {
       activePreviewLifecycleByLane.answer = "transient";
       retainPreviewOnCleanupByLane.answer = false;
@@ -625,6 +632,7 @@ export const dispatchTelegramMessage = async ({
       if (streamMode === "progress") {
         return;
       }
+      answerLaneHasAssistantContent = true;
       previewToolProgressSuppressed = true;
       previewToolProgressLines = [];
     }
@@ -1024,10 +1032,6 @@ export const dispatchTelegramMessage = async ({
                         continue;
                       }
                       if (info.kind === "final") {
-                        if (reasoningLane.hasStreamedMessage) {
-                          activePreviewLifecycleByLane.reasoning = "complete";
-                          retainPreviewOnCleanupByLane.reasoning = true;
-                        }
                         reasoningStepState.resetForNextStep();
                       }
                     }
@@ -1172,13 +1176,33 @@ export const dispatchTelegramMessage = async ({
                     if (statusReactionController && toolName) {
                       await statusReactionController.setTool(toolName);
                     }
-                    await pushPreviewToolProgress(toolName ? `tool: ${toolName}` : "tool running", {
-                      toolName,
-                    });
+                    await pushPreviewToolProgress(
+                      formatChannelProgressDraftLineForEntry(
+                        telegramCfg,
+                        {
+                          event: "tool",
+                          name: toolName,
+                          phase: payload.phase,
+                          args: payload.args,
+                        },
+                        payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+                      ),
+                      { toolName },
+                    );
                   },
                   onItemEvent: async (payload) => {
                     await pushPreviewToolProgress(
-                      payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+                      formatChannelProgressDraftLineForEntry(telegramCfg, {
+                        event: "item",
+                        itemKind: payload.kind,
+                        title: payload.title,
+                        name: payload.name,
+                        phase: payload.phase,
+                        status: payload.status,
+                        summary: payload.summary,
+                        progressText: payload.progressText,
+                        meta: payload.meta,
+                      }),
                     );
                   },
                   onPlanUpdate: async (payload) => {
@@ -1186,7 +1210,13 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushPreviewToolProgress(
-                      payload.explanation ?? payload.steps?.[0] ?? "planning",
+                      formatChannelProgressDraftLine({
+                        event: "plan",
+                        phase: payload.phase,
+                        title: payload.title,
+                        explanation: payload.explanation,
+                        steps: payload.steps,
+                      }),
                     );
                   },
                   onApprovalEvent: async (payload) => {
@@ -1194,7 +1224,14 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushPreviewToolProgress(
-                      payload.command ? `approval: ${payload.command}` : "approval requested",
+                      formatChannelProgressDraftLine({
+                        event: "approval",
+                        phase: payload.phase,
+                        title: payload.title,
+                        command: payload.command,
+                        reason: payload.reason,
+                        message: payload.message,
+                      }),
                     );
                   },
                   onCommandOutput: async (payload) => {
@@ -1202,9 +1239,14 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushPreviewToolProgress(
-                      payload.name
-                        ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
-                        : payload.title,
+                      formatChannelProgressDraftLine({
+                        event: "command-output",
+                        phase: payload.phase,
+                        title: payload.title,
+                        name: payload.name,
+                        status: payload.status,
+                        exitCode: payload.exitCode,
+                      }),
                     );
                   },
                   onPatchSummary: async (payload) => {
@@ -1212,7 +1254,16 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushPreviewToolProgress(
-                      payload.summary ?? payload.title ?? "patch applied",
+                      formatChannelProgressDraftLine({
+                        event: "patch",
+                        phase: payload.phase,
+                        title: payload.title,
+                        name: payload.name,
+                        added: payload.added,
+                        modified: payload.modified,
+                        deleted: payload.deleted,
+                        summary: payload.summary,
+                      }),
                     );
                   },
                   onCompactionStart:

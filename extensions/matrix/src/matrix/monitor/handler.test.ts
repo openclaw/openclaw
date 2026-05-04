@@ -2705,7 +2705,7 @@ describe("matrix monitor handler draft streaming", () => {
     await vi.waitFor(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
-    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toMatch(/\n- `tool: read_file`$/);
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toMatch(/\n`🧩 Read File`$/);
 
     await deliver({ text: "Done" }, { kind: "final" });
 
@@ -2790,6 +2790,24 @@ describe("matrix monitor handler draft streaming", () => {
 
     expect(opts.suppressDefaultToolProgressMessages).toBe(true);
     expect(opts.onToolStart).toBeUndefined();
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("does not create a blank Matrix progress draft when label and lines are disabled", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: false,
+      accountConfig: {
+        streaming: { mode: "progress", progress: { label: false, toolProgress: false } },
+      } as never,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onItemEvent?.({ progressText: "tool one" });
+    await opts.onItemEvent?.({ progressText: "tool two" });
+
+    expect(opts.suppressDefaultToolProgressMessages).toBe(true);
     expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
     await finish();
   });

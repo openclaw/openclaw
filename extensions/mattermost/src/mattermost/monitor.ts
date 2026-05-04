@@ -127,6 +127,12 @@ export function shouldUpdateMattermostDraftToolProgress(
   );
 }
 
+export function shouldSuppressMattermostDefaultToolProgressMessages(
+  account: Pick<ResolvedMattermostAccount, "streamingMode">,
+): boolean {
+  return account.streamingMode !== "off";
+}
+
 type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 type MattermostReaction = {
@@ -1648,6 +1654,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         const draftPreviewEnabled = account.streamingMode !== "off";
         const draftToolProgressEnabled = shouldUpdateMattermostDraftToolProgress(account);
+        const suppressDefaultToolProgressMessages =
+          shouldSuppressMattermostDefaultToolProgressMessages(account);
         const draftStream = draftPreviewEnabled
           ? createMattermostDraftStream({
               client,
@@ -1844,6 +1852,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                         replyOptions: {
                           ...replyOptions,
                           disableBlockStreaming: true,
+                          ...(suppressDefaultToolProgressMessages
+                            ? { suppressDefaultToolProgressMessages: true }
+                            : {}),
                           onModelSelected,
                           onPartialReply: (payload) => {
                             if (account.streamingMode !== "progress") {
@@ -1865,7 +1876,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            draftStream.update(buildMattermostToolStatusText(payload));
+                            draftStream.update(
+                              buildMattermostToolStatusText({
+                                ...payload,
+                                config: account.config,
+                              }),
+                            );
                           },
                         },
                       }),

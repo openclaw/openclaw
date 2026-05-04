@@ -391,9 +391,7 @@ describe("promptRemoteGatewayConfig", () => {
     const next = await promptRemoteGatewayConfig(cfg, prompter);
 
     expect(next.gateway?.remote?.token).toBe("preexisting-remote-token");
-    expect(text).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Gateway token" }),
-    );
+    expect(text).not.toHaveBeenCalledWith(expect.objectContaining({ message: "Gateway token" }));
   });
 
   it("keeps an existing remote gateway password when user confirms via masked-preview prompt", async () => {
@@ -429,8 +427,6 @@ describe("promptRemoteGatewayConfig", () => {
     const next = await promptRemoteGatewayConfig(cfg, prompter);
 
     expect(next.gateway?.remote?.password).toBe("preexisting-remote-password");
-    expect(text).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Gateway password" }),
-    );
+    expect(text).not.toHaveBeenCalledWith(expect.objectContaining({ message: "Gateway password" }));
   });
 });

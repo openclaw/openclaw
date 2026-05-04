@@ -136,7 +136,11 @@ function shouldRetryCacheProbeText(params: {
 }): boolean {
   const responseTextLower = normalizeLowercaseStringOrEmpty(params.text);
   const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
-  return !responseTextLower.includes(suffixLower) && params.attempt <= LIVE_CACHE_RESPONSE_RETRIES;
+  const markerLower = `cache-ok ${suffixLower}`;
+  return (
+    (!responseTextLower.includes(markerLower) || !responseTextLower.includes(suffixLower)) &&
+    params.attempt <= LIVE_CACHE_RESPONSE_RETRIES
+  );
 }
 
 async function runToolOnlyTurn(params: {
@@ -244,9 +248,10 @@ async function completeCacheProbe(params: {
     }
     const responseTextLower = normalizeLowercaseStringOrEmpty(text);
     const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
+    const markerLower = `cache-ok ${suffixLower}`;
     assert(
-      responseTextLower.includes(suffixLower),
-      `expected response to contain ${params.suffix}, got ${JSON.stringify(text)}`,
+      responseTextLower.includes(markerLower),
+      `expected response to contain CACHE-OK ${params.suffix}, got ${JSON.stringify(text)}`,
     );
     const usage = normalizeCacheUsage(response.usage);
     return {
@@ -256,7 +261,7 @@ async function completeCacheProbe(params: {
       hitRate: computeCacheHitRate(usage),
     };
   }
-  throw new Error(`expected response to contain ${params.suffix}`);
+  throw new Error(`expected response to contain CACHE-OK ${params.suffix}`);
 }
 
 async function runRepeatedLane(params: {

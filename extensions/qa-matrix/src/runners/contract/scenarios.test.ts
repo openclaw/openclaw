@@ -369,6 +369,106 @@ describe("matrix live qa scenarios", () => {
     expect(shardIds.toSorted()).toEqual(allIds.toSorted());
   });
 
+  it("waits for the driver Matrix approval reaction echo before awaiting the decision", async () => {
+    const context = matrixQaScenarioContext();
+    let approvalId = "";
+    const gatewayCall = vi.fn().mockImplementation(async (method: string, ...args: unknown[]) => {
+      if (method === "exec.approval.request") {
+        const params = args.find(
+          (arg): arg is { id?: unknown } => typeof arg === "object" && arg !== null && "id" in arg,
+        );
+        const payload =
+          typeof params === "object" && params !== null ? (params as { id?: unknown }) : undefined;
+        if (typeof payload?.id !== "string") {
+          throw new Error("approval request missing id");
+        }
+        approvalId = payload.id;
+        return { id: approvalId, status: "accepted" };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "allow-once", id: approvalId };
+      }
+      throw new Error(`unexpected gateway method ${method}`);
+    });
+    context.gatewayCall = gatewayCall;
+    const rootEventId = "$approval-thread-root";
+    const approvalEventId = "$approval-thread-event";
+    const sendReaction = vi.fn().mockResolvedValue("$driver-approval-reaction");
+    const waitForRoomEvent = vi
+      .fn()
+      .mockImplementationOnce(async () => ({
+        event: matrixQaMessageEvent({
+          approval: {
+            allowedDecisions: ["allow-once", "deny"],
+            hasCommandText: true,
+            id: approvalId,
+            kind: "exec",
+            state: "pending",
+            type: "approval.request",
+            version: 1,
+          },
+          body: "approval requested",
+          eventId: approvalEventId,
+          kind: "message",
+          relatesTo: {
+            eventId: rootEventId,
+            inReplyToId: rootEventId,
+            isFallingBack: true,
+            relType: "m.thread",
+          },
+        }),
+        since: "driver-sync-approval",
+      }))
+      .mockImplementationOnce(async () => ({
+        event: {
+          eventId: "$bot-approval-option",
+          kind: "reaction",
+          reaction: {
+            eventId: approvalEventId,
+            key: "✅",
+          },
+          roomId: "!main:matrix-qa.test",
+          sender: "@sut:matrix-qa.test",
+          type: "m.reaction",
+        } satisfies MatrixQaObservedEvent,
+        since: "driver-sync-option",
+      }))
+      .mockImplementationOnce(async () => ({
+        event: {
+          eventId: "$driver-approval-reaction",
+          kind: "reaction",
+          reaction: {
+            eventId: approvalEventId,
+            key: "✅",
+          },
+          roomId: "!main:matrix-qa.test",
+          sender: "@driver:matrix-qa.test",
+          type: "m.reaction",
+        } satisfies MatrixQaObservedEvent,
+        since: "driver-sync-driver-reaction",
+      }));
+    createMatrixQaClient.mockReturnValue({
+      primeRoom: vi.fn().mockResolvedValue("driver-sync-start"),
+      sendReaction,
+      sendTextMessage: vi.fn().mockResolvedValue(rootEventId),
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-approval-thread-target",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, context)).resolves.toMatchObject({
+      artifacts: {
+        reactionEventId: "$driver-approval-reaction",
+        reactionTargetEventId: approvalEventId,
+      },
+    });
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(3);
+    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.waitDecision");
+  });
+
   it("lets explicit Matrix scenario ids override the selected profile", () => {
     expect(
       scenarioTesting
@@ -2514,7 +2614,7 @@ describe("matrix live qa scenarios", () => {
           event: matrixQaMessageEvent({
             kind: "notice",
             eventId: previewEventId,
-            body: "Working...\n- `tool: read`",
+            body: "Barnacling...\n`📖 Read: from /tmp/qa/workspace/QA_KICKOFF_TASK.md`",
           }),
           since: "driver-sync-preview",
         },
@@ -2545,7 +2645,7 @@ describe("matrix live qa scenarios", () => {
     await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-trigger",
-        previewBodyPreview: "Working...\n- `tool: read`",
+        previewBodyPreview: "Barnacling...\n`📖 Read: from /tmp/qa/workspace/QA_KICKOFF_TASK.md`",
         previewEventId: "$tool-progress-preview",
         reply: {
           eventId: "$tool-progress-final",
@@ -2567,7 +2667,7 @@ describe("matrix live qa scenarios", () => {
           event: matrixQaMessageEvent({
             kind: "notice",
             eventId: previewEventId,
-            body: "Working...",
+            body: "One moment.",
           }),
           since: "driver-sync-preview",
         },
@@ -2575,7 +2675,7 @@ describe("matrix live qa scenarios", () => {
           event: matrixQaMessageEvent({
             kind: "notice",
             eventId: "$tool-progress-generic-update",
-            body: "Working...\n- `tool: exec_command`",
+            body: "- `tool: exec_command`",
             relatesTo: {
               relType: "m.replace",
               eventId: previewEventId,
@@ -2610,7 +2710,7 @@ describe("matrix live qa scenarios", () => {
     await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-generic-trigger",
-        previewBodyPreview: "Working...\n- `tool: exec_command`",
+        previewBodyPreview: "- `tool: exec_command`",
         previewEventId: "$tool-progress-generic-preview",
         reply: {
           eventId: "$tool-progress-generic-final",
@@ -2758,15 +2858,20 @@ describe("matrix live qa scenarios", () => {
 
   it("finalizes Matrix tool progress previews after tool errors", async () => {
     const previewEventId = "$tool-progress-error-preview";
-    const { sendTextMessage } = mockMatrixQaRoomClient({
+    const progressEvent = matrixQaMessageEvent({
+      kind: "notice",
+      eventId: "$tool-progress-error-progress",
+      body: "Pearling...\n`📖 Read: from /tmp/qa/workspace/missing-matrix-tool-progress-target.txt`",
+      relatesTo: {
+        relType: "m.replace",
+        eventId: previewEventId,
+      },
+    });
+    const { sendTextMessage, waitForRoomEvent } = mockMatrixQaRoomClient({
       driverEventId: "$tool-progress-error-trigger",
       events: [
         {
-          event: matrixQaMessageEvent({
-            kind: "notice",
-            eventId: previewEventId,
-            body: "Working...\n- `read from missing-matrix-tool-progress-target.txt`",
-          }),
+          event: progressEvent,
           since: "driver-sync-preview",
         },
         {
@@ -2796,7 +2901,8 @@ describe("matrix live qa scenarios", () => {
     await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-error-trigger",
-        previewBodyPreview: "Working...\n- `read from missing-matrix-tool-progress-target.txt`",
+        previewBodyPreview:
+          "Pearling...\n`📖 Read: from /tmp/qa/workspace/missing-matrix-tool-progress-target.txt`",
         previewEventId: "$tool-progress-error-preview",
         reply: {
           eventId: "$tool-progress-error-final",
@@ -2808,6 +2914,7 @@ describe("matrix live qa scenarios", () => {
       },
     });
 
+    expect(waitForRoomEvent.mock.calls[0]?.[0].predicate(progressEvent)).toBe(true);
     expect(sendTextMessage).toHaveBeenCalledWith({
       body: expect.stringContaining("Tool progress error QA check"),
       mentionUserIds: ["@sut:matrix-qa.test"],

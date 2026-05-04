@@ -54,22 +54,17 @@ type SentRealtimeEvent = {
   type: string;
   audio?: string;
   session?: {
-    type?: string;
-    audio?: {
-      input?: {
-        format?: { type?: string };
-        transcription?: {
-          model?: string;
-          language?: string;
-          prompt?: string;
-        };
-        turn_detection?: {
-          type?: string;
-          threshold?: number;
-          prefix_padding_ms?: number;
-          silence_duration_ms?: number;
-        };
-      };
+    input_audio_format?: string;
+    input_audio_transcription?: {
+      model?: string;
+      language?: string;
+      prompt?: string;
+    };
+    turn_detection?: {
+      type?: string;
+      threshold?: number;
+      prefix_padding_ms?: number;
+      silence_duration_ms?: number;
     };
   };
 };
@@ -180,22 +175,17 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       {
         type: "transcription_session.update",
         session: {
-          type: "transcription",
-          audio: {
-            input: {
-              format: { type: "audio/pcmu" },
-              transcription: {
-                model: "gpt-4o-transcribe",
-                language: "en",
-                prompt: "expect OpenClaw product names",
-              },
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.45,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 900,
-              },
-            },
+          input_audio_format: "g711_ulaw",
+          input_audio_transcription: {
+            model: "gpt-4o-transcribe",
+            language: "en",
+            prompt: "expect OpenClaw product names",
+          },
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.45,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 900,
           },
         },
       },
@@ -209,22 +199,17 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       {
         type: "transcription_session.update",
         session: {
-          type: "transcription",
-          audio: {
-            input: {
-              format: { type: "audio/pcmu" },
-              transcription: {
-                model: "gpt-4o-transcribe",
-                language: "en",
-                prompt: "expect OpenClaw product names",
-              },
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.45,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 900,
-              },
-            },
+          input_audio_format: "g711_ulaw",
+          input_audio_transcription: {
+            model: "gpt-4o-transcribe",
+            language: "en",
+            prompt: "expect OpenClaw product names",
+          },
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.45,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 900,
           },
         },
       },
