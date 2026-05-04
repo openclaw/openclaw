@@ -166,6 +166,13 @@ export type ToolLoopDetectionDetectorConfig = {
   pingPong?: boolean;
 };
 
+export type ToolLoopPostCompactionGuardConfig = {
+  /** Enable a strict guard that aborts when the agent re-enters the same tool-call loop immediately after a successful auto-compaction-retry (default: true). */
+  enabled?: boolean;
+  /** How many attempts post-compaction the guard remains armed (default: 3). */
+  windowSize?: number;
+};
+
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
@@ -181,6 +188,8 @@ export type ToolLoopDetectionConfig = {
   globalCircuitBreakerThreshold?: number;
   /** Detector toggles. */
   detectors?: ToolLoopDetectionDetectorConfig;
+  /** Post-compaction loop guard: aborts when the agent repeats the same (tool, args, result) immediately after auto-compaction-retry. */
+  postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
