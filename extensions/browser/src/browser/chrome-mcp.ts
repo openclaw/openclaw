@@ -770,6 +770,30 @@ export async function ensureChromeMcpAvailable(
   profileOptions?: string | ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<void> {
+  // Defense-in-depth: never spawn chrome-devtools-mcp from cold cache while
+  // Chrome is in a state where re-spawning would re-fire the macOS automation
+  // consent dialog (HIGH attached, MEDIUM uncertain, or LOW with conflicting
+  // signals). The gate is bypassed only when there is no Chrome remote
+  // debugging session at all (`emptyState`) — in which case spawning the
+  // chrome-mcp child to bring one up is the legitimate caller intent.
+  const cacheKey = buildChromeMcpSessionCacheKey(
+    profileName,
+    normalizeChromeMcpOptions(profileOptions),
+  );
+  const cached = sessions.get(cacheKey);
+  const cacheReady =
+    !!cached && cached.transport.pid != null && sessionReadyState.get(cached) === "ready";
+  if (!cacheReady) {
+    const health = await probeChromeMcpHealth(profileName, profileOptions);
+    if (!health.cacheAttached) {
+      const gate = decideStartGate(health);
+      if (!gate.mayStart) {
+        throw new BrowserProfileUnavailableError(
+          formatStartGateBlockedMessage(profileName, health, gate),
+        );
+      }
+    }
+  }
   const lease = await leaseSession(profileName, profileOptions, options);
   if (lease.temporary) {
     await lease.session.client.close().catch(() => {});
@@ -1154,30 +1178,259 @@ export function setBrowserAuthSignalProbesForTest(
   signalProbes = { ...DEFAULT_SIGNAL_PROBES, ...probes };
 }
 
+export type ChromeBrowserAuthLevel = "high" | "medium" | "low";
+
+export type ChromeBrowserAuthHealth = {
+  level: ChromeBrowserAuthLevel;
+  /** True iff `level === "high"`. Preserves the pre-confidence API contract. */
+  attached: boolean;
+  /** Pid of the cached chrome-devtools-mcp child, when HIGH was decided via cache. */
+  mcpPid: number | null;
+  port: number | null;
+  browserUuid: string | null;
+  /** Ordered, deterministic list of the per-signal reasons that produced `level`. */
+  reasons: string[];
+  /**
+   * True iff: Local State toggle is FALSE *and* no listener owns the
+   * candidate port. Only this combination clears LOW for `mayStart: true`.
+   */
+  emptyState: boolean;
+  /** True iff HIGH was decided from a live, ready chrome-devtools-mcp child. */
+  cacheAttached: boolean;
+};
+
+export type StartGateDecision =
+  | { mayStart: true; reason: string }
+  | { mayStart: false; reason: string; level: ChromeBrowserAuthLevel };
+
 /**
- * Non-spawning health probe for the cached Chrome MCP session.
+ * Visual auth verifier. Wired here as a typed extension point so the
+ * MEDIUM-confidence path can be lifted to HIGH (or held as MEDIUM with a
+ * specific reason) once peekaboo / vision plumbing lands. The default
+ * verifier is `null`; callers must register one explicitly.
+ */
+export interface BrowserAuthVisualVerifier {
+  /** Detects the macOS "Allow remote debugging?" / consent modal. */
+  checkConsentModal(input: {
+    profileName: string;
+    port: number | null;
+  }): Promise<{ present: boolean; reason: string }>;
+  /** Detects the "controlled by automated test software" banner. */
+  checkAutomationBanner(input: {
+    profileName: string;
+    port: number | null;
+  }): Promise<{ present: boolean; reason: string }>;
+}
+
+let browserAuthVisualVerifier: BrowserAuthVisualVerifier | null = null;
+
+export function setBrowserAuthVisualVerifier(verifier: BrowserAuthVisualVerifier | null): void {
+  browserAuthVisualVerifier = verifier;
+}
+
+export function getBrowserAuthVisualVerifier(): BrowserAuthVisualVerifier | null {
+  return browserAuthVisualVerifier;
+}
+
+/**
+ * Aggregates file, port-owner, and HTTP signals into a single confidence
+ * verdict. Used by `probeChromeMcpHealth` and consumed by `decideStartGate`.
  *
- * Reports attached:true only when a session is in the cache, its child
- * process pid is set, and its handshake (`session.ready`) has resolved.
- * Never calls getSession, never spawns, and never awaits a still-pending
- * session — callers (status polls, listProfiles, GET /tabs) must not be
- * able to trigger a fresh chrome-devtools-mcp spawn that would re-pop the
- * macOS automation-consent dialog after a gateway restart.
+ * Decision matrix (after the MCP cache miss):
+ *
+ *   HIGH:    toggle=on  port=listening  owner=chrome           (HTTP confirms when reachable)
+ *   MEDIUM:  toggle=on  port=listening  owner=unknown
+ *            toggle=on  port-file=missing                       (Chrome may be relaunching)
+ *            toggle=on  port=listening  owner=chrome  HTTP=404  (build-restricted endpoint)
+ *   LOW:     toggle=off port=none       owner=none              (truly empty → may start)
+ *            toggle=on  port=stale/!listening                   (contradiction → may not start)
+ *            toggle=*   owner=other                             (someone else owns the port)
+ */
+async function computeBrowserAuthConfidence(
+  input: ChromeRemoteDebuggingProbeInput,
+): Promise<Omit<ChromeBrowserAuthHealth, "cacheAttached" | "mcpPid">> {
+  const file = await signalProbes.fileProbe(input);
+  const reasons: string[] = [`file:${file.reason}`];
+  if (file.reason === "cdp-url-configured" || file.reason === "user-data-dir-unresolved") {
+    return {
+      level: "low",
+      attached: false,
+      port: null,
+      browserUuid: null,
+      reasons,
+      emptyState: true,
+    };
+  }
+  let owner: ChromePortOwnerSignal | null = null;
+  if (file.port !== null) {
+    owner = await signalProbes.portOwnerProbe(file.port);
+    reasons.push(`owner:${owner.reason}`);
+  } else {
+    reasons.push("owner:no-port");
+  }
+  if (owner && owner.kind === "other") {
+    return {
+      level: "low",
+      attached: false,
+      port: file.port,
+      browserUuid: file.browserUuid,
+      reasons,
+      emptyState: false,
+    };
+  }
+  if (!file.toggleEnabled) {
+    const ownerNone = !owner || owner.kind === "none";
+    return {
+      level: "low",
+      attached: false,
+      port: file.port,
+      browserUuid: file.browserUuid,
+      reasons,
+      emptyState: ownerNone && !file.portListening,
+    };
+  }
+  if (!file.portListening) {
+    return {
+      level: "low",
+      attached: false,
+      port: file.port,
+      browserUuid: file.browserUuid,
+      reasons,
+      emptyState: false,
+    };
+  }
+  if (!owner || owner.kind !== "chrome") {
+    return {
+      level: "medium",
+      attached: false,
+      port: file.port,
+      browserUuid: file.browserUuid,
+      reasons,
+      emptyState: false,
+    };
+  }
+  if (file.port !== null) {
+    const json = await signalProbes.jsonVersionProbe(file.port);
+    reasons.push(`http:${json.reason}`);
+    if (!json.ok && json.reason !== "http-timeout" && json.reason !== "http-error") {
+      // The endpoint replied but did not look like Chrome. Hold at MEDIUM.
+      return {
+        level: "medium",
+        attached: false,
+        port: file.port,
+        browserUuid: file.browserUuid,
+        reasons,
+        emptyState: false,
+      };
+    }
+  }
+  return {
+    level: "high",
+    attached: true,
+    port: file.port,
+    browserUuid: file.browserUuid,
+    reasons,
+    emptyState: false,
+  };
+}
+
+/**
+ * Confidence-gated, non-spawning health probe for the Chrome MCP transport.
+ *
+ * Reports `level: "high", attached: true` when either (1) the in-process
+ * session cache holds a ready chrome-devtools-mcp child, or (2) the file +
+ * port-owner + HTTP probes all agree the user has remote debugging on and
+ * a Chrome process owns the listening CDP port. Reports MEDIUM/LOW with
+ * `attached: false` for any partial / contradictory state. Never calls
+ * getSession, never spawns, and never awaits a still-pending session —
+ * callers (status polls, listProfiles, GET /tabs, ensureBrowserAvailable)
+ * must not be able to trigger a fresh chrome-devtools-mcp spawn that would
+ * re-pop the macOS automation-consent dialog after a gateway restart.
  */
 export async function probeChromeMcpHealth(
   profileName: string,
   profileOptions?: string | ChromeMcpProfileOptions,
-): Promise<{ attached: boolean; mcpPid: number | null }> {
+): Promise<ChromeBrowserAuthHealth> {
   const options = normalizeChromeMcpOptions(profileOptions);
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, options);
   const session = sessions.get(cacheKey);
-  if (!session || session.transport.pid == null) {
-    return { attached: false, mcpPid: null };
+  if (session && session.transport.pid != null && sessionReadyState.get(session) === "ready") {
+    return {
+      level: "high",
+      attached: true,
+      mcpPid: session.transport.pid,
+      port: null,
+      browserUuid: null,
+      reasons: ["cache:mcp-session-ready"],
+      emptyState: false,
+      cacheAttached: true,
+    };
   }
-  if (sessionReadyState.get(session) !== "ready") {
-    return { attached: false, mcpPid: null };
+  const verdict = await computeBrowserAuthConfidence({
+    userDataDir: options.userDataDir,
+    cdpUrl: options.browserUrl,
+  });
+  return { ...verdict, mcpPid: null, cacheAttached: false };
+}
+
+/**
+ * Hard predicate: should an `ensureChromeMcpAvailable` spawn be permitted
+ * given this health verdict? Encoded so blind-start is architecturally
+ * impossible on the chrome-mcp / autoConnect / "user" profile path.
+ *
+ * Rules:
+ *  - HIGH    → mayStart: false (already attached; just use it).
+ *  - MEDIUM  → mayStart: false (visual verifier required to disambiguate;
+ *              spawning here would re-fire the consent dialog).
+ *  - LOW     → mayStart: true ONLY when `emptyState` (toggle off AND no
+ *              port owner) is true. Any other LOW state means a Chrome
+ *              process is running with remote-debugging on but in a state
+ *              we can't safely attach to — re-spawning chrome-devtools-mcp
+ *              would still pop the consent dialog, so we hold.
+ */
+export function decideStartGate(health: ChromeBrowserAuthHealth): StartGateDecision {
+  if (health.level === "high") {
+    return { mayStart: false, reason: "browser-already-attached", level: "high" };
   }
-  return { attached: true, mcpPid: session.transport.pid };
+  if (health.level === "medium") {
+    return {
+      mayStart: false,
+      reason: "browser-auth-visual-verification-required",
+      level: "medium",
+    };
+  }
+  if (health.emptyState) {
+    return { mayStart: true, reason: "browser-not-running" };
+  }
+  return { mayStart: false, reason: "browser-auth-conflict", level: "low" };
+}
+
+export function formatStartGateBlockedMessage(
+  profileName: string,
+  health: ChromeBrowserAuthHealth,
+  gate: Extract<StartGateDecision, { mayStart: false }>,
+): string {
+  const reasonsTail = health.reasons.length ? ` Signals: ${health.reasons.join(", ")}.` : "";
+  if (gate.level === "high") {
+    return (
+      `Chrome MCP for profile "${profileName}" is already attached; refused to spawn a new ` +
+      `chrome-devtools-mcp child that would re-trigger the browser remote-debugging consent dialog.${reasonsTail}`
+    );
+  }
+  if (gate.level === "medium") {
+    return (
+      `Chrome MCP for profile "${profileName}": browser auth state is uncertain. Visual ` +
+      `confirmation that no remote-debugging consent dialog or automation banner is showing is ` +
+      `required before openclaw can attach. If Chrome is running, keep it open and approve any ` +
+      `pending dialog; otherwise quit Chrome fully and retry.${reasonsTail}`
+    );
+  }
+  return (
+    `Chrome MCP for profile "${profileName}": browser auth signals conflict (e.g. remote ` +
+    `debugging is enabled but no Chrome process owns the CDP port, or another process owns it). ` +
+    `Spawning chrome-devtools-mcp would re-trigger the consent dialog. Quit Chrome fully or ` +
+    `clear the conflicting listener, then retry.${reasonsTail}`
+  );
 }
 
 export async function closeChromeMcpSession(profileName: string): Promise<boolean> {
@@ -1590,6 +1843,7 @@ export async function resetChromeMcpSessionsForTest(): Promise<void> {
     portOwnerProbe: async () => ({ kind: "unknown", reason: "test-disabled" }),
     jsonVersionProbe: async () => ({ ok: false, reason: "test-disabled" }),
   };
+  browserAuthVisualVerifier = null;
   pendingSessions.clear();
   await stopAllChromeMcpSessions();
 }

@@ -168,12 +168,14 @@ export function createProfileAvailability({
 
   const isTransportAvailable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
-      const { ensureChromeMcpAvailable } = await getChromeMcpModule();
-      await ensureChromeMcpAvailable(profile.name, profile, {
-        ephemeral: true,
-        timeoutMs,
-      });
-      return true;
+      // Non-spawning probe. An ephemeral chrome-devtools-mcp lease here would
+      // re-fire the macOS automation consent dialog after every gateway
+      // restart whenever the cache is cold. probeChromeMcpHealth covers both
+      // the live MCP child and the file/port/owner confidence path.
+      const { probeChromeMcpHealth } = await getChromeMcpModule();
+      const health = await probeChromeMcpHealth(profile.name, profile);
+      void timeoutMs;
+      return health.attached;
     }
     return await isReachable(timeoutMs);
   };
@@ -315,10 +317,21 @@ export function createProfileAvailability({
           `Browser user data directory not found for profile "${profile.name}": ${profile.userDataDir}`,
         );
       }
-      const { ensureChromeMcpAvailable, probeChromeMcpHealth } = await getChromeMcpModule();
+      const {
+        ensureChromeMcpAvailable,
+        probeChromeMcpHealth,
+        decideStartGate,
+        formatStartGateBlockedMessage,
+      } = await getChromeMcpModule();
       const health = await probeChromeMcpHealth(profile.name, profile);
       if (health.attached) {
         return;
+      }
+      const gate = decideStartGate(health);
+      if (!gate.mayStart) {
+        throw new BrowserProfileUnavailableError(
+          formatStartGateBlockedMessage(profile.name, health, gate),
+        );
       }
       await ensureChromeMcpAvailable(profile.name, profile);
       await waitForChromeMcpReadyAfterAttach();
