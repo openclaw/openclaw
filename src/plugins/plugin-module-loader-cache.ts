@@ -268,12 +268,16 @@ function createPluginModuleLoader(params: {
   // for TS / TSX sources and for the small set of require(esm) /
   // async-module fallbacks `tryNativeRequireJavaScriptModule` declines to
   // handle.
+  const getLoadWithAliasTransform = createLazySourceTransformLoader({
+    ...params,
+    tryNative: false,
+  });
   return ((target: string, ...rest: unknown[]) => {
     pluginModuleLoaderStats.calls += 1;
     if (shouldForceSourceTransformForPluginSdkAlias({ target, aliasMap: params.aliasMap })) {
       pluginModuleLoaderStats.sourceTransformForced += 1;
       recordSourceTransformTarget(target);
-      return (getLoadWithSourceTransform() as (t: string, ...a: unknown[]) => unknown)(
+      return (getLoadWithAliasTransform() as (t: string, ...a: unknown[]) => unknown)(
         target,
         ...rest,
       );
