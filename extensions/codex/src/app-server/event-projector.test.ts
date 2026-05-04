@@ -14,6 +14,7 @@ import {
   CodexAppServerEventProjector,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
+import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
@@ -86,6 +87,7 @@ beforeEach(() => {
 afterEach(async () => {
   resetAgentEventsForTest();
   resetGlobalHookRunner();
+  resetCodexRateLimitCacheForTests();
   vi.restoreAllMocks();
   for (const tempDir of tempDirs) {
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -315,7 +317,7 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("Codex usage limit reached.");
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
     expect(result.promptError).toContain("Run /codex account");
     expect(result.promptErrorSource).toBe("prompt");
@@ -343,7 +345,45 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("Codex usage limit reached.");
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptErrorSource).toBe("prompt");
+  });
+
+  it("uses a recent Codex rate-limit snapshot when failed turns omit reset details", async () => {
+    const projector = await createProjector();
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    rememberCodexRateLimits({
+      rateLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
+        secondary: null,
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: "rate_limit_reached",
+      },
+      rateLimitsByLimitId: null,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          error: {
+            message: "You've reached your usage limit.",
+            codexErrorInfo: "usageLimitExceeded",
+            additionalDetails: null,
+          },
+          items: [],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });

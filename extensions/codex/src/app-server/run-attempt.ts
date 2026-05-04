@@ -84,6 +84,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
@@ -1662,7 +1663,9 @@ function formatCodexTurnStartUsageLimitError(
     message: notificationError?.message ?? errorPayload.message ?? formatErrorMessage(error),
     codexErrorInfo: notificationError?.codexErrorInfo ?? errorPayload.codexErrorInfo,
     rateLimits:
-      readLatestRateLimitNotificationPayload(pendingNotifications) ?? errorPayload.rateLimits,
+      readLatestRateLimitNotificationPayload(pendingNotifications) ??
+      errorPayload.rateLimits ??
+      readRecentCodexRateLimits(),
   });
 }
 
@@ -1672,6 +1675,7 @@ function readLatestRateLimitNotificationPayload(
   for (let index = notifications.length - 1; index >= 0; index -= 1) {
     const notification = notifications[index];
     if (notification?.method === "account/rateLimits/updated") {
+      rememberCodexRateLimits(notification.params);
       return notification.params;
     }
   }

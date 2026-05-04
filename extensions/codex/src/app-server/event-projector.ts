@@ -27,6 +27,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { attachCodexMirrorIdentity } from "./transcript-mirror.js";
@@ -116,6 +117,7 @@ export class CodexAppServerEventProjector {
     }
     if (notification.method === "account/rateLimits/updated") {
       this.latestRateLimits = params;
+      rememberCodexRateLimits(params);
       return;
     }
     if (isHookNotificationMethod(notification.method)) {
@@ -533,7 +535,7 @@ export class CodexAppServerEventProjector {
         formatCodexUsageLimitErrorMessage({
           message: turn.error?.message,
           codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.latestRateLimits,
+          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
         }) ??
         turn.error?.message ??
         "codex app-server turn failed";
@@ -765,7 +767,7 @@ export class CodexAppServerEventProjector {
       formatCodexUsageLimitErrorMessage({
         message: error ? readString(error, "message") : undefined,
         codexErrorInfo: error?.codexErrorInfo,
-        rateLimits: this.latestRateLimits,
+        rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
       }) ?? readCodexErrorNotificationMessage(params)
     );
   }

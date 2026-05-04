@@ -25,7 +25,7 @@ export function formatCodexUsageLimitErrorMessage(params: {
   }
   const nowMs = params.nowMs ?? Date.now();
   const nextReset = selectNextRateLimitReset(params.rateLimits, nowMs);
-  const parts = ["Codex usage limit reached."];
+  const parts = ["You've reached your Codex subscription usage limit."];
   if (nextReset) {
     parts.push(`Next reset ${formatResetTime(nextReset.resetsAtMs, nowMs)}.`);
   } else {

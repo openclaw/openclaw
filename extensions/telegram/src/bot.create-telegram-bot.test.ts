@@ -2765,7 +2765,7 @@ describe("createTelegramBot", () => {
 
   it("sends Codex usage-limit reset details as the Telegram reply body", async () => {
     const codexRateLimitText =
-      "⚠️ Codex usage limit reached. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";
+      "⚠️ You've reached your Codex subscription usage limit. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";
     replySpy.mockResolvedValue({ text: codexRateLimitText });
     loadConfig.mockReturnValue({
       channels: {
