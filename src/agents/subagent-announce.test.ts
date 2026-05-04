@@ -169,8 +169,13 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   resolveSubagentAnnounceTimeoutMs: () => 10_000,
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
   isTransientAnnounceDeliveryError: (error: unknown) => {
-    const message = String(error ?? "").toLowerCase();
-    return message.includes("gateway closed");
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : "";
+    return message.toLowerCase().includes("gateway closed");
   },
 }));
 
