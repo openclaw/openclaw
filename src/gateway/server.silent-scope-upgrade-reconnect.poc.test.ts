@@ -290,13 +290,18 @@ describe("gateway silent scope-upgrade reconnect", () => {
       // loopback launch with a preauth token: gateway-client/backend identity,
       // explicit operator scopes, and no device identity. The Gateway should
       // accept the connection and preserve the requested scopes through the
-      // missing-device path, so a method gated on operator.admin succeeds even
-      // though the paired CLI baseline only carries operator.read.
+      // missing-device path, so a write-gated method (chat.abort, classified
+      // as operator.write per src/gateway/method-scopes.ts) succeeds even
+      // though the paired CLI baseline only carries operator.read. If scopes
+      // were dropped on the missing-device path, the Gateway would reject this
+      // call with a scope error before chat.abort runs; aborting an unknown
+      // runId returns ok with aborted:false.
       await expect(
         callGateway({
           url: `ws://127.0.0.1:${started.port}`,
           token: "secret",
-          method: "health",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId: "acp-scope-probe" },
           clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
           clientDisplayName: "ACP",
           mode: GATEWAY_CLIENT_MODES.BACKEND,
