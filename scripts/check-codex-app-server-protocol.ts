@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveCodexAppServerProtocolSource } from "./lib/codex-app-server-protocol-source.js";
 
-const codexRepo = process.env.OPENCLAW_CODEX_REPO
-  ? path.resolve(process.env.OPENCLAW_CODEX_REPO)
-  : path.resolve(process.cwd(), "../codex");
-const schemaRoot = path.join(codexRepo, "codex-rs/app-server-protocol/schema/typescript");
-const sourceSchemaRoot = path.join(codexRepo, "codex-rs/app-server-protocol/schema");
+const { sourceRoot: sourceSchemaRoot } = await resolveCodexAppServerProtocolSource(process.cwd());
+const schemaRoot = path.join(sourceSchemaRoot, "typescript");
 const generatedRoot = path.resolve(
   process.cwd(),
   "extensions/codex/src/app-server/protocol-generated",
@@ -104,12 +102,14 @@ if (failures.length > 0) {
   for (const failure of failures) {
     console.error(`- ${failure}`);
   }
-  console.error("Run `pnpm codex-app-server:protocol:sync` after refreshing ../codex.");
+  console.error(
+    `Run \`pnpm codex-app-server:protocol:sync\` after refreshing the Codex checkout at ${path.resolve(sourceSchemaRoot, "../../..")}.`,
+  );
   process.exit(1);
 }
 
 console.log(
-  `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${schemaRoot}`,
+  `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${sourceSchemaRoot}`,
 );
 
 async function compareGeneratedProtocolMirror(): Promise<void> {
@@ -130,14 +130,12 @@ async function compareGeneratedProtocolMirror(): Promise<void> {
     );
     const target = await fs.readFile(path.join(targetTsRoot, file), "utf8");
     if (source !== target) {
-      failures.push(
-        `protocol-generated/typescript/${file}: differs from normalized ../codex schema`,
-      );
+      failures.push(`protocol-generated/typescript/${file}: differs from normalized source schema`);
     }
   }
   for (const file of targetFiles) {
     if (!sourceSet.has(file)) {
-      failures.push(`protocol-generated/typescript/${file}: no longer present in ../codex schema`);
+      failures.push(`protocol-generated/typescript/${file}: no longer present in source schema`);
     }
   }
 
@@ -161,7 +159,7 @@ async function compareGeneratedProtocolMirror(): Promise<void> {
       continue;
     }
     if (source !== target) {
-      failures.push(`protocol-generated/json/${schema}: differs from ../codex schema`);
+      failures.push(`protocol-generated/json/${schema}: differs from source schema`);
     }
   }
 }
