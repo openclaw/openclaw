@@ -1,5 +1,6 @@
 import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginWeb } from "./login.js";
@@ -141,7 +142,9 @@ describe("loginWeb coverage", () => {
     restartOpts?.onQr?.("restart-qr");
     await flushTasks();
 
-    expect(runtime.log).toHaveBeenCalledWith("Scan this QR in WhatsApp (Linked Devices):");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Open the WhatsApp app, go to Linked Devices, then scan this QR:",
+    );
     expect(runtime.log).toHaveBeenCalledWith("terminal:initial-qr");
     expect(runtime.log).toHaveBeenCalledWith("terminal:restart-qr");
     expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr", { small: true });
@@ -158,7 +161,7 @@ describe("loginWeb coverage", () => {
       /cache cleared/i,
     );
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("session is logged out"));
-    expect(rmMock).toHaveBeenCalledWith(testState.authDir, {
+    expect(rmMock).toHaveBeenCalledWith(path.resolve(testState.authDir), {
       recursive: true,
       force: true,
     });
